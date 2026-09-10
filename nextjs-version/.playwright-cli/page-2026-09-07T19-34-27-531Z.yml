@@ -1,0 +1,23 @@
+- generic [ref=f6e1]:
+  - main [ref=f6e44]:
+    - generic [ref=f6e46]:
+      - link [ref=f6e47] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f6e59]:
+        - heading "Welcome back" [level=1] [ref=f6e60]
+        - paragraph [ref=f6e61]: Sign in to continue to your brokerage workspace.
+      - generic [ref=f6e62]:
+        - generic [ref=f6e63]:
+          - generic [ref=f6e64]: Work email
+          - textbox "Work email" [active] [ref=f6e65]
+        - generic [ref=f6e66]:
+          - generic [ref=f6e67]:
+            - generic [ref=f6e68]: Password
+            - link "Forgot password?" [ref=f6e69] [cursor=pointer]:
+              - /url: /forgot-password
+          - textbox "Password" [ref=f6e70]
+        - button "Sign in" [ref=f6e71]
+        - paragraph [ref=f6e72]: New team members join through a secure invitation from their workspace admin.
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f6e36] [cursor=pointer]
+  - alert [ref=f6e40]

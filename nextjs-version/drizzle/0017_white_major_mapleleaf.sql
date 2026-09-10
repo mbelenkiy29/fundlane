@@ -1,0 +1,1 @@
+ALTER TABLE "sms_companies" ADD COLUMN "opt_out_ready" integer DEFAULT 0 NOT NULL;

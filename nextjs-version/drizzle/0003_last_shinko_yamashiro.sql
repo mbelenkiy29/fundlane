@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "mca_analysis_runs_idempotency_idx" ON "mca_analysis_runs" USING btree ("workspace_id","deal_id","snapshot_id","completeness_version","mode","top_n","review_notification_channel");

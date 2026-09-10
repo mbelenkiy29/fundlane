@@ -1,0 +1,13 @@
+- generic [active] [ref=f7e1]:
+  - generic [ref=f7e3]:
+    - img "placeholder image" [ref=f7e4]
+    - generic [ref=f7e5]:
+      - heading "403" [level=1] [ref=f7e6]
+      - heading "Forbidden" [level=2] [ref=f7e7]
+      - paragraph [ref=f7e8]: Access to this resource is forbidden. You don't have the necessary permissions to view this page.
+      - generic [ref=f7e9]:
+        - button "Go Back Home" [ref=f7e10] [cursor=pointer]
+        - button "Contact Us" [ref=f7e11] [cursor=pointer]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f7e17] [cursor=pointer]
+  - alert [ref=f7e21]

@@ -1,0 +1,63 @@
+- generic [active] [ref=f2e1]:
+  - main [ref=f2e17]:
+    - generic [ref=f2e19]:
+      - button "Toggle Sidebar" [ref=f2e20]
+      - button "Search merchants, deals, or contacts" [ref=f2e22]
+      - generic [ref=f2e24]:
+        - button "Notifications" [ref=f2e25]
+        - button "Switch to dark mode" [ref=f2e26] [cursor=pointer]
+    - generic [ref=f2e31]:
+      - generic [ref=f2e32]:
+        - generic [ref=f2e33]:
+          - generic [ref=f2e34]: Deal workspace
+          - heading "Pipeline" [level=1] [ref=f2e39]
+          - paragraph [ref=f2e40]: Work merchant applications from first contact through servicing events.
+        - button "New deal" [ref=f2e41]
+      - generic [ref=f2e42]:
+        - generic [ref=f2e44]:
+          - paragraph [ref=f2e45]: Filtered deals
+          - paragraph [ref=f2e46]: "1"
+        - generic [ref=f2e48]:
+          - paragraph [ref=f2e49]: Submission ready
+          - paragraph [ref=f2e50]: "0"
+        - generic [ref=f2e52]:
+          - paragraph [ref=f2e53]: Needs information
+          - paragraph [ref=f2e54]: "1"
+      - generic [ref=f2e56]:
+        - generic [ref=f2e57]:
+          - textbox "Search name or deal ID" [ref=f2e62]: Harbor Browser
+          - combobox [ref=f2e63]:
+            - generic: All statuses
+          - combobox [ref=f2e64]:
+            - generic: All assignees
+          - textbox "Created from" [ref=f2e65]
+          - textbox "Created to" [ref=f2e66]
+          - generic [ref=f2e67]:
+            - button "Table view" [ref=f2e68]
+            - button "Kanban view" [ref=f2e69]
+        - textbox "Filter by funder name" [ref=f2e71]
+      - table [ref=f2e74]:
+        - rowgroup [ref=f2e75]:
+          - row [ref=f2e76]:
+            - columnheader "Merchant" [ref=f2e77]
+            - columnheader "Status" [ref=f2e78]
+            - columnheader "Requested" [ref=f2e79]
+            - columnheader "Assignees" [ref=f2e80]
+            - columnheader "Readiness" [ref=f2e81]
+            - columnheader "Updated" [ref=f2e82]
+        - rowgroup [ref=f2e83]:
+          - row [ref=f2e84] [cursor=pointer]:
+            - cell [ref=f2e85]:
+              - paragraph [ref=f2e86]: Harbor Browser Cafe LLC
+              - paragraph [ref=f2e87]: MCA-B3EC666C · Harbor Browser
+            - cell "New application" [ref=f2e88]
+            - cell "—" [ref=f2e90]
+            - cell "1" [ref=f2e91]
+            - cell "12 missing" [ref=f2e92]
+            - cell "9/7/2026" [ref=f2e96]
+    - generic [ref=f2e98]:
+      - generic [ref=f2e99]: MCA Workspace
+      - generic [ref=f2e100]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f2e11] [cursor=pointer]
+  - alert [ref=f2e15]

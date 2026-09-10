@@ -1,0 +1,130 @@
+- generic [active] [ref=f4e1]:
+  - generic [ref=f4e48]:
+    - generic [ref=f4e51]:
+      - list [ref=f4e53]:
+        - listitem [ref=f4e54]:
+          - link "Northstar Capital MCA workspace" [ref=f4e55] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f4e67]:
+              - generic [ref=f4e68]: Northstar Capital
+              - generic [ref=f4e69]: MCA workspace
+      - generic [ref=f4e74]:
+        - generic [ref=f4e75]:
+          - generic [ref=f4e76]: Pipeline
+          - list [ref=f4e77]:
+            - listitem [ref=f4e78]:
+              - link "Home" [ref=f4e79] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f4e85]:
+              - link "Deals" [ref=f4e86] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f4e92]:
+              - link "Submissions" [ref=f4e93] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f4e99]:
+              - link "Offers" [ref=f4e100] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f4e108]:
+              - link "Advances" [ref=f4e109] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f4e115]:
+              - link "Renewals" [ref=f4e116] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f4e123]:
+          - generic [ref=f4e124]: Operations
+          - list [ref=f4e125]:
+            - listitem [ref=f4e126]:
+              - link "Funders" [ref=f4e127] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f4e131]:
+              - link "Reports" [ref=f4e132] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f4e136]:
+              - link "Settings" [ref=f4e137] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f4e143]:
+        - listitem [ref=f4e144]:
+          - button "Workspace Administrator admin@northstar.test" [ref=f4e145]:
+            - generic [ref=f4e151]:
+              - generic [ref=f4e152]: Workspace Administrator
+              - generic [ref=f4e153]: admin@northstar.test
+    - main [ref=f4e158]:
+      - generic [ref=f4e160]:
+        - button "Toggle Sidebar" [ref=f4e161]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f4e163]:
+          - generic [ref=f4e164]: Search merchants, deals, or contacts
+          - generic [ref=f4e165]: ⌘K
+        - generic [ref=f4e166]:
+          - link "New deal" [ref=f4e167] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f4e168]
+          - button "Switch to dark mode" [ref=f4e169] [cursor=pointer]
+      - generic [ref=f4e174]:
+        - generic [ref=f4e175]:
+          - generic [ref=f4e176]:
+            - paragraph [ref=f4e177]: Monday, September 7
+            - heading "Good afternoon, Workspace" [level=1] [ref=f4e178]
+            - paragraph [ref=f4e179]: Here’s where your brokerage needs attention.
+          - link "New deal" [ref=f4e180] [cursor=pointer]:
+            - /url: /deals/new
+        - generic [ref=f4e181]:
+          - generic [ref=f4e182]:
+            - generic [ref=f4e184]:
+              - generic [ref=f4e185]: Open deals
+              - generic [ref=f4e186]: —
+            - paragraph [ref=f4e193]: Connect deal data to populate
+          - generic [ref=f4e194]:
+            - generic [ref=f4e196]:
+              - generic [ref=f4e197]: Awaiting submission
+              - generic [ref=f4e198]: —
+            - paragraph [ref=f4e205]: No live submissions yet
+          - generic [ref=f4e206]:
+            - generic [ref=f4e208]:
+              - generic [ref=f4e209]: Offers to review
+              - generic [ref=f4e210]: —
+            - paragraph [ref=f4e219]: No live offers yet
+          - generic [ref=f4e220]:
+            - generic [ref=f4e222]:
+              - generic [ref=f4e223]: Active team
+              - generic [ref=f4e224]: —
+            - paragraph [ref=f4e231]: Open team settings to review
+        - generic [ref=f4e232]:
+          - generic [ref=f4e233]:
+            - generic [ref=f4e234]:
+              - generic [ref=f4e235]: Pipeline activity
+              - generic [ref=f4e236]: Live deal events will appear here as your team works.
+            - generic [ref=f4e238]:
+              - paragraph [ref=f4e242]: No activity to show
+              - paragraph [ref=f4e243]: Create or import a deal to start a traceable workspace activity timeline.
+              - link "Open deals" [ref=f4e244] [cursor=pointer]:
+                - /url: /deals
+          - generic [ref=f4e245]:
+            - generic [ref=f4e246]:
+              - generic [ref=f4e247]: Workspace readiness
+              - generic [ref=f4e248]: Foundation setup for a secure first deal.
+            - generic [ref=f4e249]:
+              - link "Set up Brokerage details Name, timezone, and feature access" [ref=f4e250] [cursor=pointer]:
+                - /url: /settings
+                - generic [ref=f4e251]: Set up
+                - generic [ref=f4e252]:
+                  - generic [ref=f4e253]: Brokerage details
+                  - generic [ref=f4e254]: Name, timezone, and feature access
+              - link "Set up Team and roles Seats, managers, and financial access" [ref=f4e258] [cursor=pointer]:
+                - /url: /settings/team
+                - generic [ref=f4e259]: Set up
+                - generic [ref=f4e260]:
+                  - generic [ref=f4e261]: Team and roles
+                  - generic [ref=f4e262]: Seats, managers, and financial access
+              - link "Set up Integration access Scoped API keys with expiry" [ref=f4e266] [cursor=pointer]:
+                - /url: /settings/api-keys
+                - generic [ref=f4e267]: Set up
+                - generic [ref=f4e268]:
+                  - generic [ref=f4e269]: Integration access
+                  - generic [ref=f4e270]: Scoped API keys with expiry
+              - generic [ref=f4e274]: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+      - generic [ref=f4e276]:
+        - generic [ref=f4e277]: MCA Workspace
+        - generic [ref=f4e278]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f4e43] [cursor=pointer]
+  - alert [ref=f4e47]: MCA Workspace

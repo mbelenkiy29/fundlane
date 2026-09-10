@@ -1,0 +1,1 @@
+ALTER TABLE "mca_score_snapshots" ADD COLUMN "aggregate_computed_at" text DEFAULT '' NOT NULL;

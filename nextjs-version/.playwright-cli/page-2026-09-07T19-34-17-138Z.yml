@@ -1,0 +1,23 @@
+- generic [ref=f6e1]:
+  - main [ref=f6e3]:
+    - generic [ref=f6e5]:
+      - link [ref=f6e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f6e18]:
+        - heading "Choose a new password" [level=1] [ref=f6e19]
+        - paragraph [ref=f6e20]: Reset links are single-use and expire automatically.
+      - generic [ref=f6e21]:
+        - alert [ref=f6e41]: Passwords do not match.
+        - generic [ref=f6e22]:
+          - generic [ref=f6e23]: New password
+          - textbox "New password" [ref=f6e24]: Synthetic Reset Password 88!
+          - paragraph [ref=f6e25]: Use at least 12 characters.
+        - generic [ref=f6e26]:
+          - generic [ref=f6e27]: Confirm password
+          - textbox "Confirm password" [ref=f6e28]: Mismatch Password 77!
+        - button "Reset password" [active] [ref=f6e29]
+        - link "Request a new link" [ref=f6e30] [cursor=pointer]:
+          - /url: /forgot-password
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f6e36] [cursor=pointer]
+  - alert [ref=f6e40]

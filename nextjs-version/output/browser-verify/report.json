@@ -1,0 +1,398 @@
+{
+  "steps": [
+    {
+      "step": "sign-in page",
+      "ok": true,
+      "detail": "http://localhost:3000/sign-in",
+      "at": "2026-09-08T18:19:31.226Z"
+    },
+    {
+      "step": "fill credentials",
+      "ok": true,
+      "detail": "email set",
+      "at": "2026-09-08T18:19:31.240Z"
+    },
+    {
+      "step": "submit sign-in",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:31.264Z"
+    },
+    {
+      "step": "landed dashboard",
+      "ok": true,
+      "detail": "http://localhost:3000/dashboard",
+      "at": "2026-09-08T18:19:32.125Z"
+    },
+    {
+      "step": "dashboard workspace name",
+      "ok": true,
+      "detail": "MCA Demo MCA workspace Pipeline Home Deals Submissions Offers Advances Renewals Operations Funders Reports Settings Workspace Administrator demo@mca.local Toggle Sidebar Search mer",
+      "at": "2026-09-08T18:19:32.684Z"
+    },
+    {
+      "step": "dashboard has Funders nav",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:32.685Z"
+    },
+    {
+      "step": "dashboard has Deals nav",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:32.685Z"
+    },
+    {
+      "step": "funders heading",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:33.630Z"
+    },
+    {
+      "step": "funders empty state",
+      "ok": true,
+      "detail": "rendered",
+      "at": "2026-09-08T18:19:33.630Z"
+    },
+    {
+      "step": "fill funder legal name",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:33.638Z"
+    },
+    {
+      "step": "click create funder",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:33.646Z"
+    },
+    {
+      "step": "funder created",
+      "ok": true,
+      "detail": "Browser Verify Capital 1788891573630",
+      "at": "2026-09-08T18:19:33.898Z"
+    },
+    {
+      "step": "criteria panel mounted",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:35.079Z"
+    },
+    {
+      "step": "criteria scan panel mounted",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:35.079Z"
+    },
+    {
+      "step": "industry aliases mounted",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:35.079Z"
+    },
+    {
+      "step": "open groups tab",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:35.098Z"
+    },
+    {
+      "step": "groups empty state",
+      "ok": true,
+      "detail": "named groups visible",
+      "at": "2026-09-08T18:19:35.844Z"
+    },
+    {
+      "step": "create funder group",
+      "ok": true,
+      "detail": "MCA Demo MCA workspace Pipeline Home Deals Submissions Offers Advances Renewals Operations Funders Reports Settings Workspace Administrator demo@mca.local Toggl",
+      "at": "2026-09-08T18:19:36.718Z"
+    },
+    {
+      "step": "header New deal route /deals/new",
+      "ok": true,
+      "detail": "/deals",
+      "at": "2026-09-08T18:19:37.759Z"
+    },
+    {
+      "step": "create dialog from /deals/new",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:37.804Z"
+    },
+    {
+      "step": "deals page",
+      "ok": true,
+      "detail": "MCA Demo\nMCA workspace\nPipeline\nHome\nDeals\nSubmissions\nOffers\nAdvances\nRenewals\nOperations\nFunders\nReports\nSettings\nWork",
+      "at": "2026-09-08T18:19:39.257Z"
+    },
+    {
+      "step": "open new deal dialog",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:39.307Z"
+    },
+    {
+      "step": "fill deal legal name",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:39.336Z"
+    },
+    {
+      "step": "save deal draft",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:39.362Z"
+    },
+    {
+      "step": "deal detail opened",
+      "ok": true,
+      "detail": "Browser Verify Merchant 1788891579310",
+      "at": "2026-09-08T18:19:40.118Z"
+    },
+    {
+      "step": "open underwriting tab",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:40.203Z"
+    },
+    {
+      "step": "underwriting panel: Document completeness",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.006Z"
+    },
+    {
+      "step": "underwriting panel: Bank statement underwriting",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "underwriting panel: Manual underwriting corrections",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "underwriting panel: Funder fit scores",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "underwriting panel: Funder analysis",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "underwriting panel: Review funder selection",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "underwriting panel: Data Merch",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "analysis default review first",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.007Z"
+    },
+    {
+      "step": "rerun completeness",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:41.060Z"
+    },
+    {
+      "step": "completeness result",
+      "ok": true,
+      "detail": "Not ready",
+      "at": "2026-09-08T18:19:42.564Z"
+    },
+    {
+      "step": "analyze statements",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:42.569Z"
+    },
+    {
+      "step": "score funders",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:43.775Z"
+    },
+    {
+      "step": "score outcome",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:45.276Z"
+    },
+    {
+      "step": "run analysis",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:45.287Z"
+    },
+    {
+      "step": "analysis outcome",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:47.289Z"
+    },
+    {
+      "step": "automatic send blocked copy",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:47.289Z"
+    },
+    {
+      "step": "review panel sees analysis run",
+      "ok": true,
+      "detail": "updated",
+      "at": "2026-09-08T18:19:48.656Z"
+    },
+    {
+      "step": "settings connections",
+      "ok": true,
+      "detail": "path ok",
+      "at": "2026-09-08T18:19:49.502Z"
+    },
+    {
+      "step": "data merch config on connections",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:49.502Z"
+    },
+    {
+      "step": "funders mobile still usable",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:51.077Z"
+    },
+    {
+      "step": "open deal on mobile",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:51.673Z"
+    },
+    {
+      "step": "mobile deal dialog opened",
+      "ok": false,
+      "detail": "",
+      "at": "2026-09-08T18:19:52.533Z"
+    },
+    {
+      "step": "underwriting mobile completeness",
+      "ok": false,
+      "detail": "dialog did not show underwriting on 390px",
+      "at": "2026-09-08T18:19:52.571Z"
+    },
+    {
+      "step": "no page exceptions",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:52.572Z"
+    },
+    {
+      "step": "no app API 4xx/5xx",
+      "ok": true,
+      "detail": "",
+      "at": "2026-09-08T18:19:52.572Z"
+    }
+  ],
+  "issues": [
+    {
+      "step": "mobile deal dialog opened",
+      "detail": ""
+    },
+    {
+      "step": "underwriting mobile completeness",
+      "detail": "dialog did not show underwriting on 390px"
+    }
+  ],
+  "console": [
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    },
+    {
+      "type": "warning",
+      "text": "Detected `scroll-behavior: smooth` on the `<html>` element. To disable smooth scrolling during route transitions, add `data-scroll-behavior=\"smooth\"` to your <html> element. Learn more: https://nextjs.org/docs/messages/missing-data-scroll-behavior"
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    },
+    {
+      "type": "warning",
+      "text": "Detected `scroll-behavior: smooth` on the `<html>` element. To disable smooth scrolling during route transitions, add `data-scroll-behavior=\"smooth\"` to your <html> element. Learn more: https://nextjs.org/docs/messages/missing-data-scroll-behavior"
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "log",
+      "text": "[HMR] connected"
+    }
+  ],
+  "networkErrors": [],
+  "screenshots": [
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/01-sign-in.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/02-dashboard.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/03-funders-empty.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/04-funder-created.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/04b-funder-criteria.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/05-funder-groups.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/05c-group-created.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/05b-deals-new.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/06-deals-empty.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/07-deal-detail.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/08-underwriting-top.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/09-underwriting-bottom.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/10-settings-connections.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/10b-data-merch-config.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/11-funders-mobile.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/12-deals-mobile.png",
+    "/Users/mbele/Desktop/mca/nextjs-version/output/browser-verify/12-underwriting-mobile.png"
+  ]
+}

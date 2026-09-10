@@ -1,0 +1,276 @@
+- generic [active] [ref=f10e1]:
+  - generic [ref=f10e2]:
+    - generic [ref=f10e5]:
+      - list [ref=f10e7]:
+        - listitem [ref=f10e8]:
+          - link "Browser Acceptance MCA workspace" [ref=f10e9] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f10e21]:
+              - generic [ref=f10e22]: Browser Acceptance
+              - generic [ref=f10e23]: MCA workspace
+      - generic [ref=f10e28]:
+        - generic [ref=f10e29]:
+          - generic [ref=f10e30]: Pipeline
+          - list [ref=f10e31]:
+            - listitem [ref=f10e32]:
+              - link "Home" [ref=f10e33] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f10e39]:
+              - link "Deals" [ref=f10e40] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f10e46]:
+              - link "Submissions" [ref=f10e47] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f10e53]:
+              - link "Offers" [ref=f10e54] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f10e62]:
+              - link "Advances" [ref=f10e63] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f10e69]:
+              - link "Renewals" [ref=f10e70] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f10e77]:
+          - generic [ref=f10e78]: Operations
+          - list [ref=f10e79]:
+            - listitem [ref=f10e80]:
+              - link "Funders" [ref=f10e81] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f10e85]:
+              - link "Reports" [ref=f10e86] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f10e90]:
+              - link "Settings" [ref=f10e91] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f10e97]:
+        - listitem [ref=f10e98]:
+          - button "Workspace Administrator owner@example.test" [ref=f10e99]:
+            - generic [ref=f10e105]:
+              - generic [ref=f10e106]: Workspace Administrator
+              - generic [ref=f10e107]: owner@example.test
+    - main [ref=f10e112]:
+      - generic [ref=f10e114]:
+        - button "Toggle Sidebar" [ref=f10e115]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f10e117]:
+          - generic [ref=f10e118]: Search merchants, deals, or contacts
+          - generic [ref=f10e119]: ⌘K
+        - generic [ref=f10e120]:
+          - link "New deal" [ref=f10e121] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f10e122]
+          - button "Switch to dark mode" [ref=f10e123] [cursor=pointer]
+      - generic [ref=f10e128]:
+        - generic [ref=f10e129]:
+          - heading "Settings" [level=1] [ref=f10e130]
+          - paragraph [ref=f10e131]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f10e132]:
+          - navigation "Settings" [ref=f10e133]:
+            - link "Workspace" [ref=f10e155] [cursor=pointer]:
+              - /url: /settings
+            - link "Team" [ref=f10e160] [cursor=pointer]:
+              - /url: /settings/team
+            - link "Access" [ref=f10e165] [cursor=pointer]:
+              - /url: /settings/access
+            - link "API keys" [ref=f10e169] [cursor=pointer]:
+              - /url: /settings/api-keys
+            - link "Connections" [ref=f10e173] [cursor=pointer]:
+              - /url: /settings/connections
+            - link "My profile" [ref=f10e134] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f10e138]:
+            - generic [ref=f10e139]:
+              - generic [ref=f10e140]:
+                - heading "Connections and imports" [level=2] [ref=f10e141]
+                - paragraph [ref=f10e142]: Configure inbound application providers, spreadsheet batches, document packages, and Google Drive.
+              - generic [ref=f10e177]:
+                - generic [ref=f10e178]:
+                  - generic [ref=f10e179]:
+                    - generic [ref=f10e180]: Application intake
+                    - generic [ref=f10e185]: Configure authenticated provider routes, field maps, private file access, and retry behavior. Secrets are never returned after creation or rotation.
+                  - generic [ref=f10e186]: No intake providers are configured. Add the first connection below.
+                - generic [ref=f10e188]:
+                  - generic [ref=f10e189]:
+                    - generic [ref=f10e190]: Add provider
+                    - generic [ref=f10e191]: Jotform uses a generated bearer secret in a Jotform Workflow webhook custom HTTP header; the basic Form Builder webhook does not provide this admission control. Fillout uses its configurable authorization header, HighLevel uses its official Ed25519 signature, and DocuSeal uses its HMAC secret. Zoho remains gated until the customer payload contract is approved.
+                  - generic [ref=f10e193]:
+                    - generic [ref=f10e194]:
+                      - generic [ref=f10e195]: Provider
+                      - combobox "Provider" [ref=f10e196]:
+                        - option "jotform" [selected]
+                        - option "fillout"
+                        - option "highlevel"
+                        - option "docuseal"
+                        - option "custom"
+                        - option "zoho"
+                        - option "email"
+                    - generic [ref=f10e197]:
+                      - generic [ref=f10e198]: Connection name
+                      - textbox "Connection name" [ref=f10e199]:
+                        - /placeholder: Production Jotform
+                    - generic [ref=f10e200]:
+                      - generic [ref=f10e201]: Form ID
+                      - textbox "Form ID" [ref=f10e202]
+                    - generic [ref=f10e203]:
+                      - generic [ref=f10e204]: Private read credential
+                      - textbox "Private read credential" [ref=f10e205]:
+                        - /placeholder: Needed to fetch private attachments
+                    - generic [ref=f10e206]:
+                      - generic [ref=f10e207]: Allowed attachment hosts
+                      - textbox "Allowed attachment hosts" [ref=f10e208]:
+                        - /placeholder: api.jotform.com, www.jotform.com
+                    - generic [ref=f10e209]:
+                      - generic [ref=f10e210]: Assignment pool member IDs
+                      - textbox "Assignment pool member IDs" [ref=f10e211]:
+                        - /placeholder: UUID, UUID
+                    - generic [ref=f10e212]:
+                      - generic [ref=f10e213]: Initial status
+                      - combobox "Initial status" [ref=f10e214]:
+                        - option "Lead" [selected]
+                        - option "New application"
+                        - option "Missing documents"
+                    - generic [ref=f10e215]:
+                      - generic [ref=f10e216]: Field map JSON (deal field → provider path)
+                      - textbox "Field map JSON (deal field → provider path)" [ref=f10e217]: "{}"
+                    - button "Save integration" [ref=f10e219]
+                - generic [ref=f10e220]:
+                  - generic [ref=f10e221]:
+                    - generic [ref=f10e222]: Mapping preview
+                    - generic [ref=f10e223]: Validate a realistic provider fixture without creating a deal or fetching files.
+                  - generic [ref=f10e224]:
+                    - combobox [ref=f10e225]:
+                      - option "Choose integration" [selected]
+                    - textbox "Provider fixture JSON" [ref=f10e226]: "{}"
+                    - button "Preview mapping" [ref=f10e227]
+                - generic [ref=f10e228]:
+                  - generic [ref=f10e230]:
+                    - generic [ref=f10e231]:
+                      - generic [ref=f10e232]: Intake activity
+                      - generic [ref=f10e233]: Recoverable errors and attachment checkpoints stay visible here.
+                    - button "Refresh" [ref=f10e234]
+                  - generic [ref=f10e235]:
+                    - generic [ref=f10e236]:
+                      - button "Retry files" [ref=f10e237]
+                      - button "Send receipts" [ref=f10e238]
+                    - paragraph [ref=f10e239]: No applications have arrived yet.
+              - generic [ref=f10e240]:
+                - generic [ref=f10e241]:
+                  - generic [ref=f10e242]: Import center
+                  - generic [ref=f10e246]: Stage merchant spreadsheets and document packages, review every row, then commit with saved checkpoints.
+                - generic [ref=f10e247]:
+                  - generic [ref=f10e248]:
+                    - generic [ref=f10e249]:
+                      - generic [ref=f10e250]: Existing source
+                      - combobox [ref=f10e251]:
+                        - generic: Partner referrals
+                    - generic [ref=f10e252]:
+                      - generic [ref=f10e253]: Lead batch
+                      - combobox [ref=f10e254]:
+                        - generic: September leads
+                    - generic [ref=f10e255]:
+                      - textbox "New source name" [ref=f10e256]:
+                        - /placeholder: New source
+                      - combobox [ref=f10e257]:
+                        - generic: Spreadsheet
+                      - button "Source" [disabled]
+                    - generic [ref=f10e258]:
+                      - textbox "New batch name" [ref=f10e259]:
+                        - /placeholder: New batch
+                      - button "Batch" [disabled]
+                  - generic [ref=f10e260]:
+                    - tablist [ref=f10e261]:
+                      - tab "Create" [selected] [ref=f10e262]
+                      - tab "Update" [ref=f10e263]
+                      - tab "Drive" [ref=f10e264]
+                    - tabpanel "Create" [ref=f10e265]:
+                      - generic [ref=f10e266]:
+                        - generic [ref=f10e267]:
+                          - generic [ref=f10e268]: CSV, TSV, XLSX, or XLS
+                          - button "CSV, TSV, XLSX, or XLS" [ref=f10e269]
+                        - generic [ref=f10e270]:
+                          - generic [ref=f10e271]: Round-robin pool
+                          - listbox "Round-robin pool" [ref=f10e272]:
+                            - option "Workspace Administrator" [selected] [ref=f10e273]
+                      - generic [ref=f10e274]:
+                        - switch "Ask configured AI provider for mapping suggestions" [ref=f10e275]
+                        - generic [ref=f10e276]: Ask configured AI provider for mapping suggestions
+                        - button "Preview rows" [ref=f10e277]
+                      - generic [ref=f10e278]:
+                        - generic [ref=f10e279]:
+                          - generic [ref=f10e280]:
+                            - paragraph [ref=f10e281]: Mapping review · manual_heuristic
+                            - generic [ref=f10e282]: Revision 1
+                          - generic [ref=f10e283]:
+                            - generic [ref=f10e284]:
+                              - generic [ref=f10e285]: Business Name · 72%
+                              - combobox [ref=f10e286]:
+                                - generic: legalName
+                            - generic [ref=f10e287]:
+                              - generic [ref=f10e288]: Owner First Name
+                              - combobox [ref=f10e289]:
+                                - generic: Do not import
+                            - generic [ref=f10e290]:
+                              - generic [ref=f10e291]: Owner Last Name
+                              - combobox [ref=f10e292]:
+                                - generic: Do not import
+                            - generic [ref=f10e293]:
+                              - generic [ref=f10e294]: Email · 72%
+                              - combobox [ref=f10e295]:
+                                - generic: contactEmail
+                            - generic [ref=f10e296]:
+                              - generic [ref=f10e297]: Phone · 72%
+                              - combobox [ref=f10e298]:
+                                - generic: contactPhone
+                            - generic [ref=f10e299]:
+                              - generic [ref=f10e300]: Requested Amount · 72%
+                              - combobox [ref=f10e301]:
+                                - generic: requestedAmount
+                            - generic [ref=f10e302]:
+                              - generic [ref=f10e303]: Monthly Revenue · 72%
+                              - combobox [ref=f10e304]:
+                                - generic: monthlyRevenue
+                            - generic [ref=f10e305]:
+                              - generic [ref=f10e306]: Status
+                              - combobox [ref=f10e307]:
+                                - generic: Do not import
+                          - generic [ref=f10e308]:
+                            - button "Apply mapping" [ref=f10e309]
+                            - combobox [ref=f10e310]:
+                              - generic: Load mapping profile
+                            - textbox "Mapping profile name" [ref=f10e311]:
+                              - /placeholder: Profile name
+                            - button "Save profile" [disabled]
+                        - table [ref=f10e313]:
+                          - rowgroup [ref=f10e314]:
+                            - row [ref=f10e315]:
+                              - columnheader "Row" [ref=f10e316]
+                              - columnheader "Business" [ref=f10e317]
+                              - columnheader "Originator" [ref=f10e318]
+                              - columnheader "Duplicate decision" [ref=f10e319]
+                              - columnheader "Review" [ref=f10e320]
+                          - rowgroup [ref=f10e321]:
+                            - row [ref=f10e322]:
+                              - cell "2" [ref=f10e323]
+                              - cell "Harbor Coffee LLC" [ref=f10e324]
+                              - cell "Workspace Administrator" [ref=f10e325]
+                              - cell "No match" [ref=f10e326]
+                              - cell "Ready" [ref=f10e327]
+                            - row [ref=f10e328]:
+                              - cell "3" [ref=f10e329]
+                              - cell "North Star Bakery Inc" [ref=f10e330]
+                              - cell "Workspace Administrator" [ref=f10e331]
+                              - cell "No match" [ref=f10e332]
+                              - cell "Ready" [ref=f10e333]
+                            - row [ref=f10e334]:
+                              - cell "4" [ref=f10e335]
+                              - cell "—" [ref=f10e336]
+                              - cell "Workspace Administrator" [ref=f10e337]
+                              - cell "No match" [ref=f10e338]
+                              - cell "A legal name or DBA name is required." [ref=f10e339]
+                        - generic [ref=f10e340]:
+                          - button "Commit ready rows" [ref=f10e341]
+                          - button "Cancel preview" [ref=f10e342]
+      - generic [ref=f10e151]:
+        - generic [ref=f10e152]: MCA Workspace
+        - generic [ref=f10e153]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f10e154]

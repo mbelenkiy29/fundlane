@@ -1,0 +1,32 @@
+name: Validate Fundlane
+
+on:
+  push:
+    branches: [main]
+    paths: ["nextjs-version/**", ".github/workflows/deploy.yml"]
+  pull_request:
+    paths: ["nextjs-version/**", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nextjs-version
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: nextjs-version/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint

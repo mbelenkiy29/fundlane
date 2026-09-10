@@ -1,0 +1,7 @@
+import { NextResponse } from "next/server"
+import { assertTrustedMutation, requireWorkspaceAccess } from "@/lib/mca/auth"
+import { actorForDeals } from "@/lib/mca/deals/service"
+import { apiError, AppError } from "@/lib/mca/errors"
+import { previewSpreadsheetImport } from "@/lib/mca/imports/service"
+export const runtime="nodejs";export const dynamic="force-dynamic"
+export async function POST(request:Request){try{assertTrustedMutation(request);const actor=await actorForDeals(await requireWorkspaceAccess(request,{roles:["admin","super_admin"],sessionOnly:true}));const form=await request.formData();const file=form.get("file");if(!(file instanceof File))throw new AppError(422,"import_file_required","Choose a spreadsheet to preview.");const json=<T,>(key:string,fallback:T):T=>{const value=form.get(key);return typeof value==="string"&&value?JSON.parse(value) as T:fallback};const preview=await previewSpreadsheetImport(actor,{sourceId:String(form.get("sourceId")??""),batchId:String(form.get("batchId")??""),filename:file.name,bytes:new Uint8Array(await file.arrayBuffer()),mapping:json<Record<string,string>|undefined>("mapping",undefined),originatorMapping:json<Record<string,string>>("originatorMapping",{}),assignmentPool:json<string[]>("assignmentPool",[]),useAiMapping:form.get("useAiMapping")==="true"});return NextResponse.json(preview,{status:201})}catch(error){return apiError(error)}}

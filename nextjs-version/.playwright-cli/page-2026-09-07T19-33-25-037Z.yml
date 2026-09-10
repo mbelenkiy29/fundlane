@@ -1,0 +1,58 @@
+- generic [active] [ref=f4e1]:
+  - main [ref=f4e64]:
+    - generic [ref=f4e66]:
+      - button "Toggle Sidebar" [ref=f4e67]
+      - button "Search merchants, deals, or contacts" [ref=f4e69]
+      - generic [ref=f4e71]:
+        - button "Notifications" [ref=f4e72]
+        - button "Switch to dark mode" [ref=f4e73] [cursor=pointer]
+    - generic [ref=f4e78]:
+      - generic [ref=f4e79]:
+        - generic [ref=f4e80]:
+          - paragraph [ref=f4e81]: Monday, September 7
+          - heading "Good afternoon, Browser" [level=1] [ref=f4e82]
+          - paragraph [ref=f4e83]: Here’s where your brokerage needs attention.
+        - link "New deal" [ref=f4e84] [cursor=pointer]:
+          - /url: /deals/new
+      - generic [ref=f4e85]:
+        - generic [ref=f4e86]:
+          - generic [ref=f4e88]:
+            - generic [ref=f4e89]: Open deals
+            - generic [ref=f4e90]: —
+          - paragraph [ref=f4e97]: Connect deal data to populate
+        - generic [ref=f4e98]:
+          - generic [ref=f4e100]:
+            - generic [ref=f4e101]: Awaiting submission
+            - generic [ref=f4e102]: —
+          - paragraph [ref=f4e109]: No live submissions yet
+        - generic [ref=f4e110]:
+          - generic [ref=f4e112]:
+            - generic [ref=f4e113]: Offers to review
+            - generic [ref=f4e114]: —
+          - paragraph [ref=f4e123]: No live offers yet
+        - generic [ref=f4e124]:
+          - generic [ref=f4e126]:
+            - generic [ref=f4e127]: Active team
+            - generic [ref=f4e128]: —
+          - paragraph [ref=f4e135]: Open team settings to review
+      - generic [ref=f4e136]:
+        - generic [ref=f4e137]:
+          - generic [ref=f4e138]:
+            - generic [ref=f4e139]: Pipeline activity
+            - generic [ref=f4e140]: Live deal events will appear here as your team works.
+          - generic [ref=f4e142]:
+            - paragraph [ref=f4e146]: No activity to show
+            - paragraph [ref=f4e147]: Create or import a deal to start a traceable workspace activity timeline.
+            - link "Open deals" [ref=f4e148] [cursor=pointer]:
+              - /url: /deals
+        - generic [ref=f4e149]:
+          - generic [ref=f4e150]:
+            - generic [ref=f4e151]: Workspace readiness
+            - generic [ref=f4e152]: Foundation setup for a secure first deal.
+          - generic [ref=f4e153]: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+    - generic [ref=f4e156]:
+      - generic [ref=f4e157]: MCA Workspace
+      - generic [ref=f4e158]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f4e29] [cursor=pointer]
+  - alert [ref=f4e33]: MCA Workspace

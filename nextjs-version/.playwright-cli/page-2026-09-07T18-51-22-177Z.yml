@@ -1,0 +1,220 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Visual Brokerage
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /reports
+                    - generic: Reports
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: visual@example.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Deal workspace
+                  - heading [level=1]: Pipeline
+                  - paragraph: Work merchant applications from first contact through servicing events.
+                - button: New deal
+              - generic:
+                - generic:
+                  - generic:
+                    - paragraph: Filtered deals
+                    - paragraph: "0"
+                - generic:
+                  - generic:
+                    - paragraph: Submission ready
+                    - paragraph: "0"
+                - generic:
+                  - generic:
+                    - paragraph: Needs information
+                    - paragraph: "0"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - textbox:
+                        - /placeholder: Search name or deal ID
+                    - combobox:
+                      - generic: All statuses
+                    - combobox:
+                      - generic: All assignees
+                    - textbox
+                    - textbox
+                    - generic:
+                      - button
+                      - button
+                  - generic:
+                    - textbox:
+                      - /placeholder: Filter by funder name
+              - generic:
+                - generic:
+                  - generic:
+                    - paragraph: No deals match this view
+                    - paragraph: Clear filters or save a partial merchant application.
+                  - button: New deal
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e44] [cursor=pointer]
+  - alert: MCA Workspace
+  - dialog [ref=e332]:
+    - generic [ref=e333]:
+      - heading "Create merchant deal" [level=2] [ref=e334]
+      - paragraph [ref=e335]: A stable draft ID is retained if the request needs to be retried.
+    - generic [ref=e336]:
+      - generic [ref=e337]:
+        - generic [ref=e338]:
+          - heading "Business" [level=3] [ref=e339]
+          - paragraph [ref=e340]: Save at any point. Missing submission fields stay flagged on the record.
+        - generic [ref=e341]:
+          - generic [ref=e342]:
+            - generic [ref=e343]: Legal name
+            - textbox [active] [ref=e344]
+          - generic [ref=e345]:
+            - generic [ref=e346]: DBA
+            - textbox [ref=e347]
+          - generic [ref=e348]:
+            - generic [ref=e349]: EIN
+            - textbox "12-3456789" [ref=e350]
+          - generic [ref=e351]:
+            - generic [ref=e352]: Entity type
+            - combobox [ref=e353]:
+              - generic: Choose type
+          - generic [ref=e354]:
+            - generic [ref=e355]: Contact name
+            - textbox [ref=e356]
+          - generic [ref=e357]:
+            - generic [ref=e358]: Contact email
+            - textbox [ref=e359]
+          - generic [ref=e360]:
+            - generic [ref=e361]: Contact phone
+            - textbox [ref=e362]
+          - generic [ref=e363]:
+            - generic [ref=e364]: Business start date
+            - textbox [ref=e365]
+      - generic [ref=e366]:
+        - heading "Address & criteria" [level=3] [ref=e367]
+        - generic [ref=e368]:
+          - generic [ref=e369]:
+            - generic [ref=e370]: Street address
+            - textbox [ref=e371]
+          - generic [ref=e372]:
+            - generic [ref=e373]: City
+            - textbox [ref=e374]
+          - generic [ref=e375]:
+            - generic [ref=e376]: State
+            - textbox [ref=e377]
+          - generic [ref=e378]:
+            - generic [ref=e379]: ZIP code
+            - textbox [ref=e380]
+          - generic [ref=e381]:
+            - generic [ref=e382]: Industry
+            - textbox [ref=e383]
+          - generic [ref=e384]:
+            - generic [ref=e385]: NAICS
+            - textbox [ref=e386]
+          - generic [ref=e387]:
+            - generic [ref=e388]: Monthly revenue
+            - spinbutton [ref=e389]
+          - generic [ref=e390]:
+            - generic [ref=e391]: FICO
+            - spinbutton [ref=e392]
+          - generic [ref=e393]:
+            - generic [ref=e394]: Requested funding
+            - spinbutton [ref=e395]
+          - generic [ref=e396]:
+            - generic [ref=e397]: Use of funds
+            - textbox [ref=e398]
+      - generic [ref=e399]:
+        - generic [ref=e400]:
+          - heading "Owners" [level=3] [ref=e401]
+          - button "Add owner" [ref=e402]
+        - generic [ref=e403]: No owners yet.
+      - generic [ref=e404]:
+        - generic [ref=e405]:
+          - heading "Assignments" [level=3] [ref=e406]
+          - paragraph [ref=e407]: Enter active membership IDs, separated by commas. The first is primary.
+        - generic [ref=e408]:
+          - generic [ref=e409]:
+            - generic [ref=e410]: Originators
+            - textbox [ref=e411]
+          - generic [ref=e412]:
+            - generic [ref=e413]: Closers
+            - textbox [ref=e414]
+    - generic [ref=e415]:
+      - button "Cancel" [ref=e416]
+      - button "Save draft" [ref=e417]
+    - button "Close" [ref=e418]

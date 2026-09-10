@@ -1,0 +1,10 @@
+{
+  "billing": {
+    "organization_enabled": true,
+    "plans": {
+      "free_org": { "name": "Free", "description": "One company seat. Existing business features remain available.", "payer_type": "org", "amount": 0, "annual_monthly_amount": 0, "currency": "usd", "free_trial_enabled": false, "publicly_visible": true },
+      "mca_starter_test": { "name": "Starter Test", "description": "Development only. Up to 5 company seats, including the owner.", "payer_type": "org", "amount": 4900, "annual_monthly_amount": 0, "currency": "usd", "free_trial_enabled": false, "is_recurring": true, "publicly_visible": true },
+      "mca_team_test": { "name": "Team Test", "description": "Development only. Up to 20 company seats, including the owner.", "payer_type": "org", "amount": 9900, "annual_monthly_amount": 0, "currency": "usd", "free_trial_enabled": false, "is_recurring": true, "publicly_visible": true }
+    }
+  }
+}

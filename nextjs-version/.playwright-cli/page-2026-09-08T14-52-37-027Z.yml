@@ -1,0 +1,104 @@
+- generic [active] [ref=f11e1]:
+  - generic [ref=f11e2]:
+    - generic [ref=f11e5]:
+      - list [ref=f11e7]:
+        - listitem [ref=f11e8]:
+          - link "Browser Acceptance MCA workspace" [ref=f11e9] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f11e21]:
+              - generic [ref=f11e22]: Browser Acceptance
+              - generic [ref=f11e23]: MCA workspace
+      - generic [ref=f11e28]:
+        - generic [ref=f11e29]:
+          - generic [ref=f11e30]: Pipeline
+          - list [ref=f11e31]:
+            - listitem [ref=f11e32]:
+              - link "Home" [ref=f11e33] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f11e39]:
+              - link "Deals" [ref=f11e40] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f11e46]:
+              - link "Submissions" [ref=f11e47] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f11e53]:
+              - link "Offers" [ref=f11e54] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f11e62]:
+              - link "Advances" [ref=f11e63] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f11e69]:
+              - link "Renewals" [ref=f11e70] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f11e77]:
+          - generic [ref=f11e78]: Operations
+          - list [ref=f11e79]:
+            - listitem [ref=f11e80]:
+              - link "Funders" [ref=f11e81] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f11e85]:
+              - link "Reports" [ref=f11e86] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f11e90]:
+              - link "Settings" [ref=f11e91] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f11e97]:
+        - listitem [ref=f11e98]:
+          - button "Workspace Administrator owner@example.test" [ref=f11e99]:
+            - generic [ref=f11e105]:
+              - generic [ref=f11e106]: Workspace Administrator
+              - generic [ref=f11e107]: owner@example.test
+    - main [ref=f11e112]:
+      - generic [ref=f11e114]:
+        - button "Toggle Sidebar" [ref=f11e115]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f11e117]:
+          - generic [ref=f11e118]: Search merchants, deals, or contacts
+          - generic [ref=f11e119]: ⌘K
+        - generic [ref=f11e120]:
+          - link "New deal" [ref=f11e121] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f11e122]
+          - button "Switch to dark mode" [ref=f11e123] [cursor=pointer]
+      - generic [ref=f11e128]:
+        - generic [ref=f11e129]:
+          - generic [ref=f11e130]:
+            - generic [ref=f11e131]: Application scan
+            - generic [ref=f11e137]: Upload, scan, extract, and review every business and owner field with source evidence before creating or merging a deal.
+          - generic [ref=f11e139]:
+            - button "Choose File" [ref=f11e140]
+            - button "Upload" [ref=f11e141]
+        - generic [ref=f11e142]:
+          - generic [ref=f11e143]:
+            - generic [ref=f11e144]:
+              - generic [ref=f11e145]: Deal workspace
+              - heading "Pipeline" [level=1] [ref=f11e150]
+              - paragraph [ref=f11e151]: Work merchant applications from first contact through servicing events.
+            - button "New deal" [ref=f11e152]
+          - generic [ref=f11e153]:
+            - generic [ref=f11e155]:
+              - paragraph [ref=f11e156]: Filtered deals
+              - paragraph [ref=f11e157]: —
+            - generic [ref=f11e159]:
+              - paragraph [ref=f11e160]: Submission ready
+              - paragraph [ref=f11e161]: —
+            - generic [ref=f11e163]:
+              - paragraph [ref=f11e164]: Needs information
+              - paragraph [ref=f11e165]: —
+          - generic [ref=f11e167]:
+            - generic [ref=f11e168]:
+              - textbox "Search name or deal ID" [ref=f11e173]
+              - combobox [ref=f11e174]
+              - combobox [aria-hidden] [ref=f11e175]
+              - combobox [ref=f11e176]
+              - combobox [aria-hidden] [ref=f11e177]
+              - textbox "Created from" [ref=f11e178]
+              - textbox "Created to" [ref=f11e179]
+              - generic [ref=f11e180]:
+                - button "Table view" [ref=f11e181]
+                - button "Kanban view" [ref=f11e182]
+            - textbox "Filter by funder name" [ref=f11e184]
+      - generic [ref=f11e190]:
+        - generic [ref=f11e191]: MCA Workspace
+        - generic [ref=f11e192]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f11e193]

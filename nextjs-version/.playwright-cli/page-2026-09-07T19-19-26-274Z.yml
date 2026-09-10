@@ -1,0 +1,102 @@
+- generic [ref=e1]:
+  - generic [ref=e48]:
+    - generic [ref=e51]:
+      - list [ref=e53]:
+        - listitem [ref=e54]:
+          - link "Browser QA Capital MCA workspace" [ref=e55] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e67]:
+              - generic [ref=e68]: Browser QA Capital
+              - generic [ref=e69]: MCA workspace
+      - generic [ref=e74]:
+        - generic [ref=e75]:
+          - generic [ref=e76]: Pipeline
+          - list [ref=e77]:
+            - listitem [ref=e78]:
+              - link "Home" [ref=e79] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=e85]:
+              - link "Deals" [active] [ref=e86] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=e92]:
+              - link "Submissions" [ref=e93] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=e99]:
+              - link "Offers" [ref=e100] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=e108]:
+              - link "Advances" [ref=e109] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=e115]:
+              - link "Renewals" [ref=e116] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=e123]:
+          - generic [ref=e124]: Operations
+          - list [ref=e125]:
+            - listitem [ref=e126]:
+              - link "Funders" [ref=e127] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=e131]:
+              - link "Reports" [ref=e132] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=e136]:
+              - link "Settings" [ref=e137] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=e143]:
+        - listitem [ref=e144]:
+          - button "Workspace Administrator browser-admin@example.test" [ref=e145]:
+            - generic [ref=e151]:
+              - generic [ref=e152]: Workspace Administrator
+              - generic [ref=e153]: browser-admin@example.test
+    - main [ref=e158]:
+      - generic [ref=e160]:
+        - button "Toggle Sidebar" [ref=e161]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=e163]:
+          - generic [ref=e164]: Search merchants, deals, or contacts
+          - generic [ref=e165]: ⌘K
+        - generic [ref=e166]:
+          - link "New deal" [ref=e167] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=e168]
+          - button "Switch to dark mode" [ref=e169] [cursor=pointer]
+      - generic [ref=e279]:
+        - generic [ref=e280]:
+          - generic [ref=e281]:
+            - generic [ref=e282]: Deal workspace
+            - heading "Pipeline" [level=1] [ref=e287]
+            - paragraph [ref=e288]: Work merchant applications from first contact through servicing events.
+          - button "New deal" [ref=e289]
+        - generic [ref=e290]:
+          - generic [ref=e292]:
+            - paragraph [ref=e293]: Filtered deals
+            - paragraph [ref=e294]: "0"
+          - generic [ref=e296]:
+            - paragraph [ref=e297]: Submission ready
+            - paragraph [ref=e298]: "0"
+          - generic [ref=e300]:
+            - paragraph [ref=e301]: Needs information
+            - paragraph [ref=e302]: "0"
+        - generic [ref=e304]:
+          - generic [ref=e305]:
+            - textbox "Search name or deal ID" [ref=e310]
+            - combobox [ref=e311]:
+              - generic: All statuses
+            - combobox [ref=e312]:
+              - generic: All assignees
+            - textbox "Created from" [ref=e313]
+            - textbox "Created to" [ref=e314]
+            - generic [ref=e315]:
+              - button [ref=e316]
+              - button [ref=e317]
+          - textbox "Filter by funder name" [ref=e319]
+        - generic [ref=e321]:
+          - generic [ref=e327]:
+            - paragraph [ref=e328]: No deals match this view
+            - paragraph [ref=e329]: Clear filters or save a partial merchant application.
+          - button "New deal" [ref=e330]
+      - generic [ref=e276]:
+        - generic [ref=e277]: MCA Workspace
+        - generic [ref=e278]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e44] [cursor=pointer]
+  - alert [ref=e38]: MCA Workspace

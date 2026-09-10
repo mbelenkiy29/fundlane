@@ -1,0 +1,122 @@
+- generic:
+  - generic [aria-hidden]:
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+          - generic:
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - heading [level=1]: Settings
+                - paragraph: Manage your brokerage, team access, and integrations.
+              - generic:
+                - navigation:
+                  - link:
+                    - /url: /settings
+                    - text: Workspace
+                  - link:
+                    - /url: /settings/team
+                    - text: Team
+                  - link:
+                    - /url: /settings/access
+                    - text: Access
+                  - link:
+                    - /url: /settings/api-keys
+                    - text: API keys
+                  - link:
+                    - /url: /settings/profile
+                    - text: My profile
+                - main:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Team
+                        - paragraph: Invite users, assign managers, and control role access.
+                      - button [expanded]: Invite user
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Seats
+                          - generic: 1 of 5 seats in use
+                        - generic:
+                          - text: "4"
+                          - paragraph: available
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - table:
+                              - rowgroup:
+                                - row:
+                                  - columnheader: Member
+                                  - columnheader: Role
+                                  - columnheader: Manager
+                                  - columnheader: Status
+                                  - columnheader: Application ID
+                                  - columnheader:
+                                    - generic: Actions
+                              - rowgroup:
+                                - row:
+                                  - cell:
+                                    - generic:
+                                      - paragraph: Workspace Administrator
+                                      - paragraph: browser-admin@example.test
+                                  - cell:
+                                    - combobox:
+                                      - generic: Super admin
+                                  - cell:
+                                    - combobox:
+                                      - generic: No manager
+                                  - cell:
+                                    - generic: Active
+                                  - cell: MCA-E7F63C16
+                                  - cell:
+                                    - button
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f3e11] [cursor=pointer]
+  - alert
+  - dialog [ref=f3e107]:
+    - generic [ref=f3e108]:
+      - generic [ref=f3e109]:
+        - heading "Invite a team member" [level=2] [ref=f3e110]
+        - paragraph [ref=f3e111]: The seat is reserved when the invitation is created. Expired invites can be resent without adding another membership.
+      - generic [ref=f3e112]:
+        - generic [ref=f3e113]:
+          - generic [ref=f3e114]: Name
+          - textbox [active] [ref=f3e115]
+        - generic [ref=f3e116]:
+          - generic [ref=f3e117]: Email
+          - textbox [ref=f3e118]
+        - generic [ref=f3e119]:
+          - generic [ref=f3e120]: Phone
+          - textbox "Optional" [ref=f3e121]
+        - generic [ref=f3e122]:
+          - generic [ref=f3e123]: Role
+          - combobox "Role" [ref=f3e124]:
+            - generic: Rep
+          - combobox [aria-hidden] [ref=f3e125]
+        - generic [ref=f3e126]:
+          - generic [ref=f3e127]: Manager
+          - combobox "Manager" [ref=f3e128]:
+            - generic: No manager
+          - combobox [aria-hidden] [ref=f3e129]
+        - generic [ref=f3e130]:
+          - generic [ref=f3e131]: Sender association
+          - textbox "Optional sender ID" [ref=f3e132]
+      - generic [ref=f3e133]:
+        - button "Cancel" [ref=f3e134]
+        - button "Send invitation" [ref=f3e135]
+    - button "Close" [ref=f3e136]

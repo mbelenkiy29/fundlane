@@ -1,0 +1,81 @@
+- generic [active] [ref=f10e1]:
+  - generic [ref=f10e2]:
+    - generic [ref=f10e5]:
+      - list [ref=f10e7]:
+        - listitem [ref=f10e8]:
+          - link "Browser Acceptance MCA workspace" [ref=f10e9] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f10e21]:
+              - generic [ref=f10e22]: Browser Acceptance
+              - generic [ref=f10e23]: MCA workspace
+      - generic [ref=f10e28]:
+        - generic [ref=f10e29]:
+          - generic [ref=f10e30]: Pipeline
+          - list [ref=f10e31]:
+            - listitem [ref=f10e32]:
+              - link "Home" [ref=f10e33] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f10e39]:
+              - link "Deals" [ref=f10e40] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f10e46]:
+              - link "Submissions" [ref=f10e47] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f10e53]:
+              - link "Offers" [ref=f10e54] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f10e62]:
+              - link "Advances" [ref=f10e63] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f10e69]:
+              - link "Renewals" [ref=f10e70] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f10e77]:
+          - generic [ref=f10e78]: Operations
+          - list [ref=f10e79]:
+            - listitem [ref=f10e80]:
+              - link "Funders" [ref=f10e81] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f10e85]:
+              - link "Reports" [ref=f10e86] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f10e90]:
+              - link "Settings" [ref=f10e91] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f10e97]:
+        - listitem [ref=f10e98]:
+          - button "Workspace Administrator owner@example.test" [ref=f10e99]:
+            - generic [ref=f10e105]:
+              - generic [ref=f10e106]: Workspace Administrator
+              - generic [ref=f10e107]: owner@example.test
+    - main [ref=f10e112]:
+      - generic [ref=f10e114]:
+        - button "Toggle Sidebar" [ref=f10e115]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f10e117]:
+          - generic [ref=f10e118]: Search merchants, deals, or contacts
+          - generic [ref=f10e119]: ⌘K
+        - generic [ref=f10e120]:
+          - link "New deal" [ref=f10e121] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f10e122]
+          - button "Switch to dark mode" [ref=f10e123] [cursor=pointer]
+      - generic [ref=f10e128]:
+        - generic [ref=f10e129]:
+          - heading "Settings" [level=1] [ref=f10e130]
+          - paragraph [ref=f10e131]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f10e132]:
+          - navigation "Settings" [ref=f10e133]:
+            - link "My profile" [ref=f10e134] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f10e138]:
+            - generic [ref=f10e139]:
+              - generic [ref=f10e140]:
+                - heading "Connections and imports" [level=2] [ref=f10e141]
+                - paragraph [ref=f10e142]: Configure inbound application providers, spreadsheet batches, document packages, and Google Drive.
+              - generic [ref=f10e143]: Loading intake integrations…
+              - generic [ref=f10e147]: Loading import tools…
+      - generic [ref=f10e151]:
+        - generic [ref=f10e152]: MCA Workspace
+        - generic [ref=f10e153]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f10e154]

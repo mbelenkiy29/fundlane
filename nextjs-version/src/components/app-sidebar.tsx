@@ -1,0 +1,49 @@
+"use client"
+
+import Link from "next/link"
+import { BanknoteArrowDown, BriefcaseBusiness, Building2, ChartNoAxesCombined, CircleGauge, FileCheck2, HandCoins, Landmark, RefreshCcw, Settings, MessageSquare, WalletCards } from "lucide-react"
+import { Logo } from "@/components/logo"
+import { NavMain } from "@/components/nav-main"
+import { NavUser } from "@/components/nav-user"
+import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
+import type { SessionResponse } from "@/lib/mca/types"
+
+const groups = [
+  { label: "Pipeline", items: [
+    { title: "Home", url: "/dashboard", icon: CircleGauge, page: "dashboard" },
+    { title: "Deals", url: "/deals", icon: BriefcaseBusiness, page: "deals" },
+    { title: "Submissions", url: "/submissions", icon: FileCheck2, page: "deals" },
+    { title: "Offers", url: "/offers", icon: HandCoins, page: "deals" },
+    { title: "Advances", url: "/advances", icon: BanknoteArrowDown, page: "deals" },
+    { title: "Renewals", url: "/renewals", icon: RefreshCcw, page: "deals" },
+  ]},
+  { label: "Operations", items: [
+    { title: "SMS inbox", url: "/sms", icon: MessageSquare, page: "deals" },
+    { title: "Funders", url: "/funders", icon: Landmark },
+    { title: "Payments", url: "/payments", icon: WalletCards, page: "payments" },
+    { title: "Reports", url: "/reports", icon: ChartNoAxesCombined, page: "reports" },
+    { title: "Settings", url: "/settings", icon: Settings, page: "workspace" },
+  ]},
+]
+
+export function AppSidebar({ session, ...props }: React.ComponentProps<typeof Sidebar> & { session?: SessionResponse }) {
+  const identity = { workspace: session?.membership?.workspaceName ?? "MCA Workspace", name: session?.user?.name ?? "User", email: session?.user?.email ?? "" }
+  const pages = session?.permissions?.pages
+
+  return (
+    <Sidebar {...props}>
+      <SidebarHeader className="border-b">
+        <SidebarMenu><SidebarMenuItem><SidebarMenuButton size="lg" asChild>
+          <Link href="/dashboard">
+            <div className="flex aspect-square size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"><Logo size={25} aria-hidden="true" /></div>
+            <div className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate text-sm font-semibold">{identity.workspace}</span><span className="flex items-center gap-1 truncate text-xs text-muted-foreground"><Building2 className="size-3" /> MCA workspace</span></div>
+          </Link>
+        </SidebarMenuButton></SidebarMenuItem></SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        {groups.map((group) => <NavMain key={group.label} label={group.label} items={group.items.filter((item) => (!item.page || !session || pages?.[item.page as keyof typeof pages]) && (item.url !== "/payments" || !session || session.permissions?.actions.viewPaymentTable))} />)}
+      </SidebarContent>
+      <SidebarFooter className="border-t"><NavUser user={{ name: identity.name, email: identity.email, avatar: "" }} /></SidebarFooter>
+    </Sidebar>
+  )
+}

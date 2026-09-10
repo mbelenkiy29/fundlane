@@ -1,0 +1,11 @@
+- generic [active] [ref=f4e1]:
+  - main [ref=f4e3]:
+    - generic [ref=f4e5]:
+      - link [ref=f4e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f4e18]:
+        - heading "Join your workspace" [level=1] [ref=f4e19]
+        - paragraph [ref=f4e20]: Loading your secure invitation.
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f4e29] [cursor=pointer]
+  - alert [ref=f4e33]

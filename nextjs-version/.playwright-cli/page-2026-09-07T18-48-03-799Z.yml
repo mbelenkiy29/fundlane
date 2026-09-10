@@ -1,0 +1,146 @@
+- generic:
+  - generic [aria-hidden]:
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+          - generic:
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - paragraph: Monday, September 7
+                  - heading [level=1]: Good afternoon, Workspace
+                  - paragraph: Here’s where your brokerage needs attention.
+                - link:
+                  - /url: /deals/new
+                  - text: New deal
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Open deals
+                      - generic: —
+                  - generic:
+                    - paragraph: Connect deal data to populate
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Awaiting submission
+                      - generic: —
+                  - generic:
+                    - paragraph: No live submissions yet
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Offers to review
+                      - generic: —
+                  - generic:
+                    - paragraph: No live offers yet
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Active team
+                      - generic: —
+                  - generic:
+                    - paragraph: Open team settings to review
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: Pipeline activity
+                    - generic: Live deal events will appear here as your team works.
+                  - generic:
+                    - generic:
+                      - paragraph: No activity to show
+                      - paragraph: Create or import a deal to start a traceable workspace activity timeline.
+                      - link:
+                        - /url: /deals
+                        - text: Open deals
+                - generic:
+                  - generic:
+                    - generic: Workspace readiness
+                    - generic: Foundation setup for a secure first deal.
+                  - generic:
+                    - link:
+                      - /url: /settings
+                      - generic: Set up
+                      - generic:
+                        - generic: Brokerage details
+                        - generic: Name, timezone, and feature access
+                    - link:
+                      - /url: /settings/team
+                      - generic: Set up
+                      - generic:
+                        - generic: Team and roles
+                        - generic: Seats, managers, and financial access
+                    - link:
+                      - /url: /settings/api-keys
+                      - generic: Set up
+                      - generic:
+                        - generic: Integration access
+                        - generic: Scoped API keys with expiry
+                    - generic: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f10e11] [cursor=pointer]
+  - alert
+  - dialog "Sidebar" [ref=f10e137]:
+    - generic [ref=f10e138]:
+      - heading "Sidebar" [level=2]
+      - paragraph: Displays the mobile sidebar.
+    - generic [ref=f10e139]:
+      - list [ref=f10e141]:
+        - listitem [ref=f10e142]:
+          - link "Northstar Capital MCA workspace" [ref=f10e143] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f10e155]:
+              - generic [ref=f10e156]: Northstar Capital
+              - generic [ref=f10e157]: MCA workspace
+      - generic [ref=f10e162]:
+        - generic [ref=f10e163]:
+          - generic [ref=f10e164]: Pipeline
+          - list [ref=f10e165]:
+            - listitem [ref=f10e166]:
+              - link "Home" [ref=f10e167] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f10e173]:
+              - link "Deals" [ref=f10e174] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f10e180]:
+              - link "Submissions" [ref=f10e181] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f10e187]:
+              - link "Offers" [ref=f10e188] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f10e196]:
+              - link "Advances" [ref=f10e197] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f10e203]:
+              - link "Renewals" [ref=f10e204] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f10e211]:
+          - generic [ref=f10e212]: Operations
+          - list [ref=f10e213]:
+            - listitem [ref=f10e214]:
+              - link "Funders" [ref=f10e215] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f10e219]:
+              - link "Settings" [ref=f10e220] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f10e226]:
+        - listitem [ref=f10e227]:
+          - button "Workspace Administrator admin@northstar.test" [active] [ref=f10e228]:
+            - generic [ref=f10e234]:
+              - generic [ref=f10e235]: Workspace Administrator
+              - generic [ref=f10e236]: admin@northstar.test

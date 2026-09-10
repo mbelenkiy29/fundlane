@@ -1,0 +1,84 @@
+- generic [active] [ref=f3e1]:
+  - main [ref=f3e17]:
+    - generic [ref=f3e19]:
+      - button "Toggle Sidebar" [ref=f3e20]
+      - button "Search merchants, deals, or contacts" [ref=f3e22]
+      - generic [ref=f3e24]:
+        - button "Notifications" [ref=f3e25]
+        - button "Switch to dark mode" [ref=f3e26] [cursor=pointer]
+    - generic [ref=f3e31]:
+      - generic [ref=f3e32]:
+        - heading "Settings" [level=1] [ref=f3e33]
+        - paragraph [ref=f3e34]: Manage your brokerage, team access, and integrations.
+      - generic [ref=f3e35]:
+        - navigation "Settings" [ref=f3e36]:
+          - link "Workspace" [ref=f3e37] [cursor=pointer]:
+            - /url: /settings
+          - link "Team" [ref=f3e42] [cursor=pointer]:
+            - /url: /settings/team
+          - link "Access" [ref=f3e47] [cursor=pointer]:
+            - /url: /settings/access
+          - link "API keys" [ref=f3e51] [cursor=pointer]:
+            - /url: /settings/api-keys
+          - link "My profile" [ref=f3e55] [cursor=pointer]:
+            - /url: /settings/profile
+        - main [ref=f3e59]:
+          - generic [ref=f3e138]:
+            - generic [ref=f3e139]:
+              - generic [ref=f3e140]:
+                - heading "Team" [level=2] [ref=f3e141]
+                - paragraph [ref=f3e142]: Invite users, assign managers, and control role access.
+              - button "Invite user" [ref=f3e143]
+            - generic [ref=f3e145]:
+              - generic [ref=f3e146]:
+                - generic [ref=f3e147]: Seats
+                - generic [ref=f3e148]: 2 of 5 seats in use
+              - generic [ref=f3e149]:
+                - text: "3"
+                - paragraph [ref=f3e150]: available
+            - table [ref=f3e155]:
+              - rowgroup [ref=f3e156]:
+                - row [ref=f3e157]:
+                  - columnheader "Member" [ref=f3e158]
+                  - columnheader "Role" [ref=f3e159]
+                  - columnheader "Manager" [ref=f3e160]
+                  - columnheader "Status" [ref=f3e161]
+                  - columnheader "Application ID" [ref=f3e162]
+                  - columnheader "Actions" [ref=f3e163]
+              - rowgroup [ref=f3e165]:
+                - row [ref=f3e166]:
+                  - cell [ref=f3e167]:
+                    - generic [ref=f3e168]:
+                      - paragraph [ref=f3e169]: Browser Invitee
+                      - paragraph [ref=f3e170]: browser-invitee@example.test
+                  - cell "Rep" [ref=f3e171]
+                  - cell "—" [ref=f3e172]
+                  - cell "Pending" [ref=f3e173]
+                  - cell "MCA-D1FF2719" [ref=f3e175]
+                  - cell [ref=f3e176]:
+                    - button "Actions for Browser Invitee" [ref=f3e177]
+                - row [ref=f3e178]:
+                  - cell [ref=f3e179]:
+                    - generic [ref=f3e180]:
+                      - paragraph [ref=f3e181]: Workspace Administrator
+                      - paragraph [ref=f3e182]: browser-admin@example.test
+                  - cell [ref=f3e183]:
+                    - combobox "Role" [ref=f3e184]:
+                      - generic: Super admin
+                  - cell [ref=f3e185]:
+                    - combobox "Manager" [ref=f3e186]:
+                      - generic: No manager
+                  - cell "Active" [ref=f3e187]
+                  - cell "MCA-E7F63C16" [ref=f3e189]
+                  - cell [ref=f3e190]:
+                    - button "Actions for Workspace Administrator" [ref=f3e191]
+    - generic [ref=f3e103]:
+      - generic [ref=f3e104]: MCA Workspace
+      - generic [ref=f3e105]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T":
+    - list:
+      - listitem [ref=f3e192]:
+        - button "Close toast" [ref=f3e193] [cursor=pointer]
+        - generic [ref=f3e200]: Invitation sent
+  - button "Open Next.js Dev Tools" [ref=f3e11] [cursor=pointer]
+  - alert [ref=f3e15]

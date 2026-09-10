@@ -1,0 +1,9 @@
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  dialect: "postgresql",
+  schema: ["./src/lib/mca/db/schema.ts", "./src/lib/mca/db/milestone05-*.ts", "./src/lib/mca/db/milestone06.ts", "./src/lib/mca/db/sms-onboarding.ts"],
+  out: "./drizzle",
+  strict: true,
+  verbose: true,
+});

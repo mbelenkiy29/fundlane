@@ -1,0 +1,27 @@
+- generic [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - link [ref=e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e18]:
+        - paragraph [ref=e19]: Move every deal forward with a clear owner and a complete record.
+        - paragraph [ref=e20]: A secure operating workspace for brokerage teams, from intake through funding.
+      - paragraph [ref=e21]: Workspace data is isolated and every configuration change is audited.
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - heading "Welcome back" [level=1] [ref=e25]
+        - paragraph [ref=e26]: Sign in to continue to your brokerage workspace.
+      - generic [ref=e27]:
+        - generic [ref=e28]:
+          - generic [ref=e29]: Work email
+          - textbox "Work email" [active] [ref=e30]
+        - generic [ref=e31]:
+          - generic [ref=e32]:
+            - generic [ref=e33]: Password
+            - link "Forgot password?" [ref=e34] [cursor=pointer]:
+              - /url: /forgot-password
+          - textbox "Password" [ref=e35]
+        - button "Sign in" [ref=e36]
+        - paragraph [ref=e37]: New team members join through a secure invitation from their workspace admin.
+  - region "Notifications alt+T"
+  - alert [ref=e38]

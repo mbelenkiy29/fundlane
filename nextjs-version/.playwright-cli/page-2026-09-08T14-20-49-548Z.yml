@@ -1,0 +1,129 @@
+- generic [active] [ref=f7e1]:
+  - generic [ref=f7e42]:
+    - generic [ref=f7e45]:
+      - list [ref=f7e47]:
+        - listitem [ref=f7e48]:
+          - link "Browser Acceptance MCA workspace" [ref=f7e49] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f7e61]:
+              - generic [ref=f7e62]: Browser Acceptance
+              - generic [ref=f7e63]: MCA workspace
+      - generic [ref=f7e68]:
+        - generic [ref=f7e69]:
+          - generic [ref=f7e70]: Pipeline
+          - list [ref=f7e71]:
+            - listitem [ref=f7e72]:
+              - link "Home" [ref=f7e73] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f7e79]:
+              - link "Deals" [ref=f7e80] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f7e86]:
+              - link "Submissions" [ref=f7e87] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f7e93]:
+              - link "Offers" [ref=f7e94] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f7e102]:
+              - link "Advances" [ref=f7e103] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f7e109]:
+              - link "Renewals" [ref=f7e110] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f7e117]:
+          - generic [ref=f7e118]: Operations
+          - list [ref=f7e119]:
+            - listitem [ref=f7e120]:
+              - link "Funders" [ref=f7e121] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f7e125]:
+              - link "Reports" [ref=f7e126] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f7e130]:
+              - link "Settings" [ref=f7e131] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f7e137]:
+        - listitem [ref=f7e138]:
+          - button "Workspace Administrator owner@example.test" [ref=f7e139]:
+            - generic [ref=f7e145]:
+              - generic [ref=f7e146]: Workspace Administrator
+              - generic [ref=f7e147]: owner@example.test
+    - main [ref=f7e152]:
+      - generic [ref=f7e154]:
+        - button "Toggle Sidebar" [ref=f7e155]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f7e157]:
+          - generic [ref=f7e158]: Search merchants, deals, or contacts
+          - generic [ref=f7e159]: ⌘K
+        - generic [ref=f7e160]:
+          - link "New deal" [ref=f7e161] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f7e162]
+          - button "Switch to dark mode" [ref=f7e163] [cursor=pointer]
+      - generic [ref=f7e168]:
+        - generic [ref=f7e169]:
+          - generic [ref=f7e170]:
+            - paragraph [ref=f7e171]: Monday, September 7
+            - heading "Good afternoon, Workspace" [level=1] [ref=f7e172]
+            - paragraph [ref=f7e173]: Here’s where your brokerage needs attention.
+          - link "New deal" [ref=f7e174] [cursor=pointer]:
+            - /url: /deals/new
+        - generic [ref=f7e175]:
+          - generic [ref=f7e176]:
+            - generic [ref=f7e178]:
+              - generic [ref=f7e179]: Open deals
+              - generic [ref=f7e180]: —
+            - paragraph [ref=f7e187]: Connect deal data to populate
+          - generic [ref=f7e188]:
+            - generic [ref=f7e190]:
+              - generic [ref=f7e191]: Awaiting submission
+              - generic [ref=f7e192]: —
+            - paragraph [ref=f7e199]: No live submissions yet
+          - generic [ref=f7e200]:
+            - generic [ref=f7e202]:
+              - generic [ref=f7e203]: Offers to review
+              - generic [ref=f7e204]: —
+            - paragraph [ref=f7e213]: No live offers yet
+          - generic [ref=f7e214]:
+            - generic [ref=f7e216]:
+              - generic [ref=f7e217]: Active team
+              - generic [ref=f7e218]: —
+            - paragraph [ref=f7e225]: Open team settings to review
+        - generic [ref=f7e226]:
+          - generic [ref=f7e227]:
+            - generic [ref=f7e228]:
+              - generic [ref=f7e229]: Pipeline activity
+              - generic [ref=f7e230]: Live deal events will appear here as your team works.
+            - generic [ref=f7e232]:
+              - paragraph [ref=f7e236]: No activity to show
+              - paragraph [ref=f7e237]: Create or import a deal to start a traceable workspace activity timeline.
+              - link "Open deals" [ref=f7e238] [cursor=pointer]:
+                - /url: /deals
+          - generic [ref=f7e239]:
+            - generic [ref=f7e240]:
+              - generic [ref=f7e241]: Workspace readiness
+              - generic [ref=f7e242]: Foundation setup for a secure first deal.
+            - generic [ref=f7e243]:
+              - link "Set up Brokerage details Name, timezone, and feature access" [ref=f7e244] [cursor=pointer]:
+                - /url: /settings
+                - generic [ref=f7e245]: Set up
+                - generic [ref=f7e246]:
+                  - generic [ref=f7e247]: Brokerage details
+                  - generic [ref=f7e248]: Name, timezone, and feature access
+              - link "Set up Team and roles Seats, managers, and financial access" [ref=f7e252] [cursor=pointer]:
+                - /url: /settings/team
+                - generic [ref=f7e253]: Set up
+                - generic [ref=f7e254]:
+                  - generic [ref=f7e255]: Team and roles
+                  - generic [ref=f7e256]: Seats, managers, and financial access
+              - link "Set up Integration access Scoped API keys with expiry" [ref=f7e260] [cursor=pointer]:
+                - /url: /settings/api-keys
+                - generic [ref=f7e261]: Set up
+                - generic [ref=f7e262]:
+                  - generic [ref=f7e263]: Integration access
+                  - generic [ref=f7e264]: Scoped API keys with expiry
+              - generic [ref=f7e268]: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+      - generic [ref=f7e270]:
+        - generic [ref=f7e271]: MCA Workspace
+        - generic [ref=f7e272]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f7e38]: MCA Workspace

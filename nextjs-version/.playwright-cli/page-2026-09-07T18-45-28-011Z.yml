@@ -1,0 +1,223 @@
+- generic [ref=f5e1]:
+  - generic [ref=f5e16]:
+    - generic [ref=f5e19]:
+      - list [ref=f5e21]:
+        - listitem [ref=f5e22]:
+          - link "Northstar Capital MCA workspace" [ref=f5e23] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f5e35]:
+              - generic [ref=f5e36]: Northstar Capital
+              - generic [ref=f5e37]: MCA workspace
+      - generic [ref=f5e42]:
+        - generic [ref=f5e43]:
+          - generic [ref=f5e44]: Pipeline
+          - list [ref=f5e45]:
+            - listitem [ref=f5e46]:
+              - link "Home" [ref=f5e47] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f5e53]:
+              - link "Deals" [ref=f5e54] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f5e60]:
+              - link "Submissions" [ref=f5e61] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f5e67]:
+              - link "Offers" [ref=f5e68] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f5e76]:
+              - link "Advances" [ref=f5e77] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f5e83]:
+              - link "Renewals" [ref=f5e84] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f5e91]:
+          - generic [ref=f5e92]: Operations
+          - list [ref=f5e93]:
+            - listitem [ref=f5e94]:
+              - link "Funders" [ref=f5e95] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f5e99]:
+              - link "Reports" [ref=f5e100] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f5e104]:
+              - link "Settings" [ref=f5e105] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f5e111]:
+        - listitem [ref=f5e112]:
+          - button "Workspace Administrator admin@northstar.test" [ref=f5e113]:
+            - generic [ref=f5e119]:
+              - generic [ref=f5e120]: Workspace Administrator
+              - generic [ref=f5e121]: admin@northstar.test
+    - main [ref=f5e126]:
+      - generic [ref=f5e128]:
+        - button "Toggle Sidebar" [ref=f5e129]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f5e131]:
+          - generic [ref=f5e132]: Search merchants, deals, or contacts
+          - generic [ref=f5e133]: ⌘K
+        - generic [ref=f5e134]:
+          - link "New deal" [ref=f5e135] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f5e136]
+          - button "Switch to dark mode" [ref=f5e137] [cursor=pointer]
+      - generic [ref=f5e142]:
+        - generic [ref=f5e143]:
+          - heading "Settings" [level=1] [ref=f5e144]
+          - paragraph [ref=f5e145]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f5e146]:
+          - navigation "Settings" [ref=f5e147]:
+            - link "Workspace" [ref=f5e148] [cursor=pointer]:
+              - /url: /settings
+            - link "Team" [ref=f5e153] [cursor=pointer]:
+              - /url: /settings/team
+            - link "Access" [ref=f5e158] [cursor=pointer]:
+              - /url: /settings/access
+            - link "API keys" [ref=f5e162] [cursor=pointer]:
+              - /url: /settings/api-keys
+            - link "My profile" [ref=f5e166] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f5e170]:
+            - generic [ref=f5e171]:
+              - generic [ref=f5e172]:
+                - generic [ref=f5e173]:
+                  - heading "Brokerage" [level=2] [ref=f5e174]
+                  - paragraph [ref=f5e175]: Details and capabilities shared by this workspace.
+                - button "Save changes" [ref=f5e176]
+              - generic [ref=f5e177]:
+                - generic [ref=f5e178]:
+                  - generic [ref=f5e179]: Workspace details
+                  - generic [ref=f5e184]: Used throughout the app and in time-sensitive activity records.
+                - generic [ref=f5e185]:
+                  - generic [ref=f5e186]:
+                    - generic [ref=f5e187]: Brokerage name
+                    - textbox "Brokerage name" [ref=f5e188]: Northstar Capital
+                  - generic [ref=f5e189]:
+                    - generic [ref=f5e190]: Timezone
+                    - combobox "Timezone" [ref=f5e191]:
+                      - generic: Eastern time
+                    - combobox [aria-hidden] [ref=f5e192]
+                  - generic [ref=f5e193]:
+                    - generic [ref=f5e194]: Logo URL
+                    - textbox "Logo URL" [ref=f5e195]:
+                      - /placeholder: https://example.com/logo.png
+                    - paragraph [ref=f5e196]: Use a square HTTPS image. Empty uses the MCA mark.
+                  - generic [ref=f5e197]:
+                    - generic [ref=f5e198]: Seat limit
+                    - spinbutton "Seat limit" [ref=f5e199]: "5"
+              - generic [ref=f5e200]:
+                - generic [ref=f5e201]:
+                  - generic [ref=f5e202]:
+                    - generic [ref=f5e203]: Features
+                    - generic [ref=f5e204]: Turn optional workspace capabilities on or off.
+                  - generic [ref=f5e205]:
+                    - generic [ref=f5e206]:
+                      - generic [ref=f5e207]:
+                        - generic [ref=f5e208]: Reports
+                        - paragraph [ref=f5e209]: Company performance and financial reports
+                      - switch "Reports visibility" [checked] [ref=f5e210]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e211]:
+                      - generic [ref=f5e212]:
+                        - generic [ref=f5e213]: Payments
+                        - paragraph [ref=f5e214]: Payment pages and financial tables
+                      - switch "Payments visibility" [ref=f5e215]
+                      - checkbox [aria-hidden]
+                    - generic [ref=f5e216]:
+                      - generic [ref=f5e217]:
+                        - generic [ref=f5e218]: API integrations
+                        - paragraph [ref=f5e219]: Workspace API keys and integrations
+                      - switch "API integrations visibility" [checked] [ref=f5e220]
+                      - checkbox [checked] [aria-hidden]
+                - generic [ref=f5e221]:
+                  - generic [ref=f5e222]:
+                    - generic [ref=f5e223]: Page visibility
+                    - generic [ref=f5e224]: Hide pages from navigation and direct access. Role permissions still apply.
+                  - generic [ref=f5e225]:
+                    - generic [ref=f5e226]:
+                      - generic [ref=f5e227]:
+                        - generic [ref=f5e228]: Home
+                        - paragraph [ref=f5e229]: Visible to permitted roles
+                      - switch "Home visibility" [checked] [ref=f5e230]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e231]:
+                      - generic [ref=f5e232]:
+                        - generic [ref=f5e233]: Deals
+                        - paragraph [ref=f5e234]: Visible to permitted roles
+                      - switch "Deals visibility" [checked] [ref=f5e235]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e236]:
+                      - generic [ref=f5e237]:
+                        - generic [ref=f5e238]: Team settings
+                        - paragraph [ref=f5e239]: Visible to permitted roles
+                      - switch "Team settings visibility" [checked] [ref=f5e240]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e241]:
+                      - generic [ref=f5e242]:
+                        - generic [ref=f5e243]: Reports
+                        - paragraph [ref=f5e244]: Hidden for this workspace
+                      - switch "Reports visibility" [active] [ref=f5e245]
+                      - checkbox [aria-hidden]
+                    - generic [ref=f5e246]:
+                      - generic [ref=f5e247]:
+                        - generic [ref=f5e248]: Payments
+                        - paragraph [ref=f5e249]: Visible to permitted roles
+                      - switch "Payments visibility" [checked] [ref=f5e250]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e251]:
+                      - generic [ref=f5e252]:
+                        - generic [ref=f5e253]: Workspace settings
+                        - paragraph [ref=f5e254]: Visible to permitted roles
+                      - switch "Workspace settings visibility" [checked] [disabled] [ref=f5e255]
+                      - checkbox [checked] [disabled] [aria-hidden]
+                    - generic [ref=f5e256]:
+                      - generic [ref=f5e257]:
+                        - generic [ref=f5e258]: API keys
+                        - paragraph [ref=f5e259]: Visible to permitted roles
+                      - switch "API keys visibility" [checked] [ref=f5e260]
+                      - checkbox [checked] [aria-hidden]
+                - generic [ref=f5e261]:
+                  - generic [ref=f5e262]:
+                    - generic [ref=f5e263]: Action visibility
+                    - generic [ref=f5e264]: Control individual buttons and financial data independently from pages.
+                  - generic [ref=f5e265]:
+                    - generic [ref=f5e266]:
+                      - generic [ref=f5e267]:
+                        - generic [ref=f5e268]: Create deals
+                        - paragraph [ref=f5e269]: Available when the user role permits
+                      - switch "Create deals visibility" [checked] [ref=f5e270]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e271]:
+                      - generic [ref=f5e272]:
+                        - generic [ref=f5e273]: Export deals
+                        - paragraph [ref=f5e274]: Available when the user role permits
+                      - switch "Export deals visibility" [checked] [ref=f5e275]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e276]:
+                      - generic [ref=f5e277]:
+                        - generic [ref=f5e278]: Invite users
+                        - paragraph [ref=f5e279]: Available when the user role permits
+                      - switch "Invite users visibility" [checked] [ref=f5e280]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e281]:
+                      - generic [ref=f5e282]:
+                        - generic [ref=f5e283]: Manage API keys
+                        - paragraph [ref=f5e284]: Available when the user role permits
+                      - switch "Manage API keys visibility" [checked] [ref=f5e285]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e286]:
+                      - generic [ref=f5e287]:
+                        - generic [ref=f5e288]: Payment table
+                        - paragraph [ref=f5e289]: Available when the user role permits
+                      - switch "Payment table visibility" [checked] [ref=f5e290]
+                      - checkbox [checked] [aria-hidden]
+                    - generic [ref=f5e291]:
+                      - generic [ref=f5e292]:
+                        - generic [ref=f5e293]: Company financials
+                        - paragraph [ref=f5e294]: Available when the user role permits
+                      - switch "Company financials visibility" [checked] [ref=f5e295]
+                      - checkbox [checked] [aria-hidden]
+      - generic [ref=f5e297]:
+        - generic [ref=f5e298]: MCA Workspace
+        - generic [ref=f5e299]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f5e11] [cursor=pointer]
+  - alert [ref=f5e15]

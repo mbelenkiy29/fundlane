@@ -1,0 +1,111 @@
+- generic [active] [ref=f9e1]:
+  - generic [ref=f9e16]:
+    - generic [ref=f9e19]:
+      - list [ref=f9e21]:
+        - listitem [ref=f9e22]:
+          - link "Northstar Capital MCA workspace" [ref=f9e23] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f9e35]:
+              - generic [ref=f9e36]: Northstar Capital
+              - generic [ref=f9e37]: MCA workspace
+      - generic [ref=f9e42]:
+        - generic [ref=f9e43]:
+          - generic [ref=f9e44]: Pipeline
+          - list [ref=f9e45]:
+            - listitem [ref=f9e46]:
+              - link "Home" [ref=f9e47] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f9e53]:
+              - link "Deals" [ref=f9e54] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f9e60]:
+              - link "Submissions" [ref=f9e61] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f9e67]:
+              - link "Offers" [ref=f9e68] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f9e76]:
+              - link "Advances" [ref=f9e77] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f9e83]:
+              - link "Renewals" [ref=f9e84] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f9e91]:
+          - generic [ref=f9e92]: Operations
+          - list [ref=f9e93]:
+            - listitem [ref=f9e94]:
+              - link "Funders" [ref=f9e95] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f9e99]:
+              - link "Settings" [ref=f9e100] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f9e106]:
+        - listitem [ref=f9e107]:
+          - button "Workspace Administrator admin@northstar.test" [ref=f9e108]:
+            - generic [ref=f9e114]:
+              - generic [ref=f9e115]: Workspace Administrator
+              - generic [ref=f9e116]: admin@northstar.test
+    - main [ref=f9e121]:
+      - generic [ref=f9e123]:
+        - button "Toggle Sidebar" [ref=f9e124]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f9e126]:
+          - generic [ref=f9e127]: Search merchants, deals, or contacts
+          - generic [ref=f9e128]: ⌘K
+        - generic [ref=f9e129]:
+          - link "New deal" [ref=f9e130] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f9e131]
+          - button "Switch to dark mode" [ref=f9e132] [cursor=pointer]
+      - generic [ref=f9e137]:
+        - generic [ref=f9e138]:
+          - heading "Settings" [level=1] [ref=f9e139]
+          - paragraph [ref=f9e140]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f9e141]:
+          - navigation "Settings" [ref=f9e142]:
+            - link "Workspace" [ref=f9e143] [cursor=pointer]:
+              - /url: /settings
+            - link "Team" [ref=f9e148] [cursor=pointer]:
+              - /url: /settings/team
+            - link "Access" [ref=f9e153] [cursor=pointer]:
+              - /url: /settings/access
+            - link "API keys" [ref=f9e157] [cursor=pointer]:
+              - /url: /settings/api-keys
+            - link "My profile" [ref=f9e161] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f9e165]:
+            - generic [ref=f9e239]:
+              - generic [ref=f9e240]:
+                - generic [ref=f9e241]:
+                  - heading "API keys" [level=2] [ref=f9e242]
+                  - paragraph [ref=f9e243]: Scoped access for trusted workspace integrations.
+                - button "Create key" [ref=f9e244]
+              - generic [ref=f9e245]: Keys are bound to this workspace. Revocation takes effect immediately; secrets never appear in URLs or activity logs.
+              - table [ref=f9e252]:
+                - rowgroup [ref=f9e253]:
+                  - row [ref=f9e254]:
+                    - columnheader "Name" [ref=f9e255]
+                    - columnheader "Scopes" [ref=f9e256]
+                    - columnheader "Last used" [ref=f9e257]
+                    - columnheader "Expires" [ref=f9e258]
+                    - columnheader "Rate limit" [ref=f9e259]
+                    - columnheader "Actions" [ref=f9e260]
+                - rowgroup [ref=f9e262]:
+                  - row [ref=f9e263]:
+                    - cell [ref=f9e264]:
+                      - paragraph [ref=f9e265]: Acceptance intake
+                      - paragraph [ref=f9e266]: tN0mB8H8••••••••
+                    - cell "deals:read intake:write" [ref=f9e267]:
+                      - generic [ref=f9e268]:
+                        - generic [ref=f9e269]: deals:read
+                        - generic [ref=f9e270]: intake:write
+                    - cell "Never" [ref=f9e271]
+                    - cell "No expiry" [ref=f9e272]
+                    - cell "60/min" [ref=f9e273]
+                    - cell [ref=f9e274]:
+                      - button "Actions for Acceptance intake" [ref=f9e275]
+      - generic [ref=f9e185]:
+        - generic [ref=f9e186]: MCA Workspace
+        - generic [ref=f9e187]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f9e11] [cursor=pointer]
+  - alert [ref=f9e15]

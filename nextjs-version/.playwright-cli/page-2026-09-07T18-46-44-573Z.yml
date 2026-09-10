@@ -1,0 +1,130 @@
+- generic [ref=f8e1]:
+  - generic [ref=f8e16]:
+    - generic [ref=f8e19]:
+      - list [ref=f8e21]:
+        - listitem [ref=f8e22]:
+          - link "Northstar Capital MCA workspace" [ref=f8e23] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f8e35]:
+              - generic [ref=f8e36]: Northstar Capital
+              - generic [ref=f8e37]: MCA workspace
+      - generic [ref=f8e42]:
+        - generic [ref=f8e43]:
+          - generic [ref=f8e44]: Pipeline
+          - list [ref=f8e45]:
+            - listitem [ref=f8e46]:
+              - link "Home" [ref=f8e47] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f8e53]:
+              - link "Deals" [ref=f8e54] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f8e60]:
+              - link "Submissions" [ref=f8e61] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f8e67]:
+              - link "Offers" [ref=f8e68] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f8e76]:
+              - link "Advances" [ref=f8e77] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f8e83]:
+              - link "Renewals" [ref=f8e84] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f8e91]:
+          - generic [ref=f8e92]: Operations
+          - list [ref=f8e93]:
+            - listitem [ref=f8e94]:
+              - link "Funders" [ref=f8e95] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f8e99]:
+              - link "Settings" [ref=f8e100] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f8e106]:
+        - listitem [ref=f8e107]:
+          - button "Workspace Administrator admin@northstar.test" [ref=f8e108]:
+            - generic [ref=f8e114]:
+              - generic [ref=f8e115]: Workspace Administrator
+              - generic [ref=f8e116]: admin@northstar.test
+    - main [ref=f8e121]:
+      - generic [ref=f8e123]:
+        - button "Toggle Sidebar" [ref=f8e124]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f8e126]:
+          - generic [ref=f8e127]: Search merchants, deals, or contacts
+          - generic [ref=f8e128]: ⌘K
+        - generic [ref=f8e129]:
+          - link "New deal" [ref=f8e130] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f8e131]
+          - button "Switch to dark mode" [ref=f8e132] [cursor=pointer]
+      - generic [ref=f8e137]:
+        - generic [ref=f8e138]:
+          - heading "Settings" [level=1] [ref=f8e139]
+          - paragraph [ref=f8e140]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f8e141]:
+          - navigation "Settings" [ref=f8e142]:
+            - link "Workspace" [ref=f8e143] [cursor=pointer]:
+              - /url: /settings
+            - link "Team" [ref=f8e148] [cursor=pointer]:
+              - /url: /settings/team
+            - link "Access" [ref=f8e153] [cursor=pointer]:
+              - /url: /settings/access
+            - link "API keys" [ref=f8e157] [cursor=pointer]:
+              - /url: /settings/api-keys
+            - link "My profile" [ref=f8e161] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f8e165]:
+            - generic [ref=f8e244]:
+              - generic [ref=f8e245]:
+                - generic [ref=f8e246]:
+                  - heading "Team" [level=2] [ref=f8e247]
+                  - paragraph [ref=f8e248]: Invite users, assign managers, and control role access.
+                - button "Invite user" [active] [ref=f8e249]
+              - generic [ref=f8e251]:
+                - generic [ref=f8e252]:
+                  - generic [ref=f8e253]: Seats
+                  - generic [ref=f8e254]: 2 of 5 seats in use
+                - generic [ref=f8e255]:
+                  - text: "3"
+                  - paragraph [ref=f8e256]: available
+              - table [ref=f8e261]:
+                - rowgroup [ref=f8e262]:
+                  - row [ref=f8e263]:
+                    - columnheader "Member" [ref=f8e264]
+                    - columnheader "Role" [ref=f8e265]
+                    - columnheader "Manager" [ref=f8e266]
+                    - columnheader "Status" [ref=f8e267]
+                    - columnheader "Application ID" [ref=f8e268]
+                    - columnheader "Actions" [ref=f8e269]
+                - rowgroup [ref=f8e271]:
+                  - row [ref=f8e272]:
+                    - cell [ref=f8e273]:
+                      - generic [ref=f8e274]:
+                        - paragraph [ref=f8e275]: Taylor Reed
+                        - paragraph [ref=f8e276]: taylor@northstar.test
+                    - cell "Rep" [ref=f8e277]
+                    - cell "—" [ref=f8e278]
+                    - cell "Pending" [ref=f8e279]
+                    - cell "MCA-835AC207" [ref=f8e281]
+                    - cell [ref=f8e282]:
+                      - button "Actions for Taylor Reed" [ref=f8e283]
+                  - row [ref=f8e284]:
+                    - cell [ref=f8e285]:
+                      - generic [ref=f8e286]:
+                        - paragraph [ref=f8e287]: Workspace Administrator
+                        - paragraph [ref=f8e288]: admin@northstar.test
+                    - cell [ref=f8e289]:
+                      - combobox "Role" [ref=f8e290]:
+                        - generic: Super admin
+                    - cell [ref=f8e291]:
+                      - combobox "Manager" [ref=f8e292]:
+                        - generic: No manager
+                    - cell "Active" [ref=f8e293]
+                    - cell "MCA-00BD744C" [ref=f8e295]
+                    - cell [ref=f8e296]:
+                      - button "Actions for Workspace Administrator" [ref=f8e297]
+      - generic [ref=f8e209]:
+        - generic [ref=f8e210]: MCA Workspace
+        - generic [ref=f8e211]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f8e11] [cursor=pointer]
+  - alert [ref=f8e15]

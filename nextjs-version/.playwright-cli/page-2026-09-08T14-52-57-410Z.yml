@@ -1,0 +1,225 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Browser Acceptance
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /reports
+                    - generic: Reports
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: owner@example.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Application scan
+                  - generic: Upload, scan, extract, and review every business and owner field with source evidence before creating or merging a deal.
+                - generic:
+                  - generic:
+                    - button
+                    - button: Upload
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: Deal workspace
+                    - heading [level=1]: Pipeline
+                    - paragraph: Work merchant applications from first contact through servicing events.
+                  - button: New deal
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Filtered deals
+                      - paragraph: "2"
+                  - generic:
+                    - generic:
+                      - paragraph: Submission ready
+                      - paragraph: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Needs information
+                      - paragraph: "2"
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - textbox:
+                          - /placeholder: Search name or deal ID
+                      - combobox:
+                        - generic: All statuses
+                      - combobox:
+                        - generic: All assignees
+                      - textbox
+                      - textbox
+                      - generic:
+                        - button
+                        - button
+                    - generic:
+                      - textbox:
+                        - /placeholder: Filter by funder name
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader: Merchant
+                          - columnheader: Status
+                          - columnheader: Requested
+                          - columnheader: Assignees
+                          - columnheader: Readiness
+                          - columnheader: Updated
+                      - rowgroup:
+                        - row:
+                          - cell:
+                            - paragraph: North Star Bakery Inc
+                            - paragraph: MCA-5312ED7F
+                          - cell:
+                            - generic: Lead
+                          - cell: $50,000
+                          - cell: "1"
+                          - cell:
+                            - generic: 9 missing
+                          - cell: 9/8/2026
+                        - row:
+                          - cell:
+                            - paragraph: Harbor Coffee LLC
+                            - paragraph: MCA-5DC6C41A
+                          - cell:
+                            - generic: Lead
+                          - cell: $75,000
+                          - cell: "1"
+                          - cell:
+                            - generic: 9 missing
+                          - cell: 9/8/2026
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert
+  - dialog [ref=f11e233]:
+    - generic [ref=f11e234]:
+      - generic [ref=f11e235]:
+        - heading "Harbor Coffee LLC" [level=2] [ref=f11e236]
+        - generic [ref=f11e237]: Lead
+        - generic [ref=f11e238]: v1
+      - paragraph [ref=f11e239]: MCA-5DC6C41A · Updated 9/8/2026, 10:52:16 AM
+    - generic [ref=f11e240]:
+      - generic [ref=f11e241]: Partial draft · 9 submission fields missing
+      - paragraph [ref=f11e244]: entityType, address.line1, address.city, address.state, address.postalCode, startDate, industry, fundingPurpose, owners
+    - generic [ref=f11e245]:
+      - tablist [ref=f11e246]:
+        - tab "Application" [ref=f11e247]
+        - tab "Owners" [ref=f11e248]
+        - tab "Documents" [active] [selected] [ref=f11e249]
+        - tab "Activity" [ref=f11e250]
+      - tabpanel "Documents" [ref=f11e297]:
+        - generic [ref=f11e298]:
+          - generic [ref=f11e299]:
+            - generic [ref=f11e300]:
+              - generic [ref=f11e301]: Document vault
+              - generic [ref=f11e305]: Originals are immutable. Downloads and AI processing stay locked until malware scanning succeeds.
+            - generic [ref=f11e306]:
+              - generic [ref=f11e310]:
+                - strong [ref=f11e311]: Scanner unavailable.
+                - text: Set MCA_DOCUMENT_SCANNER to clamdscan or clamscan, then retry pending uploads.
+              - generic [ref=f11e312]:
+                - combobox "Document category" [ref=f11e313]:
+                  - generic: Bank statement
+                - button "Document file" [ref=f11e314]
+                - button "Upload" [ref=f11e315]
+              - generic [ref=f11e316]: No documents yet. Upload the first application, statement, or stipulation.
+          - generic [ref=f11e317]:
+            - generic [ref=f11e318]:
+              - generic [ref=f11e319]: Generate application PDF
+              - generic [ref=f11e320]: Choose exactly how merchant contact details appear. Missing and redacted fields are labeled.
+            - generic [ref=f11e321]:
+              - generic [ref=f11e323]:
+                - generic [ref=f11e324]: Contact disclosure
+                - combobox [ref=f11e325]:
+                  - generic: Explicitly redacted
+              - generic [ref=f11e326]:
+                - generic [ref=f11e327]:
+                  - text: Name
+                  - paragraph [ref=f11e328]: REDACTED
+                - generic [ref=f11e329]:
+                  - text: Email
+                  - paragraph [ref=f11e330]: REDACTED
+                - generic [ref=f11e331]:
+                  - text: Phone
+                  - paragraph [ref=f11e332]: REDACTED
+              - generic [ref=f11e333]:
+                - checkbox "Generate on behalf of merchant" [ref=f11e334]
+                - generic [ref=f11e335]: Generate on behalf of merchant
+              - button "Generate PDF" [ref=f11e336]
+    - button "Edit application" [ref=f11e294]
+    - button "Close" [ref=f11e295]

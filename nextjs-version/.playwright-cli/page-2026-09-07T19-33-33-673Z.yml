@@ -1,0 +1,18 @@
+- generic [ref=f5e1]:
+  - main [ref=f5e3]:
+    - generic [ref=f5e5]:
+      - link [ref=f5e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f5e18]:
+        - heading "Recover your account" [level=1] [ref=f5e19]
+        - paragraph [ref=f5e20]: We’ll send a time-limited reset link if the address belongs to an active account.
+      - generic [ref=f5e21]:
+        - generic [ref=f5e22]:
+          - generic [ref=f5e23]: Work email
+          - textbox "Work email" [active] [ref=f5e24]
+        - button "Send reset link" [ref=f5e25]
+        - link "Back to sign in" [ref=f5e26] [cursor=pointer]:
+          - /url: /sign-in
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f5e32] [cursor=pointer]
+  - alert [ref=f5e36]

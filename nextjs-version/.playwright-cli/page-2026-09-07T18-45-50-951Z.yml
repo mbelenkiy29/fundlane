@@ -1,0 +1,183 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Northstar Capital
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: admin@northstar.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - heading [level=1]: Settings
+                - paragraph: Manage your brokerage, team access, and integrations.
+              - generic:
+                - navigation:
+                  - link:
+                    - /url: /settings
+                    - text: Workspace
+                  - link:
+                    - /url: /settings/team
+                    - text: Team
+                  - link:
+                    - /url: /settings/access
+                    - text: Access
+                  - link:
+                    - /url: /settings/api-keys
+                    - text: API keys
+                  - link:
+                    - /url: /settings/profile
+                    - text: My profile
+                - main:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Team
+                        - paragraph: Invite users, assign managers, and control role access.
+                      - button [expanded]: Invite user
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Seats
+                          - generic: 1 of 5 seats in use
+                        - generic:
+                          - text: "4"
+                          - paragraph: available
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - table:
+                              - rowgroup:
+                                - row:
+                                  - columnheader: Member
+                                  - columnheader: Role
+                                  - columnheader: Manager
+                                  - columnheader: Status
+                                  - columnheader: Application ID
+                                  - columnheader:
+                                    - generic: Actions
+                              - rowgroup:
+                                - row:
+                                  - cell:
+                                    - generic:
+                                      - paragraph: Workspace Administrator
+                                      - paragraph: admin@northstar.test
+                                  - cell:
+                                    - combobox:
+                                      - generic: Super admin
+                                  - cell:
+                                    - combobox:
+                                      - generic: No manager
+                                  - cell:
+                                    - generic: Active
+                                  - cell: MCA-00BD744C
+                                  - cell:
+                                    - button
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f8e11] [cursor=pointer]
+  - alert
+  - dialog [ref=f8e213]:
+    - generic [ref=f8e214]:
+      - generic [ref=f8e215]:
+        - heading "Invite a team member" [level=2] [ref=f8e216]
+        - paragraph [ref=f8e217]: The seat is reserved when the invitation is created. Expired invites can be resent without adding another membership.
+      - generic [ref=f8e218]:
+        - generic [ref=f8e219]:
+          - generic [ref=f8e220]: Name
+          - textbox [active] [ref=f8e221]
+        - generic [ref=f8e222]:
+          - generic [ref=f8e223]: Email
+          - textbox [ref=f8e224]
+        - generic [ref=f8e225]:
+          - generic [ref=f8e226]: Phone
+          - textbox "Optional" [ref=f8e227]
+        - generic [ref=f8e228]:
+          - generic [ref=f8e229]: Role
+          - combobox "Role" [ref=f8e230]:
+            - generic: Rep
+          - combobox [aria-hidden] [ref=f8e231]
+        - generic [ref=f8e232]:
+          - generic [ref=f8e233]: Manager
+          - combobox "Manager" [ref=f8e234]:
+            - generic: No manager
+          - combobox [aria-hidden] [ref=f8e235]
+        - generic [ref=f8e236]:
+          - generic [ref=f8e237]: Sender association
+          - textbox "Optional sender ID" [ref=f8e238]
+      - generic [ref=f8e239]:
+        - button "Cancel" [ref=f8e240]
+        - button "Send invitation" [ref=f8e241]
+    - button "Close" [ref=f8e242]

@@ -1,0 +1,21 @@
+import { NextResponse } from "next/server"
+import { apiError, AppError } from "@/lib/mca/errors"
+import { previewCompression, requireCompressPreview } from "@/lib/mca/submissions/compress"
+
+export const runtime = "nodejs"
+const noStore = { "cache-control": "no-store" }
+
+export async function POST(request: Request) {
+  try {
+    const actor = await requireCompressPreview(request)
+    let body: { documentId?: unknown; documentIds?: unknown; funderId?: unknown }
+    try {
+      body = await request.json() as typeof body
+    } catch {
+      throw new AppError(400, "invalid_json", "Request body must be valid JSON.")
+    }
+    return NextResponse.json(await previewCompression(actor, body), { headers: noStore })
+  } catch (error) {
+    return apiError(error)
+  }
+}

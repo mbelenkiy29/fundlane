@@ -1,0 +1,163 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Northstar Capital
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: admin@northstar.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - heading [level=1]: Settings
+                - paragraph: Manage your brokerage, team access, and integrations.
+              - generic:
+                - navigation:
+                  - link:
+                    - /url: /settings
+                    - text: Workspace
+                  - link:
+                    - /url: /settings/team
+                    - text: Team
+                  - link:
+                    - /url: /settings/access
+                    - text: Access
+                  - link:
+                    - /url: /settings/api-keys
+                    - text: API keys
+                  - link:
+                    - /url: /settings/profile
+                    - text: My profile
+                - main:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: API keys
+                        - paragraph: Scoped access for trusted workspace integrations.
+                      - button [expanded]: Create key
+                    - generic: Keys are bound to this workspace. Revocation takes effect immediately; secrets never appear in URLs or activity logs.
+                    - generic:
+                      - generic:
+                        - paragraph: No API keys
+                        - paragraph: Create a scoped key when an integration is ready to connect.
+                      - button: Create key
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f9e11] [cursor=pointer]
+  - alert
+  - dialog [ref=f9e189]:
+    - generic [ref=f9e190]:
+      - generic [ref=f9e191]:
+        - heading "Create API key" [level=2] [ref=f9e192]
+        - paragraph [ref=f9e193]: The secret is shown once. Store it in a secure secrets manager.
+      - generic [ref=f9e194]:
+        - generic [ref=f9e195]:
+          - generic [ref=f9e196]: Name
+          - textbox "Name" [ref=f9e197]:
+            - /placeholder: Production intake
+            - text: Acceptance intake
+        - generic [ref=f9e198]:
+          - generic [ref=f9e199]: Scopes
+          - generic [ref=f9e200]:
+            - checkbox "Read deals deals:read" [checked] [ref=f9e201]
+            - checkbox [checked] [aria-hidden]
+            - generic [ref=f9e202]: Read deals deals:read
+          - generic [ref=f9e203]:
+            - checkbox "Edit deals deals:write" [ref=f9e204]
+            - checkbox [aria-hidden]
+            - generic [ref=f9e205]: Edit deals deals:write
+          - generic [ref=f9e206]:
+            - checkbox "Export deals deals:export" [ref=f9e207]
+            - checkbox [aria-hidden]
+            - generic [ref=f9e208]: Export deals deals:export
+          - generic [ref=f9e209]:
+            - checkbox "Submit intake intake:write" [checked] [active] [ref=f9e210]
+            - checkbox [checked] [aria-hidden]
+            - generic [ref=f9e211]: Submit intake intake:write
+          - generic [ref=f9e212]:
+            - checkbox "Read workspace workspace:read" [ref=f9e213]
+            - checkbox [aria-hidden]
+            - generic [ref=f9e214]: Read workspace workspace:read
+        - generic [ref=f9e215]:
+          - generic [ref=f9e216]:
+            - generic [ref=f9e217]: Expires
+            - textbox "Expires" [ref=f9e218]
+            - paragraph [ref=f9e219]: Empty means no expiry.
+          - generic [ref=f9e220]:
+            - generic [ref=f9e221]: Requests per minute
+            - spinbutton "Requests per minute" [ref=f9e222]: "60"
+      - generic [ref=f9e223]:
+        - button "Cancel" [ref=f9e224]
+        - button "Create key" [ref=f9e225]
+    - button "Close" [ref=f9e226]

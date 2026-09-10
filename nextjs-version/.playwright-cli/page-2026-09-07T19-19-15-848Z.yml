@@ -1,0 +1,130 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e48]:
+    - generic [ref=e51]:
+      - list [ref=e53]:
+        - listitem [ref=e54]:
+          - link "Browser QA Capital MCA workspace" [ref=e55] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e67]:
+              - generic [ref=e68]: Browser QA Capital
+              - generic [ref=e69]: MCA workspace
+      - generic [ref=e74]:
+        - generic [ref=e75]:
+          - generic [ref=e76]: Pipeline
+          - list [ref=e77]:
+            - listitem [ref=e78]:
+              - link "Home" [ref=e79] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=e85]:
+              - link "Deals" [ref=e86] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=e92]:
+              - link "Submissions" [ref=e93] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=e99]:
+              - link "Offers" [ref=e100] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=e108]:
+              - link "Advances" [ref=e109] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=e115]:
+              - link "Renewals" [ref=e116] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=e123]:
+          - generic [ref=e124]: Operations
+          - list [ref=e125]:
+            - listitem [ref=e126]:
+              - link "Funders" [ref=e127] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=e131]:
+              - link "Reports" [ref=e132] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=e136]:
+              - link "Settings" [ref=e137] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=e143]:
+        - listitem [ref=e144]:
+          - button "Workspace Administrator browser-admin@example.test" [ref=e145]:
+            - generic [ref=e151]:
+              - generic [ref=e152]: Workspace Administrator
+              - generic [ref=e153]: browser-admin@example.test
+    - main [ref=e158]:
+      - generic [ref=e160]:
+        - button "Toggle Sidebar" [ref=e161]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=e163]:
+          - generic [ref=e164]: Search merchants, deals, or contacts
+          - generic [ref=e165]: ⌘K
+        - generic [ref=e166]:
+          - link "New deal" [ref=e167] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=e168]
+          - button "Switch to dark mode" [ref=e169] [cursor=pointer]
+      - generic [ref=e174]:
+        - generic [ref=e175]:
+          - generic [ref=e176]:
+            - paragraph [ref=e177]: Monday, September 7
+            - heading "Good afternoon, Workspace" [level=1] [ref=e178]
+            - paragraph [ref=e179]: Here’s where your brokerage needs attention.
+          - link "New deal" [ref=e180] [cursor=pointer]:
+            - /url: /deals/new
+        - generic [ref=e181]:
+          - generic [ref=e182]:
+            - generic [ref=e184]:
+              - generic [ref=e185]: Open deals
+              - generic [ref=e186]: —
+            - paragraph [ref=e193]: Connect deal data to populate
+          - generic [ref=e194]:
+            - generic [ref=e196]:
+              - generic [ref=e197]: Awaiting submission
+              - generic [ref=e198]: —
+            - paragraph [ref=e205]: No live submissions yet
+          - generic [ref=e206]:
+            - generic [ref=e208]:
+              - generic [ref=e209]: Offers to review
+              - generic [ref=e210]: —
+            - paragraph [ref=e219]: No live offers yet
+          - generic [ref=e220]:
+            - generic [ref=e222]:
+              - generic [ref=e223]: Active team
+              - generic [ref=e224]: —
+            - paragraph [ref=e231]: Open team settings to review
+        - generic [ref=e232]:
+          - generic [ref=e233]:
+            - generic [ref=e234]:
+              - generic [ref=e235]: Pipeline activity
+              - generic [ref=e236]: Live deal events will appear here as your team works.
+            - generic [ref=e238]:
+              - paragraph [ref=e242]: No activity to show
+              - paragraph [ref=e243]: Create or import a deal to start a traceable workspace activity timeline.
+              - link "Open deals" [ref=e244] [cursor=pointer]:
+                - /url: /deals
+          - generic [ref=e245]:
+            - generic [ref=e246]:
+              - generic [ref=e247]: Workspace readiness
+              - generic [ref=e248]: Foundation setup for a secure first deal.
+            - generic [ref=e249]:
+              - link "Set up Brokerage details Name, timezone, and feature access" [ref=e250] [cursor=pointer]:
+                - /url: /settings
+                - generic [ref=e251]: Set up
+                - generic [ref=e252]:
+                  - generic [ref=e253]: Brokerage details
+                  - generic [ref=e254]: Name, timezone, and feature access
+              - link "Set up Team and roles Seats, managers, and financial access" [ref=e258] [cursor=pointer]:
+                - /url: /settings/team
+                - generic [ref=e259]: Set up
+                - generic [ref=e260]:
+                  - generic [ref=e261]: Team and roles
+                  - generic [ref=e262]: Seats, managers, and financial access
+              - link "Set up Integration access Scoped API keys with expiry" [ref=e266] [cursor=pointer]:
+                - /url: /settings/api-keys
+                - generic [ref=e267]: Set up
+                - generic [ref=e268]:
+                  - generic [ref=e269]: Integration access
+                  - generic [ref=e270]: Scoped API keys with expiry
+              - generic [ref=e274]: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+      - generic [ref=e276]:
+        - generic [ref=e277]: MCA Workspace
+        - generic [ref=e278]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e44] [cursor=pointer]
+  - alert [ref=e38]: MCA Workspace

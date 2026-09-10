@@ -1,0 +1,201 @@
+- generic [ref=f9e1]:
+  - generic [ref=f9e2]:
+    - generic [ref=f9e5]:
+      - list [ref=f9e7]:
+        - listitem [ref=f9e8]:
+          - link "Browser Acceptance MCA workspace" [ref=f9e9] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f9e21]:
+              - generic [ref=f9e22]: Browser Acceptance
+              - generic [ref=f9e23]: MCA workspace
+      - generic [ref=f9e28]:
+        - generic [ref=f9e29]:
+          - generic [ref=f9e30]: Pipeline
+          - list [ref=f9e31]:
+            - listitem [ref=f9e32]:
+              - link "Home" [ref=f9e33] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=f9e39]:
+              - link "Deals" [ref=f9e40] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=f9e46]:
+              - link "Submissions" [ref=f9e47] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=f9e53]:
+              - link "Offers" [ref=f9e54] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=f9e62]:
+              - link "Advances" [ref=f9e63] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=f9e69]:
+              - link "Renewals" [ref=f9e70] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=f9e77]:
+          - generic [ref=f9e78]: Operations
+          - list [ref=f9e79]:
+            - listitem [ref=f9e80]:
+              - link "Funders" [ref=f9e81] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=f9e85]:
+              - link "Reports" [ref=f9e86] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=f9e90]:
+              - link "Settings" [ref=f9e91] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=f9e97]:
+        - listitem [ref=f9e98]:
+          - button "Workspace Administrator owner@example.test" [ref=f9e99]:
+            - generic [ref=f9e105]:
+              - generic [ref=f9e106]: Workspace Administrator
+              - generic [ref=f9e107]: owner@example.test
+    - main [ref=f9e112]:
+      - generic [ref=f9e114]:
+        - button "Toggle Sidebar" [ref=f9e115]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=f9e117]:
+          - generic [ref=f9e118]: Search merchants, deals, or contacts
+          - generic [ref=f9e119]: ⌘K
+        - generic [ref=f9e120]:
+          - link "New deal" [ref=f9e121] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=f9e122]
+          - button "Switch to dark mode" [ref=f9e123] [cursor=pointer]
+      - generic [ref=f9e128]:
+        - generic [ref=f9e129]:
+          - heading "Settings" [level=1] [ref=f9e130]
+          - paragraph [ref=f9e131]: Manage your brokerage, team access, and integrations.
+        - generic [ref=f9e132]:
+          - navigation "Settings" [ref=f9e133]:
+            - link "Workspace" [ref=f9e155] [cursor=pointer]:
+              - /url: /settings
+            - link "Team" [ref=f9e160] [cursor=pointer]:
+              - /url: /settings/team
+            - link "Access" [ref=f9e165] [cursor=pointer]:
+              - /url: /settings/access
+            - link "API keys" [ref=f9e169] [cursor=pointer]:
+              - /url: /settings/api-keys
+            - link "Connections" [ref=f9e173] [cursor=pointer]:
+              - /url: /settings/connections
+            - link "My profile" [ref=f9e134] [cursor=pointer]:
+              - /url: /settings/profile
+          - main [ref=f9e138]:
+            - generic [ref=f9e139]:
+              - generic [ref=f9e140]:
+                - heading "Connections and imports" [level=2] [ref=f9e141]
+                - paragraph [ref=f9e142]: Configure inbound application providers, spreadsheet batches, document packages, and Google Drive.
+              - generic [ref=f9e177]:
+                - generic [ref=f9e178]:
+                  - generic [ref=f9e179]:
+                    - generic [ref=f9e180]: Application intake
+                    - generic [ref=f9e185]: Configure authenticated provider routes, field maps, private file access, and retry behavior. Secrets are never returned after creation or rotation.
+                  - generic [ref=f9e186]: No intake providers are configured. Add the first connection below.
+                - generic [ref=f9e188]:
+                  - generic [ref=f9e189]:
+                    - generic [ref=f9e190]: Add provider
+                    - generic [ref=f9e191]: Jotform and Fillout use a generated bearer secret. HighLevel uses its official Ed25519 signature. DocuSeal uses its HMAC secret. Zoho remains gated until the customer payload contract is approved.
+                  - generic [ref=f9e193]:
+                    - generic [ref=f9e194]:
+                      - generic [ref=f9e195]: Provider
+                      - combobox "Provider" [ref=f9e196]:
+                        - option "jotform" [selected]
+                        - option "fillout"
+                        - option "highlevel"
+                        - option "docuseal"
+                        - option "custom"
+                        - option "zoho"
+                        - option "email"
+                    - generic [ref=f9e197]:
+                      - generic [ref=f9e198]: Connection name
+                      - textbox "Connection name" [ref=f9e199]:
+                        - /placeholder: Production Jotform
+                    - generic [ref=f9e200]:
+                      - generic [ref=f9e201]: Form ID
+                      - textbox "Form ID" [ref=f9e202]
+                    - generic [ref=f9e203]:
+                      - generic [ref=f9e204]: Private read credential
+                      - textbox "Private read credential" [ref=f9e205]:
+                        - /placeholder: Needed to fetch private attachments
+                    - generic [ref=f9e206]:
+                      - generic [ref=f9e207]: Allowed attachment hosts
+                      - textbox "Allowed attachment hosts" [ref=f9e208]:
+                        - /placeholder: api.jotform.com, www.jotform.com
+                    - generic [ref=f9e209]:
+                      - generic [ref=f9e210]: Assignment pool member IDs
+                      - textbox "Assignment pool member IDs" [ref=f9e211]:
+                        - /placeholder: UUID, UUID
+                    - generic [ref=f9e212]:
+                      - generic [ref=f9e213]: Initial status
+                      - combobox "Initial status" [ref=f9e214]:
+                        - option "Lead" [selected]
+                        - option "New application"
+                        - option "Missing documents"
+                    - generic [ref=f9e215]:
+                      - generic [ref=f9e216]: Field map JSON (deal field → provider path)
+                      - textbox "Field map JSON (deal field → provider path)" [ref=f9e217]: "{}"
+                    - button "Save integration" [ref=f9e219]
+                - generic [ref=f9e220]:
+                  - generic [ref=f9e221]:
+                    - generic [ref=f9e222]: Mapping preview
+                    - generic [ref=f9e223]: Validate a realistic provider fixture without creating a deal or fetching files.
+                  - generic [ref=f9e224]:
+                    - combobox [ref=f9e225]:
+                      - option "Choose integration" [selected]
+                    - textbox "Provider fixture JSON" [ref=f9e226]: "{}"
+                    - button "Preview mapping" [ref=f9e227]
+                - generic [ref=f9e228]:
+                  - generic [ref=f9e230]:
+                    - generic [ref=f9e231]:
+                      - generic [ref=f9e232]: Intake activity
+                      - generic [ref=f9e233]: Recoverable errors and attachment checkpoints stay visible here.
+                    - button "Refresh" [ref=f9e234]
+                  - generic [ref=f9e235]:
+                    - generic [ref=f9e236]:
+                      - button "Retry files" [ref=f9e237]
+                      - button "Send receipts" [ref=f9e238]
+                    - paragraph [ref=f9e239]: No applications have arrived yet.
+              - generic [ref=f9e240]:
+                - generic [ref=f9e241]:
+                  - generic [ref=f9e242]: Import center
+                  - generic [ref=f9e246]: Stage merchant spreadsheets and document packages, review every row, then commit with saved checkpoints.
+                - generic [ref=f9e247]:
+                  - generic [ref=f9e248]:
+                    - generic [ref=f9e249]:
+                      - generic [ref=f9e250]: Existing source
+                      - combobox [ref=f9e251]:
+                        - generic: Partner referrals
+                    - generic [ref=f9e252]:
+                      - generic [ref=f9e253]: Lead batch
+                      - combobox [ref=f9e254]:
+                        - generic: September leads
+                    - generic [ref=f9e255]:
+                      - textbox "New source name" [ref=f9e256]:
+                        - /placeholder: New source
+                      - combobox [ref=f9e257]:
+                        - generic: Spreadsheet
+                      - button "Source" [disabled]
+                    - generic [ref=f9e258]:
+                      - textbox "New batch name" [ref=f9e259]:
+                        - /placeholder: New batch
+                      - button "Batch" [disabled]
+                  - generic [ref=f9e260]:
+                    - tablist [ref=f9e261]:
+                      - tab "Create" [selected] [ref=f9e262]
+                      - tab "Update" [ref=f9e263]
+                      - tab "Drive" [ref=f9e264]
+                    - tabpanel "Create" [ref=f9e265]:
+                      - generic [ref=f9e266]:
+                        - generic [ref=f9e267]:
+                          - generic [ref=f9e268]: CSV, TSV, XLSX, or XLS
+                          - button "CSV, TSV, XLSX, or XLS" [ref=f9e269]
+                        - generic [ref=f9e270]:
+                          - generic [ref=f9e271]: Round-robin pool
+                          - listbox "Round-robin pool" [active] [ref=f9e272]:
+                            - option "Workspace Administrator" [selected] [ref=f9e273]
+                      - generic [ref=f9e274]:
+                        - switch "Ask configured AI provider for mapping suggestions" [ref=f9e275]
+                        - generic [ref=f9e276]: Ask configured AI provider for mapping suggestions
+                        - button "Preview rows" [ref=f9e299]
+      - generic [ref=f9e151]:
+        - generic [ref=f9e152]: MCA Workspace
+        - generic [ref=f9e153]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f9e154]

@@ -1,0 +1,129 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e39]:
+    - generic [ref=e42]:
+      - list [ref=e44]:
+        - listitem [ref=e45]:
+          - link "Browser Acceptance MCA workspace" [ref=e46] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e58]:
+              - generic [ref=e59]: Browser Acceptance
+              - generic [ref=e60]: MCA workspace
+      - generic [ref=e65]:
+        - generic [ref=e66]:
+          - generic [ref=e67]: Pipeline
+          - list [ref=e68]:
+            - listitem [ref=e69]:
+              - link "Home" [ref=e70] [cursor=pointer]:
+                - /url: /dashboard
+            - listitem [ref=e76]:
+              - link "Deals" [ref=e77] [cursor=pointer]:
+                - /url: /deals
+            - listitem [ref=e83]:
+              - link "Submissions" [ref=e84] [cursor=pointer]:
+                - /url: /submissions
+            - listitem [ref=e90]:
+              - link "Offers" [ref=e91] [cursor=pointer]:
+                - /url: /offers
+            - listitem [ref=e99]:
+              - link "Advances" [ref=e100] [cursor=pointer]:
+                - /url: /advances
+            - listitem [ref=e106]:
+              - link "Renewals" [ref=e107] [cursor=pointer]:
+                - /url: /renewals
+        - generic [ref=e114]:
+          - generic [ref=e115]: Operations
+          - list [ref=e116]:
+            - listitem [ref=e117]:
+              - link "Funders" [ref=e118] [cursor=pointer]:
+                - /url: /funders
+            - listitem [ref=e122]:
+              - link "Reports" [ref=e123] [cursor=pointer]:
+                - /url: /reports
+            - listitem [ref=e127]:
+              - link "Settings" [ref=e128] [cursor=pointer]:
+                - /url: /settings
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "Workspace Administrator browser.acceptance@example.test" [ref=e136]:
+            - generic [ref=e142]:
+              - generic [ref=e143]: Workspace Administrator
+              - generic [ref=e144]: browser.acceptance@example.test
+    - main [ref=e149]:
+      - generic [ref=e151]:
+        - button "Toggle Sidebar" [ref=e152]
+        - button "Search merchants, deals, or contacts ⌘K" [ref=e154]:
+          - generic [ref=e155]: Search merchants, deals, or contacts
+          - generic [ref=e156]: ⌘K
+        - generic [ref=e157]:
+          - link "New deal" [ref=e158] [cursor=pointer]:
+            - /url: /deals/new
+          - button "Notifications" [ref=e159]
+          - button "Switch to dark mode" [ref=e160] [cursor=pointer]
+      - generic [ref=e165]:
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - paragraph [ref=e168]: Monday, September 7
+            - heading "Good afternoon, Workspace" [level=1] [ref=e169]
+            - paragraph [ref=e170]: Here’s where your brokerage needs attention.
+          - link "New deal" [ref=e171] [cursor=pointer]:
+            - /url: /deals/new
+        - generic [ref=e172]:
+          - generic [ref=e173]:
+            - generic [ref=e175]:
+              - generic [ref=e176]: Open deals
+              - generic [ref=e177]: —
+            - paragraph [ref=e184]: Connect deal data to populate
+          - generic [ref=e185]:
+            - generic [ref=e187]:
+              - generic [ref=e188]: Awaiting submission
+              - generic [ref=e189]: —
+            - paragraph [ref=e196]: No live submissions yet
+          - generic [ref=e197]:
+            - generic [ref=e199]:
+              - generic [ref=e200]: Offers to review
+              - generic [ref=e201]: —
+            - paragraph [ref=e210]: No live offers yet
+          - generic [ref=e211]:
+            - generic [ref=e213]:
+              - generic [ref=e214]: Active team
+              - generic [ref=e215]: —
+            - paragraph [ref=e222]: Open team settings to review
+        - generic [ref=e223]:
+          - generic [ref=e224]:
+            - generic [ref=e225]:
+              - generic [ref=e226]: Pipeline activity
+              - generic [ref=e227]: Live deal events will appear here as your team works.
+            - generic [ref=e229]:
+              - paragraph [ref=e233]: No activity to show
+              - paragraph [ref=e234]: Create or import a deal to start a traceable workspace activity timeline.
+              - link "Open deals" [ref=e235] [cursor=pointer]:
+                - /url: /deals
+          - generic [ref=e236]:
+            - generic [ref=e237]:
+              - generic [ref=e238]: Workspace readiness
+              - generic [ref=e239]: Foundation setup for a secure first deal.
+            - generic [ref=e240]:
+              - link "Set up Brokerage details Name, timezone, and feature access" [ref=e241] [cursor=pointer]:
+                - /url: /settings
+                - generic [ref=e242]: Set up
+                - generic [ref=e243]:
+                  - generic [ref=e244]: Brokerage details
+                  - generic [ref=e245]: Name, timezone, and feature access
+              - link "Set up Team and roles Seats, managers, and financial access" [ref=e249] [cursor=pointer]:
+                - /url: /settings/team
+                - generic [ref=e250]: Set up
+                - generic [ref=e251]:
+                  - generic [ref=e252]: Team and roles
+                  - generic [ref=e253]: Seats, managers, and financial access
+              - link "Set up Integration access Scoped API keys with expiry" [ref=e257] [cursor=pointer]:
+                - /url: /settings/api-keys
+                - generic [ref=e258]: Set up
+                - generic [ref=e259]:
+                  - generic [ref=e260]: Integration access
+                  - generic [ref=e261]: Scoped API keys with expiry
+              - generic [ref=e265]: Operational metrics remain blank until real deal data exists. This screen does not invent production totals.
+      - generic [ref=e267]:
+        - generic [ref=e268]: MCA Workspace
+        - generic [ref=e269]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=e38]: MCA Workspace

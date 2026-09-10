@@ -1,0 +1,230 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Browser Acceptance
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /reports
+                    - generic: Reports
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: owner@example.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Application scan
+                  - generic: Upload, scan, extract, and review every business and owner field with source evidence before creating or merging a deal.
+                - generic:
+                  - generic:
+                    - button
+                    - button: Upload
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: Deal workspace
+                    - heading [level=1]: Pipeline
+                    - paragraph: Work merchant applications from first contact through servicing events.
+                  - button: New deal
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Filtered deals
+                      - paragraph: "2"
+                  - generic:
+                    - generic:
+                      - paragraph: Submission ready
+                      - paragraph: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Needs information
+                      - paragraph: "2"
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - textbox:
+                          - /placeholder: Search name or deal ID
+                      - combobox:
+                        - generic: All statuses
+                      - combobox:
+                        - generic: All assignees
+                      - textbox
+                      - textbox
+                      - generic:
+                        - button
+                        - button
+                    - generic:
+                      - textbox:
+                        - /placeholder: Filter by funder name
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader: Merchant
+                          - columnheader: Status
+                          - columnheader: Requested
+                          - columnheader: Assignees
+                          - columnheader: Readiness
+                          - columnheader: Updated
+                      - rowgroup:
+                        - row:
+                          - cell:
+                            - paragraph: North Star Bakery Inc
+                            - paragraph: MCA-5312ED7F
+                          - cell:
+                            - generic: Lead
+                          - cell: $50,000
+                          - cell: "1"
+                          - cell:
+                            - generic: 9 missing
+                          - cell: 9/8/2026
+                        - row:
+                          - cell:
+                            - paragraph: Harbor Coffee LLC
+                            - paragraph: MCA-5DC6C41A
+                          - cell:
+                            - generic: Lead
+                          - cell: $75,000
+                          - cell: "1"
+                          - cell:
+                            - generic: 9 missing
+                          - cell: 9/8/2026
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert
+  - dialog [ref=f11e233]:
+    - generic [ref=f11e234]:
+      - generic [ref=f11e235]:
+        - heading "Harbor Coffee LLC" [level=2] [ref=f11e236]
+        - generic [ref=f11e237]: Lead
+        - generic [ref=f11e238]: v1
+      - paragraph [ref=f11e239]: MCA-5DC6C41A · Updated 9/8/2026, 10:52:16 AM
+    - generic [ref=f11e240]:
+      - generic [ref=f11e241]: Partial draft · 9 submission fields missing
+      - paragraph [ref=f11e244]: entityType, address.line1, address.city, address.state, address.postalCode, startDate, industry, fundingPurpose, owners
+    - generic [ref=f11e245]:
+      - tablist [ref=f11e246]:
+        - tab "Application" [selected] [ref=f11e247]
+        - tab "Owners" [ref=f11e248]
+        - tab "Documents" [ref=f11e249]
+        - tab "Activity" [ref=f11e250]
+      - tabpanel "Application" [ref=f11e251]:
+        - generic [ref=f11e252]:
+          - generic [ref=f11e253]:
+            - paragraph [ref=f11e254]: Legal name
+            - paragraph [ref=f11e255]: Harbor Coffee LLC
+          - generic [ref=f11e256]:
+            - paragraph [ref=f11e257]: DBA
+            - paragraph [ref=f11e258]: —
+          - generic [ref=f11e259]:
+            - paragraph [ref=f11e260]: EIN
+            - paragraph [ref=f11e261]: —
+          - generic [ref=f11e262]:
+            - paragraph [ref=f11e263]: Entity
+            - paragraph [ref=f11e264]: —
+          - generic [ref=f11e265]:
+            - paragraph [ref=f11e266]: Industry
+            - paragraph [ref=f11e267]: —
+          - generic [ref=f11e268]:
+            - paragraph [ref=f11e269]: NAICS
+            - paragraph [ref=f11e270]: —
+          - generic [ref=f11e271]:
+            - paragraph [ref=f11e272]: Revenue
+            - paragraph [ref=f11e273]: $42,000
+          - generic [ref=f11e274]:
+            - paragraph [ref=f11e275]: Requested
+            - paragraph [ref=f11e276]: $75,000
+          - generic [ref=f11e277]:
+            - paragraph [ref=f11e278]: FICO
+            - paragraph [ref=f11e279]: —
+        - generic [ref=f11e280]:
+          - paragraph [ref=f11e281]: Field sources
+          - generic [ref=f11e282]:
+            - generic [ref=f11e283]: "legalName: import"
+            - generic [ref=f11e284]: "contactEmail: import"
+            - generic [ref=f11e285]: "contactPhone: import"
+            - generic [ref=f11e286]: "requestedAmount: import"
+            - generic [ref=f11e287]: "monthlyRevenue: import"
+            - generic [ref=f11e288]: "assignments: import"
+        - generic [ref=f11e289]:
+          - generic [ref=f11e290]:
+            - generic [ref=f11e291]: Move status
+            - combobox [ref=f11e292]:
+              - generic: Choose next status
+          - button "Move" [disabled]
+    - button "Edit application" [ref=f11e294]
+    - button "Close" [active] [ref=f11e295]

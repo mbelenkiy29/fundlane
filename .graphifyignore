@@ -1,0 +1,27 @@
+# Focus the workspace graph on the active MCA app. See AGENTS.md for template navigation.
+/vite-version/
+/docs/
+.agents/
+.codex/
+.grok/
+graphify-out/
+node_modules/
+.next/
+.next*/
+.neon/
+.vercel/
+dist/
+build/
+output/
+coverage/
+data/
+test-results/
+playwright-report/
+.env*
+*.sqlite*
+*.db
+*.db-*
+*.log
+*.tsbuildinfo
+pnpm-lock.yaml
+package-lock.json

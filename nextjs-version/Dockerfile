@@ -1,0 +1,22 @@
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY . .
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+RUN pnpm build
+
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000
+RUN apt-get update && apt-get install -y --no-install-recommends clamav ca-certificates gosu && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+COPY scripts/railway/start.sh /usr/local/bin/fundlane-start
+RUN chmod 755 /usr/local/bin/fundlane-start
+EXPOSE 3000
+CMD ["/usr/local/bin/fundlane-start"]

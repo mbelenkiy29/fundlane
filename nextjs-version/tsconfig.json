@@ -1,0 +1,61 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2022"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "target": "ES2017"
+  },
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    ".next-test-deals/types/**/*.ts",
+    ".next-test-deals/dev/types/**/*.ts",
+    ".next-test-foundation/types/**/*.ts",
+    ".next-test-foundation/dev/types/**/*.ts",
+    ".next-test-documents/types/**/*.ts",
+    ".next-test-documents/dev/types/**/*.ts",
+    ".next-test-imports/types/**/*.ts",
+    ".next-test-imports/dev/types/**/*.ts",
+    ".next-test-intake/types/**/*.ts",
+    ".next-test-intake/dev/types/**/*.ts",
+    ".next-milestone05-browser/types/**/*.ts",
+    ".next-milestone05-browser/dev/types/**/*.ts",
+    ".next-clerk-preview/types/**/*.ts",
+    ".next-clerk-preview/dev/types/**/*.ts",
+    "scripts/clerk/**/*.ts",
+    ".next-test-billing/types/**/*.ts",
+    ".next-test-billing/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next*/**/*"
+  ]
+}

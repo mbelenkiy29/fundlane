@@ -1,0 +1,17 @@
+- generic [active] [ref=f5e1]:
+  - main [ref=f5e3]:
+    - generic [ref=f5e5]:
+      - link [ref=f5e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f5e18]:
+        - heading "Recover your account" [level=1] [ref=f5e19]
+        - paragraph [ref=f5e20]: We’ll send a time-limited reset link if the address belongs to an active account.
+      - generic [ref=f5e37]:
+        - generic [ref=f5e38]:
+          - paragraph [ref=f5e42]: Check your email
+          - paragraph [ref=f5e43]: If an account exists for browser-invitee@example.test, a reset link is on its way.
+        - link "Back to sign in" [ref=f5e44] [cursor=pointer]:
+          - /url: /sign-in
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f5e32] [cursor=pointer]
+  - alert [ref=f5e36]

@@ -1,0 +1,60 @@
+# Neon remains external. Never generate a replacement encryption key for existing data.
+services:
+  - type: web
+    name: fundlane
+    runtime: docker
+    repo: https://github.com/mbelenkiy29/fundlane
+    branch: main
+    rootDir: nextjs-version
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: ohio
+    plan: 1c-2g
+    numInstances: 1
+    healthCheckPath: /sign-in
+    autoDeployTrigger: checksPass
+    disk:
+      name: fundlane-documents
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: MCA_APP_ORIGIN
+        value: https://fundlane.io
+      - key: MCA_ALLOWED_ORIGINS
+        value: https://fundlane.io,https://www.fundlane.io
+      - key: MCA_DOCUMENT_STORAGE_PATH
+        value: /data/documents
+      - key: MCA_DB_POOL_MAX
+        value: "10"
+      - key: MCA_CLERK_BILLING_ENABLED
+        value: "false"
+      - key: NEXT_PUBLIC_CLERK_SIGN_IN_URL
+        value: /sign-in
+      - key: NEXT_PUBLIC_CLERK_SIGN_UP_URL
+        value: /sign-up
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: MCA_DATA_ENCRYPTION_KEY
+        sync: false
+      - key: MCA_UPLOAD_TOKEN_SECRET
+        sync: false
+      - key: MCA_CLOSING_ARTIFACT_TOKEN_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SIGNING_SECRET
+        sync: false
+      - key: MCA_CLOSING_EMAIL_PROVIDER
+        sync: false
+      - key: MCA_CLOSING_POSTMARK_CONNECTIONS_JSON
+        sync: false

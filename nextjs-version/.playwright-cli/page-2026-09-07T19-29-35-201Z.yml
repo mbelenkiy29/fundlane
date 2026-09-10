@@ -1,0 +1,228 @@
+- generic:
+  - generic [aria-hidden]:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - list:
+              - listitem:
+                - link:
+                  - /url: /dashboard
+                  - generic:
+                    - generic: Browser QA Capital
+                    - generic: MCA workspace
+          - generic:
+            - generic:
+              - generic: Pipeline
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /dashboard
+                    - generic: Home
+                - listitem:
+                  - link:
+                    - /url: /deals
+                    - generic: Deals
+                - listitem:
+                  - link:
+                    - /url: /submissions
+                    - generic: Submissions
+                - listitem:
+                  - link:
+                    - /url: /offers
+                    - generic: Offers
+                - listitem:
+                  - link:
+                    - /url: /advances
+                    - generic: Advances
+                - listitem:
+                  - link:
+                    - /url: /renewals
+                    - generic: Renewals
+            - generic:
+              - generic: Operations
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /funders
+                    - generic: Funders
+                - listitem:
+                  - link:
+                    - /url: /reports
+                    - generic: Reports
+                - listitem:
+                  - link:
+                    - /url: /settings
+                    - generic: Settings
+          - generic:
+            - list:
+              - listitem:
+                - button:
+                  - generic:
+                    - generic: Workspace Administrator
+                    - generic: browser-admin@example.test
+    - main:
+      - generic:
+        - generic:
+          - button:
+            - generic: Toggle Sidebar
+          - button:
+            - generic: Search merchants, deals, or contacts
+            - generic: ⌘K
+          - generic:
+            - link:
+              - /url: /deals/new
+              - text: New deal
+            - button
+            - button:
+              - generic: Switch to dark mode
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Deal workspace
+                  - heading [level=1]: Pipeline
+                  - paragraph: Work merchant applications from first contact through servicing events.
+                - button: New deal
+              - generic:
+                - generic:
+                  - generic:
+                    - paragraph: Filtered deals
+                    - paragraph: "1"
+                - generic:
+                  - generic:
+                    - paragraph: Submission ready
+                    - paragraph: "0"
+                - generic:
+                  - generic:
+                    - paragraph: Needs information
+                    - paragraph: "1"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - textbox:
+                        - /placeholder: Search name or deal ID
+                        - text: Harbor Browser
+                    - combobox:
+                      - generic: All statuses
+                    - combobox:
+                      - generic: All assignees
+                    - textbox
+                    - textbox
+                    - generic:
+                      - button
+                      - button
+                  - generic:
+                    - textbox:
+                      - /placeholder: Filter by funder name
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Lead
+                      - generic: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: New application
+                      - generic: "1"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - paragraph: Harbor Browser Cafe LLC
+                          - paragraph: MCA-B3EC666C
+                          - generic:
+                            - generic: No request
+                            - generic: 13 missing
+                  - generic:
+                    - generic:
+                      - paragraph: Ready to submit
+                      - generic: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Submitted
+                      - generic: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Offer
+                      - generic: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Contract
+                      - generic: "0"
+                  - generic:
+                    - generic:
+                      - paragraph: Funded
+                      - generic: "0"
+      - generic:
+        - generic:
+          - generic: MCA Workspace
+          - generic: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f1e203] [cursor=pointer]
+  - alert
+  - dialog [ref=f1e607]:
+    - generic [ref=f1e608]:
+      - generic [ref=f1e609]:
+        - heading "Harbor Browser Cafe LLC" [level=2] [ref=f1e610]
+        - generic [ref=f1e611]: New application
+        - generic [ref=f1e612]: v4
+      - paragraph [ref=f1e613]: MCA-B3EC666C · Updated 9/7/2026, 3:28:47 PM
+    - generic [ref=f1e614]:
+      - generic [ref=f1e615]: Partial draft · 13 submission fields missing
+      - paragraph [ref=f1e618]: entityType, address.line1, address.city, address.state, address.postalCode, contactPhone, startDate, industry, monthlyRevenue, requestedAmount, fundingPurpose, owners.0.firstName, owners.0.lastName
+    - generic [ref=f1e619]:
+      - tablist [ref=f1e620]:
+        - tab "Application" [selected] [ref=f1e621]
+        - tab "Owners" [ref=f1e622]
+        - tab "Activity" [ref=f1e623]
+      - tabpanel "Application" [ref=f1e624]:
+        - generic [ref=f1e625]:
+          - generic [ref=f1e626]:
+            - paragraph [ref=f1e627]: Legal name
+            - paragraph [ref=f1e628]: Harbor Browser Cafe LLC
+          - generic [ref=f1e629]:
+            - paragraph [ref=f1e630]: DBA
+            - paragraph [ref=f1e631]: Harbor Browser
+          - generic [ref=f1e632]:
+            - paragraph [ref=f1e633]: EIN
+            - paragraph [ref=f1e634]: ••-••••789
+          - generic [ref=f1e635]:
+            - paragraph [ref=f1e636]: Entity
+            - paragraph [ref=f1e637]: —
+          - generic [ref=f1e638]:
+            - paragraph [ref=f1e639]: Industry
+            - paragraph [ref=f1e640]: —
+          - generic [ref=f1e641]:
+            - paragraph [ref=f1e642]: NAICS
+            - paragraph [ref=f1e643]: "123456"
+          - generic [ref=f1e644]:
+            - paragraph [ref=f1e645]: Revenue
+            - paragraph [ref=f1e646]: —
+          - generic [ref=f1e647]:
+            - paragraph [ref=f1e648]: Requested
+            - paragraph [ref=f1e649]: —
+          - generic [ref=f1e650]:
+            - paragraph [ref=f1e651]: FICO
+            - paragraph [ref=f1e652]: "700"
+        - generic [ref=f1e653]:
+          - paragraph [ref=f1e654]: Field sources
+          - generic [ref=f1e655]:
+            - generic [ref=f1e656]: "legalName: manual"
+            - generic [ref=f1e657]: "address: manual"
+            - generic [ref=f1e658]: "owners: manual"
+            - generic [ref=f1e659]: "dbaName: manual"
+            - generic [ref=f1e660]: "ein: manual"
+            - generic [ref=f1e661]: "naicsCode: manual"
+            - generic [ref=f1e662]: "ficoScore: manual"
+            - generic [ref=f1e663]: "assignments: manual"
+        - generic [ref=f1e664]:
+          - generic [ref=f1e665]:
+            - generic [ref=f1e666]: Move status
+            - combobox [ref=f1e667]:
+              - generic: Choose next status
+          - button "Move" [disabled]
+    - button "Edit application" [ref=f1e669]
+    - button "Close" [active] [ref=f1e670]

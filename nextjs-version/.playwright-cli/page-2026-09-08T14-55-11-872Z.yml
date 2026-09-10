@@ -1,0 +1,153 @@
+- generic [ref=f12e1]:
+  - main [ref=f12e3]:
+    - generic [ref=f12e5]:
+      - button "Toggle Sidebar" [ref=f12e6]
+      - button "Search merchants, deals, or contacts" [ref=f12e8]
+      - generic [ref=f12e10]:
+        - button "Notifications" [ref=f12e11]
+        - button "Switch to dark mode" [ref=f12e12] [cursor=pointer]
+    - generic [ref=f12e17]:
+      - generic [ref=f12e18]:
+        - heading "Settings" [level=1] [ref=f12e19]
+        - paragraph [ref=f12e20]: Manage your brokerage, team access, and integrations.
+      - generic [ref=f12e21]:
+        - navigation "Settings" [ref=f12e22]:
+          - link "Workspace" [ref=f12e23] [cursor=pointer]:
+            - /url: /settings
+          - link "Team" [ref=f12e28] [cursor=pointer]:
+            - /url: /settings/team
+          - link "Access" [ref=f12e33] [cursor=pointer]:
+            - /url: /settings/access
+          - link "API keys" [ref=f12e37] [cursor=pointer]:
+            - /url: /settings/api-keys
+          - link "Connections" [ref=f12e41] [cursor=pointer]:
+            - /url: /settings/connections
+          - link "My profile" [ref=f12e45] [cursor=pointer]:
+            - /url: /settings/profile
+        - main [ref=f12e49]:
+          - generic [ref=f12e50]:
+            - generic [ref=f12e51]:
+              - heading "Connections and imports" [level=2] [ref=f12e52]
+              - paragraph [ref=f12e53]: Configure inbound application providers, spreadsheet batches, document packages, and Google Drive.
+            - generic [ref=f12e54]:
+              - generic [ref=f12e55]:
+                - generic [ref=f12e56]:
+                  - generic [ref=f12e57]: Application intake
+                  - generic [ref=f12e62]: Configure authenticated provider routes, field maps, private file access, and retry behavior. Secrets are never returned after creation or rotation.
+                - generic [ref=f12e63]: No intake providers are configured. Add the first connection below.
+              - generic [ref=f12e65]:
+                - generic [ref=f12e66]:
+                  - generic [ref=f12e67]: Add provider
+                  - generic [ref=f12e68]: Jotform uses a generated bearer secret in a Jotform Workflow webhook custom HTTP header; the basic Form Builder webhook does not provide this admission control. Fillout uses its configurable authorization header, HighLevel uses its official Ed25519 signature, and DocuSeal uses its HMAC secret. Zoho remains gated until the customer payload contract is approved.
+                - generic [ref=f12e70]:
+                  - generic [ref=f12e71]:
+                    - generic [ref=f12e72]: Provider
+                    - combobox "Provider" [ref=f12e73]:
+                      - option "jotform" [selected]
+                      - option "fillout"
+                      - option "highlevel"
+                      - option "docuseal"
+                      - option "custom"
+                      - option "zoho"
+                      - option "email"
+                  - generic [ref=f12e74]:
+                    - generic [ref=f12e75]: Connection name
+                    - textbox "Connection name" [ref=f12e76]:
+                      - /placeholder: Production Jotform
+                  - generic [ref=f12e77]:
+                    - generic [ref=f12e78]: Form ID
+                    - textbox "Form ID" [ref=f12e79]
+                  - generic [ref=f12e80]:
+                    - generic [ref=f12e81]: Private read credential
+                    - textbox "Private read credential" [ref=f12e82]:
+                      - /placeholder: Needed to fetch private attachments
+                  - generic [ref=f12e83]:
+                    - generic [ref=f12e84]: Allowed attachment hosts
+                    - textbox "Allowed attachment hosts" [ref=f12e85]:
+                      - /placeholder: api.jotform.com, www.jotform.com
+                  - generic [ref=f12e86]:
+                    - generic [ref=f12e87]: Assignment pool member IDs
+                    - textbox "Assignment pool member IDs" [ref=f12e88]:
+                      - /placeholder: UUID, UUID
+                  - generic [ref=f12e89]:
+                    - generic [ref=f12e90]: Initial status
+                    - combobox "Initial status" [ref=f12e91]:
+                      - option "Lead" [selected]
+                      - option "New application"
+                      - option "Missing documents"
+                  - generic [ref=f12e92]:
+                    - generic [ref=f12e93]: Field map JSON (deal field → provider path)
+                    - textbox "Field map JSON (deal field → provider path)" [ref=f12e94]: "{}"
+                  - button "Save integration" [ref=f12e96]
+              - generic [ref=f12e97]:
+                - generic [ref=f12e98]:
+                  - generic [ref=f12e99]: Mapping preview
+                  - generic [ref=f12e100]: Validate a realistic provider fixture without creating a deal or fetching files.
+                - generic [ref=f12e101]:
+                  - combobox [ref=f12e102]:
+                    - option "Choose integration" [selected]
+                  - textbox "Provider fixture JSON" [ref=f12e103]: "{}"
+                  - button "Preview mapping" [ref=f12e104]
+              - generic [ref=f12e105]:
+                - generic [ref=f12e107]:
+                  - generic [ref=f12e108]:
+                    - generic [ref=f12e109]: Intake activity
+                    - generic [ref=f12e110]: Recoverable errors and attachment checkpoints stay visible here.
+                  - button "Refresh" [ref=f12e111]
+                - generic [ref=f12e112]:
+                  - generic [ref=f12e113]:
+                    - button "Retry files" [ref=f12e114]
+                    - button "Send receipts" [ref=f12e115]
+                  - generic [ref=f12e116]:
+                    - generic [ref=f12e117]:
+                      - generic [ref=f12e118]:
+                        - generic [ref=f12e119]: import
+                        - generic [ref=f12e120]: created
+                        - generic [ref=f12e121]: 1c9c7158-a6e4-43c9-8f76-b0d4f469fc07:df049bbd-2a90-46fe-bc76-5d2e9aa1b1bd
+                      - paragraph [ref=f12e122]: Deal 5312ed7f-3753-4cc5-8d4e-51600b7285c4
+                    - generic [ref=f12e123]:
+                      - generic [ref=f12e124]:
+                        - generic [ref=f12e125]: import
+                        - generic [ref=f12e126]: created
+                        - generic [ref=f12e127]: 1c9c7158-a6e4-43c9-8f76-b0d4f469fc07:246e3df4-4e7d-4708-aa92-af30a9f6fa62
+                      - paragraph [ref=f12e128]: Deal 5dc6c41a-54f6-4e9e-bf30-e35fcf97fe43
+            - generic [ref=f12e129]:
+              - generic [ref=f12e130]:
+                - generic [ref=f12e131]: Import center
+                - generic [ref=f12e135]: Stage merchant spreadsheets and document packages, review every row, then commit with saved checkpoints.
+              - generic [ref=f12e136]:
+                - generic [ref=f12e137]:
+                  - generic [ref=f12e138]:
+                    - generic [ref=f12e139]: Existing source
+                    - combobox [ref=f12e140]:
+                      - generic: Partner referrals
+                  - generic [ref=f12e141]:
+                    - generic [ref=f12e142]: Lead batch
+                    - combobox [ref=f12e143]:
+                      - generic: September leads
+                  - generic [ref=f12e144]:
+                    - textbox "New source name" [ref=f12e145]:
+                      - /placeholder: New source
+                    - combobox [ref=f12e146]:
+                      - generic: Spreadsheet
+                    - button "Source" [disabled]
+                  - generic [ref=f12e147]:
+                    - textbox "New batch name" [ref=f12e148]:
+                      - /placeholder: New batch
+                    - button "Batch" [disabled]
+                - generic [ref=f12e149]:
+                  - tablist [ref=f12e150]:
+                    - tab "Create" [ref=f12e151]
+                    - tab "Update" [selected] [ref=f12e152]
+                    - tab "Drive" [ref=f12e153]
+                  - tabpanel "Update" [ref=f12e154]:
+                    - generic [ref=f12e155]:
+                      - link "Download template" [ref=f12e156] [cursor=pointer]:
+                        - /url: /api/mca/imports/update/template
+                      - button "Choose File" [active] [ref=f12e157]
+                      - button "Preview changes" [ref=f12e163]
+    - generic [ref=f12e159]:
+      - generic [ref=f12e160]: MCA Workspace
+      - generic [ref=f12e161]: Encrypted in transit · Activity audited
+  - region "Notifications alt+T"
+  - alert [ref=f12e162]
