@@ -27,7 +27,9 @@ Document bytes remain in `MCA_DOCUMENT_STORAGE_PATH` (default `data/documents`);
 
 Build and start the production server with `pnpm build` and `pnpm start`. Configure both database URLs, document storage, encryption key, public origin, and email webhook in the runtime environment before `pnpm start`.
 
-The Fundlane Railway deployment uses the checked Dockerfile and `railway.json`, with Neon metadata and a persistent `/data` volume for document bytes and antivirus signatures. Deployment IDs, verification evidence, and outstanding email/SMS/signature activation steps are recorded in [Milestone 5 provider activation](docs/milestone-05/provider-activation.md). Closing Postmark credentials are bound to exact workspace/sender identities; a pending sender still requires a successful provider test before use.
+The Render deployment configuration is in the repository root `render.yaml`; see [Render deployment](docs/render-deployment.md). It retains Neon and mounts `/data` for documents and antivirus signatures.
+
+The previous Fundlane Railway deployment uses the checked Dockerfile and `railway.json`, with Neon metadata and a persistent `/data` volume for document bytes and antivirus signatures. Deployment IDs, verification evidence, and outstanding email/SMS/signature activation steps are recorded in [Milestone 5 provider activation](docs/milestone-05/provider-activation.md). Closing Postmark credentials are bound to exact workspace/sender identities; a pending sender still requires a successful provider test before use.
 
 ## Verification
 

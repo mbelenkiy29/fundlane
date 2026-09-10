@@ -33,7 +33,8 @@ All paths below are relative to `nextjs-version/`.
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | Closing, offer messaging and SMS routing | `src/lib/mca/closing/`, `sms/`, `src/components/mca/closing/`, `src/components/mca/sms/` |
 | Company SMS onboarding, provisioning and inbox | `src/lib/mca/sms/onboarding.ts`, `provisioning.ts`, `inbox.ts`, `src/lib/mca/db/sms-onboarding.ts`, `docs/sms/company-onboarding.md` |
-| Railway deployment and verification | `Dockerfile`, `railway.json`, `scripts/railway/`, `docs/milestone-05/provider-activation.md` |
+| Render deployment | `../render.yaml`, `Dockerfile`, `docs/render-deployment.md` |
+| Previous Railway deployment and verification | `Dockerfile`, `railway.json`, `scripts/railway/`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
 | Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts` |
 | Migration tooling | `scripts/neon/`, `drizzle.config.ts` |

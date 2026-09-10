@@ -1,6 +1,8 @@
-# Railway Clerk cutover — prepared, not deployed
+# Clerk cutover — identity migration completed; Render deployment in progress
 
-The September 9 deployment request is pending the real email address for the existing administrator. Deployment `d04b4edb-54bd-4c84-8589-c8f30215cc37` still serves fundlane.io.
+On September 10, the owner supplied the administrator email and requested moving hosting to Render. The approved email was updated on the existing user, and the production Clerk import completed. A reconciliation dry-run shows one active user, company, and membership with zero unmapped users or companies. No document objects exist in production. All 20 schema migrations are already applied. Clerk DNS, SSL, and mail checks report complete. See `../render-deployment.md` for the hosting configuration.
+
+The following notes record the earlier Railway preparation and its recovery context.
 
 ## Prepared
 
@@ -13,7 +15,7 @@ The September 9 deployment request is pending the real email address for the exi
 - Additive migrations passed on validation, then production: 20 migrations, one user/company/deal preserved. No Clerk identities imported yet.
 - Dockerfile accepts the public Clerk key at build time. Migration failures now report only provider status/error codes. Typecheck passed.
 
-## Resume after the owner supplies an email
+## Historical cutover procedure
 
 The existing user `588a276c-6714-4144-b6bb-0ab236b58db9` has an `@mca.local` placeholder. Clerk rejected import with `form_param_format_invalid`. Do not infer ownership or silently change its email.
 
