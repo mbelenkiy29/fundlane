@@ -8,6 +8,8 @@ Use Node.js 24+ and pnpm. Follow [`nextjs-version/README.md`](nextjs-version/REA
 
 ## Deployment
 
+Live application: https://fundlane.io. See [current deployment and verification](DEPLOYMENT.md).
+
 [`render.yaml`](render.yaml) defines the Render Docker service and persistent document disk. Neon remains the external database. See [`nextjs-version/docs/render-deployment.md`](nextjs-version/docs/render-deployment.md) for configuration and release checks.
 
 ## Workspace
