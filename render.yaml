@@ -12,6 +12,9 @@ services:
     plan: 1c-2g
     numInstances: 1
     healthCheckPath: /sign-in
+    domains:
+      - fundlane.io
+      - www.fundlane.io
     autoDeployTrigger: checksPass
     disk:
       name: fundlane-documents
@@ -45,6 +48,8 @@ services:
       - key: MCA_DATA_ENCRYPTION_KEY
         sync: false
       - key: MCA_UPLOAD_TOKEN_SECRET
+        sync: false
+      - key: MCA_DOCUMENT_TOKEN_SECRET
         sync: false
       - key: MCA_CLOSING_ARTIFACT_TOKEN_SECRET
         sync: false
