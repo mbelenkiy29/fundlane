@@ -7,7 +7,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-RUN pnpm build
+RUN pnpm build && node scripts/assistant/build-worker.mjs
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends clamav ca-certi
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
+COPY --from=build /app/.next/assistant-worker.cjs ./assistant-worker.cjs
+COPY scripts/assistant/supervisor.cjs ./supervisor.cjs
 COPY scripts/railway/start.sh /usr/local/bin/fundlane-start
 RUN chmod 755 /usr/local/bin/fundlane-start
 EXPOSE 3000

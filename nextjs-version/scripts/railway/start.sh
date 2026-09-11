@@ -13,4 +13,4 @@ printf '#!/bin/sh\nexec clamscan --database=/data/clamav "$@"\n' > /usr/local/bi
 chmod 755 /usr/local/bin/fundlane-scan
 export MCA_DOCUMENT_STORAGE_PATH=/data/documents
 export HOSTNAME=0.0.0.0
-exec gosu node node server.js
+exec gosu node node supervisor.cjs

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, text, integer, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -1585,3 +1585,25 @@ export const clerkWebhookEvents = pgTable("clerk_webhook_events", {
   event_type: text().notNull(),
   processed_at: text().notNull(),
 });
+
+// Private assistant state. Content and SDK state use workspace-bound encryption.
+export const mcaAssistantConversations = pgTable("mca_assistant_conversations", {
+  id: text().primaryKey(), workspace_id: text().notNull(), user_id: text().notNull(), deal_id: text(), created_at: text().notNull(),
+}, t => [uniqueIndex("assistant_conversation_owner").on(t.workspace_id,t.user_id,t.deal_id)]);
+export const mcaAssistantMessages = pgTable("mca_assistant_messages", {
+  id: text().primaryKey(), conversation_id: text().notNull().references(()=>mcaAssistantConversations.id,{onDelete:"cascade"}),
+  sequence: bigserial({mode:"number"}).notNull(), role: text().notNull(), content_cipher: text().notNull(), created_at: text().notNull(),
+}, t => [index("assistant_message_history").on(t.conversation_id,t.sequence)]);
+export const mcaAssistantRuns = pgTable("mca_assistant_runs", {
+  id: text().primaryKey(), conversation_id: text().notNull().references(()=>mcaAssistantConversations.id,{onDelete:"cascade"}),
+  request_id: text().notNull(), selected_deal_id: text(), mutation_deal_id: text(), model_turns: integer().default(0).notNull(), status: text().notNull(), state_cipher: text(), error: text(), usage_json: text(), created_at: text().notNull(), expires_at: text().notNull(),
+}, t => [uniqueIndex("assistant_request_once").on(t.conversation_id,t.request_id),
+  uniqueIndex("assistant_one_active_run").on(t.conversation_id).where(sql`${t.status} IN ('running','awaiting_approval','awaiting_input')`)]);
+export const mcaAssistantApprovals = pgTable("mca_assistant_approvals", {
+  id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), kind: text().notNull(), status: text().notNull(),
+  payload_cipher: text().notNull(), preview_cipher: text().notNull(), fingerprint: text().notNull(), call_id: text(), result_cipher: text(), created_at: text().notNull(),
+}, t => [index("assistant_run_approvals").on(t.run_id)]);
+export const mcaAssistantExecutions = pgTable("mca_assistant_executions", {
+  id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), tool_name: text().notNull(), status: text().notNull(),
+  result_cipher: text(), created_at: text().notNull(), completed_at: text(),
+}, t => [index("assistant_run_executions").on(t.run_id)]);
