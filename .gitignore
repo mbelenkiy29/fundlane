@@ -111,3 +111,8 @@ graphify-out/reflections/
 /nextjs-version/docs/**/verification-logs/
 /nextjs-version/docs/**/screenshots/
 /nextjs-version/docs/acceptance/submissions-dashboard/*.png
+
+# Python ChatKit runtime caches
+/chatkit-service/.venv/
+/chatkit-service/.pytest_cache/
+/chatkit-service/**/__pycache__/

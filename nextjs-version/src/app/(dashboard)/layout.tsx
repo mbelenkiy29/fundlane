@@ -1,3 +1,4 @@
+import { assistantEnabled } from "@/lib/mca/assistant/security"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { DashboardChrome } from "@/components/mca/dashboard-chrome"
@@ -32,5 +33,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <><DashboardChrome session={session}>{children}</DashboardChrome><PwaLifecycle /></>
+  return <><DashboardChrome session={session} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""}>{children}</DashboardChrome><PwaLifecycle /></>
 }

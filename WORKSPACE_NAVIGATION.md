@@ -25,6 +25,7 @@ All paths below are relative to `nextjs-version/`.
 | --- | --- |
 | Pages and HTTP endpoints | `src/app/`, `src/app/api/` |
 | MCA UI and shared components | `src/components/mca/`, `src/components/ui/`, `src/components/layouts/` |
+| Read-only ChatKit panel | `src/lib/mca/assistant/chatkit-context.ts`, `gateway.ts`, `security.ts`, `store.ts`, `tools.ts`, `src/app/api/mca/chatkit/`, `../chatkit-service/`, `docs/chatkit-assistant.md` |
 | Authentication and workspace isolation | `src/lib/mca/auth.ts`, `sessions.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts` |
 | Database and schema | `src/lib/mca/db.ts`, `src/lib/mca/db/schema.ts`, `drizzle/` |
 | Deals and pipeline | `src/lib/mca/deals/` |

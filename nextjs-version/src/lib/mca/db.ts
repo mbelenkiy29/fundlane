@@ -31,7 +31,10 @@ const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: P
 function databaseUrl(): string {
   const value = process.env.DATABASE_URL?.trim();
   if (!value) throw new Error("DATABASE_URL is required. Fundlane no longer supports a SQLite runtime fallback.");
-  return value;
+  // Keep certificate and hostname verification explicit across pg versions.
+  const url = new URL(value);
+  url.searchParams.set("sslmode", "verify-full");
+  return url.toString();
 }
 
 function poolSize(): number {

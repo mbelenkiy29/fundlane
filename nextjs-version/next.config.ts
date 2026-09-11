@@ -30,6 +30,10 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/fonts/inter/:font*",
+        headers: [{ key: "Access-Control-Allow-Origin", value: "*" }],
+      },
+      {
         source: "/api/:path*",
         headers: [
           {

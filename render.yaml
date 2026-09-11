@@ -35,6 +35,20 @@ services:
         value: /data/documents
       - key: MCA_DB_POOL_MAX
         value: "10"
+      - key: MCA_ASSISTANT_ENABLED
+        value: "false"
+      - key: MCA_ASSISTANT_DOMAIN_KEY
+        sync: false
+      - key: MCA_ASSISTANT_SERVICE_URL
+        fromService:
+          name: fundlane-chatkit
+          type: pserv
+          property: hostport
+      - key: MCA_ASSISTANT_SIGNING_SECRET
+        fromService:
+          name: fundlane-chatkit
+          type: pserv
+          envVarKey: MCA_ASSISTANT_SIGNING_SECRET
       - key: MCA_CLERK_BILLING_ENABLED
         value: "false"
       - key: NEXT_PUBLIC_CLERK_SIGN_IN_URL
@@ -62,4 +76,28 @@ services:
       - key: MCA_CLOSING_EMAIL_PROVIDER
         sync: false
       - key: MCA_CLOSING_POSTMARK_CONNECTIONS_JSON
+        sync: false
+
+  - type: pserv
+    name: fundlane-chatkit
+    runtime: docker
+    repo: https://github.com/mbelenkiy29/fundlane
+    branch: main
+    rootDir: chatkit-service
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: ohio
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: MCA_ASSISTANT_CALLBACK_URL
+        value: https://fundlane.io/api/mca/chatkit/internal
+      - key: MCA_ASSISTANT_SIGNING_SECRET
+        generateValue: true
+      - key: MCA_ASSISTANT_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
