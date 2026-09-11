@@ -7,7 +7,6 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { SidebarConfigProvider } from "@/contexts/sidebar-context";
 import { inter } from "@/lib/fonts";
 import { Toaster } from "@/components/ui/sonner";
-import { PwaLifecycle } from "@/components/mca/pwa-lifecycle";
 
 export const metadata: Metadata = {
   title: {
@@ -33,7 +32,6 @@ export default function RootLayout({
           <SidebarConfigProvider>
           {children}
           </SidebarConfigProvider>
-          <PwaLifecycle />
           <Toaster richColors closeButton />
           </ThemeProvider>
         </ClerkProvider>

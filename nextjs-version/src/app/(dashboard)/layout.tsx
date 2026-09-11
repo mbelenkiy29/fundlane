@@ -5,6 +5,7 @@ import { authenticateClerkSession } from "@/lib/mca/clerk-auth"
 import { auth } from "@clerk/nextjs/server"
 import { getSessionResponse } from "@/lib/mca/sessions"
 import type { PageKey } from "@/lib/mca/types"
+import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard") return "dashboard"
@@ -31,5 +32,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <DashboardChrome session={session}>{children}</DashboardChrome>
+  return <><DashboardChrome session={session}>{children}</DashboardChrome><PwaLifecycle /></>
 }
