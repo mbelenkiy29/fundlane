@@ -4,46 +4,46 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 10925 nodes · 32206 edges · 541 communities (443 shown, 98 thin omitted)
+- 10939 nodes · 32209 edges · 554 communities (454 shown, 100 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 202 edges (avg confidence: 0.68)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `46602fdf`
+- Built from commit: `cd6ee65f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- deals-workspace.tsx
+- react
 - utils.ts
 - button.tsx
-- operations.ts
-- team-profit.tsx
-- AppError
+- page.tsx
+- deals-workspace.tsx
+- assertTrustedMutation
 - service.ts
-- landing-theme-customizer.tsx
-- clerk-auth.ts
+- Button
+- db.ts
 - readJson
 - service.ts
 - service.ts
-- .prepare
+- recordAuditEvent
 - credentials.ts
-- getDatabase
+- contracts.ts
 - imports-http.test.mjs
-- react
-- consumeRequestRateLimit
+- sender-connections-panel.tsx
+- auth.ts
 - submissions-offer-links.test.ts
 - apiError
 - followups.ts
-- index.ts
-- schema.ts
+- contracts.ts
+- service.ts
 - index.ts
 - index.ts
 - templates.ts
 - index.ts
 - index.ts
 - stamps.ts
-- contracts.ts
+- index.ts
 - index.ts
 - service.ts
 - schema.ts
@@ -51,7 +51,7 @@
 - index.ts
 - index.ts
 - index.ts
-- service.ts
+- getDealForDocument
 - index.ts
 - mapping.ts
 - index.ts
@@ -68,40 +68,40 @@
 - mapping.ts
 - index.ts
 - replies.ts
-- requireAnalysisActor
-- submissions-watermarks.test.ts
+- underwriting-review.test.ts
+- getDatabase
 - adapterRuntime
 - email-templates.ts
-- milestone06-home.test.ts
+- service.ts
 - nowIso
-- contracts.ts
+- archive-service.ts
 - offer-links.ts
-- errors.ts
+- AppError
 - index.ts
 - compress.ts
 - service.ts
 - index.ts
 - reminders.ts
-- repository.ts
+- errors.ts
 - cn
 - criteria.ts
 - application-drafts.ts
 - 0000_cloudy_tattoo.sql
 - sender-fallback.ts
 - scoring.ts
-- index.ts
+- SubmissionJob
 - postgres-test-db.mjs
 - team-profit.ts
 - index.ts
 - criteria-scan.ts
-- contracts.ts
+- repository.ts
 - milestone06-reminders.test.ts
 - analysis.ts
 - directory.ts
 - import-sqlite.ts
 - lead-roi.ts
-- closeDatabaseForTests
-- badge.tsx
+- newId
+- card.tsx
 - review-mail.ts
 - funder-analytics.ts
 - drive-service.ts
@@ -117,33 +117,32 @@
 - service.ts
 - dependencies
 - rep-funnel.ts
-- createMessageTemplate
+- buildDealTemplateValues
 - milestone06-followups.test.ts
-- experience-contracts.ts
+- types.ts
 - statements.ts
 - submissions-extract.test.ts
 - reconciliation.ts
 - route.ts
-- newId
+- configuration.ts
 - providers.ts
-- underwriting-corrections.test.ts
+- submissions-core.test.ts
 - framework.ts
 - imports-core.test.ts
 - parseJson
 - devDependencies
-- assistant-experience.test.ts
+- operations.ts
 - psf-docuseal-service.ts
 - submissions-replies.test.ts
-- card.tsx
+- input.tsx
 - derive.ts
 - @dnd-kit/modifiers
 - demo.ts
 - 0008_chief_squadron_sinister.sql
 - milestone06-digest.test.ts
 - service.ts
-- team-panel.tsx
-- milestone06-team-profit.test.ts
-- include
+- Role
+- queue.ts
 - parser.ts
 - submissions-duplicates.test.ts
 - milestone06-webhooks.test.ts
@@ -163,31 +162,29 @@
 - createFollowupPolicy
 - Milestone 06 — Communications and reporting
 - milestone06.ts
-- contracts.ts
 - ReplyMailbox
 - Adapter batch A review (MIC-123, MIC-126, MIC-127, MIC-129, MIC-130)
 - snapshot-repository.ts
 - 0006_fancy_morph.sql
 - Milestone 05 remaining — Offers, funding and commissions
-- compilerOptions
-- remind-funder.tsx
-- review-panel.tsx
-- .extractCriteria
+- include
+- repository.ts
+- duplicate-policy.ts
 - layout.tsx
 - sms-onboarding.ts
 - milestone05-closing-docuseal-service.test.ts
 - 0021_assistant_workspace_credits.sql
 - Fundlane marketing site
-- FilesystemDocumentStorage
+- http.ts
 - README.md
-- activeMembershipIds
+- repository.ts
 - assistant-credits.ts
-- appOrigin
+- requestCorrelationId
 - oauth.ts
 - MCA / Fundlane architecture and hosting brief
 - 0015_tiny_nebula.sql
-- .next*/**/*
-- requireSubmissionActor
+- layout.tsx
+- query.ts
 - Blocking findings
 - milestone05-closing-docuseal.test.ts
 - MIC-157 report — PSF document request and webhook-to-signature workflow
@@ -195,20 +192,26 @@
 - milestone05-closing.ts
 - Project Design Context
 - MIC-106 report — Stipulation tasks and secure merchant upload requests
-- requireStatementActor
+- webhook.ts
 - @clerk/backend
 - milestone05-accounting.ts
 - milestone05-offers.ts
+- submissions-portal.test.ts
 - MIC-108 report — Contract request, acceptance, repricing, and signature tracking
+- contracts.ts
+- selection-panel.tsx
 - 0011_perfect_mandarin.sql
 - 0018_clerk_identity.sql
 - 0020_curved_mikhail_rasputin.sql
 - setup-billing.mjs
 - start.sh
+- MemoryRepository
+- tsconfig.marketing-verification.json
 - milestone05-sms.ts
 - OpenAiReplyOutcomeClassifier
 - 0014_youthful_silver_samurai.sql
 - milestone05-schedules.ts
+- publishWorkflowWebhook
 - 0002_natural_triton.sql
 - 0004_sharp_la_nuit.sql
 - 0009_material_kid_colt.sql
@@ -217,6 +220,8 @@
 - smoke.mjs
 - dynamic-imports.ts
 - Milestone 02 implementation plan
+- updateWorkflowWebhookEndpoint
+- db
 - @clerk/ui
 - clsx
 - jobs.ts
@@ -242,6 +247,7 @@
 - @radix-ui/react-hover-card
 - route.ts
 - @radix-ui/react-progress
+- route.ts
 - @radix-ui/react-slot
 - @radix-ui/react-switch
 - @radix-ui/react-toggle-group
@@ -259,10 +265,13 @@
 - @tanstack/react-table
 - 0022_assistant_experience.sql
 - zod
+- requestJson
 - postcss.config.mjs
 - sw.js
+- email.ts
 - proxy.ts
 - SCHEDULE_NO_TRANSFER_NOTICE
+- assertSafeWorkflowWebhookDestination
 - AI Assistant and company credits
 - MIC-164 acceptance — Document completeness
 - Milestone 5 execution plan
@@ -271,6 +280,7 @@
 - Milestone 05 lane C acceptance
 - MIC-157 acceptance — PSF document request and webhook-to-signature workflow
 - Milestone 5 provider activation
+- deals-http.test.mjs
 - Lane A acceptance - documents and extraction
 - MIC-111 report — Reverse consolidation and weekly distributions
 - MIC-102 acceptance — Home Needs Action queue and in-place deal panel
@@ -281,7 +291,7 @@
 - MIC-147 report — Personalized message templates and offer/document variables
 - MIC-188 acceptance — TextUs SMS provider adapter
 - MIC-191 acceptance — GoHighLevel SMS provider adapter
-- documents-core.test.ts
+- documents-http.test.mjs
 - Clerk authentication and company onboarding
 - Milestone 01 foundation plan
 - Milestone 02 Lane C cross-review
@@ -466,6 +476,7 @@
 - Neon migration lane B verification
 - Neon lane C verification
 - Render deployment
+- next.config.ts
 - MCA agent navigation
 - SEN-32 and SEN-35 acceptance evidence
 - Team UI redesign verification
@@ -550,78 +561,78 @@
 10. `readJson()` - 163 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `UsersPage()` --indirect_call--> `user()`  [INFERRED]
+  nextjs-version/src/app/(dashboard)/users/page.tsx → nextjs-version/tests/assistant-credits.test.ts
 - `sign()` --indirect_call--> `current()`  [INFERRED]
   nextjs-version/tests/milestone05-sms.test.ts → nextjs-version/src/components/mca/offers/offers-panel.tsx
 - `LandingPageContent()` --references--> `react`  [EXTRACTED]
   nextjs-version/src/app/landing/landing-page-content.tsx → nextjs-version/package.json
-- `SidebarNotification()` --references--> `react`  [EXTRACTED]
-  nextjs-version/src/components/sidebar-notification.tsx → nextjs-version/package.json
 - `mappedApplication()` --indirect_call--> `sourcePath()`  [INFERRED]
   nextjs-version/src/lib/mca/intake/providers.ts → nextjs-version/scripts/neon/import-sqlite.ts
-- `EventForm()` --indirect_call--> `eventData()`  [INFERRED]
-  nextjs-version/src/app/(dashboard)/calendar/components/event-form.tsx → nextjs-version/src/lib/mca/comms/webhooks.ts
+- `LoginForm1()` --calls--> `cn()`  [EXTRACTED]
+  nextjs-version/src/app/(auth)/sign-in/components/login-form-1.tsx → nextjs-version/src/lib/utils.ts
 
 ## Import Cycles
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/lendr/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/fintegra/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/idea-financial/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/can-capital/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/can-capital/index.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/plexe/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/credibly/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/forward-financing/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/channel-partners-capital/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/channel-partners-capital/index.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/bitty-advance/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/bitty-advance/index.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/ondeck/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/everest-business-funding/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/expansion-capital-group/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/fintegra/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/fora-financial/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/forward-financing/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/can-capital/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/can-capital/index.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/peac-solutions/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/fundomate/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/bitty-advance/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/bitty-advance/index.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/lendr/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/credibly/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/fora-financial/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/headway-capital/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/lendini/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/ondeck/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
-- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/peac-solutions/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
+- 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/plexe/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 - 3-file cycle: `nextjs-version/src/lib/mca/submissions/adapters/credentials.ts -> nextjs-version/src/lib/mca/submissions/adapters/registry.ts -> nextjs-version/src/lib/mca/submissions/adapters/rapid-finance/index.ts -> nextjs-version/src/lib/mca/submissions/adapters/credentials.ts`
 
-## Communities (541 total, 98 thin omitted)
+## Communities (554 total, 100 thin omitted)
 
-### Community 0 - "deals-workspace.tsx"
+### Community 0 - "react"
 Cohesion: 0.05
-Nodes (64): DashboardPage(), DealsWorkspace(), dealToDraft(), DraftForm, emptyDraft(), formPayload(), money, statusBadge() (+56 more)
+Nodes (41): react, ChartAreaInteractive(), chartData, columns, DataTable(), TableCellViewer(), schema, Task (+33 more)
 
 ### Community 1 - "utils.ts"
-Cohesion: 0.03
-Nodes (109): CalendarProps, CalendarMainProps, CalendarSidebar(), CalendarSidebarProps, CalendarMainProps, CalendarGroup, CalendarItem, Calendars() (+101 more)
+Cohesion: 0.05
+Nodes (75): CalendarGroup, CalendarItem, CalendarsProps, enhancedCalendars, Chat(), ChatProps, ChatHeader(), ChatHeaderProps (+67 more)
 
 ### Community 2 - "button.tsx"
+Cohesion: 0.05
+Nodes (25): AcceptInvite(), ForbiddenError(), InternalServerError(), NotFoundError(), UnauthorizedError(), UnderMaintenanceError(), ForgotPasswordForm2(), ForgotPasswordForm3() (+17 more)
+
+### Community 3 - "page.tsx"
+Cohesion: 0.05
+Nodes (49): LoginForm1(), loginFormSchema, LoginFormValues, accountFormSchema, AccountFormValues, appearanceFormSchema, AppearanceFormValues, userFormSchema (+41 more)
+
+### Community 4 - "deals-workspace.tsx"
+Cohesion: 0.02
+Nodes (148): DealsWorkspace(), dealToDraft(), DraftForm, emptyDraft(), formPayload(), money, statusBadge(), statusTone() (+140 more)
+
+### Community 5 - "assertTrustedMutation"
 Cohesion: 0.04
-Nodes (58): AcceptInvite(), ForbiddenError(), InternalServerError(), NotFoundError(), UnauthorizedError(), UnderMaintenanceError(), ForgotPasswordForm2(), ForgotPasswordForm3() (+50 more)
-
-### Community 3 - "operations.ts"
-Cohesion: 0.12
-Nodes (48): assistantToolFields, createDealAgent(), meteredModel(), runDealAgent(), canonical(), consumeHostedBudget(), Activity, Citation (+40 more)
-
-### Community 4 - "team-profit.tsx"
-Cohesion: 0.03
-Nodes (110): columns, DataTableColumnHeader(), DataTableColumnHeaderProps, DataTableRowActions(), formatCents(), AdvanceRow, ApprovalRow, channelLabel() (+102 more)
-
-### Community 5 - "AppError"
-Cohesion: 0.04
-Nodes (114): GET(), PATCH(), patchSchema, GET(), POST(), schema, filtersFrom(), GET() (+106 more)
+Nodes (98): GET(), PATCH(), patchSchema, GET(), PATCH(), POST(), POST(), GET() (+90 more)
 
 ### Community 6 - "service.ts"
 Cohesion: 0.04
-Nodes (96): POST(), ClosingChannel, ClosingDelivery, ClosingRequestPreview, ClosingSnapshot, ContractWorkflow, DeliveryState, MerchantUploadLink (+88 more)
+Nodes (95): GET(), POST(), ClosingChannel, ClosingDelivery, ClosingRequestPreview, ClosingSnapshot, ContractWorkflow, DeliveryState (+87 more)
 
-### Community 7 - "landing-theme-customizer.tsx"
-Cohesion: 0.05
-Nodes (73): Calendar(), calendars, eventDates, events, Calendar, useCalendar(), Category, FAQ (+65 more)
+### Community 7 - "Button"
+Cohesion: 0.03
+Nodes (135): Calendar(), CalendarProps, CalendarMain(), CalendarMainProps, CalendarSidebar(), CalendarSidebarProps, CalendarMainProps, Calendars() (+127 more)
 
-### Community 8 - "clerk-auth.ts"
-Cohesion: 0.13
-Nodes (33): main(), main(), POST(), POST(), authenticateSessionToken(), assertBillingCapacity(), billingEnabled(), billingRole() (+25 more)
+### Community 8 - "db.ts"
+Cohesion: 0.07
+Nodes (59): main(), main(), POST(), POST(), authenticateRequest(), authenticateSessionToken(), consumeApiKey(), assertBillingCapacity() (+51 more)
 
 ### Community 9 - "readJson"
-Cohesion: 0.04
-Nodes (81): PATCH(), POST(), POST(), GET(), POST(), POST(), POST(), schema (+73 more)
+Cohesion: 0.05
+Nodes (66): POST(), POST(), schema, POST(), schema, POST(), schema, POST() (+58 more)
 
 ### Community 10 - "service.ts"
 Cohesion: 0.07
@@ -629,51 +640,51 @@ Nodes (83): POST(), PATCH(), RouteContext, POST(), POST(), POST(), RouteContext,
 
 ### Community 11 - "service.ts"
 Cohesion: 0.05
-Nodes (81): ConfirmFundingInput, FundingAccountingWriter, FundingResult, FundingSplitInput, confirmOfferFunding(), existingFunding(), FundingRow, getFundingForDeal() (+73 more)
+Nodes (81): ConfirmFundingInput, FundingAccountingInput, FundingAccountingWriter, FundingResult, FundingSplitInput, confirmOfferFunding(), existingFunding(), FundingRow (+73 more)
 
-### Community 12 - ".prepare"
-Cohesion: 0.05
-Nodes (85): calculateOffer(), calculateSplitSnapshot(), CALCULATION_RULE_VERSION, CalculationSnapshot, OfferCalculationInput, PaymentCalendar, PaymentFrequency, ROUNDING_POLICY (+77 more)
+### Community 12 - "recordAuditEvent"
+Cohesion: 0.03
+Nodes (135): PATCH(), actor(), GET(), POST(), calculateOffer(), calculateSplitSnapshot(), CALCULATION_RULE_VERSION, CalculationSnapshot (+127 more)
 
 ### Community 13 - "credentials.ts"
 Cohesion: 0.05
-Nodes (80): noStore, POST(), RouteContext, DELETE(), GET(), noStore, PATCH(), RouteContext (+72 more)
+Nodes (78): noStore, POST(), RouteContext, DELETE(), GET(), noStore, PATCH(), RouteContext (+70 more)
 
-### Community 14 - "getDatabase"
-Cohesion: 0.04
-Nodes (49): assertResourceWorkspace(), AsyncStatement, createExecutor(), databaseUrl(), execute(), getDatabase(), getPool(), globalDatabase (+41 more)
+### Community 14 - "contracts.ts"
+Cohesion: 0.09
+Nodes (18): gohighlevelSmsAdapter, openphoneSmsAdapter, adapters, twilioSmsAdapter, unavailableSmsAdapter(), SMS_ACCOUNT_STATES, SMS_ADAPTER_ENVIRONMENTS, SMS_PROVIDERS (+10 more)
 
 ### Community 15 - "imports-http.test.mjs"
 Cohesion: 0.38
 Nodes (5): crc32(), json(), multipart(), temp, zip()
 
-### Community 16 - "react"
-Cohesion: 0.03
-Nodes (85): react, VerifyCompany(), DataTable(), ApiKeysPage(), formatDate(), WorkspaceSettingsPage(), ProfilePage(), SmsReview() (+77 more)
+### Community 16 - "sender-connections-panel.tsx"
+Cohesion: 0.16
+Nodes (15): emptyForm, errorMessage(), ListPayload, MembershipOption, providerLabel(), PROVIDERS, PURPOSES, SenderConnection (+7 more)
 
-### Community 17 - "consumeRequestRateLimit"
+### Community 17 - "auth.ts"
 Cohesion: 0.05
-Nodes (65): POST(), headers, PATCH(), GET(), GET(), POST(), noStore, POST() (+57 more)
+Nodes (65): POST(), headers, PATCH(), GET(), GET(), POST(), GET(), noStore (+57 more)
 
 ### Community 18 - "submissions-offer-links.test.ts"
 Cohesion: 0.08
-Nodes (23): setOfferLinkNetworkForTests(), setReplyMailboxForTests(), actor(), classifyCalls, cookieRequest(), fetchCalls, fixtureClassifier, fixtureMailbox() (+15 more)
+Nodes (22): setOfferLinkNetworkForTests(), setReplyMailboxForTests(), actor(), classifyCalls, cookieRequest(), fetchCalls, fixtureClassifier, fixtureMailbox() (+14 more)
 
 ### Community 19 - "apiError"
-Cohesion: 0.03
-Nodes (103): POST(), DELETE(), GET(), POST(), GET(), GET(), POST(), GET() (+95 more)
+Cohesion: 0.04
+Nodes (71): POST(), GET(), noStore, POST(), RouteContext, POST(), POST(), POST() (+63 more)
 
 ### Community 20 - "followups.ts"
 Cohesion: 0.05
-Nodes (61): MessageChannel, addCalendarDays(), alreadyOutcome(), CHANNEL_ENUM, ClaimAction, claimOccurrence(), daysInMonth(), DEAL_STATUS_ENUM (+53 more)
+Nodes (56): addCalendarDays(), alreadyOutcome(), CHANNEL_ENUM, ClaimAction, claimOccurrence(), daysInMonth(), DEAL_STATUS_ENUM, DEFAULT_FOLLOWUP_RETRY (+48 more)
 
-### Community 21 - "index.ts"
-Cohesion: 0.06
-Nodes (66): applicationNameForAttempt(), applications, bindCanCapitalApplication(), canCapitalFixtureDestination(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot (+58 more)
+### Community 21 - "contracts.ts"
+Cohesion: 0.05
+Nodes (73): applicationNameForAttempt(), applications, bindCanCapitalApplication(), canCapitalFixtureDestination(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot (+65 more)
 
-### Community 22 - "schema.ts"
-Cohesion: 0.07
-Nodes (53): allowed, canTransition(), PIPELINE_VERSION, transitionGuidance(), addSyntheticSubmission(), childOrder, db(), DealMutationOutcome (+45 more)
+### Community 22 - "service.ts"
+Cohesion: 0.10
+Nodes (49): canActorAccessDeal(), normalizePrimaryAssignments(), permittedAssignmentIds(), reconcilePipelineCounts(), allowed, canTransition(), PIPELINE_VERSION, transitionGuidance() (+41 more)
 
 ### Community 23 - "index.ts"
 Cohesion: 0.06
@@ -681,11 +692,11 @@ Nodes (72): applications, bindIdeaFinancialApplication(), executeSubmit(), FIXTU
 
 ### Community 24 - "index.ts"
 Cohesion: 0.06
-Nodes (72): bearerToken(), fixtureDuplicateContactResponse(), fixtureSendResponse(), fixtureUpsertContactResponse(), GOHIGHLEVEL_FIXTURE_CREDENTIALS, GOHIGHLEVEL_FIXTURE_SCENARIOS, gohighlevelFixtureFetch(), gohighlevelFixtureMessageId() (+64 more)
+Nodes (71): bearerToken(), fixtureDuplicateContactResponse(), fixtureSendResponse(), fixtureUpsertContactResponse(), GOHIGHLEVEL_FIXTURE_CREDENTIALS, GOHIGHLEVEL_FIXTURE_SCENARIOS, gohighlevelFixtureFetch(), gohighlevelFixtureMessageId() (+63 more)
 
 ### Community 25 - "templates.ts"
-Cohesion: 0.08
-Nodes (48): buildDealTemplateValues(), buildSyntheticTemplateValues(), canonicalName(), dealUrl(), DOCUMENT_BUCKETS, documentChecklist(), eligibleOffers(), escapeHtml() (+40 more)
+Cohesion: 0.09
+Nodes (58): asBody(), asChannel(), asId(), asName(), asScope(), asSubject(), canonicalName(), createMessageTemplate() (+50 more)
 
 ### Community 26 - "index.ts"
 Cohesion: 0.06
@@ -696,20 +707,20 @@ Cohesion: 0.06
 Nodes (68): applications, bindOnDeckApplication(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord, FixtureScenario (+60 more)
 
 ### Community 28 - "stamps.ts"
-Cohesion: 0.06
-Nodes (56): applyStamp(), asBooleanFlag(), asOriginalOutgoing(), checksumOf(), db(), defaultSettings(), denied(), DerivativeRow (+48 more)
+Cohesion: 0.07
+Nodes (55): applyStamp(), asBooleanFlag(), asOriginalOutgoing(), checksumOf(), db(), defaultSettings(), denied(), DerivativeRow (+47 more)
 
-### Community 29 - "contracts.ts"
-Cohesion: 0.05
-Nodes (57): adapters, TextusSmsRequest, isTwilioFixtureAccountSid(), resolveTwilioSendScenario(), TWILIO_FIXTURE_CREDENTIALS, TWILIO_FIXTURE_SCENARIOS, TWILIO_OFFICIAL_SIGNATURE_FIXTURE, twilioFixtureMessageSid() (+49 more)
+### Community 29 - "index.ts"
+Cohesion: 0.08
+Nodes (43): TextusSmsRequest, isTwilioFixtureAccountSid(), resolveTwilioSendScenario(), TWILIO_FIXTURE_CREDENTIALS, TWILIO_FIXTURE_SCENARIOS, TWILIO_OFFICIAL_SIGNATURE_FIXTURE, twilioFixtureMessageSid(), TwilioFixtureScenario (+35 more)
 
 ### Community 30 - "index.ts"
 Cohesion: 0.06
 Nodes (68): applications, bindLendiniApplication(), decisionStatusForScenario(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord (+60 more)
 
 ### Community 31 - "service.ts"
-Cohesion: 0.07
-Nodes (61): GET(), noStore, POST(), asMerchants(), countRecords(), DataMerchFetch, DataMerchLookupFailureKind, DataMerchLookupResult (+53 more)
+Cohesion: 0.08
+Nodes (59): GET(), noStore, POST(), asMerchants(), countRecords(), DataMerchFetch, DataMerchLookupFailureKind, DataMerchLookupResult (+51 more)
 
 ### Community 32 - "schema.ts"
 Cohesion: 0.03
@@ -731,13 +742,13 @@ Nodes (65): applications, bindForwardFinancingApplication(), executeSubmit(), FI
 Cohesion: 0.06
 Nodes (67): applications, bindFundomateApplication(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord, FixtureScenario (+59 more)
 
-### Community 37 - "service.ts"
+### Community 37 - "getDealForDocument"
 Cohesion: 0.07
-Nodes (59): POST(), RouteContext, getSmsAdapter(), SmsMessage, account(), adapterEnvironment(), adapterRegistered(), assertAdmin() (+51 more)
+Nodes (60): previewMerchantOffers(), getDealForDocument(), listOfferRevisionsForClosing(), getSmsAdapter(), SmsMessage, account(), adapterEnvironment(), adapterRegistered() (+52 more)
 
 ### Community 38 - "index.ts"
 Cohesion: 0.07
-Nodes (65): cachedTextTorrentResult(), fixtureAlreadyStartedResponse(), fixtureCreateChatResponse(), fixtureInboxResponse(), fixtureRejectedSendResponse(), fixtureSendResponse(), isAuthorized(), jsonResponse() (+57 more)
+Nodes (66): cachedTextTorrentResult(), fixtureAlreadyStartedResponse(), fixtureCreateChatResponse(), fixtureInboxResponse(), fixtureRejectedSendResponse(), fixtureSendResponse(), isAuthorized(), jsonResponse() (+58 more)
 
 ### Community 39 - "mapping.ts"
 Cohesion: 0.07
@@ -748,8 +759,8 @@ Cohesion: 0.06
 Nodes (66): applications, bindRapidFinanceApplication(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord, FixtureScenario (+58 more)
 
 ### Community 41 - "submissions-status.test.ts"
-Cohesion: 0.06
-Nodes (44): adapters, listAdapters(), registerAdapter(), setClock(), DuplicateDecision, FunderAdapter, ACTIVE_STATES, addMs() (+36 more)
+Cohesion: 0.08
+Nodes (22): requireAdapterRuntime(), adapters, registerAdapter(), FunderAdapter, actor(), fundedTerms, ids, memory (+14 more)
 
 ### Community 42 - "index.ts"
 Cohesion: 0.06
@@ -760,20 +771,20 @@ Cohesion: 0.06
 Nodes (61): applications, bindPeacSolutionsApplication(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureScenario, fixtureSubmitCallCount() (+53 more)
 
 ### Community 44 - "service.ts"
-Cohesion: 0.09
-Nodes (38): noStore, POST(), DealOwner, DOCUMENT_CATEGORIES, DOCUMENT_PROCESSING_STATES, DocumentActor, DocumentCategory, DocumentSummary (+30 more)
+Cohesion: 0.05
+Nodes (95): POST(), POST(), GET(), noStore, POST(), ApplicationScanReview, asReview(), changedConflicts() (+87 more)
 
 ### Community 45 - "AdapterStatusResult"
 Cohesion: 0.06
-Nodes (65): applications, bindEverestBusinessFundingApplication(), everestBusinessFundingDealId(), everestBusinessFundingFixtureDestination(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot (+57 more)
+Nodes (64): applications, bindEverestBusinessFundingApplication(), everestBusinessFundingDealId(), everestBusinessFundingFixtureDestination(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot (+56 more)
 
 ### Community 46 - "index.ts"
 Cohesion: 0.06
 Nodes (60): applicationIdForAttempt(), applications, bindPlexeApplication(), executeSubmit(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord (+52 more)
 
 ### Community 47 - "watermarks.ts"
-Cohesion: 0.07
-Nodes (71): GET(), noStore, ensureStored(), documentStorage, applyWatermark(), asBooleanFlag(), assertImageSize(), assertLogoAvailable() (+63 more)
+Cohesion: 0.05
+Nodes (89): noStore, POST(), noStore, POST(), GET(), noStore, PATCH(), applyWatermark() (+81 more)
 
 ### Community 48 - "digest.ts"
 Cohesion: 0.06
@@ -785,27 +796,27 @@ Nodes (61): applications, bindHeadwayCapitalApplication(), executeSubmit(), FIXT
 
 ### Community 50 - "extract-outcomes.ts"
 Cohesion: 0.06
-Nodes (66): ReplyState, acceptInteger(), acceptNumber(), acceptString(), asClassification(), asDealQuery(), asReplyState(), auditExtract() (+58 more)
+Nodes (65): ReplyState, acceptInteger(), acceptNumber(), acceptString(), asClassification(), asDealQuery(), asReplyState(), auditExtract() (+57 more)
 
 ### Community 51 - "mapping.ts"
 Cohesion: 0.07
-Nodes (58): asObject(), isOpenPhoneFixtureApiKey(), omitData(), OPENPHONE_FIXTURE_CREDENTIALS, OPENPHONE_FIXTURE_SCENARIOS, OPENPHONE_SIGNATURE_FIXTURE, openphoneAcceptedSendResponse(), openphoneFixtureMessageId() (+50 more)
+Nodes (57): asObject(), isOpenPhoneFixtureApiKey(), omitData(), OPENPHONE_FIXTURE_CREDENTIALS, OPENPHONE_FIXTURE_SCENARIOS, OPENPHONE_SIGNATURE_FIXTURE, openphoneAcceptedSendResponse(), openphoneFixtureMessageId() (+49 more)
 
 ### Community 52 - "index.ts"
 Cohesion: 0.06
 Nodes (59): applications, bindExpansionCapitalGroupApplication(), executeSubmit(), expansionCapitalGroupFixtureDestination(), FIXTURE_SCENARIOS, FixtureDocumentReceipt, FixtureMappedSnapshot, FixtureRecord (+51 more)
 
 ### Community 53 - "replies.ts"
-Cohesion: 0.06
-Nodes (70): GET(), noStore, RouteContext, GET(), noStore, REPLY_STATES, activeMailbox(), asDealQuery() (+62 more)
-
-### Community 54 - "requireAnalysisActor"
-Cohesion: 0.11
-Nodes (21): GET(), noStore, POST(), RouteContext, GET(), noStore, POST(), GET() (+13 more)
-
-### Community 55 - "submissions-watermarks.test.ts"
 Cohesion: 0.07
-Nodes (22): noStore, POST(), ClamAvScanner, documentScanner, run(), ScanResult, UnavailableScanner, WatermarkSettingsView (+14 more)
+Nodes (61): REPLY_STATES, activeMailbox(), asDealQuery(), asEnabled(), asOptionalId(), asReplyState(), asSenderId(), assertSubmissionSender() (+53 more)
+
+### Community 54 - "underwriting-review.test.ts"
+Cohesion: 0.24
+Nodes (15): GET(), noStore, RouteContext, getDealReview(), actor(), addWorkspace(), dqStateRules(), exec() (+7 more)
+
+### Community 55 - "getDatabase"
+Cohesion: 0.06
+Nodes (52): selectPsfDeliveryProvider(), hashOpaqueToken(), getDatabase(), acceptInvitation(), requestPasswordRecovery(), createSession(), sendVerification(), seed() (+44 more)
 
 ### Community 56 - "adapterRuntime"
 Cohesion: 0.07
@@ -813,39 +824,39 @@ Nodes (54): adapterRuntime(), findFintegraReceipt(), FINTEGRA_FIXTURE_NAMES, fin
 
 ### Community 57 - "email-templates.ts"
 Cohesion: 0.07
-Nodes (61): listFunders(), assertSenderUsable(), applyPrefixes(), applySignature(), asDealId(), asFunderId(), asFunderIds(), asPrefix() (+53 more)
+Nodes (60): assertSenderUsable(), applyPrefixes(), applySignature(), asDealId(), asFunderId(), asFunderIds(), asPrefix(), asRequiredText() (+52 more)
 
-### Community 58 - "milestone06-home.test.ts"
-Cohesion: 0.12
-Nodes (25): GET(), RouteContext, GET(), HOME_SLA_HOURS, HomeDealPanel, HomeQueueQuery, HomeQueueResult, isHomeActionCategory() (+17 more)
+### Community 58 - "service.ts"
+Cohesion: 0.19
+Nodes (16): GET(), RouteContext, GET(), HOME_SLA_HOURS, HomeQueueQuery, HomeQueueResult, isHomeActionCategory(), countHomeCategories() (+8 more)
 
 ### Community 59 - "nowIso"
-Cohesion: 0.09
-Nodes (67): POST(), RouteContext, decryptSensitive(), encryptionKey(), encryptSensitive(), nowIso(), recordAuditEvent(), generateApplicationPdf() (+59 more)
+Cohesion: 0.10
+Nodes (62): decryptSensitive(), encryptionKey(), encryptSensitive(), nowIso(), validateTwilioFormSignature(), associateConversation(), Conversation, conversationDetail() (+54 more)
 
-### Community 60 - "contracts.ts"
-Cohesion: 0.14
-Nodes (27): Registry, extractConfirmedArchiveFiles(), folderFor(), inferArchiveCategory(), inspectArchives(), isDirectory(), isNestedArchive(), isSymlink() (+19 more)
+### Community 60 - "archive-service.ts"
+Cohesion: 0.15
+Nodes (24): extractApplication(), extractConfirmedArchiveFiles(), folderFor(), inferArchiveCategory(), inspectArchives(), isDirectory(), isNestedArchive(), isSymlink() (+16 more)
 
 ### Community 61 - "offer-links.ts"
 Cohesion: 0.08
-Nodes (60): asDealQuery(), asOfferSource(), asReply(), asReplyId(), assertSafeOfferUrl(), blockedResolution(), compact(), db() (+52 more)
+Nodes (61): ReplyExtractionSnapshot, asDealQuery(), asOfferSource(), asReply(), asReplyId(), assertSafeOfferUrl(), blockedResolution(), compact() (+53 more)
 
-### Community 62 - "errors.ts"
+### Community 62 - "AppError"
 Cohesion: 0.06
-Nodes (45): PATCH(), schema, GET(), POST(), schema, PATCH(), schema, createSchema (+37 more)
+Nodes (39): PATCH(), schema, GET(), POST(), schema, PATCH(), schema, createSchema (+31 more)
 
 ### Community 63 - "index.ts"
-Cohesion: 0.07
-Nodes (54): cachedEntranceResult(), entranceFixtureFetch(), EntranceFixtureRecord, entranceFixtureSendCallCount(), entranceMessageId(), fixtureInboundPayload(), fixtureLoginResponse(), fixtureRejectedSendResponse() (+46 more)
+Cohesion: 0.08
+Nodes (53): cachedEntranceResult(), entranceFixtureFetch(), EntranceFixtureRecord, entranceFixtureSendCallCount(), entranceMessageId(), fixtureInboundPayload(), fixtureLoginResponse(), fixtureRejectedSendResponse() (+45 more)
 
 ### Community 64 - "compress.ts"
 Cohesion: 0.05
-Nodes (69): RFC-4648, applyCompression(), asBooleanFlag(), assertFits(), buildReport(), checksumOf(), COMPRESS_STAGE, CompressPackageResult (+61 more)
+Nodes (68): RFC-4648, applyCompression(), asBooleanFlag(), assertFits(), buildReport(), checksumOf(), COMPRESS_STAGE, CompressPackageResult (+60 more)
 
 ### Community 65 - "service.ts"
-Cohesion: 0.08
-Nodes (68): noStore, POST(), RouteContext, EmailSender, SENDER_PROVIDERS, SENDER_PURPOSES, senderOAuthConfig, senderOAuthConfigured() (+60 more)
+Cohesion: 0.09
+Nodes (62): SENDER_PROVIDERS, SENDER_PURPOSES, senderOAuthConfigured(), activeMembershipIdsInWorkspace(), clearDefaultSenders(), consumeOauthState(), db(), decryptSenderCredential() (+54 more)
 
 ### Community 66 - "index.ts"
 Cohesion: 0.07
@@ -853,23 +864,23 @@ Nodes (50): APPROVED_TERMS, KAPITUS_FIXTURE_SCENARIOS, kapitusAcceptedApplicatio
 
 ### Community 67 - "reminders.ts"
 Cohesion: 0.07
-Nodes (57): asBody(), asDealId(), asJobId(), asReminderId(), assertEligible(), canSend(), composeReminder(), conflict() (+49 more)
+Nodes (56): asBody(), asDealId(), asJobId(), asReminderId(), assertEligible(), canSend(), composeReminder(), conflict() (+48 more)
 
-### Community 68 - "repository.ts"
-Cohesion: 0.15
-Nodes (29): GET(), POST(), GET(), headers, POST(), assistantAvailable(), requireAssistantProvider(), ActionKind (+21 more)
+### Community 68 - "errors.ts"
+Cohesion: 0.07
+Nodes (38): bodySchema, POST(), row, Context, input, POST(), Context, GET() (+30 more)
 
 ### Community 69 - "cn"
 Cohesion: 0.03
-Nodes (112): ForgotPasswordForm1(), LoginForm1(), CalendarMain(), CalendarMain(), EventForm(), ChartAreaInteractive(), chartData, columns (+104 more)
+Nodes (104): ForgotPasswordForm1(), CalendarMain(), DataTableFacetedFilterProps, LandingNavbar(), navigationItems, smoothScrollTo(), solutionsItems, plans (+96 more)
 
 ### Community 70 - "criteria.ts"
-Cohesion: 0.09
-Nodes (46): IndustryAlias, assertManage(), assertNoConflicts(), canonicalizeRevenueUnit(), conflict(), convertRevenueThreshold(), CriteriaField, deleteIndustryAlias() (+38 more)
+Cohesion: 0.10
+Nodes (44): IndustryAlias, assertManage(), assertNoConflicts(), canonicalizeRevenueUnit(), conflict(), convertRevenueThreshold(), CRITERIA_FIELDS, CriteriaField (+36 more)
 
 ### Community 71 - "application-drafts.ts"
-Cohesion: 0.09
-Nodes (54): ApplicationDraftReview, cleanFilename(), confirmApplicationDraft(), conflicts(), createApplicationDraft(), extractApplicationDraft(), getApplicationDraft(), previewDraftMerge() (+46 more)
+Cohesion: 0.11
+Nodes (30): ApplicationDraftReview, cleanFilename(), confirmApplicationDraft(), conflicts(), createApplicationDraft(), extractApplicationDraft(), getApplicationDraft(), previewDraftMerge() (+22 more)
 
 ### Community 72 - "0000_cloudy_tattoo.sql"
 Cohesion: 0.04
@@ -877,275 +888,271 @@ Nodes (53): "api_keys", "api_rate_windows", "audit_events", "deal_activity", "de
 
 ### Community 73 - "sender-fallback.ts"
 Cohesion: 0.07
-Nodes (52): asMode(), CopyRow, db(), defaultSettings(), denied(), ensureTables(), failResolution(), FOLLOWUP_SENDER_MODES (+44 more)
+Nodes (51): asMode(), CopyRow, db(), defaultSettings(), denied(), ensureTables(), failResolution(), FOLLOWUP_SENDER_MODES (+43 more)
 
 ### Community 74 - "scoring.ts"
 Cohesion: 0.07
-Nodes (64): GET(), noStore, POST(), RouteContext, HARD_DQ_FIELDS, HardDqField, autoSelectableFunderIds(), clamp() (+56 more)
+Nodes (63): GET(), noStore, POST(), RouteContext, HARD_DQ_FIELDS, HardDqField, actorFromContext(), autoSelectableFunderIds() (+55 more)
 
-### Community 75 - "index.ts"
-Cohesion: 0.09
-Nodes (44): acceptedByAttemptKey, acceptedChannelPartnersCapitalSubmission(), accountIdForAttempt(), applicationForChannelPartnersCapitalFixture(), CHANNEL_PARTNERS_CAPITAL_ACCEPTED_APPLICATION, CHANNEL_PARTNERS_CAPITAL_FIXTURES, CHANNEL_PARTNERS_CAPITAL_MISSING_FIELDS_APPLICATION, ChannelPartnersCapitalFixture (+36 more)
+### Community 75 - "SubmissionJob"
+Cohesion: 0.08
+Nodes (49): acceptedByAttemptKey, acceptedChannelPartnersCapitalSubmission(), accountIdForAttempt(), applicationForChannelPartnersCapitalFixture(), CHANNEL_PARTNERS_CAPITAL_ACCEPTED_APPLICATION, CHANNEL_PARTNERS_CAPITAL_FIXTURES, CHANNEL_PARTNERS_CAPITAL_MISSING_FIELDS_APPLICATION, ChannelPartnersCapitalFixture (+41 more)
 
 ### Community 76 - "postgres-test-db.mjs"
-Cohesion: 0.05
-Nodes (39): connection, counts(), db, main(), rehearsal, tables, port, connectionFile (+31 more)
+Cohesion: 0.07
+Nodes (32): connection, counts(), db, main(), rehearsal, tables, port, connectionFile (+24 more)
 
 ### Community 77 - "team-profit.ts"
-Cohesion: 0.09
-Nodes (40): REPORT_BASES, ReportBasis, ReportFilters, ReportPermissionState, FunderAnalyticsReport, FunderCommissionMetric, LeadRoiEconomics, LeadRoiReport (+32 more)
+Cohesion: 0.07
+Nodes (50): GET(), ReportFilters, ReportPermissionState, FunderAnalyticsReport, LeadRoiReport, DistributionMetric, FunnelPeriod, FunnelStage (+42 more)
 
 ### Community 78 - "index.ts"
 Cohesion: 0.08
 Nodes (42): DealAddress, EntityType, FIXTURE_SET, isQuantumLendsFixtureKey(), QUANTUM_LENDS_FIXTURE_KEYS, QUANTUM_LENDS_FIXTURES, QUANTUM_LENDS_RAW_STATUS, QuantumLendsFixtureKey (+34 more)
 
 ### Community 79 - "criteria-scan.ts"
-Cohesion: 0.10
-Nodes (49): POST(), current(), record(), CRITERIA_UNITS, CRITERIA_FIELDS, acceptCriteriaScan(), ALLOWED_MIME_TYPES, asList() (+41 more)
+Cohesion: 0.07
+Nodes (51): CRITERIA_OPERATORS, CRITERIA_UNITS, CriteriaOperator, CriteriaScanProposal, CriteriaUnit, EligibilityRule, FunderActor, FunderContact (+43 more)
 
-### Community 80 - "contracts.ts"
-Cohesion: 0.04
-Nodes (106): ReminderJobView, ReminderPreview, ReminderSendResult, FunderRoute, FunderRouteKind, nowIso(), ATTEMPT_STATES, AttemptState (+98 more)
+### Community 80 - "repository.ts"
+Cohesion: 0.08
+Nodes (59): GET(), noStore, POST(), RouteContext, ReminderJobView, ReminderPreview, ReminderSendResult, FunderRoute (+51 more)
 
 ### Community 81 - "milestone06-reminders.test.ts"
 Cohesion: 0.08
-Nodes (27): ReminderDeliveryMessage, setReminderDeliveryFetchForTests(), setReminderTransportForTests(), THREAD_FALLBACK_DISCLOSURE, probeSubmissionSender(), independentReason(), queueSubmissions(), actor() (+19 more)
+Nodes (24): ReminderDeliveryMessage, setReminderDeliveryFetchForTests(), setReminderTransportForTests(), THREAD_FALLBACK_DISCLOSURE, independentReason(), queueSubmissions(), actor(), delivered (+16 more)
 
 ### Community 82 - "analysis.ts"
-Cohesion: 0.09
-Nodes (50): analysisQueueCallsForTests(), AnalysisRunOverride, assertAdmin(), blockedReason(), completenessVersion(), decideDestinations(), getAnalysisSettings(), isThenable() (+42 more)
+Cohesion: 0.08
+Nodes (55): GET(), noStore, POST(), RouteContext, analysisQueueCallsForTests(), AnalysisRunOverride, assertAdmin(), blockedReason() (+47 more)
 
 ### Community 83 - "directory.ts"
-Cohesion: 0.12
-Nodes (44): FUNDER_ROUTE_KINDS, FunderRecord, assertManage(), assertWorkspaceFunders(), createFunder(), CreateFunderInput, createGroup(), CreateGroupInput (+36 more)
+Cohesion: 0.13
+Nodes (41): FUNDER_ROUTE_KINDS, FunderGroup, assertManage(), assertWorkspaceFunders(), createFunder(), CreateFunderInput, createGroup(), CreateGroupInput (+33 more)
 
 ### Community 84 - "import-sqlite.ts"
 Cohesion: 0.16
 Nodes (21): argument(), canonical(), digestRows(), environmentValue(), main(), verifyCiphertext(), targetFromArgs(), targetUrl() (+13 more)
 
 ### Community 85 - "lead-roi.ts"
-Cohesion: 0.07
-Nodes (44): APPROVED_ACTIVITY, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES, assertKnownIds(), buildEconomics(), CommissionFact, costPerFunded(), DealFact (+36 more)
+Cohesion: 0.06
+Nodes (53): group(), inReportPeriod(), APPROVED_ACTIVITY, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES, assertKnownIds(), buildEconomics(), CommissionFact (+45 more)
 
-### Community 86 - "closeDatabaseForTests"
-Cohesion: 0.10
-Nodes (45): main(), GET(), GET(), POST(), alertSettingsSchema, CreditAlertPayload, currentAdmin(), deliverCreditAlerts() (+37 more)
+### Community 86 - "newId"
+Cohesion: 0.09
+Nodes (47): main(), GET(), GET(), POST(), alertSettingsSchema, CreditAlertPayload, currentAdmin(), deliverCreditAlerts() (+39 more)
 
-### Community 87 - "badge.tsx"
-Cohesion: 0.03
-Nodes (68): CustomerInsights(), metrics, MetricsOverview(), QuickActions(), RecentTransactions(), RevenueBreakdown(), SalesChart(), products (+60 more)
+### Community 87 - "card.tsx"
+Cohesion: 0.02
+Nodes (137): QuickActionsProps, chartConfig, customerGrowthData, CustomerInsights(), demographicsData, regionsData, metrics, MetricsOverview() (+129 more)
 
 ### Community 88 - "review-mail.ts"
-Cohesion: 0.08
-Nodes (55): noStore, POST(), AccessOptions, MembershipRow, ActiveMembershipRow, ApiKeyScope, Role, getDealAnalysis() (+47 more)
+Cohesion: 0.11
+Nodes (37): noStore, POST(), assertEmailDeliveryConfigured(), getCompleteness(), ApprovalRow, assertReviewable(), buildReview(), candidatesFor() (+29 more)
 
 ### Community 89 - "funder-analytics.ts"
 Cohesion: 0.05
-Nodes (53): GET(), RouteContext, addChannel(), addCommission(), amountToCents(), APPROVED_MANUAL_STATES, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES (+45 more)
+Nodes (49): addChannel(), addCommission(), amountToCents(), APPROVED_MANUAL_STATES, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES, assertKnownIds(), buildRow() (+41 more)
 
 ### Community 90 - "drive-service.ts"
-Cohesion: 0.13
-Nodes (38): actor(), DELETE(), GET(), POST(), DriveFileResult, downloadDriveFile(), driveAuthorizationUrl(), DriveCredential (+30 more)
+Cohesion: 0.14
+Nodes (36): actor(), DELETE(), GET(), POST(), DriveFileResult, downloadDriveFile(), driveAuthorizationUrl(), driveJson() (+28 more)
 
 ### Community 91 - "funders-scan.test.ts"
-Cohesion: 0.08
-Nodes (19): GET(), noStore, listFunderCriteria(), CriteriaExtraction, listCriteriaScanDocuments(), setCriteriaScanProviderForTests(), getFunder(), extractCalls (+11 more)
+Cohesion: 0.07
+Nodes (44): noStore, POST(), noStore, POST(), noStore, POST(), GET(), noStore (+36 more)
 
 ### Community 92 - "senders.test.ts"
-Cohesion: 0.12
-Nodes (16): noStore, POST(), RouteContext, GET(), noStore, PATCH(), RouteContext, GET() (+8 more)
+Cohesion: 0.09
+Nodes (19): noStore, POST(), RouteContext, noStore, POST(), RouteContext, GET(), noStore (+11 more)
 
 ### Community 93 - "completeness.ts"
-Cohesion: 0.10
-Nodes (38): GET(), noStore, POST(), RouteContext, GET(), noStore, POST(), APPLICATION_CATEGORIES (+30 more)
+Cohesion: 0.09
+Nodes (35): GET(), noStore, RouteContext, FilesystemDocumentStorage, setDocumentStorageForTests(), APPLICATION_CATEGORIES, checkCompleteness(), evaluateFindings() (+27 more)
 
 ### Community 94 - "webhooks.ts"
-Cohesion: 0.05
-Nodes (80): asBoolean(), asEventId(), asEvents(), asInt(), asLabel(), asResourceId(), asSecret(), assertEnvelopeMinimum() (+72 more)
+Cohesion: 0.06
+Nodes (35): buildEnvelope(), CreateWorkflowWebhookEndpointInput, dealSnapshot(), defaultEventId(), DeliveryRow, EndpointRow, FORBIDDEN_PAYLOAD_KEYS, MemberRow (+27 more)
 
 ### Community 95 - "requireSmsActor"
 Cohesion: 0.10
 Nodes (30): PATCH(), RouteContext, schema, createSchema, GET(), noStore, POST(), GET() (+22 more)
 
 ### Community 96 - "contracts.ts"
-Cohesion: 0.14
-Nodes (23): HOME_ACTION_CATEGORIES, HOME_ACTION_REASONS, HOME_CATEGORY_RANK, HOME_COPY, HOME_REASON_LABELS, HOME_REASON_RANK, HomeActionCategory, HomeActionReason (+15 more)
+Cohesion: 0.10
+Nodes (30): chipClass(), dollars(), errorText(), NeedsAction(), DraftState, formatActionSince(), HOME_ACTION_CATEGORIES, HOME_ACTION_REASONS (+22 more)
 
 ### Community 97 - "DealActor"
-Cohesion: 0.20
-Nodes (9): DealActor, ApplicationExtraction, ExtractionFileInput, FieldMappingSuggestion, StatementMetadataExtraction, DocumentExtractionProvider, fileData(), OpenAiDocumentExtractionProvider (+1 more)
+Cohesion: 0.08
+Nodes (29): DealActor, ApplicationExtraction, DOCUMENT_PROCESSING_STATES, DocumentActor, ExtractionFileInput, FieldMappingSuggestion, StatementMetadataExtraction, UploadDocumentInput (+21 more)
 
 ### Community 98 - "docuseal-provider.ts"
-Cohesion: 0.11
-Nodes (42): apiUrl(), artifactReference(), assertSafeUrl(), buildDocuSealPsfSubmissionRequest(), centsText(), cleanRequired(), DOCUSEAL_PSF_FIELD_KEYS, DocuSealArtifact (+34 more)
+Cohesion: 0.12
+Nodes (34): artifactReference(), buildDocuSealPsfSubmissionRequest(), centsText(), cleanRequired(), DOCUSEAL_PSF_FIELD_KEYS, DocuSealArtifact, DocuSealArtifactReference, DocuSealCreateSubmissionBody (+26 more)
 
 ### Community 99 - "followup-panel.tsx"
 Cohesion: 0.07
 Nodes (30): Catalog, Channel, DealStatus, errorMessage(), FOLLOWUP_PANEL_COPY, FollowupPanel(), followupPanelGate(), Frequency (+22 more)
 
 ### Community 100 - "service.ts"
-Cohesion: 0.12
-Nodes (50): validateAssignmentPool(), ImportCommitResult, ImportPreview, UpdatePreview, UpdateRowPreview, applyCreateReview(), batchesFor(), batchFrom() (+42 more)
+Cohesion: 0.16
+Nodes (33): validateAssignmentPool(), assertMapping(), heuristicMapping(), normalizeHeader(), applyCreateReview(), beginCommit(), findPreview(), finishRun() (+25 more)
 
 ### Community 101 - "dependencies"
 Cohesion: 0.06
 Nodes (35): class-variance-authority, @clerk/nextjs, cmdk, @dnd-kit/core, @dnd-kit/utilities, dependencies, class-variance-authority, @clerk/nextjs (+27 more)
 
 ### Community 102 - "rep-funnel.ts"
-Cohesion: 0.07
-Nodes (42): inReportPeriod(), commissionInRange(), addDistribution(), amountRestricted(), APPROVED_ACTIVITY, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES, assertKnownIds() (+34 more)
+Cohesion: 0.06
+Nodes (42): REPORT_BASES, ReportBasis, addDistribution(), amountRestricted(), APPROVED_ACTIVITY, APPROVED_OFFER_STATUSES, APPROVED_SUBMISSION_STATUSES, assertDateOnly() (+34 more)
 
-### Community 103 - "createMessageTemplate"
+### Community 103 - "buildDealTemplateValues"
 Cohesion: 0.18
-Nodes (27): asBody(), asChannel(), asId(), asName(), asScope(), asSubject(), createMessageTemplate(), currentDraft() (+19 more)
+Nodes (17): buildDealTemplateValues(), buildSyntheticTemplateValues(), dealUrl(), documentChecklist(), eligibleOffers(), formatFrequency(), formatOfferBlock(), formatUsdPayment() (+9 more)
 
 ### Community 104 - "milestone06-followups.test.ts"
-Cohesion: 0.15
-Nodes (11): setFollowupDeliveryFetchForTests(), setFollowupTransportForTests(), actor(), dailySchedule(), delivered, ErrorBody, ids, policy() (+3 more)
+Cohesion: 0.12
+Nodes (15): MessageChannel, FollowupDeliveryMessage, FollowupPolicyView, FollowupPreviewResult, FollowupTemplateOption, setFollowupDeliveryFetchForTests(), setFollowupTransportForTests(), actor() (+7 more)
 
-### Community 105 - "experience-contracts.ts"
-Cohesion: 0.11
-Nodes (22): DealAssistant(), json(), suggestions, MemoryDialog(), QuestionCard(), RichResponse(), safeLink(), AgentWorkflow() (+14 more)
+### Community 105 - "types.ts"
+Cohesion: 0.06
+Nodes (31): sections, SettingsShell(), actionVisibility, apiKeyCreateSchema, featureFlags, invitationAcceptSchema, invitationSchema, membershipPatchSchema (+23 more)
 
 ### Community 106 - "statements.ts"
-Cohesion: 0.07
-Nodes (77): ExistingPositionCandidate, StatementMonthRecord, UnderwritingAggregate, correctedMetric(), correctExistingPosition(), CorrectionMonthView, CorrectionPositionView, correctStatementMonth() (+69 more)
+Cohesion: 0.04
+Nodes (130): noStore, POST(), readBody(), RouteContext, GET(), hasOwn(), noStore, POST() (+122 more)
 
 ### Community 107 - "submissions-extract.test.ts"
-Cohesion: 0.09
-Nodes (21): ClassifiedReplyOutcome, REPLY_OUTCOME_SYSTEM_PROMPT, ReplyOutcomeClassifierInput, setReplyOutcomeClassifierForTests(), actor(), classifyCalls, cookieRequest(), ExtractBody (+13 more)
+Cohesion: 0.08
+Nodes (24): noStore, POST(), ClassifiedReplyOutcome, ExtractRunInput, previewReplyExtraction(), REPLY_OUTCOME_SYSTEM_PROMPT, ReplyOutcomeClassifierInput, setReplyOutcomeClassifierForTests() (+16 more)
 
 ### Community 108 - "reconciliation.ts"
-Cohesion: 0.12
-Nodes (27): asNormalized(), cacheStatus(), currentRank(), db(), eventAttemptKey(), evidenceFrom(), hasFinancialTerms(), MappedProviderStatus (+19 more)
+Cohesion: 0.11
+Nodes (30): asNormalized(), cacheStatus(), currentRank(), db(), eventAttemptKey(), evidenceFrom(), hasFinancialTerms(), listApiOffersForDeal() (+22 more)
 
 ### Community 109 - "route.ts"
-Cohesion: 0.12
-Nodes (18): noStore, POST(), DELETE(), GET(), noStore, PATCH(), RouteContext, noStore (+10 more)
+Cohesion: 0.15
+Nodes (18): DELETE(), GET(), noStore, PATCH(), RouteContext, noStore, POST(), RouteContext (+10 more)
 
-### Community 110 - "newId"
-Cohesion: 0.05
-Nodes (98): DashboardLayout(), pageForPath(), DashboardChrome(), PwaLifecycle(), ApiKeyRow, createApiKey(), listApiKeys(), mapKey() (+90 more)
+### Community 110 - "configuration.ts"
+Cohesion: 0.15
+Nodes (31): createOpaqueToken(), DealStatus, assertAdmin(), cleanHosts(), configureIntegration(), createJotformRepLink(), EMAIL_GATEWAYS, EmailGateway (+23 more)
 
 ### Community 111 - "providers.ts"
-Cohesion: 0.19
-Nodes (26): attachment(), attachments(), bearerToken(), custom(), docuseal(), equalText(), filenameFromUrl(), fillout() (+18 more)
+Cohesion: 0.22
+Nodes (24): attachment(), attachments(), custom(), docuseal(), filenameFromUrl(), fillout(), highlevel(), inferMime() (+16 more)
 
-### Community 112 - "underwriting-corrections.test.ts"
-Cohesion: 0.04
-Nodes (58): noStore, POST(), readBody(), RouteContext, GET(), hasOwn(), noStore, POST() (+50 more)
+### Community 112 - "submissions-core.test.ts"
+Cohesion: 0.14
+Nodes (10): actor(), attemptCount(), ids, jobRow(), memory, minimalPdf, pdfChecksum, scanner (+2 more)
 
 ### Community 113 - "framework.ts"
 Cohesion: 0.09
-Nodes (62): noStore, POST(), RouteContext, effectiveAdapterCapabilities(), recordAdapterLastAction(), redactAdapterSecrets(), resolveAdapterEnvironment(), resolveAdapterSecrets() (+54 more)
+Nodes (61): noStore, POST(), RouteContext, effectiveAdapterCapabilities(), findAdapterCredential(), recordAdapterLastAction(), redactAdapterSecrets(), resolveAdapterEnvironment() (+53 more)
 
 ### Community 114 - "imports-core.test.ts"
-Cohesion: 0.12
-Nodes (22): IMPORTABLE_FIELDS, ImportableField, aliases, assertMapping(), entityValue(), heuristicMapping(), mapRow(), normalizeHeader() (+14 more)
+Cohesion: 0.22
+Nodes (9): roundRobinAssignments(), actor, archiveRows, crc32(), ids, otherActor, seed(), temp (+1 more)
 
 ### Community 115 - "parseJson"
-Cohesion: 0.08
-Nodes (53): PATCH(), DistributionSchedule, DistributionScheduleStatus, ReverseConsolidation, ReverseConsolidationWorkspace, ScheduledInstallment, ScheduledInstallmentStatus, addCalendarDays() (+45 more)
+Cohesion: 0.19
+Nodes (22): parseJson(), DriveCredential, batchesFor(), batchFrom(), cancellationRequested(), db(), driveTransfersForRun(), findBatch() (+14 more)
 
 ### Community 116 - "devDependencies"
 Cohesion: 0.07
 Nodes (29): drizzle-kit, esbuild, eslint, eslint-config-next, @eslint/eslintrc, devDependencies, drizzle-kit, esbuild (+21 more)
 
-### Community 117 - "assistant-experience.test.ts"
-Cohesion: 0.08
-Nodes (62): GET(), Context, DELETE(), GET(), PATCH(), GET(), Context, DELETE() (+54 more)
+### Community 117 - "operations.ts"
+Cohesion: 0.05
+Nodes (157): GET(), Context, DELETE(), GET(), PATCH(), GET(), POST(), GET() (+149 more)
 
 ### Community 118 - "psf-docuseal-service.ts"
-Cohesion: 0.10
-Nodes (23): DocuSealProviderDependencies, artifactKey(), deliverPsfRequestWithDocuSeal(), DocuSealPsfCompletionResult, DocuSealPsfDispatchResult, DocuSealPsfRepository, DocuSealPsfServiceDependencies, EnvironmentConnection (+15 more)
+Cohesion: 0.11
+Nodes (23): DocuSealProviderConfig, DocuSealProviderDependencies, NormalizedConfig, artifactKey(), deliverPsfRequestWithDocuSeal(), DocuSealPsfCompletionResult, DocuSealPsfConnection, DocuSealPsfDispatchResult (+15 more)
 
 ### Community 119 - "submissions-replies.test.ts"
-Cohesion: 0.11
-Nodes (16): parseEmailAttemptRef(), loadAnchors(), MailboxMessage, attemptRef(), actor(), ids, MailboxSpy, memory (+8 more)
+Cohesion: 0.08
+Nodes (24): GET(), noStore, RouteContext, GET(), noStore, originalAttemptRef(), parseEmailAttemptRef(), getReply() (+16 more)
 
-### Community 120 - "card.tsx"
+### Community 120 - "input.tsx"
 Cohesion: 0.03
-Nodes (131): loginFormSchema, LoginFormValues, QuickActionsProps, chartConfig, revenueData, chartConfig, salesData, chartData (+123 more)
+Nodes (140): VerifyCompany(), AccountSwitcherProps, pageLabels, WorkspaceSettingsPage(), ProfilePage(), Company, SmsReview(), DataTablePaginationProps (+132 more)
 
 ### Community 121 - "derive.ts"
-Cohesion: 0.18
-Nodes (25): allowedTransitions(), ACTIVE_OFFER_STATES, ACTIVE_RENEWALS, activeOffers(), advanceRenewal(), blockingContract(), committedFunding(), dedupeReasons() (+17 more)
+Cohesion: 0.17
+Nodes (26): allowedTransitions(), ACTIVE_OFFER_STATES, ACTIVE_RENEWALS, activeOffers(), advanceRenewal(), blockingContract(), committedFunding(), dedupeReasons() (+18 more)
 
 ### Community 123 - "demo.ts"
-Cohesion: 0.16
-Nodes (12): POST, Errors, createDemoHandler(), defaults, Dependencies, json(), readBody(), DemoRequest (+4 more)
+Cohesion: 0.23
+Nodes (8): POST, createDemoHandler(), defaults, Dependencies, json(), readBody(), configuration(), fixture()
 
 ### Community 124 - "0008_chief_squadron_sinister.sql"
 Cohesion: 0.08
 Nodes (23): "mca_accounting_adjustments", "mca_accounting_payments", "mca_advance_status_history", "mca_advances", "mca_closing_deliveries", "mca_closing_previews", "mca_closing_stipulations", "mca_contract_workflows" (+15 more)
 
 ### Community 125 - "milestone06-digest.test.ts"
-Cohesion: 0.10
-Nodes (15): DigestDeliveryMessage, DigestStage, setDigestDeliveryFetchForTests(), setDigestTransportForTests(), actor(), delivered, DigestView, ErrorBody (+7 more)
+Cohesion: 0.11
+Nodes (13): DigestDeliveryMessage, DigestStage, setDigestDeliveryFetchForTests(), setDigestTransportForTests(), actor(), delivered, DigestView, ErrorBody (+5 more)
 
 ### Community 126 - "service.ts"
-Cohesion: 0.07
-Nodes (86): PageProps, SharedApplicationPage(), IntakeResult, NormalizedIntakeInput, actorForEmail(), applicationFromText(), decodeAttachment(), deliverPendingReceipts() (+78 more)
+Cohesion: 0.09
+Nodes (44): IntakeResult, readInboundEmailBody(), actorForIntegration(), ingestProviderDelivery(), parsePayload(), rejectToReview(), bearerToken(), equalText() (+36 more)
 
-### Community 127 - "team-panel.tsx"
-Cohesion: 0.05
-Nodes (58): chartConfig, customerGrowthData, demographicsData, regionsData, AccountSwitcher(), MailDisplay(), MailDisplayProps, getBadgeVariantFromLabel() (+50 more)
+### Community 128 - "Role"
+Cohesion: 0.10
+Nodes (26): DashboardPage(), DashboardLayout(), pageForPath(), DashboardChrome(), PwaLifecycle(), hashPassword(), verifyPassword(), MembershipRow (+18 more)
 
-### Community 128 - "milestone06-team-profit.test.ts"
-Cohesion: 0.13
-Nodes (18): GET(), assertDateOnly(), isReportBasis(), parseReportFilters(), parseTeamProfitFilters(), requireTeamProfitActor(), summedUserDealCount(), actions (+10 more)
-
-### Community 129 - "include"
-Cohesion: 0.08
-Nodes (24): include, .next-clerk-preview/dev/types/**/*.ts, .next-clerk-preview/types/**/*.ts, .next/dev/types/**/*.ts, next-env.d.ts, .next-milestone05-browser/dev/types/**/*.ts, .next-milestone05-browser/types/**/*.ts, .next-test-billing/dev/types/**/*.ts (+16 more)
+### Community 129 - "queue.ts"
+Cohesion: 0.12
+Nodes (29): FunderRecord, listFunders(), StoredFunder, QueuedJobSummary, QueueSubmissionsInput, QueueSubmissionsResult, activeRoute(), checklistForRoute() (+21 more)
 
 ### Community 130 - "parser.ts"
 Cohesion: 0.20
 Nodes (14): xlsx, decimal(), integer(), parseHistoricalSpreadsheet(), ImportFormat, ParsedSpreadsheet, chooseHeader(), cleanCell() (+6 more)
 
 ### Community 131 - "submissions-duplicates.test.ts"
-Cohesion: 0.12
-Nodes (13): actor(), attemptCount(), confirmationKey(), enqueue(), ids, jobRows(), memory, minimalPdf (+5 more)
+Cohesion: 0.13
+Nodes (12): actor(), attemptCount(), confirmationKey(), enqueue(), ids, jobRows(), memory, minimalPdf (+4 more)
 
 ### Community 132 - "milestone06-webhooks.test.ts"
-Cohesion: 0.13
-Nodes (12): setWorkflowWebhookFetchForTests(), signWorkflowWebhookBody(), verifyWorkflowWebhookSignature(), WORKFLOW_WEBHOOK_SPEC_VERSION, actor(), assertHmac(), Envelope, ErrorBody (+4 more)
+Cohesion: 0.11
+Nodes (16): noStore, POST(), RouteContext, loadOutbox(), replayWebhookOutbox(), setWorkflowWebhookFetchForTests(), signWorkflowWebhookBody(), verifyWorkflowWebhookSignature() (+8 more)
 
 ### Community 133 - "Milestone 03 agent team — underwriting and funders"
 Cohesion: 0.08
 Nodes (25): Agent MIC-148 — modes, Agent MIC-150 — review email, Agent MIC-163 — scoring, Agent MIC-164 — completeness, Agent MIC-170 — eligibility, Agent MIC-172 — corrections, Agent MIC-179 — bank underwriting, Agent MIC-180 — Data Merch (+17 more)
 
 ### Community 134 - "route.ts"
-Cohesion: 0.11
-Nodes (23): GET(), noStore, PATCH(), RouteContext, GET(), noStore, POST(), noStore (+15 more)
+Cohesion: 0.13
+Nodes (20): GET(), noStore, PATCH(), RouteContext, GET(), noStore, POST(), GET() (+12 more)
 
 ### Community 135 - "delivery.ts"
-Cohesion: 0.17
-Nodes (16): configuredPostmarkClosingTransport(), createPostmarkClosingTransport(), FollowupSenderPublic, SENDER_STATES, SenderProvider, SenderPurpose, SenderState, SenderTestSendResult (+8 more)
+Cohesion: 0.16
+Nodes (18): configuredPostmarkClosingTransport(), postmarkConnectionsFromEnvironment(), FollowupSenderPublic, EmailSender, SENDER_STATES, SenderProvider, SenderPurpose, SenderState (+10 more)
 
 ### Community 136 - "usesend.ts"
 Cohesion: 0.17
 Nodes (21): emailDomain(), equalText(), header(), headerList(), listUsesendDomains(), originalMessageId(), parseEmailAddress(), requirePublicHttpsOrigin() (+13 more)
 
 ### Community 137 - "service.ts"
-Cohesion: 0.05
-Nodes (94): GET(), POST(), GET(), POST(), GET(), POST(), errorText(), ExportPanel() (+86 more)
+Cohesion: 0.08
+Nodes (61): errorText(), ExportPanel(), DealFilters, CreateExportInput, EXPORT_JOB_STATES, EXPORT_KIND_LABELS, EXPORT_KINDS, EXPORT_PANEL_COPY (+53 more)
 
 ### Community 138 - "query.ts"
-Cohesion: 0.12
-Nodes (21): WorkflowWebhookAssignmentData, WorkflowWebhookRecipient, AssignmentKind, DraftState, HomeAdvanceFact, HomeContractFact, HomeDealFacts, HomeFundingFact (+13 more)
+Cohesion: 0.13
+Nodes (19): WorkflowWebhookAssignmentData, WorkflowWebhookRecipient, AssignmentKind, HomeAdvanceFact, HomeContractFact, HomeDealFacts, HomeFundingFact, HomeNoteFact (+11 more)
 
 ### Community 139 - "submissions-email.test.ts"
-Cohesion: 0.12
-Nodes (13): setEmailDeliveryFetchForTests(), actor(), attemptRow(), captured, ids, memory, minimalPdf, pdfChecksum (+5 more)
+Cohesion: 0.13
+Nodes (12): setEmailDeliveryFetchForTests(), actor(), attemptRow(), captured, ids, memory, minimalPdf, pdfChecksum (+4 more)
 
 ### Community 140 - "page.tsx"
-Cohesion: 0.20
-Nodes (11): DemoPage(), metadata, DemoForm(), faqs, features, stages, DemoLink(), manrope (+3 more)
+Cohesion: 0.10
+Nodes (18): DemoPage(), metadata, metadata, DemoForm(), Errors, faqs, features, MarketingHome() (+10 more)
 
 ### Community 141 - "dashboard.ts"
-Cohesion: 0.13
-Nodes (19): GET(), canActorAccessDeal(), normalizePrimaryAssignments(), permittedAssignmentIds(), DealAssignment, DealRecord, ENTITY_TYPES, DealValidationResult (+11 more)
+Cohesion: 0.23
+Nodes (12): GET(), getSubmissionDashboardDetail(), listSubmissionDashboard(), RecordRow, validateDashboardParams(), DashboardResult, filterSubmissionRows(), SubmissionDetail (+4 more)
 
 ### Community 142 - "Milestone 04 — Submissions and integrations"
 Cohesion: 0.08
@@ -1175,17 +1182,13 @@ Nodes (23): Communications (13), Current code (starting point), Exclusive files 
 Cohesion: 0.11
 Nodes (17): mca_deal_acquisition_events, mca_digest_deliveries, mca_digest_subscriptions, mca_export_download_tokens, mca_export_jobs, mca_followup_occurrences, mca_followup_policies, mca_followup_sender_settings (+9 more)
 
-### Community 149 - "contracts.ts"
-Cohesion: 0.17
-Nodes (15): CRITERIA_OPERATORS, CriteriaOperator, CriteriaScanProposal, CriteriaUnit, EligibilityRule, FunderActor, FunderContact, FunderGroup (+7 more)
-
 ### Community 151 - "Adapter batch A review (MIC-123, MIC-126, MIC-127, MIC-129, MIC-130)"
 Cohesion: 0.10
 Nodes (20): Adapter batch A review (MIC-123, MIC-126, MIC-127, MIC-129, MIC-130), Batch confirmations, Compact table, Handoff, MIC-123 — Expansion Capital Group, MIC-126 — Kapitus, MIC-127 — Fintegra, MIC-129 — Quantum Lends (+12 more)
 
 ### Community 152 - "snapshot-repository.ts"
-Cohesion: 0.20
-Nodes (14): AnalysisRunView, DealAnalysis, AnalysisDestination, RunAnalysisResult, AnalysisSnapshot, FunderScore, AnalysisReview, ConfirmReviewResult (+6 more)
+Cohesion: 0.18
+Nodes (16): AnalysisRunView, DealAnalysis, AnalysisDestination, RunAnalysisResult, AnalysisSnapshot, FunderScore, AnalysisReview, ConfirmReviewResult (+8 more)
 
 ### Community 153 - "0006_fancy_morph.sql"
 Cohesion: 0.12
@@ -1195,21 +1198,17 @@ Nodes (15): "deal_offers", "deal_submissions", "mca_adapter_credentials", "mca_c
 Cohesion: 0.11
 Nodes (18): A1 — MIC-111 (only greenfield ticket), A2 — MIC-106, A3 — MIC-108, A4 — MIC-157, A5 — MIC-168, Already Done — do not reopen, rewrite, or assign agents, Constraints (every agent), Current code (starting point) (+10 more)
 
-### Community 155 - "compilerOptions"
-Cohesion: 0.09
-Nodes (22): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+14 more)
+### Community 155 - "include"
+Cohesion: 0.04
+Nodes (47): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+39 more)
 
-### Community 156 - "remind-funder.tsx"
-Cohesion: 0.22
-Nodes (10): errorMessage(), formatTimestamp(), ListPayload, PreviewPayload, ReminderIneligibleReason, ReminderJobView, ReminderThreadMode, RemindFunder() (+2 more)
+### Community 156 - "repository.ts"
+Cohesion: 0.15
+Nodes (25): PageProps, SharedApplicationPage(), attachmentFromRow(), claimAttachmentJob(), claimReceipt(), completeAttachmentJob(), completeReceipt(), dueAttachmentJobs() (+17 more)
 
-### Community 157 - "review-panel.tsx"
-Cohesion: 0.27
-Nodes (7): Candidate, gradeVariant(), Outcome, Payload, reasonTone(), ReviewPanel(), Run
-
-### Community 158 - ".extractCriteria"
-Cohesion: 0.29
-Nodes (5): configuredProvider(), criteriaScanProvider, extractedValue(), fileData(), OpenAiCriteriaScanProvider
+### Community 158 - "duplicate-policy.ts"
+Cohesion: 0.19
+Nodes (20): setClock(), ACTIVE_STATES, addMs(), allow(), asJobState(), assertDuplicatePolicy(), Claim, claimId() (+12 more)
 
 ### Community 159 - "layout.tsx"
 Cohesion: 0.15
@@ -1220,8 +1219,8 @@ Cohesion: 0.14
 Nodes (13): users, workspaces, smsAssignments, smsCompanies, smsConversations, smsEmailTokens, smsInboxMessages, smsNumbers (+5 more)
 
 ### Community 161 - "milestone05-closing-docuseal-service.test.ts"
-Cohesion: 0.09
-Nodes (10): DocuSealPsfSubmissionInput, DocuSealAttemptReservation, DocuSealPsfRecord, actor, connection, connectionJson, fieldBindings, MemoryRepository (+2 more)
+Cohesion: 0.14
+Nodes (6): actor, connection, connectionJson, fieldBindings, pdf, templatePayload
 
 ### Community 162 - "0021_assistant_workspace_credits.sql"
 Cohesion: 0.15
@@ -1231,25 +1230,29 @@ Nodes (12): "mca_assistant_conversations", "mca_assistant_references", "mca_assi
 Cohesion: 0.29
 Nodes (6): Enable demo requests, Fundlane marketing site, Measurement and launch, Product images, Sales receiver contract, Verification
 
+### Community 164 - "http.ts"
+Cohesion: 0.26
+Nodes (14): GET(), POST(), GET(), POST(), GET(), POST(), createExportSchema, csvResponse() (+6 more)
+
 ### Community 165 - "README.md"
 Cohesion: 0.13
 Nodes (10): Where this code comes from, Configuration, Fundlane deployment — September 10, 2026, Remaining user and provider steps, Resources, Verification, Deployment, Development (+2 more)
 
-### Community 166 - "activeMembershipIds"
-Cohesion: 0.67
-Nodes (4): recipientActor(), recipientCanAccess(), activeMembershipIds(), managedMembershipIds()
+### Community 166 - "repository.ts"
+Cohesion: 0.13
+Nodes (25): recipientActor(), recipientCanAccess(), activeMembershipIds(), addSyntheticSubmission(), childOrder, db(), DealMutationOutcome, DealTransactionCheckpoint (+17 more)
 
 ### Community 167 - "assistant-credits.ts"
 Cohesion: 0.17
 Nodes (11): assistantReferences, creditAccounts, creditAlertEmails, creditAlertSettings, creditBalanceEvents, creditLedger, creditMonths, creditNotifications (+3 more)
 
-### Community 168 - "appOrigin"
-Cohesion: 0.12
-Nodes (21): POST(), GET(), noStore, PATCH(), RouteContext, noStore, POST(), RouteContext (+13 more)
+### Community 168 - "requestCorrelationId"
+Cohesion: 0.06
+Nodes (61): POST(), DELETE(), GET(), POST(), GET(), GET(), GET(), POST() (+53 more)
 
 ### Community 169 - "oauth.ts"
-Cohesion: 0.30
-Nodes (11): asCredential(), exchangeSenderAuthorizationCode(), fetchSenderProfileEmail(), GOOGLE_SENDER_SCOPES, http(), MICROSOFT_SENDER_SCOPES, oauthPost(), refreshSenderCredential() (+3 more)
+Cohesion: 0.27
+Nodes (12): asCredential(), exchangeSenderAuthorizationCode(), fetchSenderProfileEmail(), GOOGLE_SENDER_SCOPES, http(), MICROSOFT_SENDER_SCOPES, oauthPost(), refreshSenderCredential() (+4 more)
 
 ### Community 170 - "MCA / Fundlane architecture and hosting brief"
 Cohesion: 0.14
@@ -1259,21 +1262,17 @@ Nodes (14): 1. Current application architecture, 2. Data ownership and access, 3
 Cohesion: 0.18
 Nodes (10): "sms_companies", "sms_conversation_reads", "sms_conversations", "sms_email_tokens", "sms_inbox_messages", "sms_number_assignments", "sms_numbers", "sms_operations" (+2 more)
 
-### Community 172 - ".next*/**/*"
-Cohesion: 0.14
-Nodes (6): nextConfig, metadata, metadata, MarketingHome(), marketingMetadata(), .next*/**/*
-
-### Community 173 - "requireSubmissionActor"
-Cohesion: 0.19
-Nodes (12): GET(), noStore, POST(), RouteContext, GET(), noStore, POST(), RouteContext (+4 more)
+### Community 173 - "query.ts"
+Cohesion: 0.24
+Nodes (19): inclusiveUtcDateBounds(), listDealRecords(), captureExportSnapshot(), Cell, dealStatusLabel(), ids(), isoInRange(), membershipNames() (+11 more)
 
 ### Community 174 - "Blocking findings"
 Cohesion: 0.14
 Nodes (13): 1. Upload persistence, replay, and version allocation are not atomic, 2. Version lineage can be corrupted by normal UI actions, 3. Extraction and draft confirmation allow concurrent double side effects, 4. Existing-document confirmation accepts stale or unsafe source state, 5. Generated PDFs silently omit valid CRM data, 6. The extraction review UI cannot review the complete strict schema, 7. Statement rename audit data can leak account data, Blocking findings (+5 more)
 
 ### Community 175 - "milestone05-closing-docuseal.test.ts"
-Cohesion: 0.18
-Nodes (7): DocuSealProviderConfig, NormalizedConfig, DocuSealPsfConnection, bindings, config, input, templatePayload
+Cohesion: 0.25
+Nodes (4): bindings, config, input, templatePayload
 
 ### Community 178 - "MIC-157 report — PSF document request and webhook-to-signature workflow"
 Cohesion: 0.14
@@ -1295,9 +1294,9 @@ Nodes (12): Avoid, Colors, Components, Constraints, Decisions, Must, Project, Pr
 Cohesion: 0.15
 Nodes (12): A new upload resolves the correct request only after validation, Activation checklist (do not execute live send), An upload token cannot retrieve other documents or change a deal ID, Demonstrate every implementation requirement with a realistic synthetic scenario, Direct API requests enforce the same permissions as the UI. Logs exclude secrets, Files changed, Hunt result (no remaining software gap), Linear acceptance criteria (+4 more)
 
-### Community 184 - "requireStatementActor"
-Cohesion: 0.27
-Nodes (7): noStore, POST(), GET(), noStore, GET(), noStore, requireStatementActor()
+### Community 184 - "webhook.ts"
+Cohesion: 0.17
+Nodes (18): DeliverResult, deliverSubmission(), createPortalTask(), WebhookJobView, buildWebhookPayload(), decodeUserinfo(), deliverWebhook(), failed() (+10 more)
 
 ### Community 186 - "milestone05-accounting.ts"
 Cohesion: 0.22
@@ -1307,9 +1306,21 @@ Nodes (8): mca_accounting_adjustments, mca_accounting_payments, mca_advance_stat
 Cohesion: 0.22
 Nodes (8): mca_advances, mca_funding_events, mca_historical_import_rows, mca_historical_import_runs, mca_manual_submissions, mca_offer_revisions, mca_offer_selections, mca_offers
 
+### Community 189 - "submissions-portal.test.ts"
+Cohesion: 0.12
+Nodes (12): actor(), attemptRow(), captured, CapturedWebhook, ids, jobRow(), memory, minimalPdf (+4 more)
+
 ### Community 190 - "MIC-108 report — Contract request, acceptance, repricing, and signature tracking"
 Cohesion: 0.15
 Nodes (12): 1. A request does not mark contracts signed, 2. Absent DL / voided check is a visible blocker or explicit exception, 3. Repricing requires a reason, 4. External signature id alone is not signed evidence, 5. Retries preserve identity; send cannot regress signed / final-review, Adjacent software (already implemented; not a gap), Files, MIC-108 report — Contract request, acceptance, repricing, and signature tracking (+4 more)
+
+### Community 191 - "contracts.ts"
+Cohesion: 0.17
+Nodes (14): Registry, IMPORT_FORMATS, IMPORTABLE_FIELDS, ImportableField, ImportCommitResult, ImportSource, LeadBatch, MappingProfile (+6 more)
+
+### Community 192 - "selection-panel.tsx"
+Cohesion: 0.21
+Nodes (12): ConfirmPayload, errorMessage(), funderTitle(), JobState, JobView, RouteKind, routeLabels, SelectionFunder (+4 more)
 
 ### Community 193 - "0011_perfect_mandarin.sql"
 Cohesion: 0.33
@@ -1331,6 +1342,14 @@ Nodes (5): apply, cli(), member, mutate(), target
 Cohesion: 0.33
 Nodes (5): HOSTNAME, MCA_DOCUMENT_SCANNER, MCA_DOCUMENT_SCANNER_COMMAND, MCA_DOCUMENT_STORAGE_PATH, start.sh script
 
+### Community 198 - "MemoryRepository"
+Cohesion: 0.22
+Nodes (4): DocuSealPsfSubmissionInput, DocuSealAttemptReservation, DocuSealPsfRecord, MemoryRepository
+
+### Community 199 - "tsconfig.marketing-verification.json"
+Cohesion: 0.15
+Nodes (12): compilerOptions, incremental, exclude, extends, include, .next*/**/*, node_modules, scripts/clerk/**/*.ts (+4 more)
+
 ### Community 200 - "milestone05-sms.ts"
 Cohesion: 0.33
 Nodes (5): mca_sms_account_members, mca_sms_accounts, mca_sms_consent_events, mca_sms_messages, mca_sms_status_events
@@ -1343,9 +1362,21 @@ Nodes (4): "mca_distribution_schedule_versions", "mca_distribution_schedules", "
 Cohesion: 0.40
 Nodes (4): mca_distribution_schedule_versions, mca_distribution_schedules, mca_reverse_consolidations, mca_scheduled_installments
 
+### Community 204 - "publishWorkflowWebhook"
+Cohesion: 0.27
+Nodes (13): asEventId(), asResourceId(), assertEnvelopeMinimum(), authorizedAssignments(), EVENT_SET, eventData(), invalid(), loadMembers() (+5 more)
+
 ### Community 212 - "Milestone 02 implementation plan"
 Cohesion: 0.17
 Nodes (11): A. Durable records and authorization, B. Domain responsibilities under the frozen contracts, C. External services and truthful states, Execution-ready corrections and frozen contracts, Existing foundation to preserve, Milestone 02 implementation plan, Observed dependencies, Ownership for up to three Sol high execution agents (+3 more)
+
+### Community 213 - "updateWorkflowWebhookEndpoint"
+Cohesion: 0.38
+Nodes (10): asBoolean(), asEvents(), asLabel(), asSecret(), assertUniqueLabel(), createWorkflowWebhookEndpoint(), destinationHost(), flag() (+2 more)
+
+### Community 214 - "db"
+Cohesion: 0.31
+Nodes (10): asInt(), db(), deliverOutboxRow(), finishOutbox(), listWorkflowWebhookConsole(), processWebhookOutbox(), recordDelivery(), toDeliveryView() (+2 more)
 
 ### Community 217 - "jobs.ts"
 Cohesion: 0.24
@@ -1367,6 +1398,10 @@ Nodes (10): Acceptance criteria, Exclusive files (you may only create/edit these
 Cohesion: 0.30
 Nodes (10): GET(), noStore, clockFrom(), GET(), noStore, PATCH(), getDigestSubscription(), previewDigest() (+2 more)
 
+### Community 240 - "route.ts"
+Cohesion: 0.39
+Nodes (7): GET(), noStore, PATCH(), POST(), getCompressSettings(), requireCompressAdmin(), requireCompressManual()
+
 ### Community 250 - "Implementation plan"
 Cohesion: 0.20
 Nodes (9): Acceptance evidence, Artifacts, Implementation plan, Milestone 01 — shell, settings, auth, and PWA, SEN-27 — Workspace isolation and brokerage configuration, SEN-28 — Roles, manager hierarchy and financial visibility, SEN-30 — User invitations, profiles, seat checks and account recovery, SEN-31 — Original responsive app shell and configurable page visibility (+1 more)
@@ -1378,6 +1413,18 @@ Nodes (9): Atomicity and concurrency acceptance requirements, Data preservation 
 ### Community 256 - "0022_assistant_experience.sql"
 Cohesion: 0.20
 Nodes (9): "mca_assistant_cleanup", "mca_assistant_conversation_meta", "mca_assistant_events", "mca_assistant_files", "mca_assistant_memories", "mca_assistant_memory_settings", "mca_assistant_message_parts", "mca_assistant_questions" (+1 more)
+
+### Community 258 - "requestJson"
+Cohesion: 0.32
+Nodes (8): apiUrl(), assertSafeUrl(), fetchDocuSealArtifact(), getVerifiedDocuSealCompletedSubmission(), isPrivateAddress(), readBounded(), requestJson(), timeout()
+
+### Community 266 - "email.ts"
+Cohesion: 0.13
+Nodes (23): DealWriteInput, NormalizedIntakeInput, actorForEmail(), applicationFromText(), decodeAttachment(), deliverPendingReceipts(), EmailProcessingOptions, InboundAttachment (+15 more)
+
+### Community 279 - "assertSafeWorkflowWebhookDestination"
+Cohesion: 0.40
+Nodes (6): assertSafeWorkflowWebhookDestination(), blockedHostname(), http(), isWorkflowWebhookTestHook(), postEnvelope(), privateIp()
 
 ### Community 280 - "AI Assistant and company credits"
 Cohesion: 0.22
@@ -1451,9 +1498,9 @@ Nodes (7): Behavior, Commands, Expected synthetic output, Handoff, Linear boxes,
 Cohesion: 0.25
 Nodes (7): Behavior, Commands, Expected synthetic output, Handoff, Linear boxes, Local vs live gates, MIC-191 acceptance — GoHighLevel SMS provider adapter
 
-### Community 299 - "documents-core.test.ts"
-Cohesion: 0.07
-Nodes (45): GET(), ApplicationScanReview, asReview(), changedConflicts(), confirmApplicationScan(), proposedAlreadyApplied(), reviewApplicationMerge(), safeFields() (+37 more)
+### Community 299 - "documents-http.test.mjs"
+Cohesion: 0.47
+Nodes (4): json(), key(), temp, upload()
 
 ### Community 300 - "Clerk authentication and company onboarding"
 Cohesion: 0.29
@@ -2280,24 +2327,24 @@ Cohesion: 0.50
 Nodes (3): Milestone 06 progress, Remaining gates (not production-verified), Waves
 
 ## Knowledge Gaps
-- **3388 isolated node(s):** `$schema`, `style`, `rsc`, `tsx`, `config` (+3383 more)
+- **3398 isolated node(s):** `$schema`, `style`, `rsc`, `tsx`, `config` (+3393 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **98 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **100 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `AppError` connect `AppError` to `operations.ts`, `service.ts`, `clerk-auth.ts`, `readJson`, `service.ts`, `service.ts`, `.prepare`, `credentials.ts`, `getDatabase`, `consumeRequestRateLimit`, `apiError`, `followups.ts`, `index.ts`, `index.ts`, `index.ts`, `templates.ts`, `index.ts`, `index.ts`, `stamps.ts`, `contracts.ts`, `index.ts`, `service.ts`, `index.ts`, `index.ts`, `index.ts`, `index.ts`, `service.ts`, `mapping.ts`, `index.ts`, `index.ts`, `index.ts`, `service.ts`, `AdapterStatusResult`, `index.ts`, `watermarks.ts`, `digest.ts`, `index.ts`, `extract-outcomes.ts`, `mapping.ts`, `index.ts`, `replies.ts`, `requireAnalysisActor`, `submissions-watermarks.test.ts`, `email-templates.ts`, `milestone06-home.test.ts`, `nowIso`, `contracts.ts`, `offer-links.ts`, `errors.ts`, `compress.ts`, `service.ts`, `index.ts`, `reminders.ts`, `repository.ts`, `criteria.ts`, `application-drafts.ts`, `sender-fallback.ts`, `scoring.ts`, `index.ts`, `team-profit.ts`, `index.ts`, `criteria-scan.ts`, `contracts.ts`, `analysis.ts`, `directory.ts`, `lead-roi.ts`, `closeDatabaseForTests`, `review-mail.ts`, `funder-analytics.ts`, `drive-service.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `webhooks.ts`, `requireSmsActor`, `docuseal-provider.ts`, `service.ts`, `rep-funnel.ts`, `statements.ts`, `route.ts`, `newId`, `providers.ts`, `underwriting-corrections.test.ts`, `framework.ts`, `parseJson`, `assistant-experience.test.ts`, `psf-docuseal-service.ts`, `demo.ts`, `service.ts`, `parser.ts`, `milestone06-webhooks.test.ts`, `route.ts`, `delivery.ts`, `usesend.ts`, `service.ts`, `dashboard.ts`, `appOrigin`, `oauth.ts`, `requireSubmissionActor`, `requireStatementActor`, `jobs.ts`, `route.ts`, `documents-core.test.ts`?**
-  _High betweenness centrality (0.071) - this node is a cross-community bridge._
-- **Why does `getDatabase()` connect `getDatabase` to `operations.ts`, `AppError`, `service.ts`, `clerk-auth.ts`, `readJson`, `service.ts`, `service.ts`, `.prepare`, `credentials.ts`, `consumeRequestRateLimit`, `submissions-offer-links.test.ts`, `apiError`, `followups.ts`, `schema.ts`, `templates.ts`, `stamps.ts`, `service.ts`, `service.ts`, `submissions-status.test.ts`, `service.ts`, `watermarks.ts`, `digest.ts`, `extract-outcomes.ts`, `replies.ts`, `requireAnalysisActor`, `submissions-watermarks.test.ts`, `email-templates.ts`, `milestone06-home.test.ts`, `nowIso`, `offer-links.ts`, `errors.ts`, `compress.ts`, `service.ts`, `reminders.ts`, `repository.ts`, `criteria.ts`, `application-drafts.ts`, `sender-fallback.ts`, `scoring.ts`, `team-profit.ts`, `criteria-scan.ts`, `contracts.ts`, `milestone06-reminders.test.ts`, `analysis.ts`, `directory.ts`, `lead-roi.ts`, `closeDatabaseForTests`, `review-mail.ts`, `funder-analytics.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `webhooks.ts`, `requireSmsActor`, `service.ts`, `rep-funnel.ts`, `createMessageTemplate`, `milestone06-followups.test.ts`, `statements.ts`, `submissions-extract.test.ts`, `reconciliation.ts`, `newId`, `underwriting-corrections.test.ts`, `framework.ts`, `imports-core.test.ts`, `parseJson`, `assistant-experience.test.ts`, `psf-docuseal-service.ts`, `submissions-replies.test.ts`, `milestone06-digest.test.ts`, `service.ts`, `milestone06-team-profit.test.ts`, `submissions-duplicates.test.ts`, `milestone06-webhooks.test.ts`, `service.ts`, `query.ts`, `submissions-email.test.ts`, `dashboard.ts`, `createFollowupPolicy`, `snapshot-repository.ts`, `documents-core.test.ts`?**
+- **Why does `AppError` connect `AppError` to `assertTrustedMutation`, `service.ts`, `db.ts`, `readJson`, `service.ts`, `service.ts`, `recordAuditEvent`, `credentials.ts`, `contracts.ts`, `auth.ts`, `apiError`, `followups.ts`, `contracts.ts`, `service.ts`, `index.ts`, `index.ts`, `templates.ts`, `index.ts`, `index.ts`, `stamps.ts`, `index.ts`, `index.ts`, `service.ts`, `index.ts`, `index.ts`, `index.ts`, `index.ts`, `getDealForDocument`, `mapping.ts`, `index.ts`, `index.ts`, `index.ts`, `service.ts`, `AdapterStatusResult`, `index.ts`, `watermarks.ts`, `digest.ts`, `index.ts`, `extract-outcomes.ts`, `mapping.ts`, `index.ts`, `replies.ts`, `underwriting-review.test.ts`, `getDatabase`, `email-templates.ts`, `service.ts`, `nowIso`, `archive-service.ts`, `offer-links.ts`, `compress.ts`, `service.ts`, `index.ts`, `reminders.ts`, `errors.ts`, `criteria.ts`, `application-drafts.ts`, `sender-fallback.ts`, `scoring.ts`, `SubmissionJob`, `team-profit.ts`, `index.ts`, `criteria-scan.ts`, `repository.ts`, `analysis.ts`, `directory.ts`, `lead-roi.ts`, `newId`, `review-mail.ts`, `funder-analytics.ts`, `drive-service.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `webhooks.ts`, `requireSmsActor`, `DealActor`, `docuseal-provider.ts`, `service.ts`, `rep-funnel.ts`, `statements.ts`, `submissions-extract.test.ts`, `route.ts`, `configuration.ts`, `providers.ts`, `framework.ts`, `imports-core.test.ts`, `operations.ts`, `psf-docuseal-service.ts`, `submissions-replies.test.ts`, `demo.ts`, `service.ts`, `Role`, `queue.ts`, `parser.ts`, `milestone06-webhooks.test.ts`, `route.ts`, `delivery.ts`, `usesend.ts`, `service.ts`, `dashboard.ts`, `http.ts`, `requestCorrelationId`, `oauth.ts`, `jobs.ts`, `route.ts`, `route.ts`, `email.ts`?**
+  _High betweenness centrality (0.068) - this node is a cross-community bridge._
+- **Why does `getDatabase()` connect `getDatabase` to `Role`, `submissions-duplicates.test.ts`, `milestone06-webhooks.test.ts`, `assertTrustedMutation`, `service.ts`, `db.ts`, `service.ts`, `query.ts`, `service.ts`, `recordAuditEvent`, `service.ts`, `credentials.ts`, `dashboard.ts`, `submissions-email.test.ts`, `auth.ts`, `createFollowupPolicy`, `apiError`, `followups.ts`, `submissions-offer-links.test.ts`, `snapshot-repository.ts`, `templates.ts`, `repository.ts`, `stamps.ts`, `service.ts`, `getDealForDocument`, `repository.ts`, `requestCorrelationId`, `submissions-status.test.ts`, `service.ts`, `query.ts`, `watermarks.ts`, `digest.ts`, `extract-outcomes.ts`, `replies.ts`, `underwriting-review.test.ts`, `email-templates.ts`, `nowIso`, `offer-links.ts`, `submissions-portal.test.ts`, `compress.ts`, `service.ts`, `reminders.ts`, `criteria.ts`, `sender-fallback.ts`, `scoring.ts`, `team-profit.ts`, `criteria-scan.ts`, `repository.ts`, `milestone06-reminders.test.ts`, `analysis.ts`, `directory.ts`, `lead-roi.ts`, `newId`, `db`, `review-mail.ts`, `funder-analytics.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `webhooks.ts`, `requireSmsActor`, `rep-funnel.ts`, `milestone06-followups.test.ts`, `statements.ts`, `submissions-extract.test.ts`, `reconciliation.ts`, `configuration.ts`, `submissions-core.test.ts`, `framework.ts`, `imports-core.test.ts`, `parseJson`, `operations.ts`, `psf-docuseal-service.ts`, `submissions-replies.test.ts`, `milestone06-digest.test.ts`, `service.ts`?**
   _High betweenness centrality (0.040) - this node is a cross-community bridge._
-- **Why does `apiError()` connect `apiError` to `milestone06-team-profit.test.ts`, `AppError`, `service.ts`, `route.ts`, `clerk-auth.ts`, `readJson`, `service.ts`, `service.ts`, `credentials.ts`, `dashboard.ts`, `consumeRequestRateLimit`, `service.ts`, `service.ts`, `appOrigin`, `documents-core.test.ts`, `service.ts`, `requireSubmissionActor`, `watermarks.ts`, `replies.ts`, `requireAnalysisActor`, `submissions-watermarks.test.ts`, `requireStatementActor`, `milestone06-home.test.ts`, `nowIso`, `errors.ts`, `service.ts`, `repository.ts`, `scoring.ts`, `criteria-scan.ts`, `closeDatabaseForTests`, `review-mail.ts`, `funder-analytics.ts`, `drive-service.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `requireSmsActor`, `route.ts`, `route.ts`, `underwriting-corrections.test.ts`, `framework.ts`, `parseJson`, `assistant-experience.test.ts`?**
+- **Why does `apiError()` connect `apiError` to `milestone06-webhooks.test.ts`, `assertTrustedMutation`, `service.ts`, `route.ts`, `db.ts`, `readJson`, `service.ts`, `recordAuditEvent`, `credentials.ts`, `dashboard.ts`, `auth.ts`, `service.ts`, `http.ts`, `requestCorrelationId`, `service.ts`, `watermarks.ts`, `underwriting-review.test.ts`, `service.ts`, `AppError`, `errors.ts`, `scoring.ts`, `team-profit.ts`, `repository.ts`, `analysis.ts`, `newId`, `review-mail.ts`, `drive-service.ts`, `funders-scan.test.ts`, `senders.test.ts`, `completeness.ts`, `requireSmsActor`, `statements.ts`, `submissions-extract.test.ts`, `route.ts`, `route.ts`, `route.ts`, `framework.ts`, `operations.ts`, `submissions-replies.test.ts`?**
   _High betweenness centrality (0.020) - this node is a cross-community bridge._
 - **What connects `$schema`, `style`, `rsc` to the rest of the system?**
-  _3388 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `deals-workspace.tsx` be split into smaller, more focused modules?**
-  _Cohesion score 0.0473111960035263 - nodes in this community are weakly interconnected._
+  _3398 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `react` be split into smaller, more focused modules?**
+  _Cohesion score 0.05052790346907994 - nodes in this community are weakly interconnected._
 - **Should `utils.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.03423499577345731 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.04977511244377811 - nodes in this community are weakly interconnected._
 - **Should `button.tsx` be split into smaller, more focused modules?**
-  _Cohesion score 0.04228571428571429 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05157894736842105 - nodes in this community are weakly interconnected._

@@ -6658,5 +6658,10 @@
     "mtime": 1789089279.3834946,
     "ast_hash": "cf3f5c112796ebbf09a59a8ad2206f70",
     "semantic_hash": ""
+  },
+  "nextjs-version/src/types/next-images.d.ts": {
+    "mtime": 1789090991.9806485,
+    "ast_hash": "cb91ed832a08e47308a20517d677c5f8",
+    "semantic_hash": ""
   }
 }
