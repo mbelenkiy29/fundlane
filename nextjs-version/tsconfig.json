@@ -52,7 +52,9 @@
     ".next-clerk-preview/dev/types/**/*.ts",
     "scripts/clerk/**/*.ts",
     ".next-test-billing/types/**/*.ts",
-    ".next-test-billing/dev/types/**/*.ts"
+    ".next-test-billing/dev/types/**/*.ts",
+    ".next-test-chatkit/types/**/*.ts",
+    ".next-test-chatkit/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

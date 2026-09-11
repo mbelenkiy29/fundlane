@@ -35,6 +35,9 @@ importers:
       '@openai/agents':
         specifier: ^0.17.2
         version: 0.17.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@4.3.2)
+      '@openai/chatkit-react':
+        specifier: ^1.6.1
+        version: 1.6.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -1323,6 +1326,15 @@ packages:
     resolution: {integrity: sha512-sNf/XcfJ5VPvvouKTc+ununm+laNEF56x2eNM95SM+ULHzNVLkb7rMOSJXjmn7T3Pc2xdQlEUSvGp2auqzGlcw==}
     peerDependencies:
       zod: ^4.0.0
+
+  '@openai/chatkit-react@1.6.1':
+    resolution: {integrity: sha512-NraG0KJMouWG4uuXS5mAlcU8DNvu8lNp4YfpJiA4yzR6S9hnPsiPwbwhGXnMk8JxBQEitmSB1lMivJn/I2wopg==}
+    peerDependencies:
+      react: '>=18'
+      react-dom: '>=18'
+
+  '@openai/chatkit@1.9.0':
+    resolution: {integrity: sha512-AbqNYaCkQfOauFIk/xL3LFmZ/zIBJuvV71EMUK1o1Tu3/qCG5qRjuDnTUVLkkX9Al2ZYQ6yB1oyWN0jNhoBRMQ==}
 
   '@pdf-lib/standard-fonts@1.0.0':
     resolution: {integrity: sha512-hU30BK9IUN/su0Mn9VdlVKsWBS6GyhVfqjwl1FjZN4TxP6cCw0jP2w7V3Hf5uX7M0AZJ16vey9yE0ny7Sa59ZA==}
@@ -6688,6 +6700,14 @@ snapshots:
       - undici
       - utf-8-validate
       - ws
+
+  '@openai/chatkit-react@1.6.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      '@openai/chatkit': 1.9.0
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
+
+  '@openai/chatkit@1.9.0': {}
 
   '@pdf-lib/standard-fonts@1.0.0':
     dependencies:
