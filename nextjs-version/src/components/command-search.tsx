@@ -155,6 +155,7 @@ export function CommandSearch({ open, onOpenChange }: CommandSearchProps) {
     // Settings
     { title: "User Settings", url: "/settings/user", group: "Settings", icon: User },
     { title: "Account Settings", url: "/settings/account", group: "Settings", icon: Settings },
+    { title: "AI Assistant", url: "/assistant", group: "Pipeline", icon: MessageCircle },
     { title: "Plans & Billing", url: "/settings/billing", group: "Settings", icon: CreditCard },
     { title: "Appearance", url: "/settings/appearance", group: "Settings", icon: Palette },
     { title: "Notifications", url: "/settings/notifications", group: "Settings", icon: Bell },

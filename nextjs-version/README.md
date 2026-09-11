@@ -40,3 +40,11 @@ Run `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Database tests
 Company signup, business review, employee number provisioning and two-way inbox setup are documented in [Company SMS onboarding](docs/sms/company-onboarding.md). Apply its checked migrations before enabling the new screens. Twilio ISV eligibility, per-company carrier approval and Advanced Opt-Out confirmation are separate activation gates; code deployment alone does not enable sending.
 
 Company subscriptions are development-only. See [Clerk Billing setup, reconciliation, and release requirements](docs/clerk-billing.md).
+
+## Deal AI assistant
+
+AI Assistant is available immediately below Home in the sidebar and within each selected deal. It supports private workspace chats, scoped deal actions, per-user monthly credits, admin credit packs and low-balance alerts. It performs requested internal work and requires exact-preview approval for merchant texts, funder reminder emails, and submissions. It is disabled by default. Apply migrations 0020 and 0021 and configure `MCA_ASSISTANT_ENABLED=true`, `OPENAI_API_KEY`, and `MCA_ASSISTANT_MODEL` before activation. See [configuration, approval behavior, and verification](docs/deal-assistant.md).
+
+Credit packs require separate Stripe test-mode activation. Admin alert email uses the transactional adapter and the assistant account-maintenance worker. In-app alerts remain available without email configuration. See the assistant guide for the worker and provider verification steps.
+
+The conversational assistant adds private memory, cited research, clarification replies and generated files. See [conversational assistant setup and operations](docs/assistant-conversations.md) for migration 0022, feature flags, scanner/storage requirements and the supervised maintenance worker.

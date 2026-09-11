@@ -245,7 +245,7 @@ function mergePositions(existing: ExistingPositionRow[], incoming: Array<{ docum
 export async function analyzeDealStatements(
   actor: DealActor,
   dealId: string,
-  options?: { replaceReviewed?: boolean },
+  options?: { replaceReviewed?: boolean; beforeStep?: () => Promise<void> },
 ): Promise<StatementUnderwritingResult> {
   await getDealForDocument(actor, dealId)
   const documents = (await listDocuments(actor, dealId))
@@ -261,6 +261,7 @@ export async function analyzeDealStatements(
   if (missing.length > 0) {
     const provider = statementExtractionProvider()
     for (const document of missing) {
+      await options?.beforeStep?.()
       const content = await getDocumentContent(actor, document.id)
       extracted.push({
         documentId: document.id,
@@ -273,7 +274,9 @@ export async function analyzeDealStatements(
   }
   const extractedByDocument = new Map(extracted.map((item) => [item.documentId, item]))
 
+  await options?.beforeStep?.()
   return withUnderwritingDealLock(actor.workspaceId, dealId, async () => {
+    await options?.beforeStep?.()
     const lockedMonths = await listMonthRecords(actor.workspaceId, dealId)
     const lockedPositions = await listPositionRecords(actor.workspaceId, dealId)
     const lockedAggregate = await getAggregateRecord(actor.workspaceId, dealId)

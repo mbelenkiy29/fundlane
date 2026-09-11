@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: process.cwd(),
   experimental: {
     optimizePackageImports: ["lucide-react", "@radix-ui/react-icons"],
+    // Allow a 25 MB assistant upload plus multipart headers; routes enforce their own limits.
+    proxyClientMaxBodySize: "26mb",
   },
   turbopack: { root: process.cwd() },
 
