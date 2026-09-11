@@ -1,0 +1,367 @@
+import Image from "next/image"
+import pipelineImage from "../../../public/marketing/pipeline.png"
+import captureImage from "../../../public/marketing/capture.png"
+import reviewImage from "../../../public/marketing/review.png"
+import submitImage from "../../../public/marketing/submit.png"
+import renewImage from "../../../public/marketing/renew.png"
+import teamImage from "../../../public/marketing/team.png"
+import Link from "next/link"
+import {
+  ArrowRight,
+  Check,
+  FolderInput,
+  ScanLine,
+  Send,
+  CircleDollarSign,
+  Repeat2,
+  ChartNoAxesCombined,
+  UsersRound,
+  ChevronDown,
+} from "lucide-react"
+import { MarketingShell, DemoLink } from "./shell"
+import { MARKETING_DESCRIPTION } from "@/lib/marketing/metadata"
+
+const stages = [
+  {
+    name: "Capture",
+    title: "A complete picture starts with the application.",
+    text: "Bring applications, imports, and supporting documents together. See what’s missing before the next handoff.",
+    action: "Next action: review the deal file",
+    image: captureImage,
+    alt: "Synthetic Harbor Coffee deal in Fundlane’s application workspace",
+  },
+  {
+    name: "Review",
+    title: "Understand the deal before you send it.",
+    text: "Review bank-statement analysis, correct extracted details, and compare funder eligibility. Understand the reasons behind a fit score.",
+    action: "Next action: review eligible funders",
+    image: reviewImage,
+    alt: "Fundlane underwriting tools for a synthetic Harbor Coffee application",
+  },
+  {
+    name: "Submit",
+    title: "Keep every submission in view.",
+    text: "Choose funders, review your package, and follow submission progress. Give exceptions and duplicate checks the attention they need.",
+    action: "Next action: follow up on submissions",
+    image: submitImage,
+    alt: "Fundlane submission tracking with synthetic brokerage deals",
+  },
+  {
+    name: "Fund and renew",
+    title: "The relationship continues after funding.",
+    text: "Record funding, track the advance, and keep renewal opportunities visible. Carry the deal’s history into your next conversation.",
+    action: "Next action: review renewal eligibility",
+    image: renewImage,
+    alt: "Fundlane renewal workspace with synthetic funding history",
+  },
+]
+const features = [
+  {
+    icon: FolderInput,
+    title: "Intake and documents",
+    text: "Application forms, imports, and organized documents give every deal a place to start.",
+  },
+  {
+    icon: ScanLine,
+    title: "Underwriting and funder fit",
+    text: "Review statement analysis, make corrections, and see why a funder fits the deal.",
+  },
+  {
+    icon: Send,
+    title: "Submission management",
+    text: "Bring funder selection, preflight checks, and submission tracking into one workflow.",
+  },
+  {
+    icon: CircleDollarSign,
+    title: "Offers and funding",
+    text: "Compare offers, keep track of revisions, and carry the selected offer through funding.",
+  },
+  {
+    icon: Repeat2,
+    title: "Follow-ups and renewals",
+    text: "Keep reminders and funding history close, so the next conversation has context.",
+  },
+  {
+    icon: ChartNoAxesCombined,
+    title: "Commissions and reporting",
+    text: "Follow splits, payment records, and performance from the individual deal to the team.",
+  },
+]
+const faqs = [
+  [
+    "Who is Fundlane for?",
+    "Fundlane is built for MCA brokerage owners and their teams. It brings the work of managing applications, underwriting, submissions, offers, and renewals into a shared workspace.",
+  ],
+  [
+    "Can we bring our existing deals?",
+    "Fundlane includes spreadsheet imports, field mapping, and review tools. In your demo, we can walk through how your current records and document packages would fit the import workflow.",
+  ],
+  [
+    "How does funder matching work?",
+    "Matching compares deal information against configured funder criteria. Rankings explain fit and eligibility, including missing information or restrictions. A fit score is not a prediction or guarantee of approval.",
+  ],
+  [
+    "Can we connect our application forms and communication tools?",
+    "Fundlane supports configurable intake and communication workflows. Availability depends on the provider, credentials, and activation requirements. We’ll review the tools your brokerage uses during the demo.",
+  ],
+  [
+    "Can I control what my team sees?",
+    "Company roles, deal assignments, and financial visibility controls help you give each teammate the access they need. The demo can cover how owners, managers, and reps work together.",
+  ],
+  [
+    "What happens when I request a demo?",
+    "Tell us about your brokerage and what you’d like to improve. We’ll use those details to follow up about a walkthrough of the product and your team’s requirements.",
+  ],
+]
+
+export function MarketingHome() {
+  return (
+    <MarketingShell>
+      <main id="main">
+        <section className="fl-hero fl-container">
+          <div className="fl-hero-top">
+            <div className="fl-hero-copy">
+              <p className="fl-audience">
+                <span />
+                The workspace for MCA brokerages
+              </p>
+              <h1>Run your MCA brokerage from application to renewal.</h1>
+              <p className="fl-hero-description">{MARKETING_DESCRIPTION}</p>
+              <div className="fl-actions">
+                <DemoLink />
+                <Link href="#workflow" className="fl-text-link">
+                  Explore the workflow
+                  <ArrowRight size={17} aria-hidden="true" />
+                </Link>
+              </div>
+            </div>
+            <div className="fl-hero-note">
+              <span className="fl-note-line" />
+              <p>
+                One deal.
+                <br />
+                Every next step.
+                <br />
+                <strong>All together.</strong>
+              </p>
+            </div>
+          </div>
+          <figure className="fl-hero-preview">
+            <div className="fl-preview-bar">
+              <span className="fl-preview-dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span>Your deal pipeline</span>
+              <span className="fl-preview-label">Product preview</span>
+            </div>
+            <div className="fl-hero-image">
+              <Image
+                src={pipelineImage}
+                alt="Fundlane deal pipeline populated with synthetic brokerage applications"
+                sizes="(max-width: 768px) 1100px, (max-width: 1280px) 94vw, 1200px"
+                preload
+              />
+            </div>
+            <figcaption>
+              Applications, submissions, and next steps in one place.
+              <span>Illustrative data</span>
+            </figcaption>
+          </figure>
+          <div className="fl-workflow-line" aria-label="Deal lifecycle">
+            <span>Application in</span>
+            <ArrowRight />
+            <span>Funder review</span>
+            <ArrowRight />
+            <span>Offer selected</span>
+            <ArrowRight />
+            <span className="fl-green">Funded. Ready for what’s next.</span>
+          </div>
+        </section>
+        <section id="workflow" className="fl-section fl-workflow-section">
+          <div className="fl-container">
+            <div className="fl-section-heading">
+              <p className="fl-section-label">How it works</p>
+              <h2>
+                Every deal has a next step.
+                <br />
+                Make it a clear one.
+              </h2>
+              <p>
+                Follow the work from first application to the next funding
+                conversation.
+              </p>
+            </div>
+            <fieldset className="fl-workflow">
+              <legend className="fl-sr-only">Explore the deal workflow</legend>
+              {stages.map((stage, i) => (
+                <input
+                  className="fl-stage-radio"
+                  type="radio"
+                  name="workflow"
+                  id={`fl-stage-${i}`}
+                  key={stage.name}
+                  defaultChecked={i === 0}
+                  aria-label={stage.name}
+                />
+              ))}
+              <div className="fl-stage-labels">
+                {stages.map((stage, i) => (
+                  <label htmlFor={`fl-stage-${i}`} key={stage.name}>
+                    <span>{i + 1}</span>
+                    {stage.name}
+                  </label>
+                ))}
+              </div>
+              <div className="fl-stage-panels">
+                {stages.map((stage, i) => (
+                  <div
+                    className={`fl-stage-panel fl-stage-panel-${i}`}
+                    key={stage.name}
+                  >
+                    <div className="fl-stage-copy">
+                      <h3>{stage.title}</h3>
+                      <p>{stage.text}</p>
+                      <div className="fl-next-action">
+                        <Check size={16} aria-hidden="true" />
+                        {stage.action}
+                      </div>
+                      <Link className="fl-text-link" href="/demo">
+                        See it in your demo
+                        <ArrowRight size={16} aria-hidden="true" />
+                      </Link>
+                    </div>
+                    <figure>
+                      <Image
+                        src={stage.image}
+                        alt={stage.alt}
+                        sizes="(max-width: 760px) 94vw, 720px"
+                      />
+                      <figcaption>
+                        Illustrative data ·{" "}
+                        <a
+                          href={stage.image.src}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="fl-inline-link"
+                        >
+                          View full-size preview
+                        </a>
+                      </figcaption>
+                    </figure>
+                  </div>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+        </section>
+        <section id="product" className="fl-section fl-container">
+          <div className="fl-section-heading fl-heading-split">
+            <div>
+              <p className="fl-section-label">Built around your work</p>
+              <h2>
+                The whole deal.
+                <br />
+                Not just the contact.
+              </h2>
+            </div>
+            <p>
+              Give your team a shared view of the work, the handoffs, and the
+              details that matter.
+            </p>
+          </div>
+          <div className="fl-feature-grid">
+            {features.map(({ icon: Icon, title, text }) => (
+              <article key={title}>
+                <Icon size={25} strokeWidth={1.6} aria-hidden="true" />
+                <h3>{title}</h3>
+                <p>{text}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+        <section className="fl-team-section">
+          <div className="fl-container fl-team-grid">
+            <div>
+              <UsersRound size={28} strokeWidth={1.5} aria-hidden="true" />
+              <h2>
+                Your team, working
+                <br />
+                from the same page.
+              </h2>
+              <p>
+                Keep ownership clear and financial information in the right
+                hands. See the work across your brokerage without losing the
+                details of a single deal.
+              </p>
+              <ul>
+                <li>
+                  <Check />
+                  Clear assignments for reps and managers
+                </li>
+                <li>
+                  <Check />
+                  Role-based access and financial visibility
+                </li>
+                <li>
+                  <Check />
+                  Team, funder, and lead-source reporting
+                </li>
+              </ul>
+              <DemoLink />
+            </div>
+            <figure className="fl-team-image">
+              <Image
+                src={teamImage}
+                alt="Fundlane company team controls with synthetic team members"
+                sizes="(max-width: 760px) 94vw, 660px"
+              />
+              <figcaption>
+                Give each teammate the right access. Illustrative data.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+        <section id="faq" className="fl-section fl-container fl-faq">
+          <div className="fl-section-heading">
+            <p className="fl-section-label">A few things to know</p>
+            <h2>Before we meet.</h2>
+            <p>
+              Have a question specific to your brokerage?
+              <br />
+              <Link href="/demo" className="fl-inline-link">
+                Bring it to your demo.
+              </Link>
+            </p>
+          </div>
+          <div className="fl-faq-items">
+            {faqs.map(([question, answer]) => (
+              <details key={question}>
+                <summary>
+                  {question}
+                  <ChevronDown size={18} aria-hidden="true" />
+                </summary>
+                <p>{answer}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+        <section className="fl-closing">
+          <div className="fl-container">
+            <div>
+              <p className="fl-section-label">Let’s walk through it</p>
+              <h2>
+                A clearer way to run
+                <br />
+                your brokerage.
+              </h2>
+              <p>See how Fundlane brings your deal workflow together.</p>
+            </div>
+            <DemoLink />
+          </div>
+        </section>
+      </main>
+    </MarketingShell>
+  )
+}

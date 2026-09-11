@@ -80,3 +80,5 @@ Use Node.js 24+ and pnpm. From `nextjs-version/`, the verification commands are 
 Refresh the graph after changes and update this guide when module ownership or entry points change. Fetch live Linear status before selecting work or recording completion; milestone snapshots and generated graphs can become stale.
 
 Clerk company billing uses `nextjs-version/src/lib/mca/billing.ts`, `/api/billing`, and `workspace_billing` (migration 0019). Neon enforces active/pending seat reservations; company features remain accessible. See `nextjs-version/docs/clerk-billing.md` for the development catalog, least-privilege roles, and reconciliation commands.
+
+Public Fundlane marketing lives at `/` and `/demo`, with components in `nextjs-version/src/components/marketing/` and the demo-delivery endpoint at `/api/marketing/demo`. See `nextjs-version/docs/marketing-site.md` for sales webhook/privacy activation, receiver deduplication requirements, synthetic product captures, and verification. Demo requests use the existing shared request-rate table; no lead data is written to MCA workspaces.

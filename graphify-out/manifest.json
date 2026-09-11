@@ -1,11 +1,11 @@
 {
   "nextjs-version/components.json": {
-    "mtime": 1771301782.0,
+    "mtime": 1789086971.0559635,
     "ast_hash": "191f81bbd3f90c114cc2827ffabf63d8",
     "semantic_hash": "191f81bbd3f90c114cc2827ffabf63d8"
   },
   "nextjs-version/drizzle.config.ts": {
-    "mtime": 1788963426.9290013,
+    "mtime": 1789086971.0573883,
     "ast_hash": "1fef37039ecef30430d59f111a13f3ba",
     "semantic_hash": ""
   },
@@ -90,7 +90,7 @@
     "semantic_hash": "b94bcf436f10e5edfaf14fe0656843f6"
   },
   "nextjs-version/drizzle/meta/_journal.json": {
-    "mtime": 1788981223.7729657,
+    "mtime": 1789086971.0578346,
     "ast_hash": "8bb06a7915303342eeb7aaacb073441f",
     "semantic_hash": ""
   },
@@ -100,12 +100,12 @@
     "semantic_hash": "274ebe4d146bd39d7ae6fae22f01dc71"
   },
   "nextjs-version/next.config.ts": {
-    "mtime": 1788906026.5478487,
-    "ast_hash": "f29eb0be9f7061d427b454f07f50494d",
-    "semantic_hash": "f29eb0be9f7061d427b454f07f50494d"
+    "mtime": 1789089492.7058957,
+    "ast_hash": "72e2f087113e49a409d43f21814b9997",
+    "semantic_hash": ""
   },
   "nextjs-version/package.json": {
-    "mtime": 1788981416.2914643,
+    "mtime": 1789086971.0588608,
     "ast_hash": "f156e1f798d5f657f05a12fe3538ab40",
     "semantic_hash": ""
   },
@@ -475,7 +475,7 @@
     "semantic_hash": "bbd58874e2c87e235b199d53bb2044b6"
   },
   "nextjs-version/src/app/(dashboard)/deals/components/deals-workspace.tsx": {
-    "mtime": 1788998410.8514454,
+    "mtime": 1789086971.0625496,
     "ast_hash": "aaccfa66b1e2f8f9a7ca82432d2d538b",
     "semantic_hash": ""
   },
@@ -510,8 +510,8 @@
     "semantic_hash": "20bf6b4501be55cf3b1df14b670fe317"
   },
   "nextjs-version/src/app/(dashboard)/layout.tsx": {
-    "mtime": 1788998410.8508973,
-    "ast_hash": "66216d51b0229bb404ea3e62ceb58b94",
+    "mtime": 1789088274.873007,
+    "ast_hash": "f413b94971a5082b1a62ad8ca1299e88",
     "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/loading.tsx": {
@@ -1310,19 +1310,14 @@
     "semantic_hash": "ead2ec78d6ea7d5d8dbd07c77c868089"
   },
   "nextjs-version/src/app/landing/page.tsx": {
-    "mtime": 1771301782.0,
-    "ast_hash": "ddb6eed6b7b983fd9a0feacd1a0bf98f",
-    "semantic_hash": "ddb6eed6b7b983fd9a0feacd1a0bf98f"
-  },
-  "nextjs-version/src/app/layout.tsx": {
-    "mtime": 1788977456.6003435,
-    "ast_hash": "bbc0dcae5bd83fcaf9f943129958118f",
+    "mtime": 1789088274.9076624,
+    "ast_hash": "ffa2069e764d06e48cd881aa822f5b6c",
     "semantic_hash": ""
   },
-  "nextjs-version/src/app/loading.tsx": {
-    "mtime": 1771301782.0,
-    "ast_hash": "58a81c3ed39ddc3c461629e02f0b24f2",
-    "semantic_hash": "58a81c3ed39ddc3c461629e02f0b24f2"
+  "nextjs-version/src/app/layout.tsx": {
+    "mtime": 1789088274.8726525,
+    "ast_hash": "35da77821e9d6172af1d4f2860b5df97",
+    "semantic_hash": ""
   },
   "nextjs-version/src/app/manifest.ts": {
     "mtime": 1788805074.7448967,
@@ -1335,12 +1330,12 @@
     "semantic_hash": "f19558137c6bd6aed48e5ae07cfc64a7"
   },
   "nextjs-version/src/app/page.tsx": {
-    "mtime": 1771301782.0,
-    "ast_hash": "0ffe6eb0a4e862afc52148a98e71c2cc",
-    "semantic_hash": "0ffe6eb0a4e862afc52148a98e71c2cc"
+    "mtime": 1789088274.8723488,
+    "ast_hash": "def29b4a6996287f5fce74a0228b2452",
+    "semantic_hash": ""
   },
   "nextjs-version/src/components/app-sidebar.tsx": {
-    "mtime": 1788998410.8503642,
+    "mtime": 1789086971.0647748,
     "ast_hash": "7af0d33c44aa00203fa2aa23f8464c3d",
     "semantic_hash": ""
   },
@@ -1350,7 +1345,7 @@
     "semantic_hash": "a75108233575e45162ebed9fb8bd1735"
   },
   "nextjs-version/src/components/command-search.tsx": {
-    "mtime": 1771301782.0,
+    "mtime": 1789086971.0656583,
     "ast_hash": "4b138494385ca04659c68ac6009f9309",
     "semantic_hash": "4b138494385ca04659c68ac6009f9309"
   },
@@ -1520,7 +1515,7 @@
     "semantic_hash": "2622261684feb21bf460c70766b2634b"
   },
   "nextjs-version/src/components/site-header.tsx": {
-    "mtime": 1788891063.9017787,
+    "mtime": 1789086971.06635,
     "ast_hash": "01eed32e3b62f47392cada1f338fc854",
     "semantic_hash": "01eed32e3b62f47392cada1f338fc854"
   },
@@ -1860,7 +1855,7 @@
     "semantic_hash": "52aed3a746a68498d1d37c82d9bb3b8e"
   },
   "nextjs-version/src/lib/mca/db/schema.ts": {
-    "mtime": 1788981183.9098687,
+    "mtime": 1789086971.0678875,
     "ast_hash": "29e5ba65c82c4e83e032b1c8701b5480",
     "semantic_hash": ""
   },
@@ -1960,7 +1955,7 @@
     "semantic_hash": "92c3fa9cd52ff3196e9a4b1f6f0f6d27"
   },
   "nextjs-version/src/lib/mca/email.ts": {
-    "mtime": 1788963529.9196281,
+    "mtime": 1789086971.0686774,
     "ast_hash": "c2f930aff524ddc4f97951d7077ef275",
     "semantic_hash": ""
   },
@@ -2295,7 +2290,7 @@
     "semantic_hash": "a3d29c5a36905102350bf039fdcf3e3d"
   },
   "nextjs-version/src/lib/mca/underwriting/statements.ts": {
-    "mtime": 1788891065.4002135,
+    "mtime": 1789086971.070199,
     "ast_hash": "dbf9ea8efc1226950d57dcfbcc3c8d94",
     "semantic_hash": "dbf9ea8efc1226950d57dcfbcc3c8d94"
   },
@@ -2445,29 +2440,9 @@
     "semantic_hash": "877d4544f921090eba609f28cd843d8d"
   },
   "nextjs-version/tsconfig.json": {
-    "mtime": 1788982054.770088,
-    "ast_hash": "a516de080bebf9987b182efa3dfd88c1",
+    "mtime": 1789089035.6277506,
+    "ast_hash": "a5002a9a3ed34c25294bc9ea44abb89b",
     "semantic_hash": ""
-  },
-  "nextjs-version/docs/milestone-02/project-issues.current.snapshot.json": {
-    "mtime": 1788873725.2821321,
-    "ast_hash": "373e5814ca5658258739bc6d5f63b8f6",
-    "semantic_hash": "373e5814ca5658258739bc6d5f63b8f6"
-  },
-  "nextjs-version/docs/milestone-02/project-issues.snapshot.json": {
-    "mtime": 1788811586.3531923,
-    "ast_hash": "dcc13dc4ff4730d86f77b1b4c2a7d879",
-    "semantic_hash": "dcc13dc4ff4730d86f77b1b4c2a7d879"
-  },
-  "nextjs-version/docs/milestone-02/tickets.current.full.json": {
-    "mtime": 1788873725.287785,
-    "ast_hash": "e5c70caded67e8cb422e3586cf529b29",
-    "semantic_hash": "e5c70caded67e8cb422e3586cf529b29"
-  },
-  "nextjs-version/docs/milestone-02/tickets.json": {
-    "mtime": 1788811586.3528943,
-    "ast_hash": "226670f90e87752cbc5e49bc414787c7",
-    "semantic_hash": "226670f90e87752cbc5e49bc414787c7"
   },
   "nextjs-version/tests/intake-http.test.mjs": {
     "mtime": 1788979988.7922957,
@@ -2475,8 +2450,8 @@
     "semantic_hash": ""
   },
   ".github/workflows/deploy.yml": {
-    "mtime": 1771301782.0,
-    "ast_hash": "ee8447af3ab26d5b7d0c817253282f6b",
+    "mtime": 1789049462.367599,
+    "ast_hash": "d4a03dbc9fe92f14f134daa1366f05eb",
     "semantic_hash": ""
   },
   "AGENTS.md": {
@@ -2495,13 +2470,13 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1788895201.7129304,
-    "ast_hash": "005996f85526743c59b6bed807a680de",
+    "mtime": 1789051967.5018008,
+    "ast_hash": "ab7dffcfaa21ced121c82b84ac0f2663",
     "semantic_hash": ""
   },
   "WORKSPACE_NAVIGATION.md": {
-    "mtime": 1788982348.7202353,
-    "ast_hash": "5b745fd471d42bc22745cfa3d51aae94",
+    "mtime": 1789088997.6186795,
+    "ast_hash": "a33f4227fb356bf657b3f29752d7d3f9",
     "semantic_hash": ""
   },
   "nextjs-version/.playwright-cli/page-2026-09-07T18-44-05-666Z.yml": {
@@ -3000,8 +2975,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/README.md": {
-    "mtime": 1788982348.7196894,
-    "ast_hash": "a371094d45e5c7924f170f397a952077",
+    "mtime": 1789086971.0554242,
+    "ast_hash": "bd8ad4606b3c899a949a094e322ba025",
     "semantic_hash": ""
   },
   "nextjs-version/docs/acceptance/SEN-32-SEN-35.md": {
@@ -3478,11 +3453,6 @@
     "mtime": 1771301782.0,
     "ast_hash": "f0402b67b6ce880f65666bb49e841696",
     "semantic_hash": ""
-  },
-  "nextjs-version/docs/milestone-05/linear-tickets.json": {
-    "mtime": 1788895666.2606263,
-    "ast_hash": "61927eb8066e07396eaecba2455fffbe",
-    "semantic_hash": "61927eb8066e07396eaecba2455fffbe"
   },
   "nextjs-version/drizzle/0008_chief_squadron_sinister.sql": {
     "mtime": 1788896117.753472,
@@ -4409,16 +4379,6 @@
     "ast_hash": "b61830e79f63f9a8550d34494a9068bd",
     "semantic_hash": ""
   },
-  "nextjs-version/docs/milestone-05/screenshots/advances.png": {
-    "mtime": 1788904340.7790012,
-    "ast_hash": "5449c93ae54c8b03bc7ab49a3bf3c223",
-    "semantic_hash": ""
-  },
-  "nextjs-version/docs/milestone-05/screenshots/closing.png": {
-    "mtime": 1788904685.338321,
-    "ast_hash": "3d81e7878dcc7d89fd321370cc1f6b01",
-    "semantic_hash": ""
-  },
   "nextjs-version/src/app/api/mca/submissions/extract/[id]/route.ts": {
     "mtime": 1788905135.2180946,
     "ast_hash": "a35430427cfbdee38d94baec040d7afc",
@@ -4549,11 +4509,6 @@
     "ast_hash": "66070fbc53e5703e6829c8f54d617733",
     "semantic_hash": ""
   },
-  "nextjs-version/docs/milestone-05/linear-final-statuses.json": {
-    "mtime": 1788905461.89595,
-    "ast_hash": "74b82dc28574f4ecc793ad60706abae9",
-    "semantic_hash": "74b82dc28574f4ecc793ad60706abae9"
-  },
   "nextjs-version/docs/milestone-04/MIC-122-acceptance.md": {
     "mtime": 1788905461.9842308,
     "ast_hash": "93e318862cd81506c34feec776396518",
@@ -4570,7 +4525,7 @@
     "semantic_hash": "6ab1867fef091939903089920d11a696"
   },
   "nextjs-version/scripts/railway/start.sh": {
-    "mtime": 1788906910.3342154,
+    "mtime": 1789086971.06163,
     "ast_hash": "c144ef1ebcdfea55490bfb2c1b1ff4d1",
     "semantic_hash": "c144ef1ebcdfea55490bfb2c1b1ff4d1"
   },
@@ -4738,11 +4693,6 @@
     "mtime": 1788906294.1883924,
     "ast_hash": "4ec231fb85335a62ba81f9f178a0b010",
     "semantic_hash": ""
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/production-smoke.json": {
-    "mtime": 1788906681.3948865,
-    "ast_hash": "dd3aeb36570866d83a78832f196d35ac",
-    "semantic_hash": "dd3aeb36570866d83a78832f196d35ac"
   },
   "nextjs-version/drizzle/0011_perfect_mandarin.sql": {
     "mtime": 1788906456.6131325,
@@ -5109,11 +5059,6 @@
     "ast_hash": "24c2f468bd7b6c7fef6f9654ee7d2560",
     "semantic_hash": ""
   },
-  "nextjs-version/docs/milestone-05/verification-logs/sms-browser.md": {
-    "mtime": 1788908865.4790132,
-    "ast_hash": "7fdb69d42bb0b0c9b0653c6dc8980473",
-    "semantic_hash": ""
-  },
   "nextjs-version/src/lib/mca/submissions/adapters/credibly/fixtures.ts": {
     "mtime": 1788907882.879842,
     "ast_hash": "2c7cbb7b210c2b5b1feebf43bdb64f06",
@@ -5208,41 +5153,6 @@
     "mtime": 1788908374.6841373,
     "ast_hash": "d203e8994ad4f435e9c45863810d0aae",
     "semantic_hash": ""
-  },
-  "nextjs-version/docs/milestone-05/provider-linear-updates.json": {
-    "mtime": 1788909923.795435,
-    "ast_hash": "b71eb8e5ea94553a54c0dcdb9bd1df44",
-    "semantic_hash": "b71eb8e5ea94553a54c0dcdb9bd1df44"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/domain-certificates.json": {
-    "mtime": 1788910102.6146216,
-    "ast_hash": "80bf77c63fe27b138c2113a779ea5436",
-    "semantic_hash": "80bf77c63fe27b138c2113a779ea5436"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/provider-deployment.json": {
-    "mtime": 1788909801.3244903,
-    "ast_hash": "16c4cf9e834f9d8cb37ef75f4d6aec88",
-    "semantic_hash": "16c4cf9e834f9d8cb37ef75f4d6aec88"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/provider-domain-public-dns-smoke.json": {
-    "mtime": 1788910102.7096825,
-    "ast_hash": "c663a7e592e480b22cb5e830794eb03a",
-    "semantic_hash": "c663a7e592e480b22cb5e830794eb03a"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/provider-domain-smoke.json": {
-    "mtime": 1788910102.7090936,
-    "ast_hash": "1e2dce3a96660e803539c885b42e236d",
-    "semantic_hash": "1e2dce3a96660e803539c885b42e236d"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/provider-production-smoke.json": {
-    "mtime": 1788909801.3243434,
-    "ast_hash": "e303162443a47e11da80b401fe77b1eb",
-    "semantic_hash": "e303162443a47e11da80b401fe77b1eb"
-  },
-  "nextjs-version/docs/milestone-05/verification-logs/provider-www-public-dns-smoke.json": {
-    "mtime": 1788910102.7102308,
-    "ast_hash": "fe712d26e71ff78c0d7935776c295808",
-    "semantic_hash": "fe712d26e71ff78c0d7935776c295808"
   },
   "nextjs-version/drizzle/0012_furry_ultimatum.sql": {
     "mtime": 1788915918.6278439,
@@ -6680,8 +6590,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/helpers/clerk-preview.mjs": {
-    "mtime": 1788998887.4331331,
-    "ast_hash": "c5dd6cd4c27502ff71022aaaad8ddffe",
+    "mtime": 1789088781.9702113,
+    "ast_hash": "8c95d140c1cb9517cb7ad81889917997",
     "semantic_hash": ""
   },
   "nextjs-version/docs/clerk-auth.md": {
@@ -6794,11 +6704,6 @@
     "ast_hash": "ea001cf173a57d9745f6b86d0b6580dd",
     "semantic_hash": ""
   },
-  ".playwright-mcp/page-2026-09-10T00-03-58-598Z.yml": {
-    "mtime": 1788998638.598778,
-    "ast_hash": "18ed75713139e14c1e7bfc6e08873f6f",
-    "semantic_hash": ""
-  },
   "nextjs-version/docs/acceptance/submissions-dashboard.md": {
     "mtime": 1788998929.664769,
     "ast_hash": "53e7293a2d336e696ab4e9ed80da3087",
@@ -6809,19 +6714,284 @@
     "ast_hash": "4bab21c4c8051cb806295bcf9be6bfa2",
     "semantic_hash": ""
   },
-  "nextjs-version/docs/acceptance/submissions-dashboard/submissions-desktop.png": {
-    "mtime": 1788998712.7082524,
-    "ast_hash": "f1c378556042ec74a98eb90f05b33d1a",
-    "semantic_hash": ""
-  },
-  "nextjs-version/docs/acceptance/submissions-dashboard/submissions-mobile.png": {
-    "mtime": 1788998779.5679655,
-    "ast_hash": "f0857c7858321036cdccad89eca4d41c",
-    "semantic_hash": ""
-  },
   "nextjs-version/docs/acceptance/railway-clerk-cutover.md": {
-    "mtime": 1788999794.1341913,
-    "ast_hash": "fd118f71d69b119ef7162b62912db56d",
+    "mtime": 1789049794.5493276,
+    "ast_hash": "c51758712a82965de6ed27bdffe91b63",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/marketing/seed-preview.mjs": {
+    "mtime": 1789089192.970889,
+    "ast_hash": "880dd8d384b497729b207df073e8fefb",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/marketing/demo/route.ts": {
+    "mtime": 1789088618.964747,
+    "ast_hash": "36a03383c7c9aec3cbb9d5e4771bfbd8",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/demo/page.tsx": {
+    "mtime": 1789089192.9191437,
+    "ast_hash": "f767fe65ebecc1d20d00b0a046e415eb",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/marketing/social.png/route.tsx": {
+    "mtime": 1789089192.9243753,
+    "ast_hash": "28c9b3db18e62b96899f4576d494b238",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/robots.ts": {
+    "mtime": 1789088274.8737807,
+    "ast_hash": "463360725af8314361e45cb7013c2476",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/sitemap.ts": {
+    "mtime": 1789088274.8736422,
+    "ast_hash": "a2026f6588e133dcca5df749319d7830",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/marketing/demo-form.tsx": {
+    "mtime": 1789089192.7825785,
+    "ast_hash": "f6798a9e7858f8331d272d4ac1d1960a",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/marketing/home.tsx": {
+    "mtime": 1789089688.791729,
+    "ast_hash": "97d1e88a4accb9cc0ca37a255f75bced",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/marketing/shell.tsx": {
+    "mtime": 1789089192.8078048,
+    "ast_hash": "b2728de47f0fd0c350e71fb253c4c533",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/marketing/config.ts": {
+    "mtime": 1789089192.8734987,
+    "ast_hash": "dbd4f890c8eb6920cee5472cc2d4f634",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/marketing/demo-schema.ts": {
+    "mtime": 1789089192.8835423,
+    "ast_hash": "9167d5e6f434e7fd59f79d0f618568e9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/marketing/demo.ts": {
+    "mtime": 1789089192.910831,
+    "ast_hash": "7b2eebc639339c375217702b0b30d0b4",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/marketing/metadata.ts": {
+    "mtime": 1789089192.9141328,
+    "ast_hash": "cf9a14579efc34ddda65b78ceafe4052",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/marketing-demo.test.ts": {
+    "mtime": 1789089192.946102,
+    "ast_hash": "7b0689fad237d2378df79cee9bd983c7",
+    "semantic_hash": ""
+  },
+  "DEPLOYMENT.md": {
+    "mtime": 1789051967.5014508,
+    "ast_hash": "5f9f77b917d5e114ad1ce9b857656db0",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T21-56-07-794Z.yml": {
+    "mtime": 1789077367.7943902,
+    "ast_hash": "29a1e78b86b13e4ea356b7e00c890215",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T21-58-22-080Z.yml": {
+    "mtime": 1789077502.0815465,
+    "ast_hash": "084a3b983bbf59d6abf7b84c967bfb48",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-02-22-458Z.yml": {
+    "mtime": 1789077742.4584248,
+    "ast_hash": "833df9a3d0aef7fd1820c647107c89c5",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-06-25-158Z.yml": {
+    "mtime": 1789077985.1591253,
+    "ast_hash": "3c7a0c7899ed12b31206c5e2d101c7d1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-07-29-414Z.yml": {
+    "mtime": 1789078049.4151876,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-08-12-491Z.yml": {
+    "mtime": 1789078092.4924312,
+    "ast_hash": "83dfbb98d2883bb61a5f99996986f41b",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-11-37-322Z.yml": {
+    "mtime": 1789078297.3224654,
+    "ast_hash": "6c8947faba1ee5b0a447887043a149a0",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-12-52-133Z.yml": {
+    "mtime": 1789078372.1341698,
+    "ast_hash": "95d990222e3e2030ef50b80992d5d89f",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-13-17-165Z.yml": {
+    "mtime": 1789078397.1659174,
+    "ast_hash": "3994195a7f979b413f918572b18f005b",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-13-29-256Z.yml": {
+    "mtime": 1789078409.257439,
+    "ast_hash": "49879a9211a329accbf1f7ad0ca5a4b0",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-15-00-689Z.yml": {
+    "mtime": 1789078500.6898053,
+    "ast_hash": "8261db4fa58c008c176f6beef2a520bc",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-19-23-333Z.yml": {
+    "mtime": 1789078763.3343356,
+    "ast_hash": "0e5aa59fc7bb924bc5c21d6db9ef6f03",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-19-43-851Z.yml": {
+    "mtime": 1789078783.8517406,
+    "ast_hash": "2085c19c3081ab6743ae1df21442a156",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-20-02-180Z.yml": {
+    "mtime": 1789078802.1809945,
+    "ast_hash": "281d1737fa5c87f6bfea8998111b3d6b",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-20-05-272Z.yml": {
+    "mtime": 1789078805.2728472,
+    "ast_hash": "9b9c8beca51d0e72bba5359e00b974d9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-20-41-066Z.yml": {
+    "mtime": 1789078841.067281,
+    "ast_hash": "be8daad17ff72ea8b51045de7bc29707",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-20-44-109Z.yml": {
+    "mtime": 1789078844.1105077,
+    "ast_hash": "cbcc8359954d4829374e1a9b42b3f9cd",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-21-37-348Z.yml": {
+    "mtime": 1789078897.34908,
+    "ast_hash": "ab1a6afb8afa073148b64596bae0abfa",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-10T22-22-40-583Z.yml": {
+    "mtime": 1789078960.5839784,
+    "ast_hash": "cd8eeb54eaa4e18aebc5700eebeafbc1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-04-01-364Z.yml": {
+    "mtime": 1789088641.3694985,
+    "ast_hash": "284037bb71a9655180748de1816bdbc5",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-08-46-126Z.yml": {
+    "mtime": 1789088926.1270075,
+    "ast_hash": "661ca550dc6660adaa0d0ac3fb9e2da9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-09-19-408Z.yml": {
+    "mtime": 1789088959.409488,
+    "ast_hash": "a319dcba7539da9249ff1f4af75ed779",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-10-06-072Z.yml": {
+    "mtime": 1789089006.073295,
+    "ast_hash": "45b7e9e469f8054fce304fd8acba13e2",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-10-49-889Z.yml": {
+    "mtime": 1789089049.890391,
+    "ast_hash": "0a0be93a249da62e0d8470bc1d09392c",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-11-18-502Z.yml": {
+    "mtime": 1789089078.5047486,
+    "ast_hash": "1f9906f24b613c947e2f7ad0ef08afa5",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-12-09-973Z.yml": {
+    "mtime": 1789089129.985797,
+    "ast_hash": "3e316cb859ec70f7f17d7c5fa8fc1af7",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-14-11-260Z.yml": {
+    "mtime": 1789089251.2614455,
+    "ast_hash": "b9a3d0ca908bd370b8cbc5b06d5873ed",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-17-11-199Z.yml": {
+    "mtime": 1789089431.2002707,
+    "ast_hash": "0369b9e462c8aa5918bfa49b16437887",
+    "semantic_hash": ""
+  },
+  "nextjs-version/.playwright-cli/page-2026-09-11T01-18-45-417Z.yml": {
+    "mtime": 1789089525.4184685,
+    "ast_hash": "0369b9e462c8aa5918bfa49b16437887",
+    "semantic_hash": ""
+  },
+  "nextjs-version/ARCHITECTURE.md": {
+    "mtime": 1789005566.4042125,
+    "ast_hash": "c124b6a0bf9b2dced75d74e221c1cc27",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/marketing-site.md": {
+    "mtime": 1789089687.0314782,
+    "ast_hash": "f4336689b566afd7be3f5e6142b05cf9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/render-deployment.md": {
+    "mtime": 1789049668.5052876,
+    "ast_hash": "f9948cb5d20a88b42fc796cb6472f340",
+    "semantic_hash": ""
+  },
+  "render.yaml": {
+    "mtime": 1789051590.5087092,
+    "ast_hash": "40fd60ba0066eb0fd1bb72f414348bcd",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/capture.png": {
+    "mtime": 1789089194.330493,
+    "ast_hash": "ea11ba5834e3f30c2b8c8a4be0a4a9e6",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/icon.svg": {
+    "mtime": 1789089112.1395938,
+    "ast_hash": "6d9d05d1e43b782dd9d84de70b7f8d08",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/pipeline.png": {
+    "mtime": 1789089582.787507,
+    "ast_hash": "c0a37b5a4bb3cbc0f7f6596e820c0248",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/renew.png": {
+    "mtime": 1789089239.7629223,
+    "ast_hash": "c0dd30d0d0deb7f883f10d337d55722b",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/review.png": {
+    "mtime": 1789089194.674617,
+    "ast_hash": "e9e2327c6fef35f35b75464b178c1337",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/submit.png": {
+    "mtime": 1789089235.894903,
+    "ast_hash": "602ba350c8856be27ccf6708ec84578c",
+    "semantic_hash": ""
+  },
+  "nextjs-version/public/marketing/team.png": {
+    "mtime": 1789089279.3834946,
+    "ast_hash": "cf3f5c112796ebbf09a59a8ad2206f70",
     "semantic_hash": ""
   }
 }

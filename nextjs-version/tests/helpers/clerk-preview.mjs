@@ -178,6 +178,10 @@ try {
       }
     }
   }
+  if (process.env.MCA_MARKETING_PREVIEW === "true") {
+    const { seedMarketingPreview } = await import("../../scripts/marketing/seed-preview.mjs")
+    await seedMarketingPreview(db, { workspaceId, memberId, userId })
+  }
   console.log(
     `Synthetic preview account: ${email}. Clerk development email code: 424242. URL: http://localhost:3010/sign-in`
   )
