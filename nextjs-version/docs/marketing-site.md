@@ -35,7 +35,7 @@ The server sends the receiver:
 
 Headers: `Authorization: Bearer <token>`, `Content-Type: application/json`, and `Idempotency-Key: <requestId>`.
 
-**The receiver must atomically deduplicate Idempotency-Key before persisting a lead or notifying sales**, return 2xx only after durable acceptance, and return a successful response on identical retries. Store the key for at least seven days. Application replicas and timeout retries deliberately send the same key; this application does not store lead/contact data or own a sales queue. The request ID is bound to normalized form contents with HMAC so edited submissions become distinct operations. Rotating the webhook token also changes deduplication keys; avoid rotation during an active retry incident.
+**The receiver must atomically deduplicate Idempotency-Key before persisting a lead or notifying sales**, return 2xx only after durable acceptance, and return a successful response on identical retries. Store the key for at least seven days. Application replicas and timeout retries deliberately send the same key; the bundled receiver stores encrypted demo contact details in a separate global sales inbox. The request ID is bound to normalized form contents with HMAC so edited submissions become distinct operations. Rotating the webhook token also changes deduplication keys; avoid rotation during an active retry incident.
 
 The client retains its ID and values during retries in the open page, locks concurrent submits, and generates a new ID when values change. Reloading the page starts a new request. The receiver may additionally deduplicate business leads by email according to sales policy.
 
@@ -45,7 +45,7 @@ The server has a 10-second delivery deadline and the client waits 15 seconds. Fa
 
 Structured logs contain only `marketing_demo_accepted` or `marketing_demo_delivery_failed` and the opaque request ID. Count unique accepted IDs for conversions; retries can repeat an accepted log. Alert on sustained delivery failures and verify a controlled synthetic request reaches the sales destination before launch. Do not log bodies, contact fields, or tokens. No third-party tracking/cookies were added. Compare conversion only after establishing a real traffic baseline.
 
-Approved privacy information and the production sales destination are external launch inputs. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
+The approved website/demo privacy notice is published at `/privacy` for Sentinel Tech Solutions LLC, with privacy contact `ben@sentineltechsolutions.io`. The operator approved the notice on September 11, 2026. The dedicated production receiver is `/api/marketing/receiver`. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
 
 ## Product images
 
@@ -67,3 +67,20 @@ pnpm build
 ```
 
 The demo tests cover accepted delivery, normalized payloads, receiver deduplication and ambiguous retries, validation, honeypot, body limits, rate rejection, cross-origin requests, failed configuration/storage, provider errors and aborts. Browser checks cover desktop/tablet/390px, keyboard workflow controls, no-JavaScript navigation/FAQ, demo states, redirects and metadata. Test external sales acceptance only with a controlled synthetic address. No live sales message is sent by the test suite.
+
+
+## Bundled receiver and private sales inbox
+
+Migration `0023_marketing_demo_requests` adds a global inbox separate from tenant deals. `POST /api/marketing/receiver` requires the demo bearer token, validates the envelope and matching idempotency header, and encrypts contact details using the existing application encryption key with the request ID as authenticated context. PostgreSQL atomically deduplicates concurrent deliveries; conflicting payloads fail closed. A deleted inquiry keeps a deduplication tombstone, so retries do not restore contact details. Neither endpoint logs contact details. There are no automated sales messages, customer-workspace imports, or CRM triggers.
+
+Authorized operators review the inbox from Render’s private service shell:
+
+```sh
+node marketing-inbox.cjs list
+node marketing-inbox.cjs show <opaque-request-id>
+node marketing-inbox.cjs delete <opaque-request-id>
+```
+
+`list` displays only IDs and timestamps. `show` decrypts contact data: use it only in the private shell and do not copy its output to shared logs or tickets. `delete` removes the encrypted contact payload and preserves the retry tombstone. Operators should review new inquiries and delete contact details when no longer needed. Outbound contact requires a separate operator decision; intake itself sends nothing.
+
+Render stores `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. The Docker build explicitly accepts the non-secret privacy URL so the static homepage footer includes it; tokens are runtime-only. `/privacy` remains unpublished unless the configured privacy URL points to it.
