@@ -25,3 +25,6 @@ playwright-report/
 *.tsbuildinfo
 pnpm-lock.yaml
 package-lock.json
+
+# Browser snapshots are verification artifacts, not application source.
+.playwright-cli/

@@ -28,6 +28,7 @@ All paths below are relative to `nextjs-version/`.
 | Authentication and workspace isolation | `src/lib/mca/auth.ts`, `sessions.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts` |
 | Database and schema | `src/lib/mca/db.ts`, `src/lib/mca/db/schema.ts`, `drizzle/` |
 | Deals and pipeline | `src/lib/mca/deals/` |
+| Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
 | Intake, documents and imports | `src/lib/mca/intake/`, `documents/`, `imports/` |
 | Underwriting and funder matching | `src/lib/mca/underwriting/`, `funders/`, `datamerch/` |
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
