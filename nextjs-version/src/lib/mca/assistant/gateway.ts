@@ -57,7 +57,7 @@ export async function chatkitGateway(request: Request, authenticate = requireMem
     request.signal.addEventListener("abort", onAbort, { once: true })
     if (request.signal.aborted) abort.abort()
     timer = setTimeout(onAbort, 120_000)
-    const upstream = await fetch(new URL("/chatkit", serviceUrl.includes("://") ? serviceUrl : `http://${serviceUrl}`), {
+    const upstream = await fetch(new URL("/chatkit", serviceUrl.includes("://") ? serviceUrl : `http://${serviceUrl}${serviceUrl.includes(":") ? "" : ":8000"}`), {
       method: "POST", body: raw, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, signal: abort.signal, redirect: "error",
     })
     if (!upstream.ok || !upstream.body) {

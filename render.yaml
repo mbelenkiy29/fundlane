@@ -43,7 +43,7 @@ services:
         fromService:
           name: fundlane-chatkit
           type: pserv
-          property: hostport
+          property: host
       - key: MCA_ASSISTANT_SIGNING_SECRET
         fromService:
           name: fundlane-chatkit

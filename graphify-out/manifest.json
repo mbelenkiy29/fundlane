@@ -6295,8 +6295,8 @@
     "semantic_hash": ""
   },
   "render.yaml": {
-    "mtime": 1789136165.746403,
-    "ast_hash": "fbeb4802e93c56a2c7b93739380f6bc9",
+    "mtime": 1789137402.6826332,
+    "ast_hash": "a9c587be8a95d9c7c31d24448320311f",
     "semantic_hash": ""
   },
   "nextjs-version/drizzle/0021_assistant_workspace_credits.sql": {
@@ -6770,8 +6770,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/assistant/gateway.ts": {
-    "mtime": 1789136486.743562,
-    "ast_hash": "697cf1a7a13398ef000385dc6511e21e",
+    "mtime": 1789137402.6831336,
+    "ast_hash": "0d89c362c5477f04a16d7fee9e63ac41",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/assistant/security.ts": {
@@ -6795,8 +6795,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/chatkit.test.ts": {
-    "mtime": 1789136486.770277,
-    "ast_hash": "401fafdbd6ad27f8c6bc4abaa26d68a4",
+    "mtime": 1789137402.6835277,
+    "ast_hash": "54cd53b42c92cab34949508b48105814",
     "semantic_hash": ""
   },
   "chatkit-service/requirements.txt": {
@@ -6805,13 +6805,13 @@
     "semantic_hash": ""
   },
   "nextjs-version/docs/chatkit-assistant.md": {
-    "mtime": 1789136445.7536957,
-    "ast_hash": "6ac8e8d49fed8fdcd541893088960999",
+    "mtime": 1789137402.6838255,
+    "ast_hash": "1a92350b7a6cd3cdd294df883c2bb943",
     "semantic_hash": ""
   },
   "nextjs-version/public/fonts/inter/OFL.txt": {
-    "mtime": 1789135125.809987,
-    "ast_hash": "5e95cb23ed621124015c5d23224ba2d3",
+    "mtime": 1789137249.4105403,
+    "ast_hash": "b2dfdd1bdce4563ca13246f84faffc09",
     "semantic_hash": ""
   }
 }

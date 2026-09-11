@@ -22,7 +22,7 @@ The feature defaults off. Existing production data and document storage are unaf
 | --- | --- | --- |
 | Next.js | `MCA_ASSISTANT_ENABLED` | `false` until verification is complete |
 | Next.js | `MCA_ASSISTANT_DOMAIN_KEY` | ChatKit domain key registered for the frontend origin |
-| Next.js | `MCA_ASSISTANT_SERVICE_URL` | Private `host:port` from the Blueprint, or a full URL locally |
+| Next.js | `MCA_ASSISTANT_SERVICE_URL` | Private hostname from the Blueprint (port 8000), or explicit `host:port`/full URL locally |
 | Both | `MCA_ASSISTANT_SIGNING_SECRET` | Same generated secret, at least 32 bytes |
 | Python | `OPENAI_API_KEY` | Reuse the existing approved OpenAI project key through the service secret store |
 | Python | `MCA_ASSISTANT_MODEL` | Dedicated model ID; verification uses the configured `gpt-5-mini` |
@@ -86,3 +86,5 @@ The OpenAI **Generate key** form is prepared but unsubmitted for the two exact p
 The private service is pinned to `codex/chatkit-release` with automatic deployment disabled while the PR awaits merge. After merge, sync the checked Blueprint to track main and restore checks-pass deployment behavior; inspect the sync plan and preserve the already-configured signing secret. Deploy both services at the same merged revision. Do not merge this PR or activate unrelated assistant capabilities implicitly. The existing conversational assistant also uses `MCA_ASSISTANT_ENABLED`, so setting it true is a shared activation change and its own provider prerequisites must be checked as well.
 
 Final regression verification: the three existing assistant suites completed with **50 passed, zero failed, one intentionally skipped live-provider test**. After cleanup, both production ChatKit routes returned 404 `assistant_disabled`, Render reported the flag as `false` with no verification scope, and no synthetic workspace-scoped rows remained. The final release commit is deployed to both services; current deployment IDs and revision are recorded in the PR description.
+
+Blueprint port correction: Render reports `fundlane-chatkit:10000` in its service URL metadata even though its detected open port is 8000. The Blueprint therefore references `property: host`; the gateway adds port 8000 for a bare private hostname and preserves explicit ports/full URLs. The streaming test verifies this resolution. This prevents a future Blueprint sync from replacing the verified service URL with the wrong port.

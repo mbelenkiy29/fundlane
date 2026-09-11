@@ -123,10 +123,11 @@ test("gateway preserves streaming, cleans cancellation, and gates disabled or in
   const enabled = process.env.MCA_ASSISTANT_ENABLED
   const url = process.env.MCA_ASSISTANT_SERVICE_URL
   process.env.MCA_ASSISTANT_ENABLED = "true"
-  process.env.MCA_ASSISTANT_SERVICE_URL = "http://chatkit.test:8000"
+  process.env.MCA_ASSISTANT_SERVICE_URL = "chatkit.test"
   let canceled = false
   try {
     globalThis.fetch = async (_input, init) => {
+      assert.equal(String(_input), "http://chatkit.test:8000/chatkit")
       const token = new Headers(init?.headers).get("authorization")!.slice(7)
       const claims = verifyDelegation(token)
       assert.equal(claims.bodyHash,bodyHash(String(init?.body)))
