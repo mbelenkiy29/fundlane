@@ -183,6 +183,13 @@
       "when": 1789360000028,
       "tag": "0028_merchant_remittance",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789360000029,
+      "tag": "0029_merchants_and_home_kpis",
+      "breakpoints": true
     }
   ]
 }

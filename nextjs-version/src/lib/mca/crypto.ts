@@ -1,6 +1,8 @@
 import "server-only";
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+
+export type LookupHashKind = "ein" | "id4";
 
 export function hashOpaqueToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -37,6 +39,11 @@ function encryptionKey(): Buffer {
   }
   // Stable local-only fallback. Production has a hard gate above.
   return createHash("sha256").update("mca-local-development-encryption-key").digest();
+}
+
+export function hmacLookup(kind: LookupHashKind, workspaceId: string, normalized: string): string {
+  void workspaceId;
+  return createHmac("sha256", encryptionKey()).update(`${kind}:${normalized}`, "utf8").digest("hex");
 }
 
 export function encryptSensitive(value: string, workspaceId: string): string {
