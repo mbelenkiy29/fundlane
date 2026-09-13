@@ -50,9 +50,10 @@ export function DuplicateMerchantDialogHost({ children }: { children: React.Reac
     set(id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) {
       if (props) slots.current.set(id, props)
       else slots.current.delete(id)
+      const snapshot = props?.current
       setSnapshots((previous) => {
         const next = new Map(previous)
-        if (props) next.set(id, props.current)
+        if (snapshot) next.set(id, snapshot)
         else next.delete(id)
         return next
       })
