@@ -1,79 +1,34 @@
 "use client"
 
+import Link from "next/link"
 import { Eye, Star, TrendingUp } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { NO_ACTIVITY_YET, type Dashboard2FunderRow } from "@/lib/mca/dashboard2/map-kpis"
 
-const products = [
-  {
-    id: 1,
-    name: "Premium Dashboard",
-    sales: 2847,
-    revenue: "$142,350",
-    growth: "+23%",
-    rating: 4.8,
-    stock: 145,
-    category: "Software",
-  },
-  {
-    id: 2,
-    name: "Analytics Pro",
-    sales: 1923,
-    revenue: "$96,150",
-    growth: "+18%",
-    rating: 4.6,
-    stock: 67,
-    category: "Tools",
-  },
-  {
-    id: 3,
-    name: "Mobile App Suite",
-    sales: 1456,
-    revenue: "$72,800",
-    growth: "+12%",
-    rating: 4.9,
-    stock: 234,
-    category: "Mobile",
-  },
-  {
-    id: 4,
-    name: "Enterprise License",
-    sales: 892,
-    revenue: "$178,400",
-    growth: "+8%",
-    rating: 4.7,
-    stock: 12,
-    category: "Enterprise",
-  },
-  {
-    id: 5,
-    name: "Basic Subscription",
-    sales: 3421,
-    revenue: "$68,420",
-    growth: "+31%",
-    rating: 4.4,
-    stock: 999,
-    category: "Subscription",
-  },
-]
+export function TopProducts({ funders }: { funders?: Dashboard2FunderRow[] }) {
+  const products = funders ?? []
 
-export function TopProducts() {
   return (
     <Card className="cursor-pointer">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <div>
           <CardTitle>Top Products</CardTitle>
-          <CardDescription>Best performing products this month</CardDescription>
+          <CardDescription>Best performing funders this period</CardDescription>
         </div>
-        <Button variant="outline" size="sm" className="cursor-pointer">
-          <Eye className="h-4 w-4 mr-2" />
-          View All
+        <Button variant="outline" size="sm" className="cursor-pointer" asChild>
+          <Link href="/funders">
+            <Eye className="h-4 w-4 mr-2" />
+            View All
+          </Link>
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        {products.map((product, index) => (
+        {products.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{NO_ACTIVITY_YET}</p>
+        ) : products.map((product, index) => (
           <div key={product.id} className="flex items-center p-3 rounded-lg border gap-2">
               <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
                 #{index + 1}
@@ -92,7 +47,7 @@ export function TopProducts() {
                     <span className="text-xs text-muted-foreground">{product.rating}</span>
                   </div>
                   <span className="text-xs text-muted-foreground">•</span>
-                  <span className="text-xs text-muted-foreground">{product.sales} sales</span>
+                  <span className="text-xs text-muted-foreground">{product.sales} deals</span>
                 </div>
               </div>
               <div className="text-right space-y-1">
@@ -109,7 +64,7 @@ export function TopProducts() {
                 <div className="flex items-center space-x-2">
                   <span className="text-xs text-muted-foreground">Stock: {product.stock}</span>
                   <Progress
-                    value={product.stock > 100 ? 100 : (product.stock / 100) * 100}
+                    value={product.stockPercent}
                     className="w-12 h-1"
                   />
                 </div>

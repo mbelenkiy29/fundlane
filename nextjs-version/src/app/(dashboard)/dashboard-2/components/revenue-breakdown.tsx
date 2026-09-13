@@ -7,13 +7,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartContainer, ChartStyle, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
-
-const revenueData = [
-  { category: "subscriptions", value: 45, amount: 24500, fill: "var(--color-subscriptions)" },
-  { category: "sales", value: 30, amount: 16300, fill: "var(--color-sales)" },
-  { category: "services", value: 15, amount: 8150, fill: "var(--color-services)" },
-  { category: "partnerships", value: 10, amount: 5430, fill: "var(--color-partnerships)" },
-]
+import {
+  EMPTY_DASHBOARD2,
+  NO_ACTIVITY_YET,
+  RESTRICTED_LABEL,
+  revenueBreakdownCsv,
+  type Dashboard2View,
+} from "@/lib/mca/dashboard2/map-kpis"
 
 const chartConfig = {
   revenue: {
@@ -22,34 +22,43 @@ const chartConfig = {
   amount: {
     label: "Amount",
   },
-  subscriptions: {
-    label: "Subscriptions",
+  funded: {
+    label: "Funded",
     color: "var(--chart-1)",
   },
-  sales: {
-    label: "One-time Sales",
+  commission: {
+    label: "Commission",
     color: "var(--chart-2)",
   },
-  services: {
-    label: "Services",
+  fees: {
+    label: "Fees",
     color: "var(--chart-3)",
-  },
-  partnerships: {
-    label: "Partnerships",
-    color: "var(--chart-4)",
   },
 }
 
-export function RevenueBreakdown() {
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+export function RevenueBreakdown({ revenue }: { revenue?: Dashboard2View["revenue"] }) {
   const id = "revenue-breakdown"
-  const [activeCategory, setActiveCategory] = React.useState("sales")
+  const data = revenue ?? EMPTY_DASHBOARD2.revenue
+  const [activeCategory, setActiveCategory] = React.useState(data.slices[0]?.category ?? "funded")
 
   const activeIndex = React.useMemo(() => {
-    const index = revenueData.findIndex((item) => item.category === activeCategory)
+    const index = data.slices.findIndex((item) => item.category === activeCategory)
     return index === -1 ? 0 : index
-  }, [activeCategory])
+  }, [activeCategory, data.slices])
 
-  const categories = React.useMemo(() => revenueData.map((item) => item.category), [])
+  const categories = React.useMemo(() => data.slices.map((item) => item.category), [data.slices])
+  const active = data.slices[activeIndex]
+  const message = data.restricted ? RESTRICTED_LABEL : data.empty ? NO_ACTIVITY_YET : null
 
   return (
     <Card data-chart={id} className="flex flex-col cursor-pointer">
@@ -60,7 +69,7 @@ export function RevenueBreakdown() {
           <CardDescription>Revenue distribution by source</CardDescription>
         </div>
         <div className="flex items-center space-x-2">
-          <Select value={activeCategory} onValueChange={setActiveCategory}>
+          <Select value={activeCategory} onValueChange={(value) => setActiveCategory(value as typeof activeCategory)}>
             <SelectTrigger
               className="w-[175px] rounded-lg cursor-pointer"
               aria-label="Select a category"
@@ -95,7 +104,11 @@ export function RevenueBreakdown() {
               })}
             </SelectContent>
           </Select>
-          <Button variant="outline" className="cursor-pointer">
+          <Button
+            variant="outline"
+            className="cursor-pointer"
+            onClick={() => downloadCsv("revenue-breakdown.csv", revenueBreakdownCsv(data.slices, data.restricted))}
+          >
             Export
           </Button>
         </div>
@@ -103,72 +116,81 @@ export function RevenueBreakdown() {
       <CardContent className="flex flex-1 justify-center">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
           <div className="flex justify-center">
-            <ChartContainer
-              id={id}
-              config={chartConfig}
-              className="mx-auto aspect-square w-full max-w-[300px]"
-            >
-              <PieChart>
-                <ChartTooltip
-                  cursor={false}
-                  content={<ChartTooltipContent hideLabel />}
-                />
-                <Pie
-                  data={revenueData}
-                  dataKey="amount"
-                  nameKey="category"
-                  innerRadius={60}
-                  strokeWidth={5}
-                  activeShape={({
-                    outerRadius = 0,
-                    ...props
-                  }: PieSectorDataItem) => (
-                    <g>
-                      <Sector {...props} outerRadius={outerRadius + 10} />
-                      <Sector
-                        {...props}
-                        outerRadius={outerRadius + 25}
-                        innerRadius={outerRadius + 12}
-                      />
-                    </g>
-                  )}
-                >
-                  <Label
-                    content={({ viewBox }) => {
-                      if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                        return (
-                          <text
-                            x={viewBox.cx}
-                            y={viewBox.cy}
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                          >
-                            <tspan
+            {message ? (
+              <div className="flex aspect-square w-full max-w-[300px] items-center justify-center text-sm text-muted-foreground">
+                {message}
+              </div>
+            ) : (
+              <ChartContainer
+                id={id}
+                config={chartConfig}
+                className="mx-auto aspect-square w-full max-w-[300px]"
+              >
+                <PieChart>
+                  <ChartTooltip
+                    cursor={false}
+                    content={<ChartTooltipContent hideLabel />}
+                  />
+                  <Pie
+                    data={data.slices.map((item) => ({ category: item.category, amount: item.amount, fill: item.fill }))}
+                    dataKey="amount"
+                    nameKey="category"
+                    innerRadius={60}
+                    strokeWidth={5}
+                    activeShape={({
+                      outerRadius = 0,
+                      ...props
+                    }: PieSectorDataItem) => (
+                      <g>
+                        <Sector {...props} outerRadius={outerRadius + 10} />
+                        <Sector
+                          {...props}
+                          outerRadius={outerRadius + 25}
+                          innerRadius={outerRadius + 12}
+                        />
+                      </g>
+                    )}
+                  >
+                    <Label
+                      content={({ viewBox }) => {
+                        if (viewBox && "cx" in viewBox && "cy" in viewBox) {
+                          const center = active?.restricted
+                            ? RESTRICTED_LABEL
+                            : `$${((active?.amount ?? 0) / 1000).toFixed(0)}K`
+                          return (
+                            <text
                               x={viewBox.cx}
                               y={viewBox.cy}
-                              className="fill-foreground text-3xl font-bold"
+                              textAnchor="middle"
+                              dominantBaseline="middle"
                             >
-                              ${(revenueData[activeIndex].amount / 1000).toFixed(0)}K
-                            </tspan>
-                            <tspan
-                              x={viewBox.cx}
-                              y={(viewBox.cy || 0) + 24}
-                              className="fill-muted-foreground"
-                            >
-                              Revenue
-                            </tspan>
-                          </text>
-                        )
-                      }
-                    }}
-                  />
-                </Pie>
-              </PieChart>
-            </ChartContainer>
+                              <tspan
+                                x={viewBox.cx}
+                                y={viewBox.cy}
+                                className="fill-foreground text-3xl font-bold"
+                              >
+                                {center}
+                              </tspan>
+                              <tspan
+                                x={viewBox.cx}
+                                y={(viewBox.cy || 0) + 24}
+                                className="fill-muted-foreground"
+                              >
+                                Revenue
+                              </tspan>
+                            </text>
+                          )
+                        }
+                      }}
+                    />
+                  </Pie>
+                </PieChart>
+              </ChartContainer>
+            )}
           </div>
 
           <div className="flex flex-col justify-center space-y-4">
-            {revenueData.map((item, index) => {
+            {data.slices.map((item, index) => {
               const config = chartConfig[item.category as keyof typeof chartConfig]
               const isActive = index === activeIndex
 
@@ -190,8 +212,10 @@ export function RevenueBreakdown() {
                     <span className="font-medium">{config?.label}</span>
                   </div>
                   <div className="text-right">
-                    <div className="font-bold">${(item.amount / 1000).toFixed(1)}K</div>
-                    <div className="text-sm text-muted-foreground">{item.value}%</div>
+                    <div className="font-bold">
+                      {item.restricted ? RESTRICTED_LABEL : `$${(item.amount / 1000).toFixed(1)}K`}
+                    </div>
+                    <div className="text-sm text-muted-foreground">{item.restricted ? "—" : `${item.value}%`}</div>
                   </div>
                 </div>
               )

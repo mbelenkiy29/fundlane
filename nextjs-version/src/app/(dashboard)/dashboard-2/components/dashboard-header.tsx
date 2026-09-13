@@ -7,10 +7,29 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import type { Dashboard2DateRange } from "@/lib/mca/dashboard2/map-kpis"
 
-export function DashboardHeader() {
-  const [dateRange, setDateRange] = useState("30d")
-  const lastUpdated = new Date().toLocaleString()
+export function DashboardHeader({
+  dateRange,
+  onDateRangeChange,
+  onRefresh,
+  refreshing,
+  lastUpdated,
+}: {
+  dateRange?: Dashboard2DateRange
+  onDateRangeChange?: (range: Dashboard2DateRange) => void
+  onRefresh?: () => void
+  refreshing?: boolean
+  lastUpdated?: string
+} = {}) {
+  const [uncontrolledRange, setUncontrolledRange] = useState<Dashboard2DateRange>("30d")
+  const range = dateRange ?? uncontrolledRange
+  const updated = lastUpdated || "—"
+
+  function handleRange(next: Dashboard2DateRange) {
+    onDateRangeChange?.(next)
+    if (dateRange == null) setUncontrolledRange(next)
+  }
 
   return (
     <Card>
@@ -27,7 +46,7 @@ export function DashboardHeader() {
               <Clock className="h-3 w-3 mr-1" />
               Live Data
             </Badge>
-            <Button variant="outline" size="sm" className="cursor-pointer">
+            <Button variant="outline" size="sm" className="cursor-pointer" onClick={() => onRefresh?.()} disabled={refreshing}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -41,7 +60,7 @@ export function DashboardHeader() {
             <div className="flex items-center space-x-2">
               <Calendar className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground">Date Range:</span>
-              <Select value={dateRange} onValueChange={setDateRange}>
+              <Select value={range} onValueChange={(value) => handleRange(value as Dashboard2DateRange)}>
                 <SelectTrigger className="w-40 cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>
@@ -60,7 +79,7 @@ export function DashboardHeader() {
           </div>
           
           <div className="text-sm text-muted-foreground">
-            Last updated: {lastUpdated}
+            Last updated: {updated}
           </div>
         </div>
       </CardHeader>
