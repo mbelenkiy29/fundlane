@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ENTITY_TYPES,
   type DealOwnerInput,
+  type DealWriteInput,
 } from "@/lib/mca/deals/schema"
 
 export interface DraftForm {
@@ -22,6 +23,31 @@ export const emptyDraft = (): DraftForm => ({
   contactName: "", contactEmail: "", contactPhone: "", startDate: "", industry: "", naicsCode: "", monthlyRevenue: "",
   ficoScore: "", fundingPurpose: "", requestedAmount: "", owners: [], originators: "", closers: "",
 })
+
+export function applyWriteInput(form: DraftForm, fields: DealWriteInput): DraftForm {
+  return {
+    ...form,
+    legalName: fields.legalName ?? form.legalName,
+    dbaName: fields.dbaName ?? form.dbaName,
+    ein: fields.ein ?? form.ein,
+    entityType: fields.entityType ?? form.entityType,
+    line1: fields.address?.line1 ?? form.line1,
+    city: fields.address?.city ?? form.city,
+    state: fields.address?.state ?? form.state,
+    postalCode: fields.address?.postalCode ?? form.postalCode,
+    contactName: fields.contactName ?? form.contactName,
+    contactEmail: fields.contactEmail ?? form.contactEmail,
+    contactPhone: fields.contactPhone ?? form.contactPhone,
+    startDate: fields.startDate ?? form.startDate,
+    industry: fields.industry ?? form.industry,
+    naicsCode: fields.naicsCode ?? form.naicsCode,
+    monthlyRevenue: fields.monthlyRevenue != null ? String(fields.monthlyRevenue) : form.monthlyRevenue,
+    ficoScore: fields.ficoScore != null ? String(fields.ficoScore) : form.ficoScore,
+    fundingPurpose: fields.fundingPurpose ?? form.fundingPurpose,
+    requestedAmount: fields.requestedAmount != null ? String(fields.requestedAmount) : form.requestedAmount,
+    owners: fields.owners ?? form.owners,
+  }
+}
 
 export function formPayload(form: DraftForm) {
   const ids = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean)

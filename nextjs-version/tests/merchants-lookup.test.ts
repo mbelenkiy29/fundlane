@@ -10,6 +10,7 @@ import { einLookupHash, identityLookupHash } from "../src/lib/mca/merchants/look
 import { lookupMerchants } from "../src/lib/mca/merchants/service"
 import { backfillMerchantHashes } from "../src/lib/mca/merchants/backfill"
 import { POST as lookupMerchantsPost } from "../src/app/api/mca/merchants/lookup/route"
+import { GET as getMerchant } from "../src/app/api/mca/merchants/[id]/route"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -396,6 +397,79 @@ function lookupRequest(body: unknown, init: { cookie?: string; bearer?: string; 
     body: JSON.stringify(body),
   })
 }
+
+function merchantRequest(id: string, init: { cookie?: string; bearer?: string } = {}) {
+  return new Request(`http://localhost/api/mca/merchants/${id}`, {
+    headers: {
+      ...(init.cookie ? { cookie: `mca_session=${init.cookie}` } : {}),
+      ...(init.bearer ? { authorization: `Bearer mca_${init.bearer}` } : {}),
+    },
+  })
+}
+
+test("GET /api/mca/merchants/:id returns attach fields for deals:read actors", async () => {
+  const created = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-http"),
+    legalName: "Attach Http LLC",
+    ein: "12-1100330",
+    contactName: "Ada Attach",
+    contactEmail: "ada@example.test",
+    owners: [{ firstName: "Ada", lastName: "Attach", isPrimary: true, identityLast4: "5566" }],
+  })
+  if (!created.deal.merchantId) throw new Error("expected merchant id")
+  const merchantId = created.deal.merchantId
+  const context = { params: Promise.resolve({ id: merchantId }) }
+
+  const unauth = await getMerchant(merchantRequest(merchantId), context)
+  assert.equal(unauth.status, 401)
+
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO api_keys
+    (id,workspace_id,name,prefix,secret_hash,scopes,expires_at,last_used_at,revoked_at,rate_limit_per_minute,created_by,created_at)
+    VALUES ('merchant-read-key', ?, 'read', 'mca_test', ?, ?, NULL, NULL, NULL, 60, 'merchant-admin', ?)`).run(
+    workspaceId, hashOpaqueToken("mca_read-secret"), JSON.stringify(["deals:read"]), now,
+  )
+
+  const sessionRes = await getMerchant(merchantRequest(merchantId, { cookie: "merchant-admin-token" }), context)
+  assert.equal(sessionRes.status, 200)
+  assert.equal(sessionRes.headers.get("cache-control"), "no-store")
+  const sessionBody = await sessionRes.json() as {
+    merchantId: string
+    fields: { legalName?: string; ein?: string; contactName?: string; owners?: Array<{ identityLast4?: string }> }
+    documentSummaries: unknown[]
+  }
+  assert.equal(sessionBody.merchantId, merchantId)
+  assert.equal(sessionBody.fields.legalName, "Attach Http LLC")
+  assert.equal(sessionBody.fields.ein, "12-1100330")
+  assert.equal(sessionBody.fields.contactName, "Ada Attach")
+  assert.equal(sessionBody.fields.owners?.[0]?.identityLast4, "5566")
+  assert.equal(Array.isArray(sessionBody.documentSummaries), true)
+
+  const readRes = await getMerchant(merchantRequest(merchantId, { bearer: "read-secret" }), context)
+  assert.equal(readRes.status, 200)
+  const missing = await getMerchant(merchantRequest("missing-merchant", { cookie: "merchant-admin-token" }), { params: Promise.resolve({ id: "missing-merchant" }) })
+  assert.equal(missing.status, 404)
+})
+
+test("GET /api/mca/merchants/:id hides merchants a rep cannot see", async () => {
+  const created = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-hidden-http"),
+    legalName: "Hidden Attach Http LLC",
+    ein: "12-1100440",
+    assignments: [{ membershipId: "merchant-admin-member", kind: "originator", isPrimary: true }],
+  })
+  if (!created.deal.merchantId) throw new Error("expected merchant id")
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
+    VALUES ('merchant-rep-session', 'merchant-rep', 'merchant-rep-member', ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run(
+    hashOpaqueToken("merchant-rep-token"), now, now,
+  )
+  const hidden = await getMerchant(
+    merchantRequest(created.deal.merchantId, { cookie: "merchant-rep-token" }),
+    { params: Promise.resolve({ id: created.deal.merchantId }) },
+  )
+  assert.equal(hidden.status, 404)
+})
 
 test("POST /api/mca/merchants/lookup returns matches for session and deals:write actors", async () => {
   await createDeal(actor(), { idempotencyKey: nextKey("http-ein"), legalName: "Http Lookup LLC", ein: "12-1100990" })

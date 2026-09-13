@@ -315,6 +315,36 @@ test("application-draft confirm create hits the same EIN duplicate gate", async 
   assert.equal(forced.deal.legalName, "Dup Draft Forced LLC")
 })
 
+test("supporting files can be stored onto a deal after application-draft confirm", async () => {
+  setDocumentScannerForTests(scanner("clean"))
+  const draft = await createApplicationDraft(actor(), {
+    idempotencyKey: "support-after-confirm-draft", filename: "support-app.pdf", mimeType: "application/pdf",
+    bytes: new Uint8Array(Buffer.from("%PDF-1.4\nsupport-app\n%%EOF\n")),
+  })
+  await extractApplicationDraft(actor(), draft.id, { legalName: "Support After Confirm LLC", ein: "88-1112244" })
+  const confirmed = await confirmApplicationDraft(actor(), { draftId: draft.id, confirmationId: "support-after-confirm", mode: "create" })
+  const statement = await storeDocument(actor(), {
+    dealId: confirmed.deal.id, idempotencyKey: "support-stmt", filename: "bank-statement.pdf",
+    mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\nstmt\n%%EOF\n")), category: "statement", source: "user_upload",
+  })
+  const check = await storeDocument(actor(), {
+    dealId: confirmed.deal.id, idempotencyKey: "support-check", filename: "voided-check.pdf",
+    mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\ncheck\n%%EOF\n")), category: "voided_check", source: "user_upload",
+  })
+  const license = await storeDocument(actor(), {
+    dealId: confirmed.deal.id, idempotencyKey: "support-id", filename: "driver-license.pdf",
+    mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\nid\n%%EOF\n")), category: "driver_license", source: "user_upload",
+  })
+  const listed = await listDocuments(actor(), confirmed.deal.id)
+  assert.equal((await getDocument(actor(), confirmed.sourceDocumentId)).category, "application")
+  assert.equal(statement.category, "statement")
+  assert.equal(check.category, "voided_check")
+  assert.equal(license.category, "driver_license")
+  assert.equal(listed.some((item) => item.id === statement.id && item.category === "statement"), true)
+  assert.equal(listed.some((item) => item.id === check.id && item.category === "voided_check"), true)
+  assert.equal(listed.some((item) => item.id === license.id && item.category === "driver_license"), true)
+})
+
 test("MIC-177 suggests readable stable statement names without full account numbers and preserves original name", async () => {
   setDocumentScannerForTests(scanner("clean"))
   const document = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "statement-name", filename: "download (19).pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.7\n%%EOF\n")), category: "statement", source: "test" })

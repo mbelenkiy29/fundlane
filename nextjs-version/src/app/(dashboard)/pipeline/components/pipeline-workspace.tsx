@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { allowedTransitions } from "@/lib/mca/deals/pipeline"
 import { DealForm, emptyDraft, formPayload, type DraftForm } from "@/components/mca/deals/deal-form"
+import { NewDealModal } from "@/components/mca/deals/new-deal-modal"
 import { DocumentPanel } from "@/components/mca/documents/document-panel"
 import { DataMerchPanel } from "@/components/mca/datamerch/data-merch-panel"
 import { AnalysisPanel } from "@/components/mca/underwriting/analysis-panel"
@@ -85,7 +86,7 @@ export function DealsWorkspace() {
   const router = useRouter(); const pathname = usePathname(); const searchParams = useSearchParams()
   const [result, setResult] = useState<DealListResponse | null>(null); const [loading, setLoading] = useState(true); const [failure, setFailure] = useState("")
   const [createOpen, setCreateOpen] = useState(false); const [form, setForm] = useState<DraftForm>(emptyDraft); const [saving, setSaving] = useState(false)
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({}); const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({})
   const [selected, setSelected] = useState<DealDetail | null>(null); const [detailOpen, setDetailOpen] = useState(false); const [editMode, setEditMode] = useState(false)
   useAssistantDeal(selected?.id, selected?.displayId)
   const [conflict, setConflict] = useState<DealConflict | null>(null); const [note, setNote] = useState(""); const [transition, setTransition] = useState<DealStatus | "">("")
@@ -106,7 +107,6 @@ export function DealsWorkspace() {
   const setParam = useCallback((key: string, value?: string) => { const params = new URLSearchParams(searchParams); if (value) params.set(key, value); else params.delete(key); router.replace(`${pathname}?${params}`) }, [pathname, router, searchParams])
   useEffect(() => {
     if (searchParams.get("create") !== "1") return
-    setForm(emptyDraft())
     setCreateOpen(true)
     setParam("create", undefined)
   }, [searchParams, setParam])
@@ -126,16 +126,6 @@ export function DealsWorkspace() {
     const id = searchParams.get("deal")
     if (id && /^[0-9a-f-]{36}$/i.test(id)) void openDeal(id)
   }, [searchParams, openDeal])
-
-  const saveNew = async () => {
-    setSaving(true); setFieldErrors({})
-    try {
-      const deal = await responseJson<DealDetail>(await fetch("/api/mca/deals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...formPayload(form), idempotencyKey }) }))
-      toast.success(`${deal.displayId} saved as ${deal.draftState === "partial" ? "a partial draft" : "submission ready"}.`)
-      setCreateOpen(false); setForm(emptyDraft()); setIdempotencyKey(crypto.randomUUID()); await load(); await openDeal(deal.id)
-    } catch (error) { const typed = error as Error & { body?: { error?: { fieldErrors?: Record<string, string[]> } } }; setFieldErrors(typed.body?.error?.fieldErrors ?? {}); toast.error(typed.message) }
-    finally { setSaving(false) }
-  }
 
   const saveEdit = async (expectedVersion = selected?.version) => {
     if (!selected || expectedVersion === undefined) return
@@ -181,7 +171,7 @@ export function DealsWorkspace() {
   }, [searchParams])
 
   return <div className="space-y-5 px-4 lg:px-6">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground"><Building2 className="size-3.5" />Deal workspace</div><h1 className="text-2xl font-bold tracking-tight">Pipeline</h1><p className="text-sm text-muted-foreground">Work merchant applications from first contact through contract.</p></div><Button onClick={() => { setForm(emptyDraft()); setCreateOpen(true) }}><Plus className="mr-2 size-4" />New deal</Button></div>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground"><Building2 className="size-3.5" />Deal workspace</div><h1 className="text-2xl font-bold tracking-tight">Pipeline</h1><p className="text-sm text-muted-foreground">Work merchant applications from first contact through servicing events.</p></div><Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 size-4" />New deal</Button></div>
     <div className="grid gap-3 sm:grid-cols-3"><Card><CardContent className="pt-5"><p className="text-sm text-muted-foreground">Filtered deals</p><p className="mt-1 text-2xl font-semibold">{result?.total ?? "—"}</p></CardContent></Card><Card><CardContent className="pt-5"><p className="text-sm text-muted-foreground">Submission ready</p><p className="mt-1 text-2xl font-semibold">{result?.deals.filter((deal) => deal.draftState === "submission_ready").length ?? "—"}</p></CardContent></Card><Card><CardContent className="pt-5"><p className="text-sm text-muted-foreground">Needs information</p><p className="mt-1 text-2xl font-semibold">{result?.deals.filter((deal) => deal.draftState === "partial").length ?? "—"}</p></CardContent></Card></div>
     <Card><CardContent className="pt-5"><div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_150px_150px_auto]">
       <div className="relative"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" placeholder="Search name or deal ID" defaultValue={searchParams.get("q") ?? ""} onKeyDown={(event) => { if (event.key === "Enter") setParam("q", event.currentTarget.value) }} /></div>
@@ -193,7 +183,7 @@ export function DealsWorkspace() {
     <ExportPanel filters={exportFilters} />
     {loading ? <div className="space-y-3">{[0,1,2].map((item) => <Skeleton key={item} className="h-20 w-full" />)}</div> : failure ? <Card className="border-destructive/40"><CardContent className="flex flex-col items-center gap-3 py-10 text-center"><AlertCircle className="size-8 text-destructive" /><div><p className="font-medium">Deals could not be loaded</p><p className="text-sm text-muted-foreground">{failure}</p></div><Button variant="outline" onClick={() => void load()}><RefreshCw className="mr-2 size-4" />Retry</Button></CardContent></Card> : !result?.deals.length ? <Card><CardContent className="flex flex-col items-center gap-3 py-14 text-center"><div className="rounded-full bg-muted p-4"><Building2 className="size-7" /></div><div><p className="font-medium">No deals match this view</p><p className="text-sm text-muted-foreground">Clear filters or save a partial merchant application.</p></div><Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 size-4" />New deal</Button></CardContent></Card> : view === "table" ? <Card className="overflow-hidden"><Table><TableHeader><TableRow><TableHead>Merchant</TableHead><TableHead>Status</TableHead><TableHead>Requested</TableHead><TableHead>Assignees</TableHead><TableHead>Readiness</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{result.deals.map((deal) => <TableRow key={deal.id} className="cursor-pointer" onClick={() => void openDeal(deal.id)}><TableCell><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}{deal.dbaName ? ` · ${deal.dbaName}` : ""}</p></TableCell><TableCell>{statusBadge(deal.status)}</TableCell><TableCell>{deal.requestedAmount ? money.format(deal.requestedAmount) : "—"}</TableCell><TableCell>{deal.assignments.length || "—"}</TableCell><TableCell>{deal.draftState === "partial" ? <span className="inline-flex items-center gap-1 text-amber-600"><FileWarning className="size-3.5" />{deal.missingRequiredFields.length} missing</span> : <span className="text-emerald-600">Ready</span>}</TableCell><TableCell className="text-muted-foreground">{new Date(deal.updatedAt).toLocaleDateString()}</TableCell></TableRow>)}</TableBody></Table></Card> : <div className="overflow-x-auto pb-3"><div className="flex min-w-max gap-3">{stages.map((status) => <div className="w-72 rounded-xl bg-muted/45 p-3" key={status}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-medium">{DEAL_STATUS_LABELS[status]}</p><Badge variant="secondary">{result.counts[status] ?? 0}</Badge></div><div className="space-y-2">{result.deals.filter((deal) => deal.status === status).map((deal) => <Card className="cursor-pointer transition-shadow hover:shadow-sm" key={deal.id} onClick={() => void openDeal(deal.id)}><CardContent className="p-3"><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}</p><div className="mt-3 flex items-center justify-between text-xs"><span>{deal.requestedAmount ? money.format(deal.requestedAmount) : "No request"}</span>{deal.draftState === "partial" && <span className="text-amber-600">{deal.missingRequiredFields.length} missing</span>}</div></CardContent></Card>)}</div></div>)}</div></div>}
 
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"><DialogHeader><DialogTitle>Create merchant deal</DialogTitle><DialogDescription>A stable draft ID is retained if the request needs to be retried.</DialogDescription></DialogHeader><DealForm form={form} setForm={setForm} fieldErrors={fieldErrors} /><DialogFooter><Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button><Button onClick={() => void saveNew()} disabled={saving}>{saving && <Loader2 className="mr-2 size-4 animate-spin" />}Save draft</Button></DialogFooter></DialogContent></Dialog>
+    <NewDealModal open={createOpen} onOpenChange={setCreateOpen} onCreated={(deal) => { toast.success(`${deal.displayId} saved as ${deal.draftState === "partial" ? "a partial draft" : "submission ready"}.`); void load().then(() => openDeal(deal.id)) }} />
 
     <Dialog open={detailOpen} onOpenChange={setDetailOpen}><DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">{!selected ? <><DialogHeader className="sr-only"><DialogTitle>Loading deal</DialogTitle><DialogDescription>Loading the selected merchant deal.</DialogDescription></DialogHeader><div className="space-y-3 py-8"><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div></> : <><DialogHeader><div className="flex flex-wrap items-center gap-2"><DialogTitle>{selected.legalName || "Untitled draft"}</DialogTitle>{statusBadge(selected.status)}<Badge variant="secondary">v{selected.version}</Badge><AssistantButton onOpen={() => setDetailOpen(false)} /></div><DialogDescription>{selected.displayId} · Updated {new Date(selected.updatedAt).toLocaleString()}</DialogDescription></DialogHeader>
       {selected.missingRequiredFields.length > 0 && <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3"><div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-300"><FileWarning className="size-4" />Partial draft · {selected.missingRequiredFields.length} submission fields missing</div><p className="mt-1 text-xs text-muted-foreground">{selected.missingRequiredFields.join(", ")}</p></div>}
