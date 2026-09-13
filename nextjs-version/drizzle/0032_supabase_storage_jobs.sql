@@ -1,4 +1,4 @@
-CREATE TABLE mca_background_jobs (
+CREATE TABLE IF NOT EXISTS mca_background_jobs (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id),
   kind text NOT NULL,
@@ -19,9 +19,9 @@ CREATE TABLE mca_background_jobs (
   UNIQUE (workspace_id,kind,idempotency_key)
 );
 --> statement-breakpoint
-CREATE INDEX mca_background_jobs_claim_idx ON mca_background_jobs(state,available_at,created_at);
+CREATE INDEX IF NOT EXISTS mca_background_jobs_claim_idx ON mca_background_jobs(state,available_at,created_at);
 --> statement-breakpoint
-CREATE TABLE mca_document_uploads (
+CREATE TABLE IF NOT EXISTS mca_document_uploads (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id),
   owner_key text NOT NULL,

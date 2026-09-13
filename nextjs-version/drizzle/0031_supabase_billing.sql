@@ -1,6 +1,6 @@
 -- Clerk billing rows and webhook history remain untouched for migration traceability.
 -- Stripe Sync Engine owns the stripe schema; these tables own application permissions.
-CREATE TABLE workspace_stripe_customers (
+CREATE TABLE IF NOT EXISTS workspace_stripe_customers (
   workspace_id text PRIMARY KEY REFERENCES workspaces(id),
   stripe_customer_id text NOT NULL UNIQUE,
   checkout_session_id text,
@@ -8,7 +8,7 @@ CREATE TABLE workspace_stripe_customers (
   created_at text NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE workspace_billing_entitlements (
+CREATE TABLE IF NOT EXISTS workspace_billing_entitlements (
   workspace_id text PRIMARY KEY REFERENCES workspaces(id),
   stripe_subscription_id text UNIQUE,
   stripe_price_id text,
@@ -23,7 +23,7 @@ CREATE TABLE workspace_billing_entitlements (
   synced_at text NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE stripe_billing_events (
+CREATE TABLE IF NOT EXISTS stripe_billing_events (
   event_id text PRIMARY KEY,
   event_type text NOT NULL,
   stripe_customer_id text,
