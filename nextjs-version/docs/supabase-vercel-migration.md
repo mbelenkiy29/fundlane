@@ -6,7 +6,7 @@ GitHub `mbelenkiy29/fundlane`, branch `main`, deploys automatically to the exist
 
 Supabase project `drubsfvhlggmtyiigwxy` (`fundlane`, previously named staging) owns database records, Auth identities, and private Storage. Existing data and users are preserved. Do not reconnect to Neon or import historical Clerk identities as part of deployment repair. The retired Clerk webhook responds with HTTP 410.
 
-Production origin: `https://fundlane-michael-belenkiys-projects.vercel.app`. Configure this as `MCA_APP_ORIGIN` and the Supabase Auth Site URL. Allow `/auth/callback`, `/auth/callback?next=/onboarding`, and `/auth/callback?next=/reset-password`; retain existing staging callbacks.
+Production origin: `https://fundlane.vercel.app`. The team and branch aliases remain protected by Vercel; do not use them as the public Auth Site URL. Configure this as `MCA_APP_ORIGIN` and the Supabase Auth Site URL. Allow `/auth/callback`, `/auth/callback?next=/onboarding`, and `/auth/callback?next=/reset-password`; retain existing staging callbacks.
 
 ## Environment
 
