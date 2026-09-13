@@ -36,6 +36,8 @@ yarn-error.log*
 .env*
 !.env.example
 .neon/
+.migration/
+supabase/.temp/
 
 # vercel
 .vercel

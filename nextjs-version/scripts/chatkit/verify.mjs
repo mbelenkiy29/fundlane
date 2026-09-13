@@ -1,6 +1,6 @@
 /** Isolated end-to-end verification. OPENAI_API_KEY stays in process memory. */
 import { createPostgresTestDatabase } from "../../tests/helpers/postgres-test-db.mjs"
-import { createClerkHttpFixture } from "../../tests/helpers/clerk-http.mjs"
+import { createSupabaseHttpFixture } from "../../tests/helpers/supabase-http.mjs"
 import { spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { readFileSync, writeFileSync, rmSync } from "node:fs"
@@ -29,12 +29,12 @@ async function stop(child) {
 }
 try {
   database = await createPostgresTestDatabase("chatkit_e2e")
-  fixture = await createClerkHttpFixture(database)
+  fixture = await createSupabaseHttpFixture(database)
   const owner = await fixture.login("chatkit-owner@example.test","Synthetic password 99!")
   const headers = await fixture.headers(owner.cookie)
   const env = database.env({ ...fixture.env, MCA_ASSISTANT_ENABLED:"true", MCA_ASSISTANT_DOMAIN_KEY:"domain_pk_localhost_dev",
     MCA_ASSISTANT_SIGNING_SECRET:signing, MCA_ASSISTANT_SERVICE_URL:"http://127.0.0.1:8387", MCA_APP_ORIGIN:base,
-    NEXT_DIST_DIR:".next-test-chatkit", MCA_ASSISTANT_MODEL:model, MCA_CLERK_BILLING_ENABLED:"false" })
+    NEXT_DIST_DIR:".next-test-chatkit", MCA_ASSISTANT_MODEL:model, MCA_STRIPE_BILLING_ENABLED:"false" })
   web = spawn(process.execPath,["node_modules/next/dist/bin/next","dev","--hostname","localhost","--port","4387"],{env,stdio:["ignore","ignore","ignore"]})
   python = spawn(process.env.CHATKIT_PYTHON || "python3",["-m","uvicorn","app:app","--host","127.0.0.1","--port","8387","--no-access-log",...(hold ? ["--reload"] : [])],{
     cwd:"../chatkit-service",env:{...process.env,OPENAI_API_KEY:key,MCA_ASSISTANT_MODEL:model,MCA_ASSISTANT_SIGNING_SECRET:signing,MCA_ASSISTANT_CALLBACK_URL:`${base}/api/mca/chatkit/internal`},stdio:["ignore","ignore","ignore"],

@@ -1,5 +1,5 @@
 import "server-only"
-import { billingEnabled, syncWorkspaceBilling } from "../billing"
+import { billingEnabled, syncWorkspaceBilling, type StripeBillingClient } from "../billing"
 import {
   getDatabase,
   newId,
@@ -48,10 +48,12 @@ export function nextReset(date = new Date()) {
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)
   ).toISOString()
 }
-export async function resolveCreditAllowance(workspaceId: string) {
+export async function resolveCreditAllowance(workspaceId: string, client?: StripeBillingClient) {
   if (!billingEnabled()) return 10
-  const plan = await syncWorkspaceBilling(workspaceId)
-  const allowance = CREDIT_ALLOWANCES[plan.planSlug]
+  const plan = await syncWorkspaceBilling(workspaceId, client)
+  // Payment trouble never removes records or purchased credits, but cannot issue
+  // additional paid-tier monthly allowances before current payment is verified.
+  const allowance = CREDIT_ALLOWANCES[plan.paymentPastDue ? "free_org" : plan.planSlug]
   if (!allowance)
     throw new AppError(
       503,

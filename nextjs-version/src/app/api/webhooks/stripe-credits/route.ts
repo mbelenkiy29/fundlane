@@ -4,6 +4,7 @@ import {
   processCreditPaymentEvent,
 } from "@/lib/mca/assistant/purchases"
 import { maintainCreditAlerts } from "@/lib/mca/assistant/alerts"
+import { webhookVerificationTime } from "@/lib/mca/maintenance/replay-clock"
 export const runtime = "nodejs"
 export async function POST(request: Request) {
   if (!process.env.STRIPE_WEBHOOK_SECRET || !process.env.STRIPE_SECRET_KEY)
@@ -20,7 +21,10 @@ export async function POST(request: Request) {
     event = stripe.webhooks.constructEvent(
       await request.text(),
       signature,
-      process.env.STRIPE_WEBHOOK_SECRET
+      process.env.STRIPE_WEBHOOK_SECRET,
+      undefined,
+      undefined,
+      webhookVerificationTime()
     )
   } catch {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 })

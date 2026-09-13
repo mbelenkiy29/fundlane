@@ -1,4 +1,4 @@
-import { createClerkHttpFixture } from "./helpers/clerk-http.mjs"
+import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
@@ -16,7 +16,7 @@ const baseUrl = `http://localhost:${port}`
 const dist = ".next-test-imports"
 let server
 let output = ""
-let clerkFixture
+let supabaseFixture
 let testDatabase
 
 async function waitForServer() {
@@ -30,11 +30,11 @@ async function waitForServer() {
 
 before(async () => {
   testDatabase = await createPostgresTestDatabase("imports_http")
-  clerkFixture = await createClerkHttpFixture(testDatabase)
+  supabaseFixture = await createSupabaseHttpFixture(testDatabase)
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
     cwd: root,
     env: testDatabase.env({
-      ...clerkFixture.env,
+      ...supabaseFixture.env,
       NODE_ENV: "development",
       NEXT_DIST_DIR: dist,
       MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"),
@@ -60,7 +60,7 @@ after(async () => {
     server.kill("SIGTERM")
     await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 2_000))])
   }
-  if (clerkFixture) await clerkFixture.close()
+  if (supabaseFixture) await supabaseFixture.close()
   if (testDatabase) await testDatabase.close()
   rmSync(temp, { recursive: true, force: true })
   rmSync(join(root, dist), { recursive: true, force: true })
@@ -70,7 +70,7 @@ async function json(path, { method = "GET", cookie, bearer, body, origin = baseU
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
-      ...(await clerkFixture.headers(cookie)),
+      ...(await supabaseFixture.headers(cookie)),
       ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       ...(body !== undefined ? { "content-type": "application/json", origin } : {}),
     },
@@ -84,7 +84,7 @@ async function multipart(path, cookie, fields, files = []) {
   const form = new FormData()
   for (const [name, value] of Object.entries(fields)) form.set(name, String(value))
   for (const file of files) form.append(file.field, new File([file.bytes], file.name, { type: file.type }))
-  const response = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { ...(await clerkFixture.headers(cookie)), origin: baseUrl }, body: form })
+  const response = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { ...(await supabaseFixture.headers(cookie)), origin: baseUrl }, body: form })
   return { response, payload: await response.json() }
 }
 
@@ -116,7 +116,7 @@ test("import routes enforce sessions and support reviewed create/update replay w
   const unauthenticated = await json("/api/mca/imports/registry")
   assert.equal(unauthenticated.response.status, 401)
 
-  const login = await clerkFixture.login("imports-http@example.test", "Correct Imports Password 99!")
+  const login = await supabaseFixture.login("imports-http@example.test", "Correct Imports Password 99!")
   assert.equal(login.response.status, 200, JSON.stringify(login.payload))
   const cookie = login.cookie
 

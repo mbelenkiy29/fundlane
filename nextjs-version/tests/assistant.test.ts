@@ -84,7 +84,7 @@ before(async () => {
   fixture = await createPostgresTestDatabase("assistant")
   Object.assign(process.env, fixture.env())
   process.env.MCA_ASSISTANT_ENABLED = "true"
-  process.env.MCA_CLERK_BILLING_ENABLED = "false"
+  process.env.MCA_STRIPE_BILLING_ENABLED = "false"
   process.env.MCA_SMS_PROVIDER = "twilio"
   process.env.MCA_SMS_PUBLIC_BASE_URL = "https://sms.example.test"
   process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON = JSON.stringify({

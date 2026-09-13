@@ -131,7 +131,7 @@ const fields = (patch: Record<string, unknown>) =>
 before(async () => {
   fixture = await createPostgresTestDatabase("assistant_credits")
   Object.assign(process.env, fixture.env())
-  process.env.MCA_CLERK_BILLING_ENABLED = "false"
+  process.env.MCA_STRIPE_BILLING_ENABLED = "false"
   process.env.MCA_ASSISTANT_ENABLED = "true"
   process.env.MCA_APP_ORIGIN = "http://localhost"
   for (const id of ["credits-workspace", "other-credits-workspace"]) {
@@ -241,7 +241,10 @@ test("definitive first-call rejection refunds once; expired reservations release
 })
 test("unverified paid billing cannot grant allowances", async () => {
   const u = await user()
-  process.env.MCA_CLERK_BILLING_ENABLED = "true"
+  process.env.MCA_STRIPE_BILLING_ENABLED = "true"
+  const previousKey = process.env.STRIPE_SECRET_KEY
+  delete process.env.STRIPE_SECRET_KEY
+  await sql("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)",u.workspace_id,"cus_unverified_paid",nowIso())
   try {
     await assert.rejects(resolveCreditAllowance(u.workspace_id))
     const n = await getDatabase()
@@ -249,7 +252,9 @@ test("unverified paid billing cannot grant allowances", async () => {
       .get(u.user_id)
     assert.equal(n, undefined)
   } finally {
-    process.env.MCA_CLERK_BILLING_ENABLED = "false"
+    process.env.MCA_STRIPE_BILLING_ENABLED = "false"
+    if (previousKey === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = previousKey
+    await sql("DELETE FROM workspace_stripe_customers WHERE stripe_customer_id=?","cus_unverified_paid")
   }
 })
 test("workspace chat creates and edits one deal, rejects forbidden fields and cross-deal changes", async () => {

@@ -52,7 +52,7 @@ export async function createSupabaseHttpFixture(database){
     }catch(error){console.error("Supabase protocol fixture:",error.message);res.writeHead(500).end()}
   })
   await new Promise(resolve=>api.listen(0,"127.0.0.1",resolve));origin=`http://127.0.0.1:${api.address().port}`
-  const env={MCA_CLERK_BILLING_ENABLED:"false",MCA_STRIPE_BILLING_ENABLED:"false",NEXT_PUBLIC_SUPABASE_URL:origin,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:"sb_publishable_fixture",SUPABASE_SECRET_KEY:"sb_secret_fixture",MCA_EMAIL_WEBHOOK_URL:`${origin}/email`}
+  const env={MCA_STRIPE_BILLING_ENABLED:"false",NEXT_PUBLIC_SUPABASE_URL:origin,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:"sb_publishable_fixture",SUPABASE_SECRET_KEY:"sb_secret_fixture",MCA_EMAIL_WEBHOOK_URL:`${origin}/email`}
   async function login(email,password){
     let result=await database.query(`SELECT m.id membership_id,m.workspace_id,m.role,u.id user_id FROM users u JOIN memberships m ON m.user_id=u.id WHERE lower(u.email)=lower($1) AND m.status='active' LIMIT 1`,[email])
     if(!result.rows[0]){await createWorkspaceWithAdmin({workspaceName:"HTTP fixture company",adminName:"Owner",adminEmail:email,password});result=await database.query(`SELECT m.id membership_id,m.workspace_id,m.role,u.id user_id FROM users u JOIN memberships m ON m.user_id=u.id WHERE lower(u.email)=lower($1) LIMIT 1`,[email])}
