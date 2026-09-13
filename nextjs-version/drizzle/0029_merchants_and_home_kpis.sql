@@ -1,4 +1,4 @@
-CREATE TABLE mca_merchants (
+CREATE TABLE IF NOT EXISTS mca_merchants (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id),
   legal_name text,
@@ -13,13 +13,13 @@ CREATE TABLE mca_merchants (
   updated_at text NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX mca_merchants_workspace_ein_lookup_hash_idx
+CREATE INDEX IF NOT EXISTS mca_merchants_workspace_ein_lookup_hash_idx
   ON mca_merchants (workspace_id, ein_lookup_hash)
   WHERE ein_lookup_hash IS NOT NULL;
 --> statement-breakpoint
-CREATE INDEX mca_merchants_workspace_id_idx ON mca_merchants (workspace_id);
+CREATE INDEX IF NOT EXISTS mca_merchants_workspace_id_idx ON mca_merchants (workspace_id);
 --> statement-breakpoint
-CREATE TABLE mca_merchant_owners (
+CREATE TABLE IF NOT EXISTS mca_merchant_owners (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id),
   merchant_id text NOT NULL REFERENCES mca_merchants(id) ON DELETE CASCADE,
@@ -34,27 +34,27 @@ CREATE TABLE mca_merchant_owners (
   phone_cipher text
 );
 --> statement-breakpoint
-CREATE INDEX mca_merchant_owners_workspace_id_idx ON mca_merchant_owners (workspace_id);
+CREATE INDEX IF NOT EXISTS mca_merchant_owners_workspace_id_idx ON mca_merchant_owners (workspace_id);
 --> statement-breakpoint
-CREATE INDEX mca_merchant_owners_merchant_id_idx ON mca_merchant_owners (merchant_id);
+CREATE INDEX IF NOT EXISTS mca_merchant_owners_merchant_id_idx ON mca_merchant_owners (merchant_id);
 --> statement-breakpoint
-CREATE INDEX mca_merchant_owners_workspace_identity_last4_lookup_hash_idx
+CREATE INDEX IF NOT EXISTS mca_merchant_owners_workspace_identity_last4_lookup_hash_idx
   ON mca_merchant_owners (workspace_id, identity_last4_lookup_hash)
   WHERE identity_last4_lookup_hash IS NOT NULL;
 --> statement-breakpoint
-ALTER TABLE deals ADD COLUMN merchant_id text REFERENCES mca_merchants(id) ON DELETE SET NULL;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS merchant_id text REFERENCES mca_merchants(id) ON DELETE SET NULL;
 --> statement-breakpoint
-ALTER TABLE deals ADD COLUMN ein_lookup_hash text;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS ein_lookup_hash text;
 --> statement-breakpoint
-CREATE INDEX deals_merchant_id_idx ON deals (merchant_id);
+CREATE INDEX IF NOT EXISTS deals_merchant_id_idx ON deals (merchant_id);
 --> statement-breakpoint
-CREATE INDEX deals_workspace_ein_lookup_hash_idx
+CREATE INDEX IF NOT EXISTS deals_workspace_ein_lookup_hash_idx
   ON deals (workspace_id, ein_lookup_hash)
   WHERE ein_lookup_hash IS NOT NULL;
 --> statement-breakpoint
-ALTER TABLE deal_owners ADD COLUMN identity_last4_lookup_hash text;
+ALTER TABLE deal_owners ADD COLUMN IF NOT EXISTS identity_last4_lookup_hash text;
 --> statement-breakpoint
-CREATE INDEX deal_owners_workspace_identity_last4_lookup_hash_idx
+CREATE INDEX IF NOT EXISTS deal_owners_workspace_identity_last4_lookup_hash_idx
   ON deal_owners (workspace_id, identity_last4_lookup_hash)
   WHERE identity_last4_lookup_hash IS NOT NULL;
 --> statement-breakpoint
