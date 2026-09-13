@@ -144,6 +144,11 @@ export async function listDealIdsByEinHash(workspaceId: string, hash: string, ex
   return rows.map((row) => row.id)
 }
 
+export async function workspaceEinExists(workspaceId: string, hash: string, executor?: DbExecutor): Promise<boolean> {
+  if ((await listMerchantIdsByEinHash(workspaceId, hash, executor)).length) return true
+  return (await listDealIdsByEinHash(workspaceId, hash, executor)).length > 0
+}
+
 export async function listDealIdsByLast4Hashes(workspaceId: string, hashes: string[], executor?: DbExecutor): Promise<string[]> {
   if (!hashes.length) return []
   const rows = await db(executor).prepare<{ deal_id: string }>(

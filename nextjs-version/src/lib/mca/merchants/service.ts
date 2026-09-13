@@ -15,6 +15,7 @@ import {
   listMerchantsByIds,
   loadDealIdentity,
   upsertMerchantFromDeal,
+  workspaceEinExists,
   type MerchantDealIdentity,
   type MerchantRow,
 } from "./repository"
@@ -162,9 +163,12 @@ export async function merchantCreateWarnings(
   input: { ein?: string; owners?: Array<{ identityLast4?: string }>; attachMerchantId?: string; forceDuplicate?: boolean },
 ): Promise<string[]> {
   if (input.attachMerchantId || input.forceDuplicate) return []
-  const lookup = await lookupMerchants(actor, { ein: input.ein, owners: input.owners })
-  const einMatches = lookup.matches.filter((match) => match.match === "ein")
-  if (einMatches.length) throw new MerchantExistsError(einMatches)
+  const einHash = einLookupHash(actor.workspaceId, input.ein)
+  if (einHash && await workspaceEinExists(actor.workspaceId, einHash)) {
+    const visible = await lookupMerchants(actor, { ein: input.ein })
+    throw new MerchantExistsError(visible.matches.filter((match) => match.match === "ein"))
+  }
+  const lookup = await lookupMerchants(actor, { owners: input.owners })
   return lookup.matches
     .filter((match) => match.match === "identity_last4")
     .map((match) => `This business already exists: ${match.legalName}`)

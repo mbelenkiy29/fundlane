@@ -231,6 +231,44 @@ test("a rep does not receive merchants whose deals they cannot see", async () =>
   assert.equal((await lookupMerchants(rep, { owners: [{ identityLast4: "1122" }] })).matches[0]?.legalName, "Visible Merchant LLC")
 })
 
+test("a rep is 409'd on a hidden merchant EIN even when lookup returns no matches", async () => {
+  const admin = actor({ activeMembershipIds: ["merchant-admin-member", "merchant-rep-member"] })
+  const rep = actor({
+    userId: "merchant-rep",
+    membershipId: "merchant-rep-member",
+    role: "rep",
+    activeMembershipIds: ["merchant-rep-member"],
+  })
+  await createDeal(admin, {
+    idempotencyKey: nextKey("gate-hidden"),
+    legalName: "Gate Hidden LLC",
+    ein: "12-1101001",
+    assignments: [{ membershipId: "merchant-admin-member", kind: "originator", isPrimary: true }],
+  })
+  assert.equal((await lookupMerchants(rep, { ein: "12-1101001" })).matches.length, 0)
+  const beforeDeals = await dealCountForEin("12-1101001")
+  const beforeMerchants = await merchantCountForEin("12-1101001")
+  await assert.rejects(
+    () => createDeal(rep, {
+      idempotencyKey: nextKey("gate-hidden-rep"),
+      legalName: "Rep Should Not Exist LLC",
+      ein: "12-1101001",
+    }),
+    (error: unknown) => {
+      assert.equal(isMerchantExists(error), true)
+      if (!isMerchantExists(error)) return false
+      assert.equal(error.matches.every((match) => match.match === "ein"), true)
+      assert.equal(error.matches.some((match) => match.legalName === "Gate Hidden LLC"), false)
+      return true
+    },
+  )
+  assert.equal(await dealCountForEin("12-1101001"), beforeDeals)
+  assert.equal(await merchantCountForEin("12-1101001"), beforeMerchants)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM deals WHERE workspace_id = ? AND legal_name = ?",
+  ).get(workspaceId, "Rep Should Not Exist LLC"))?.count, 0)
+})
+
 function isMerchantExists(error: unknown): error is { code: string; status: number; matches: Array<{ legalName: string; match: string }> } {
   return Boolean(
     error

@@ -3,8 +3,9 @@ import "server-only"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, parseJson, withImmediateTransaction } from "../db"
 import type { DbExecutor } from "../db"
+import { AppError } from "../errors"
 import { einLookupHash, identityLookupHash } from "../merchants/lookup-hash"
-import { upsertMerchantFromDeal } from "../merchants/repository"
+import { upsertMerchantFromDeal, workspaceEinExists } from "../merchants/repository"
 import type {
   DealActivity,
   DealAssignment,
@@ -206,6 +207,13 @@ export async function insertDeal(
   options?: { forceNewMerchant?: boolean },
 ): Promise<{ record: DealRecord; inserted: boolean }> {
   return withImmediateTransaction(async (database) => {
+    const einHash = !options?.forceNewMerchant && !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
+    if (einHash && await workspaceEinExists(record.workspaceId, einHash, database)) {
+      const replay = record.idempotencyKey
+        ? await database.prepare<{ id: string }>("SELECT id FROM deals WHERE workspace_id = ? AND idempotency_key = ?").get(record.workspaceId, record.idempotencyKey)
+        : undefined
+      if (!replay) throw new AppError(409, "merchant_exists", "This business already exists.", undefined, { matches: [] })
+    }
     const result = await database.prepare(`INSERT INTO deals
       (id, workspace_id, display_id, legal_name, dba_name, ein_cipher, ein_lookup_hash, entity_type, address_json, contact_name,
        contact_email_cipher, contact_phone_cipher, start_date, industry, naics_code, monthly_revenue, fico_score,
