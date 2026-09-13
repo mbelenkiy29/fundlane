@@ -61,8 +61,8 @@ test("installments persist once and missed alerts are idempotent", async () => {
 })
 
 test("book list sorts by funded date and records receipts as completed payments", async () => {
-  await recordReceipt(actor, ids.advance, { amountCents: 100_000, receivedAt: "2026-01-02", origin: "manual", idempotencyKey: "receipt-1" })
-  const book = await listDealBook(actor, { asOf: "2026-01-05T12:00:00.000Z", missedWindow: "week", completedWindow: "week" })
+  await recordReceipt(actor, ids.advance, { amountCents: 100_000, receivedAt: "2026-01-06", origin: "manual", idempotencyKey: "receipt-1" })
+  const book = await listDealBook(actor, { asOf: "2026-01-07T12:00:00.000Z", missedWindow: "week", completedWindow: "week" })
   assert.equal(book.total, 1)
   assert.equal(book.rows[0].legalName, "Harbor Bakery")
   assert.equal(book.rows[0].advanceNumber, 1)

@@ -13,11 +13,9 @@ import type { MembershipContext } from "../src/lib/mca/types"
 let db: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let remoteActive = true
 const remoteUsers = new Map<string, string>()
-const fakeClient = {
-  sessions: { getSession: async (id: string) => ({ status: remoteActive ? "active" : "revoked", userId: remoteUsers.get(id), expireAt: Date.now() + 10000 }) },
-  users: { getUser: async () => ({ banned: false, locked: false, passwordEnabled: true, primaryEmailAddressId: "email", emailAddresses: [{ id: "email", verification: { status: "verified" } }] }) },
-  organizations: { getOrganizationMembershipList: async () => ({ data: [{}] }) },
-} as unknown as NonNullable<Parameters<typeof delegatedContext>[1]>
+const fakeClient: NonNullable<Parameters<typeof delegatedContext>[1]> = async (sessionId, userId) => {
+  assert.ok(remoteActive && remoteUsers.get(sessionId) === userId, "Supabase session must remain active and belong to the user")
+}
 import { assistantContext, delegatedContext } from "../src/lib/mca/assistant/chatkit-context"
 let first: MembershipContext, second: MembershipContext
 before(async () => {
@@ -27,9 +25,8 @@ before(async () => {
   for (const label of ["first", "second"]) {
     const fixture = await createWorkspaceWithAdmin({ workspaceName: label, adminName: "Test", adminEmail: `${randomUUID()}@example.test`, password: "Synthetic fixture password 99!", role: "admin" })
     const context: MembershipContext = { authType: "session", ...fixture, role: "admin", sessionId: randomUUID(), scopes: [] }
-    await getDatabase().prepare("UPDATE users SET clerk_user_id=? WHERE id=?").run(`clerk_${fixture.userId}`, fixture.userId)
-    await getDatabase().prepare("UPDATE workspaces SET clerk_organization_id=? WHERE id=?").run(`org_${fixture.workspaceId}`, fixture.workspaceId)
-    remoteUsers.set(context.sessionId!, `clerk_${fixture.userId}`)
+    await getDatabase().prepare("UPDATE users SET supabase_user_id=? WHERE id=?").run(fixture.userId, fixture.userId)
+    remoteUsers.set(context.sessionId!, fixture.userId)
     if (label === "first") first = context; else second = context
   }
 })
@@ -100,7 +97,7 @@ test("existing underwriting is read without creating score snapshots", async () 
   const result = await runTool(c,toolRequest.parse({ name:"get_underwriting",threadId:id,args:{dealId:own.id} })) as {status:string}
   assert.equal(result.status,"not_analyzed")
 })
-test("delegated callbacks recheck active request, Clerk session and current membership role", async () => {
+test("delegated callbacks recheck active request, Supabase session and current membership role", async () => {
   const now = Math.floor(Date.now()/1000)
   const claims = { aud:"mca-chatkit" as const,requestId:randomUUID(),userId:first.userId,workspaceId:first.workspaceId,membershipId:first.membershipId,sessionId:first.sessionId!,iat:now,exp:now+120,bodyHash:bodyHash("test") }
   await assert.rejects(delegatedContext(claims, fakeClient))

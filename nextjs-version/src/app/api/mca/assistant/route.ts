@@ -37,7 +37,7 @@ import {
 } from "@/lib/mca/assistant/repository"
 
 export const runtime = "nodejs"
-export const maxDuration = 330
+export const maxDuration = 300
 const headers = { "cache-control": "no-store" }
 
 export async function GET(request: Request) {
@@ -137,7 +137,7 @@ export async function POST(request: Request) {
     const onAbort = () => abort.abort()
     request.signal.addEventListener("abort", onAbort, { once: true })
     if (request.signal.aborted) abort.abort()
-    const deadline = setTimeout(() => abort.abort(), remaining)
+    const deadline = setTimeout(() => abort.abort(), Math.min(remaining, 270_000))
     const watch = setInterval(() => {
       void getRun(run.id)
         .then((r) => {
@@ -177,13 +177,16 @@ export async function POST(request: Request) {
                 : undefined
           )
         } finally {
-          if (meta) await endExecution(run.id)
           clearTimeout(deadline)
           clearInterval(watch)
           request.signal.removeEventListener("abort", onAbort)
-          if (!closed) {
-            closed = true
-            controller.close()
+          try {
+            if (meta) await endExecution(run.id)
+          } finally {
+            if (!closed) {
+              closed = true
+              controller.close()
+            }
           }
         }
       },

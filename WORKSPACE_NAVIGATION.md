@@ -39,14 +39,14 @@ All paths below are relative to `nextjs-version/`.
 | Previous Railway deployment and verification | `Dockerfile`, `railway.json`, `scripts/railway/`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
 | Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts` |
-| Migration tooling | `scripts/neon/`, `drizzle.config.ts` |
+| Migration tooling | `scripts/database/`, `scripts/supabase/`, `drizzle.config.ts` |
 | Plans, contracts and verification evidence | `docs/milestone-*/`, `docs/acceptance/`, `docs/neon-*.md` |
 
-The app uses Neon Postgres. SQLite references concern historical state or migration tooling. Document bytes remain in filesystem storage. Read the active README before environment setup or database work. Local runtime data and environment files are excluded from Graphify.
+The app uses Supabase Postgres, Supabase Auth, and private Supabase Storage. The authoritative project is `drubsfvhlggmtyiigwxy` (`fundlane`). See `nextjs-version/README.md` and `nextjs-version/docs/supabase-vercel-migration.md`. Neon and Clerk references describe historical migrations only.
 
 ## Graphify setup and refresh
 
-Clerk owns browser authentication through `src/proxy.ts`, `src/lib/mca/clerk-auth.ts`, and the existing custom auth forms. Neon remains authoritative for MCA memberships, roles, and financial permissions. Team delivery is in `clerk-team.ts`; signed event reconciliation is in `clerk-webhooks.ts`. See `nextjs-version/docs/clerk-auth.md` and `scripts/clerk/migrate.ts` for the additive migration and separate production cutover. Legacy password/session HTTP issuance returns 410; API keys retain their existing gateway.
+Supabase owns browser authentication through `src/proxy.ts`, `src/lib/mca/supabase-auth.ts`, and the existing custom auth forms. Application memberships, roles, and financial permissions remain authoritative. Team delivery is in `supabase-team.ts`. See `nextjs-version/docs/supabase-auth.md`.
 
 Following the [official Graphify README](https://github.com/Graphify-Labs/graphify), this workspace uses `graphifyy` (double y), version 0.9.18 with SQL support. It is a Python developer tool, not an application dependency.
 
@@ -77,10 +77,10 @@ This local workspace had no `.git` at setup. After it becomes a Git checkout, ru
 
 ## Validate implementation changes
 
-Use Node.js 24+ and pnpm. From `nextjs-version/`, the verification commands are `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Run checks appropriate to the changed behavior. Database tests require the protected Neon verification environment described in the active README; do not substitute application data for an isolated test database.
+Use Node.js 24+ and pnpm. From `nextjs-version/`, the verification commands are `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Run checks appropriate to the changed behavior. Database tests require the isolated disposable Postgres verification environment described in the active README; do not substitute application data for an isolated test database.
 
 Refresh the graph after changes and update this guide when module ownership or entry points change. Fetch live Linear status before selecting work or recording completion; milestone snapshots and generated graphs can become stale.
 
-Clerk company billing uses `nextjs-version/src/lib/mca/billing.ts`, `/api/billing`, and `workspace_billing` (migration 0019). Neon enforces active/pending seat reservations; company features remain accessible. See `nextjs-version/docs/clerk-billing.md` for the development catalog, least-privilege roles, and reconciliation commands.
+Stripe company billing uses `nextjs-version/src/lib/mca/billing.ts`, `/api/billing`, and `workspace_billing` (migration 0019). Supabase Postgres enforces active/pending seat reservations; company features remain accessible. See `nextjs-version/docs/supabase-billing.md` for the development catalog, least-privilege roles, and reconciliation commands.
 
 Public Fundlane marketing lives at `/` and `/demo`, with components in `nextjs-version/src/components/marketing/` and the demo-delivery endpoint at `/api/marketing/demo`. See `nextjs-version/docs/marketing-site.md` for sales webhook/privacy activation, receiver deduplication requirements, synthetic product captures, and verification. Demo requests use the existing shared request-rate table; no lead data is written to MCA workspaces.

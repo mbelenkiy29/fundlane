@@ -15,7 +15,7 @@ type DuplicateMerchantDialogProps = {
 
 const DuplicateMerchantDialogHostContext = React.createContext<{
   set: (id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) => void
-  notify: () => void
+  notify: (id: string, props: DuplicateMerchantDialogProps) => void
 } | null>(null)
 
 function DuplicateMerchantDialogView({
@@ -45,18 +45,24 @@ function DuplicateMerchantDialogView({
 
 export function DuplicateMerchantDialogHost({ children }: { children: React.ReactNode }) {
   const slots = React.useRef(new Map<string, React.MutableRefObject<DuplicateMerchantDialogProps>>())
-  const [, rerender] = React.useReducer((count: number) => count + 1, 0)
+  const [snapshots, setSnapshots] = React.useState(new Map<string, DuplicateMerchantDialogProps>())
   const host = React.useMemo(() => ({
     set(id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) {
       if (props) slots.current.set(id, props)
       else slots.current.delete(id)
-      rerender()
+      const snapshot = props?.current
+      setSnapshots((previous) => {
+        const next = new Map(previous)
+        if (snapshot) next.set(id, snapshot)
+        else next.delete(id)
+        return next
+      })
     },
-    notify() {
-      rerender()
+    notify(id: string, props: DuplicateMerchantDialogProps) {
+      setSnapshots((previous) => new Map(previous).set(id, props))
     },
   }), [])
-  const values = [...slots.current.values()].map((slot) => slot.current)
+  const values = [...snapshots.values()]
   const active = values.find((item) => item.open) ?? values[0]
   function latest(): DuplicateMerchantDialogProps {
     const current = [...slots.current.values()].map((slot) => slot.current)
@@ -85,15 +91,17 @@ export function DuplicateMerchantDialog(props: DuplicateMerchantDialogProps) {
   const host = React.useContext(DuplicateMerchantDialogHostContext)
   const id = React.useId()
   const propsRef = React.useRef(props)
-  propsRef.current = props
+  React.useLayoutEffect(() => {
+    propsRef.current = props
+  })
   React.useLayoutEffect(() => {
     if (!host) return
     host.set(id, propsRef)
     return () => host.set(id, null)
   }, [host, id])
   React.useLayoutEffect(() => {
-    host?.notify()
-  }, [host, props.open, props.merchantName, props.busy])
+    host?.notify(id, propsRef.current)
+  }, [host, id, props.open, props.merchantName, props.busy])
   if (host) return null
   return <DuplicateMerchantDialogView {...props} />
 }

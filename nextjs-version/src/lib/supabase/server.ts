@@ -3,8 +3,10 @@ import { createServerClient } from "@supabase/ssr"
 import { createClient } from "@supabase/supabase-js"
 import { cookies } from "next/headers"
 import { supabasePublicConfig } from "./config"
+import { assertHostedSupabaseConfig } from "../mca/hosted-config"
 
 export async function createSupabaseServerClient() {
+  assertHostedSupabaseConfig()
   const store = await cookies()
   const { url, key } = supabasePublicConfig()
   return createServerClient(url, key, {
@@ -19,6 +21,7 @@ export async function createSupabaseServerClient() {
 }
 
 export function getSupabaseAdminClient() {
+  assertHostedSupabaseConfig()
   const { url } = supabasePublicConfig()
   const key = process.env.SUPABASE_SECRET_KEY
   if (!key) throw new Error("Supabase server secret key is not configured.")

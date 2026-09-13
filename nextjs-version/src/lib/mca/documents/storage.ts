@@ -3,6 +3,7 @@ import "server-only"
 import { mkdir, open, readFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
+import { assertHostedSupabaseConfig } from "../hosted-config"
 import { AppError } from "../errors"
 
 export interface DocumentStorage {
@@ -19,6 +20,7 @@ export function validateStorageKey(key: string): string {
 }
 
 export function storageClient(): SupabaseClient {
+  assertHostedSupabaseConfig()
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) throw new AppError(503, "storage_unavailable", "Document storage is not configured.")

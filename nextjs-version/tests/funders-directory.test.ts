@@ -1,3 +1,4 @@
+import { postgresConnection } from "../src/lib/mca/db-connection"
 import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -119,11 +120,7 @@ function params(id: string) {
 }
 
 async function holdRowLock(table: "mca_funders" | "mca_funder_groups", workspaceId: string, id: string) {
-  const client = new Client({
-    connectionString: testDatabase.databaseUrlUnpooled,
-    ssl: { rejectUnauthorized: true },
-    enableChannelBinding: true,
-  })
+  const client = new Client(postgresConnection(testDatabase.databaseUrlUnpooled))
   await client.connect()
   await client.query("BEGIN")
   await client.query(`SELECT id FROM ${table} WHERE workspace_id = $1 AND id = $2 FOR UPDATE`, [workspaceId, id])
