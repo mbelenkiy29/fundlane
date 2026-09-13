@@ -60,7 +60,7 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
         <div className="fl-container fl-nav">
           <Brand />
           <nav className="fl-desktop-nav" aria-label="Main navigation">
-            <Link href="/#product">Product</Link>
+            <Link href="/features">Features</Link>
             <Link href="/#workflow">How it works</Link>
             <Link href="/#faq">FAQ</Link>
           </nav>
@@ -75,7 +75,7 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
               <Menu size={22} />
             </summary>
             <nav aria-label="Mobile navigation">
-              <Link href="/#product">Product</Link>
+              <Link href="/features">Features</Link>
               <Link href="/#workflow">How it works</Link>
               <Link href="/#faq">FAQ</Link>
               <Link href="/sign-in">Sign in</Link>
@@ -93,7 +93,7 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
               <p>A clear path for every deal.</p>
             </div>
             <nav aria-label="Footer navigation">
-              <Link href="/#product">Product</Link>
+              <Link href="/features">Features</Link>
               <Link href="/#workflow">How it works</Link>
               <Link href="/demo">Request a demo</Link>
               <Link href="/sign-in">Sign in</Link>

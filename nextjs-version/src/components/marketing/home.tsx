@@ -4,26 +4,23 @@ import captureImage from "../../../public/marketing/capture.png"
 import reviewImage from "../../../public/marketing/review.png"
 import submitImage from "../../../public/marketing/submit.png"
 import renewImage from "../../../public/marketing/renew.png"
+import offersImage from "../../../public/marketing/offers.png"
 import teamImage from "../../../public/marketing/team.png"
 import Link from "next/link"
 import {
   ArrowRight,
   Check,
-  FolderInput,
-  ScanLine,
-  Send,
-  CircleDollarSign,
-  Repeat2,
-  ChartNoAxesCombined,
   UsersRound,
   ChevronDown,
 } from "lucide-react"
 import { MarketingShell, DemoLink } from "./shell"
+import { marketingFeatures, featuredIds } from "./catalog"
+import { FeatureVisual } from "./feature-visual"
 import { MARKETING_DESCRIPTION } from "@/lib/marketing/metadata"
 
 const stages = [
   {
-    name: "Capture",
+    name: "Application",
     title: "A complete picture starts with the application.",
     text: "Bring applications, imports, and supporting documents together. See what’s missing before the next handoff.",
     action: "Next action: review the deal file",
@@ -47,7 +44,15 @@ const stages = [
     alt: "Fundlane submission tracking with synthetic brokerage deals",
   },
   {
-    name: "Fund and renew",
+    name: "Offers and funding",
+    title: "Turn the selected offer into a clear closing plan.",
+    text: "Compare terms, track revisions, and collect outstanding requirements. Keep your team aligned through the funding decision.",
+    action: "Next action: review closing requirements",
+    image: offersImage,
+    alt: "Fundlane offer terms for a synthetic Northside Kitchen application",
+  },
+  {
+    name: "Renew",
     title: "The relationship continues after funding.",
     text: "Record funding, track the advance, and keep renewal opportunities visible. Carry the deal’s history into your next conversation.",
     action: "Next action: review renewal eligibility",
@@ -55,39 +60,8 @@ const stages = [
     alt: "Fundlane renewal workspace with synthetic funding history",
   },
 ]
-const features = [
-  {
-    icon: FolderInput,
-    title: "Intake and documents",
-    text: "Application forms, imports, and organized documents give every deal a place to start.",
-  },
-  {
-    icon: ScanLine,
-    title: "Underwriting and funder fit",
-    text: "Review statement analysis, make corrections, and see why a funder fits the deal.",
-  },
-  {
-    icon: Send,
-    title: "Submission management",
-    text: "Bring funder selection, preflight checks, and submission tracking into one workflow.",
-  },
-  {
-    icon: CircleDollarSign,
-    title: "Offers and funding",
-    text: "Compare offers, keep track of revisions, and carry the selected offer through funding.",
-  },
-  {
-    icon: Repeat2,
-    title: "Follow-ups and renewals",
-    text: "Keep reminders and funding history close, so the next conversation has context.",
-  },
-  {
-    icon: ChartNoAxesCombined,
-    title: "Commissions and reporting",
-    text: "Follow splits, payment records, and performance from the individual deal to the team.",
-  },
-]
 const faqs = [
+  ["What can the AI assistant help with?", "Ask questions about accessible deals, draft communications, research public sources, and work with supported files. Approval-required messages and submissions stay under your control. Tools depend on enabled capabilities and available credits."],
   [
     "Who is Fundlane for?",
     "Fundlane is built for MCA brokerage owners and their teams. It brings the work of managing applications, underwriting, submissions, offers, and renewals into a shared workspace.",
@@ -135,16 +109,6 @@ export function MarketingHome() {
                 </Link>
               </div>
             </div>
-            <div className="fl-hero-note">
-              <span className="fl-note-line" />
-              <p>
-                One deal.
-                <br />
-                Every next step.
-                <br />
-                <strong>All together.</strong>
-              </p>
-            </div>
           </div>
           <figure className="fl-hero-preview">
             <div className="fl-preview-bar">
@@ -160,13 +124,13 @@ export function MarketingHome() {
               <Image
                 src={pipelineImage}
                 alt="Fundlane deal pipeline populated with synthetic brokerage applications"
-                sizes="(max-width: 768px) 1100px, (max-width: 1280px) 94vw, 1200px"
+                sizes="(max-width: 1280px) 94vw, 1200px"
                 preload
               />
             </div>
             <figcaption>
               Applications, submissions, and next steps in one place.
-              <span>Illustrative data</span>
+              <a href={pipelineImage.src} target="_blank" rel="noopener noreferrer" className="fl-inline-link">Illustrative data · View full-size</a>
             </figcaption>
           </figure>
           <div className="fl-workflow-line" aria-label="Deal lifecycle">
@@ -178,6 +142,12 @@ export function MarketingHome() {
             <ArrowRight />
             <span className="fl-green">Funded. Ready for what’s next.</span>
           </div>
+        </section>
+        <section className="fl-container fl-purpose">
+          <p className="fl-section-label">Built around the life of a deal</p>
+          <h2>A shared picture.<br />A clear next step.</h2>
+          <p>An application becomes a review. A submission becomes a conversation. An offer becomes the next opportunity. Fundlane connects the information and the people behind each handoff.</p>
+          <div className="fl-purpose-points"><span><Check size={16} aria-hidden="true" />The deal’s full context</span><span><Check size={16} aria-hidden="true" />Clear team ownership</span><span><Check size={16} aria-hidden="true" />Visible next actions</span></div>
         </section>
         <section id="workflow" className="fl-section fl-workflow-section">
           <div className="fl-container">
@@ -263,7 +233,7 @@ export function MarketingHome() {
               <h2>
                 The whole deal.
                 <br />
-                Not just the contact.
+                All within reach.
               </h2>
             </div>
             <p>
@@ -272,14 +242,15 @@ export function MarketingHome() {
             </p>
           </div>
           <div className="fl-feature-grid">
-            {features.map(({ icon: Icon, title, text }) => (
-              <article key={title}>
-                <Icon size={25} strokeWidth={1.6} aria-hidden="true" />
-                <h3>{title}</h3>
-                <p>{text}</p>
+            {featuredIds.map(id => {
+              const feature = marketingFeatures.find(item => item.id === id)!
+              return <article key={id}>
+                <FeatureVisual feature={feature} compact />
+                <div className="fl-card-copy"><h3><Link href={`/features#${id}`}>{feature.title}<ArrowRight size={17} aria-hidden="true" /></Link></h3><p>{feature.summary}</p></div>
               </article>
-            ))}
+            })}
           </div>
+          <div className="fl-feature-more"><Link href="/features" className="fl-button fl-button-secondary">Explore all features <ArrowRight size={16} aria-hidden="true" /></Link></div>
         </section>
         <section className="fl-team-section">
           <div className="fl-container fl-team-grid">

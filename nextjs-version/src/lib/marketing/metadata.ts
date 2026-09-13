@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 
 export const MARKETING_ORIGIN = "https://fundlane.io"
 export const MARKETING_DESCRIPTION =
-  "Bring applications, underwriting, funder submissions, offers, and commissions into one workspace—so your team knows what needs attention next."
+  "Bring applications, documents, underwriting, funder submissions, offers, and follow-ups into one workspace—so your team knows what needs attention next."
 
 export function marketingMetadata(title: string, path: string): Metadata {
   const fullTitle = `${title} | Fundlane`

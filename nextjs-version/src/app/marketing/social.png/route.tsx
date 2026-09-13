@@ -13,8 +13,8 @@ export function GET() {
           flexDirection: "column",
           justifyContent: "space-between",
           padding: "64px 72px",
-          background: "#f3f6fa",
-          color: "#162a3b",
+          background: "#09090f",
+          color: "#f5f3ff",
           fontFamily: "sans-serif",
         }}
       >
@@ -28,7 +28,7 @@ export function GET() {
           }}
         >
           <svg width="45" height="45" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="9" fill="#245bd6" />
+            <rect width="32" height="32" rx="9" fill="#a78bfa" />
             <path
               d="M9 9h15l-4 4H9V9Zm0 7h11l-4 4H9v-4Zm0 7h7l-4 4H9v-4Z"
               fill="white"
@@ -49,7 +49,7 @@ export function GET() {
           >
             Run your MCA brokerage from application to renewal.
           </div>
-          <div style={{ display: "flex", fontSize: 23, color: "#536576" }}>
+          <div style={{ display: "flex", fontSize: 23, color: "#b4aec6" }}>
             One workspace. A clear next step for every deal.
           </div>
         </div>
@@ -57,13 +57,13 @@ export function GET() {
           style={{
             display: "flex",
             justifyContent: "space-between",
-            borderTop: "1px solid #ccd8e5",
+            borderTop: "1px solid #302940",
             paddingTop: 24,
             fontSize: 19,
           }}
         >
           <span>Built for MCA brokerages</span>
-          <span style={{ color: "#245bd6" }}>fundlane.io</span>
+          <span style={{ color: "#a78bfa" }}>fundlane.io</span>
         </div>
       </div>
     ),
