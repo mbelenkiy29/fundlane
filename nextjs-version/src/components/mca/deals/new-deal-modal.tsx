@@ -9,7 +9,7 @@ import { ApplicationScanPanel } from "@/components/mca/documents/application-sca
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { DealDetail } from "@/lib/mca/deals/schema"
 import { DealForm, applyWriteInput, emptyDraft, formPayload, type DraftForm } from "@/components/mca/deals/deal-form"
-import { DuplicateMerchantDialog } from "@/components/mca/deals/duplicate-merchant-dialog"
+import { DuplicateMerchantDialog, DuplicateMerchantDialogHost } from "@/components/mca/deals/duplicate-merchant-dialog"
 import { loadAttachPayload, lookupMerchantMatches, merchantMatchesFromError } from "@/components/mca/deals/merchant-lookup"
 import type { MerchantMatch } from "@/lib/mca/merchants/contracts"
 
@@ -139,7 +139,7 @@ export function NewDealModal({
   }
 
   return (
-    <>
+    <DuplicateMerchantDialogHost>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
@@ -176,6 +176,6 @@ export function NewDealModal({
         onAttach={() => void attachExisting()}
         onCreateNew={createAnyway}
       />
-    </>
+    </DuplicateMerchantDialogHost>
   )
 }

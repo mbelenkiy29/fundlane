@@ -8,6 +8,7 @@ import type { DealActor } from "../src/lib/mca/deals/schema"
 import { normalizeEin } from "../src/lib/mca/merchants/normalize"
 import { einLookupHash, identityLookupHash } from "../src/lib/mca/merchants/lookup-hash"
 import { lookupMerchants } from "../src/lib/mca/merchants/service"
+import { findMerchantById } from "../src/lib/mca/merchants/repository"
 import { backfillMerchantHashes } from "../src/lib/mca/merchants/backfill"
 import { POST as lookupMerchantsPost } from "../src/app/api/mca/merchants/lookup/route"
 import { GET as getMerchant } from "../src/app/api/mca/merchants/[id]/route"
@@ -345,6 +346,39 @@ test("attachMerchantId creates a new deal on the same merchant and copies omitte
   assert.equal(full.owners[0]?.firstName, "Pat")
   assert.equal(full.owners[0]?.lastName, "Source")
   assert.equal(full.owners[0]?.identityLast4, "3210")
+})
+
+test("attach with a different EIN does not rewrite the original merchant identity", async () => {
+  const first = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-keep-src"),
+    legalName: "Keep Identity LLC",
+    ein: "12-1199001",
+    contactName: "Kim Keep",
+    owners: [{ firstName: "Kim", lastName: "Keep", isPrimary: true, identityLast4: "1111" }],
+  })
+  const merchantId = first.deal.merchantId
+  assert.ok(merchantId)
+  const attached = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-keep-new"),
+    attachMerchantId: merchantId,
+    legalName: "Rewrite Attempt LLC",
+    ein: "12-1199002",
+    contactName: "Other Contact",
+    owners: [{ firstName: "Oth", lastName: "Er", isPrimary: true, identityLast4: "2222" }],
+  })
+  assert.notEqual(attached.deal.id, first.deal.id)
+  assert.equal(attached.deal.merchantId, merchantId)
+  const full = await getDealForDocument(actor(), attached.deal.id)
+  assert.equal(full.legalName, "Rewrite Attempt LLC")
+  assert.equal(full.ein, "12-1199002")
+  assert.equal(full.contactName, "Other Contact")
+  assert.equal(full.owners[0]?.identityLast4, "2222")
+  const merchant = await findMerchantById(workspaceId, merchantId)
+  assert.equal(merchant?.legalName, "Keep Identity LLC")
+  assert.equal(merchant?.ein, "12-1199001")
+  assert.equal(merchant?.contactName, "Kim Keep")
+  assert.equal(merchant?.owners[0]?.firstName, "Kim")
+  assert.equal(merchant?.owners[0]?.identityLast4, "1111")
 })
 
 test("forceDuplicate inserts a new merchant even when the EIN hash collides", async () => {

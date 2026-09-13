@@ -269,22 +269,18 @@ export async function upsertMerchantFromDeal(
   const existing = await database.prepare<{ id: string }>(
     "SELECT id FROM mca_merchants WHERE workspace_id = ? AND id = ?",
   ).get(record.workspaceId, merchantId)
-  const values = [
+  if (existing) {
+    await database.prepare("UPDATE deals SET merchant_id = ? WHERE workspace_id = ? AND id = ?").run(merchantId, record.workspaceId, record.id)
+    return merchantId
+  }
+  await database.prepare(`INSERT INTO mca_merchants
+    (legal_name, dba_name, ein_cipher, ein_lookup_hash, contact_name, contact_email_cipher, contact_phone_cipher,
+     address_json, updated_at, workspace_id, id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     record.legalName ?? null, record.dbaName ?? null, encrypt(record.ein, record.workspaceId), einHash ?? null,
     record.contactName ?? null, encrypt(record.contactEmail, record.workspaceId), encrypt(record.contactPhone, record.workspaceId),
-    JSON.stringify(record.address ?? {}), record.updatedAt, record.workspaceId, merchantId,
-  ]
-  if (existing) {
-    await database.prepare(`UPDATE mca_merchants SET
-      legal_name=?, dba_name=?, ein_cipher=?, ein_lookup_hash=?, contact_name=?,
-      contact_email_cipher=?, contact_phone_cipher=?, address_json=?, updated_at=?
-      WHERE workspace_id=? AND id=?`).run(...values)
-  } else {
-    await database.prepare(`INSERT INTO mca_merchants
-      (legal_name, dba_name, ein_cipher, ein_lookup_hash, contact_name, contact_email_cipher, contact_phone_cipher,
-       address_json, updated_at, workspace_id, id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...values, record.updatedAt)
-  }
+    JSON.stringify(record.address ?? {}), record.updatedAt, record.workspaceId, merchantId, record.updatedAt,
+  )
   await replaceMerchantOwners(database, record, merchantId)
   await database.prepare("UPDATE deals SET merchant_id = ? WHERE workspace_id = ? AND id = ?").run(merchantId, record.workspaceId, record.id)
   return merchantId

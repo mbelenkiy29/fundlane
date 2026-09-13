@@ -1,23 +1,31 @@
 "use client"
 
+import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
-export function DuplicateMerchantDialog({
-  open,
-  onOpenChange,
-  merchantName,
-  busy,
-  onAttach,
-  onCreateNew,
-}: {
+type DuplicateMerchantDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   merchantName: string
   busy?: boolean
   onAttach: () => void
   onCreateNew: () => void
-}) {
+}
+
+const DuplicateMerchantDialogHostContext = React.createContext<{
+  set: (id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) => void
+  notify: () => void
+} | null>(null)
+
+function DuplicateMerchantDialogView({
+  open,
+  onOpenChange,
+  merchantName,
+  busy,
+  onAttach,
+  onCreateNew,
+}: DuplicateMerchantDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -33,4 +41,59 @@ export function DuplicateMerchantDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+export function DuplicateMerchantDialogHost({ children }: { children: React.ReactNode }) {
+  const slots = React.useRef(new Map<string, React.MutableRefObject<DuplicateMerchantDialogProps>>())
+  const [, rerender] = React.useReducer((count: number) => count + 1, 0)
+  const host = React.useMemo(() => ({
+    set(id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) {
+      if (props) slots.current.set(id, props)
+      else slots.current.delete(id)
+      rerender()
+    },
+    notify() {
+      rerender()
+    },
+  }), [])
+  const values = [...slots.current.values()].map((slot) => slot.current)
+  const active = values.find((item) => item.open) ?? values[0]
+  function latest(): DuplicateMerchantDialogProps {
+    const current = [...slots.current.values()].map((slot) => slot.current)
+    const next = current.find((item) => item.open) ?? current[0] ?? active
+    if (!next) throw new Error("Duplicate merchant dialog is not mounted.")
+    return next
+  }
+  return (
+    <DuplicateMerchantDialogHostContext.Provider value={host}>
+      {children}
+      {active ? (
+        <DuplicateMerchantDialogView
+          open={active.open}
+          merchantName={active.merchantName}
+          busy={active.busy}
+          onOpenChange={(open) => latest().onOpenChange(open)}
+          onAttach={() => latest().onAttach()}
+          onCreateNew={() => latest().onCreateNew()}
+        />
+      ) : null}
+    </DuplicateMerchantDialogHostContext.Provider>
+  )
+}
+
+export function DuplicateMerchantDialog(props: DuplicateMerchantDialogProps) {
+  const host = React.useContext(DuplicateMerchantDialogHostContext)
+  const id = React.useId()
+  const propsRef = React.useRef(props)
+  propsRef.current = props
+  React.useLayoutEffect(() => {
+    if (!host) return
+    host.set(id, propsRef)
+    return () => host.set(id, null)
+  }, [host, id])
+  React.useLayoutEffect(() => {
+    host?.notify()
+  }, [host, props.open, props.merchantName, props.busy])
+  if (host) return null
+  return <DuplicateMerchantDialogView {...props} />
 }
