@@ -112,6 +112,8 @@ export async function confirmApplicationScan(actor: DealActor, input: {
   expectedVersion?: number
   acceptedConflictFields?: string[]
   manualFields?: DealWriteInput
+  forceDuplicate?: boolean
+  attachMerchantId?: string
 }): Promise<{ deal: DealDetail; created: boolean; sourceDocumentId: string; extractionVersion: number; replayed: boolean }> {
   if (!input.confirmationId?.trim() || input.confirmationId.length > 160) throw new AppError(422, "confirmation_id_invalid", "Provide an immutable confirmation ID.")
   const record = await findExtraction(actor.workspaceId, input.extractionId)
@@ -143,7 +145,12 @@ export async function confirmApplicationScan(actor: DealActor, input: {
   }
   let preservedDocumentId = sourceDocument.id
   if (input.mode === "create") {
-    const result = await createDeal(actor, { ...proposed, idempotencyKey: `application-scan:${input.confirmationId}` })
+    const result = await createDeal(actor, {
+      ...proposed,
+      idempotencyKey: `application-scan:${input.confirmationId}`,
+      forceDuplicate: input.forceDuplicate,
+      attachMerchantId: input.attachMerchantId,
+    })
     deal = result.deal
     created = result.created
     if (sourceDocument.dealId !== deal.id) {

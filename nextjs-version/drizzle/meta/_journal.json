@@ -183,6 +183,34 @@
       "when": 1789360000028,
       "tag": "0028_merchant_remittance",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789360000029,
+      "tag": "0029_merchants_and_home_kpis",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789360000030,
+      "tag": "0030_supabase_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789360000031,
+      "tag": "0031_supabase_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789360000032,
+      "tag": "0032_supabase_storage_jobs",
+      "breakpoints": true
     }
   ]
 }

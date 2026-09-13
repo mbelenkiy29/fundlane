@@ -3,6 +3,9 @@ import "server-only"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, parseJson, withImmediateTransaction } from "../db"
 import type { DbExecutor } from "../db"
+import { AppError } from "../errors"
+import { einLookupHash, identityLookupHash } from "../merchants/lookup-hash"
+import { upsertMerchantFromDeal, workspaceEinExists } from "../merchants/repository"
 import type {
   DealActivity,
   DealAssignment,
@@ -99,6 +102,7 @@ async function hydrate(database: DbExecutor, row: Row): Promise<DealRecord> {
   return {
     id: dealId,
     workspaceId,
+    merchantId: row.merchant_id ? String(row.merchant_id) : undefined,
     displayId: String(row.display_id),
     legalName: row.legal_name ? String(row.legal_name) : undefined,
     dbaName: row.dba_name ? String(row.dba_name) : undefined,
@@ -136,7 +140,7 @@ async function hydrate(database: DbExecutor, row: Row): Promise<DealRecord> {
 function dealValues(record: DealRecord): Array<string | number | null> {
   return [
     record.id, record.workspaceId, record.displayId, record.legalName ?? null, record.dbaName ?? null,
-    encrypt(record.ein, record.workspaceId), record.entityType ?? null, JSON.stringify(record.address ?? {}), record.contactName ?? null,
+    encrypt(record.ein, record.workspaceId), einLookupHash(record.workspaceId, record.ein) ?? null, record.entityType ?? null, JSON.stringify(record.address ?? {}), record.contactName ?? null,
     encrypt(record.contactEmail, record.workspaceId), encrypt(record.contactPhone, record.workspaceId), record.startDate ?? null,
     record.industry ?? null, record.naicsCode ?? null, record.monthlyRevenue ?? null, record.ficoScore ?? null,
     record.fundingPurpose ?? null, record.requestedAmount ?? null, record.status, record.pipelineVersion, record.draftState,
@@ -150,11 +154,12 @@ async function replaceChildren(database: DbExecutor, record: DealRecord): Promis
     await database.prepare(`DELETE FROM ${table} WHERE workspace_id = ? AND deal_id = ?`).run(record.workspaceId, record.id)
   }
   const ownerStatement = database.prepare(`INSERT INTO deal_owners
-    (id, workspace_id, deal_id, first_name, last_name, ownership_percent, is_primary, date_of_birth_cipher, identity_last4_cipher, email_cipher, phone_cipher)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    (id, workspace_id, deal_id, first_name, last_name, ownership_percent, is_primary, date_of_birth_cipher, identity_last4_cipher, identity_last4_lookup_hash, email_cipher, phone_cipher)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   for (const owner of record.owners) await ownerStatement.run(
     owner.id, record.workspaceId, record.id, owner.firstName ?? null, owner.lastName ?? null, owner.ownershipPercent ?? null,
     owner.isPrimary ? 1 : 0, encrypt(owner.dateOfBirth, record.workspaceId), encrypt(owner.identityLast4, record.workspaceId),
+    identityLookupHash(record.workspaceId, owner.identityLast4) ?? null,
     encrypt(owner.email, record.workspaceId), encrypt(owner.phone, record.workspaceId),
   )
   const assignmentStatement = database.prepare(`INSERT INTO deal_assignments
@@ -196,20 +201,32 @@ export async function findDealByIdempotencyKey(workspaceId: string, key: string)
   return row ? await hydrate(database, row) : undefined
 }
 
-export async function insertDeal(record: DealRecord, transactionCheckpoint?: DealTransactionCheckpoint): Promise<{ record: DealRecord; inserted: boolean }> {
+export async function insertDeal(
+  record: DealRecord,
+  transactionCheckpoint?: DealTransactionCheckpoint,
+  options?: { forceNewMerchant?: boolean },
+): Promise<{ record: DealRecord; inserted: boolean }> {
   return withImmediateTransaction(async (database) => {
+    const einHash = !options?.forceNewMerchant && !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
+    if (einHash && await workspaceEinExists(record.workspaceId, einHash, database)) {
+      const replay = record.idempotencyKey
+        ? await database.prepare<{ id: string }>("SELECT id FROM deals WHERE workspace_id = ? AND idempotency_key = ?").get(record.workspaceId, record.idempotencyKey)
+        : undefined
+      if (!replay) throw new AppError(409, "merchant_exists", "This business already exists.", undefined, { matches: [] })
+    }
     const result = await database.prepare(`INSERT INTO deals
-      (id, workspace_id, display_id, legal_name, dba_name, ein_cipher, entity_type, address_json, contact_name,
+      (id, workspace_id, display_id, legal_name, dba_name, ein_cipher, ein_lookup_hash, entity_type, address_json, contact_name,
        contact_email_cipher, contact_phone_cipher, start_date, industry, naics_code, monthly_revenue, fico_score,
        funding_purpose, requested_amount, status, pipeline_version, draft_state, missing_required_json, field_sources_json,
        idempotency_key, version, created_at, updated_at)
-      VALUES (${Array.from({ length: 27 }, () => "?").join(",")})
+      VALUES (${Array.from({ length: 28 }, () => "?").join(",")})
       ON CONFLICT (workspace_id, idempotency_key) DO NOTHING`).run(...dealValues(record))
     if (result.changes === 0) {
       if (!record.idempotencyKey) throw new Error("Deal insert conflicted without an idempotency key")
       const existing = await database.prepare<Row>("SELECT * FROM deals WHERE workspace_id = ? AND idempotency_key = ?").get(record.workspaceId, record.idempotencyKey)
       if (!existing) throw new Error("Deal insert conflicted but no idempotent record was found")
       const persisted = await hydrate(database, existing)
+      persisted.merchantId = await upsertMerchantFromDeal({ ...persisted, merchantId: persisted.merchantId ?? record.merchantId }, database)
       await transactionCheckpoint?.(database, persisted, "replayed")
       return { record: persisted, inserted: false }
     }
@@ -218,6 +235,11 @@ export async function insertDeal(record: DealRecord, transactionCheckpoint?: Dea
     const row = await database.prepare<Row>("SELECT * FROM deals WHERE workspace_id = ? AND id = ?").get(record.workspaceId, record.id)
     if (!row) throw new Error("Deal insert did not return a persisted row")
     const persisted = await hydrate(database, row)
+    persisted.merchantId = await upsertMerchantFromDeal(
+      { ...persisted, merchantId: record.merchantId ?? persisted.merchantId },
+      database,
+      { forceNew: options?.forceNewMerchant },
+    )
     await transactionCheckpoint?.(database, persisted, "created")
     return { record: persisted, inserted: true }
   })
@@ -230,7 +252,7 @@ export async function updateDeal(record: DealRecord, expectedVersion: number, ne
     if (Number(currentRow.version) !== expectedVersion) throw new DealVersionConflictError(await hydrate(database, currentRow), expectedVersion)
     const values = dealValues(record).slice(3)
     const result = await database.prepare(`UPDATE deals SET
-      legal_name=?, dba_name=?, ein_cipher=?, entity_type=?, address_json=?, contact_name=?, contact_email_cipher=?,
+      legal_name=?, dba_name=?, ein_cipher=?, ein_lookup_hash=?, entity_type=?, address_json=?, contact_name=?, contact_email_cipher=?,
       contact_phone_cipher=?, start_date=?, industry=?, naics_code=?, monthly_revenue=?, fico_score=?, funding_purpose=?,
       requested_amount=?, status=?, pipeline_version=?, draft_state=?, missing_required_json=?, field_sources_json=?,
       idempotency_key=?, version=?, created_at=?, updated_at=?
@@ -245,6 +267,7 @@ export async function updateDeal(record: DealRecord, expectedVersion: number, ne
     const persistedRow = await database.prepare<Row>("SELECT * FROM deals WHERE workspace_id = ? AND id = ?").get(record.workspaceId, record.id)
     if (!persistedRow) throw new Error("Deal not found")
     const persisted = await hydrate(database, persistedRow)
+    persisted.merchantId = await upsertMerchantFromDeal({ ...persisted, merchantId: record.merchantId ?? persisted.merchantId }, database)
     await transactionCheckpoint?.(database, persisted, "updated")
     return persisted
   })

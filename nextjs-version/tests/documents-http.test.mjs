@@ -1,5 +1,5 @@
-let clerkFixture
-import { createClerkHttpFixture } from "./helpers/clerk-http.mjs"
+let supabaseFixture
+import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
@@ -27,11 +27,11 @@ async function waitForServer() {
 
 before(async () => {
   testDatabase = await createPostgresTestDatabase("documents_http")
-  clerkFixture = await createClerkHttpFixture(testDatabase)
+  supabaseFixture = await createSupabaseHttpFixture(testDatabase)
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
     cwd: root,
     env: testDatabase.env({
-      ...clerkFixture.env, NODE_ENV: "development", NEXT_DIST_DIR: dist, MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"), MCA_APP_ORIGIN: baseUrl, MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_DOCUMENT_TOKEN_SECRET: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Documents Test", MCA_BOOTSTRAP_ADMIN_EMAIL: "documents@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Documents Password 99!", MCA_DOCUMENT_SCANNER: "", MCA_DOCUMENT_AI_PROVIDER: "", OPENAI_API_KEY: "", MCA_DOCUMENT_AI_MODEL: "" }),
+      ...supabaseFixture.env, NODE_ENV: "development", NEXT_DIST_DIR: dist, MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"), MCA_APP_ORIGIN: baseUrl, MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_DOCUMENT_TOKEN_SECRET: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Documents Test", MCA_BOOTSTRAP_ADMIN_EMAIL: "documents@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Documents Password 99!", MCA_DOCUMENT_SCANNER: "", MCA_DOCUMENT_AI_PROVIDER: "", OPENAI_API_KEY: "", MCA_DOCUMENT_AI_MODEL: "" }),
     stdio: ["ignore", "pipe", "pipe"],
   })
   server.stdout.on("data", (chunk) => { output += chunk }); server.stderr.on("data", (chunk) => { output += chunk })
@@ -39,13 +39,13 @@ before(async () => {
 })
 after(async () => {
   if (server?.exitCode === null) { server.kill("SIGTERM"); await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 2_000))]) }
-  if (clerkFixture) await clerkFixture.close()
+  if (supabaseFixture) await supabaseFixture.close()
   if (testDatabase) await testDatabase.close()
   rmSync(temp, { recursive: true, force: true }); rmSync(join(root, dist), { recursive: true, force: true })
 })
 
 async function json(path, { method = "GET", cookie, bearer, body } = {}) {
-  const response = await fetch(`${baseUrl}${path}`, { method, headers: { ...(await clerkFixture.headers(cookie)), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...(body ? { "content-type": "application/json", origin: baseUrl } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  const response = await fetch(`${baseUrl}${path}`, { method, headers: { ...(await supabaseFixture.headers(cookie)), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...(body ? { "content-type": "application/json", origin: baseUrl } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   return { response, payload: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0] }
 }
 async function key(cookie, name, scopes) {
@@ -56,12 +56,12 @@ async function upload(path, cookieOrBearer, fields) {
   for (const [name, value] of Object.entries(fields)) form.set(name, value)
   form.set("file", new File([Buffer.from("%PDF-1.4\n%%EOF\n")], "merchant.pdf", { type: "application/pdf" }))
   const isBearer = !cookieOrBearer.includes("=")
-  const response = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { ...(isBearer ? { authorization: `Bearer ${cookieOrBearer}` } : await clerkFixture.headers(cookieOrBearer)), origin: baseUrl }, body: form })
+  const response = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { ...(isBearer ? { authorization: `Bearer ${cookieOrBearer}` } : await supabaseFixture.headers(cookieOrBearer)), origin: baseUrl }, body: form })
   return { response, payload: await response.json() }
 }
 
 test("document routes enforce scopes and expose recoverable unavailable-provider states", async () => {
-  const login = await clerkFixture.login("documents@example.test", "Correct Documents Password 99!")
+  const login = await supabaseFixture.login("documents@example.test", "Correct Documents Password 99!")
   assert.equal(login.response.status, 200, JSON.stringify(login.payload))
   const cookie = login.cookie
   const readKey = await key(cookie, "Docs read", ["deals:read"]), writeKey = await key(cookie, "Docs write", ["deals:write"]), intakeKey = await key(cookie, "Intake only", ["intake:write"])

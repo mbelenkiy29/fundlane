@@ -2,6 +2,10 @@ import "server-only"
 
 import { z } from "zod"
 import { createHash } from "node:crypto"
+import { encryptSensitive, decryptSensitive } from "../crypto"
+import { backgroundJobView, enqueueBackgroundJob, inBackgroundWorker } from "../jobs/queue"
+import { documentScanner } from "../documents/scanner"
+import { usesSupabaseStorage } from "../documents/storage"
 import { withImmediateTransaction } from "../db"
 import { AppError } from "../errors"
 import { actorForDeals } from "../deals/service"
@@ -91,7 +95,7 @@ export async function readInboundEmailBody(request: Request, maxBytes = 35 * 102
 
 async function actorForEmail(workspaceId: string): Promise<DealActor> {
   const context: AuthContext = { authType: "api_key", userId: null, membershipId: null, workspaceId, role: null, scopes: ["intake:write"], sessionId: null }
-  return actorForDeals(context)
+  return { ...await actorForDeals(context), source: "system", role: "admin" }
 }
 
 function parseObject(rawBody: string): Record<string, unknown> {
@@ -194,6 +198,11 @@ export async function ingestEmailDelivery(input: {
   appOrigin: string
   extractor?: (actor: DealActor, file: { filename: string; mimeType: string; bytes: Uint8Array; sourceReference: string }) => Promise<ApplicationExtraction>
 }): Promise<IntakeResult> {
+  const { integration, email } = await admittedEmail(input)
+  return processEmail(email, integration, input)
+}
+
+async function admittedEmail(input: Parameters<typeof ingestEmailDelivery>[0]) {
   const integration = await findIntegrationByPublicId(input.integrationId, true)
   if (!integration || integration.provider !== "email") throw new AppError(404, "integration_not_found", "The email intake route was not found.")
   verifyProviderAdmission(input.request, input.rawBody, integration)
@@ -205,7 +214,23 @@ export async function ingestEmailDelivery(input: {
   const parsed = inboundEmailSchema.safeParse(normalized)
   if (!parsed.success) throw new AppError(422, "email_payload_invalid", "Review the inbound email fields.", z.flattenError(parsed.error).fieldErrors)
   const email = parsed.data as InboundEmail
-  return processEmail(email, integration, input)
+  return { integration, email }
+}
+
+export async function queueInboundEmail(input: Parameters<typeof ingestEmailDelivery>[0]) {
+  const { integration, email } = await admittedEmail(input)
+  if (!email.messageId?.trim()) throw new AppError(422, "email_message_id_missing", "Inbound email message identity is required.")
+  const actor = await actorForEmail(integration.workspaceId)
+  const normalized = JSON.stringify(email)
+  return backgroundJobView(await enqueueBackgroundJob({ actor, kind: "email_intake", resourceId: input.integrationId,
+    idempotencyKey: `${input.integrationId}:${createHash("sha256").update(email.messageId).digest("hex")}`,
+    payload: { emailCipher: encryptSensitive(normalized, actor.workspaceId), appOrigin: input.appOrigin }, payloadHash: createHash("sha256").update(normalized).digest("hex") }))
+}
+
+export async function processQueuedEmail(actor: DealActor, integrationId: string, payload: { emailCipher: string; appOrigin: string }): Promise<IntakeResult> {
+  const integration = await findIntegrationByPublicId(integrationId, true)
+  if (!integration || !integration.enabled || integration.workspaceId !== actor.workspaceId || integration.provider !== "email") throw new AppError(403, "integration_disabled", "The original email integration is no longer available.")
+  return processEmail(JSON.parse(decryptSensitive(payload.emailCipher, actor.workspaceId)) as InboundEmail, integration, { appOrigin: payload.appOrigin })
 }
 
 type EmailProcessingOptions = Pick<Parameters<typeof ingestEmailDelivery>[0], "appOrigin" | "extractor"> & { reviewedApplication?: DealWriteInput }
@@ -235,6 +260,14 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
     aggregateBytes += bytes.length
     if (aggregateBytes > 25 * 1024 * 1024) throw new AppError(413, "email_attachments_too_large", "Decoded inbound attachments must total at most 25 MiB.")
     decoded.set(file, bytes)
+  }
+  if (usesSupabaseStorage()) {
+    if (!inBackgroundWorker()) throw new AppError(503, "email_worker_required", "Email processing must run on the background worker.")
+    for (const [file, bytes] of decoded) {
+      const result = await documentScanner().scan(bytes, file.filename ?? "attachment")
+      if (result.status === "infected") throw new AppError(422, "email_attachment_quarantined", "Security scanning rejected an email attachment.")
+      if (result.status !== "clean") throw new AppError(503, "scanner_unavailable", "Email attachments must pass security scanning before processing.")
+    }
   }
   return withImmediateTransaction(async () => {
     const initial: NormalizedIntakeInput = { schemaVersion: 1, provider: "email", eventId: messageId, application: {}, sourceReference: `email:message:${messageId}`, initialStatus: integration.initialStatus }

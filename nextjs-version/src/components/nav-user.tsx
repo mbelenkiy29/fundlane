@@ -2,16 +2,16 @@
 
 import { CircleUser, EllipsisVertical, LogOut, Settings } from "lucide-react"
 import Link from "next/link"
-import { useClerk } from "@clerk/nextjs"
+import { requestJson } from "@/lib/mca/client"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar"
 
 export function NavUser({ user }: { user: { name: string; email: string; avatar: string } }) {
   const { isMobile } = useSidebar()
-  const clerk = useClerk()
 
   async function signOut() {
-    await clerk.signOut({ redirectUrl: "/sign-in" })
+    await requestJson("/api/auth/sign-out",{method:"POST"})
+    window.location.href="/sign-in"
   }
 
   return <SidebarMenu><SidebarMenuItem><DropdownMenu>

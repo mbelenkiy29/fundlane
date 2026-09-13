@@ -71,6 +71,7 @@ export interface SessionUser {
 }
 
 export interface AuthContext {
+  apiKeyId?: string;
   authType: "session" | "api_key";
   userId: string | null;
   membershipId: string | null;
@@ -158,7 +159,10 @@ export interface ApiErrorBody {
     message: string;
     fieldErrors?: Record<string, string[]>;
     correlationId?: string;
+    matches?: unknown;
   };
+  code?: string;
+  matches?: unknown;
 }
 
 export interface AuditEvent {

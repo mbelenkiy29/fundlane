@@ -99,7 +99,7 @@ before(async () => {
     MCA_ASSISTANT_EXPERIENCE_ENABLED: "true",
     MCA_ASSISTANT_WEB_ENABLED: "true",
     MCA_ASSISTANT_FILES_ENABLED: "true",
-    MCA_CLERK_BILLING_ENABLED: "false"
+    MCA_STRIPE_BILLING_ENABLED: "false"
   })
   storage = await mkdtemp(join(tmpdir(), "assistant-fixture-"))
   process.env.MCA_DOCUMENT_STORAGE_PATH = storage

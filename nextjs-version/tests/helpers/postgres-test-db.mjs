@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
-import { directUrl, pooledUrl, protectedConnections, urlForDatabase } from "../../scripts/neon/connections.ts";
+import { postgresConnection } from "../../src/lib/mca/db-connection.ts";
 
 const { Client, Pool } = pg;
 
@@ -15,21 +15,24 @@ function identifier(value) {
 export async function createPostgresTestDatabase(label = "suite") {
   const safeLabel = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "suite";
   const databaseName = `fundlane_test_${safeLabel}_${randomBytes(5).toString("hex")}`;
-  const connections = protectedConnections();
-  const adminUrl = directUrl(connections.verification);
-  const admin = new Client({ connectionString: adminUrl, ssl: { rejectUnauthorized: true }, enableChannelBinding: true });
+  const adminUrl = process.env.MCA_TEST_DATABASE_ADMIN_URL;
+  if (!adminUrl) throw new Error("MCA_TEST_DATABASE_ADMIN_URL must point at an isolated disposable Postgres cluster; production fallback is prohibited.");
+  const endpoint = new URL(adminUrl);
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname) && process.env.MCA_TEST_DATABASE_DISPOSABLE !== "true") throw new Error("Remote tests require an explicitly disposable cluster.");
+  const admin = new Client(postgresConnection(adminUrl));
   await admin.connect();
   try {
     const current = await admin.query("select current_database() as database, current_user as role");
-    if (current.rows[0]?.database !== "fundlane") throw new Error("Test administration must run from the Fundlane verification database.");
-    await admin.query(`CREATE DATABASE ${identifier(databaseName)}`);
+    if (!current.rows[0]?.database) throw new Error("Test administration database is unavailable.");
+    await admin.query(`CREATE DATABASE ${identifier(databaseName)} TEMPLATE template0 ENCODING 'UTF8'`);
   } finally {
     await admin.end();
   }
 
-  const databaseUrlUnpooled = urlForDatabase(adminUrl, databaseName);
-  const databaseUrl = pooledUrl(databaseUrlUnpooled);
-  const migrationPool = new Pool({ connectionString: databaseUrlUnpooled, max: 1, ssl: { rejectUnauthorized: true }, enableChannelBinding: true });
+  endpoint.pathname = `/${databaseName}`;
+  const databaseUrlUnpooled = endpoint.toString();
+  const databaseUrl = databaseUrlUnpooled;
+  const migrationPool = new Pool({ ...postgresConnection(databaseUrlUnpooled), max: 1 });
   try {
     await migrate(drizzle(migrationPool), { migrationsFolder: resolve(process.cwd(), "drizzle") });
   } catch (error) {
@@ -39,14 +42,14 @@ export async function createPostgresTestDatabase(label = "suite") {
   }
   await migrationPool.end();
 
-  let queryPool = new Pool({ connectionString: databaseUrl, max: 4, ssl: { rejectUnauthorized: true }, enableChannelBinding: true });
+  let queryPool = new Pool({ ...postgresConnection(databaseUrl), max: 4 });
   let closed = false;
   return {
     databaseName,
     databaseUrl,
     databaseUrlUnpooled,
     env(overrides = {}) {
-      return { ...process.env, DATABASE_URL: databaseUrl, DATABASE_URL_UNPOOLED: databaseUrlUnpooled, MCA_DB_POOL_MAX: "4", ...overrides };
+      return { ...process.env, DATABASE_URL: databaseUrl, DATABASE_URL_UNPOOLED: databaseUrlUnpooled, MCA_DB_POOL_MAX: "4", MCA_DOCUMENT_STORAGE_PROVIDER: "filesystem", ...overrides };
     },
     query(text, values = []) { return queryPool.query(text, values); },
     async close() {
@@ -60,7 +63,7 @@ export async function createPostgresTestDatabase(label = "suite") {
 }
 
 async function dropDatabase(adminUrl, databaseName) {
-  const admin = new Client({ connectionString: adminUrl, ssl: { rejectUnauthorized: true }, enableChannelBinding: true });
+  const admin = new Client(postgresConnection(adminUrl));
   await admin.connect();
   try { await admin.query(`DROP DATABASE IF EXISTS ${identifier(databaseName)} WITH (FORCE)`); }
   finally { await admin.end(); }

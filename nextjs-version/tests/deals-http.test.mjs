@@ -1,4 +1,4 @@
-import { createClerkHttpFixture } from "./helpers/clerk-http.mjs"
+import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
@@ -15,7 +15,7 @@ const distDirectoryName = ".next-test-deals"
 let server
 let serverOutput = ""
 let emailServer
-let clerkFixture
+let supabaseFixture
 let testDatabase
 
 async function waitForServer() {
@@ -29,14 +29,14 @@ async function waitForServer() {
 
 before(async () => {
   testDatabase = await createPostgresTestDatabase("deals_http")
-  clerkFixture = await createClerkHttpFixture(testDatabase)
+  supabaseFixture = await createSupabaseHttpFixture(testDatabase)
   emailServer = createServer((_request, response) => response.writeHead(202).end())
   await new Promise((resolve) => emailServer.listen(0, "127.0.0.1", resolve))
   const emailAddress = emailServer.address()
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
     cwd: projectRoot,
     env: testDatabase.env({
-      ...clerkFixture.env,
+      ...supabaseFixture.env,
       NODE_ENV: "development", NEXT_DIST_DIR: distDirectoryName, MCA_APP_ORIGIN: baseUrl,
       MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Atlas Capital",
       MCA_BOOTSTRAP_ADMIN_EMAIL: "deals-owner@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Deal Password 99!",
@@ -55,7 +55,7 @@ after(async () => {
     await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 2_000))])
   }
   if (emailServer) await new Promise((resolve) => emailServer.close(resolve))
-  if (clerkFixture) await clerkFixture.close()
+  if (supabaseFixture) await supabaseFixture.close()
   if (testDatabase) await testDatabase.close()
   rmSync(join(projectRoot, distDirectoryName), { recursive: true, force: true })
 })
@@ -65,7 +65,7 @@ async function request(path, { method = "GET", cookie, bearer, body, origin = ba
     method,
     headers: {
       ...(body ? { "content-type": "application/json" } : {}),
-      ...(await clerkFixture.headers(cookie)),
+      ...(await supabaseFixture.headers(cookie)),
       ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       ...(origin ? { origin } : {}),
     },
@@ -98,7 +98,7 @@ async function sessionCookie(userId, membershipId) {
 }
 
 test("deal routes satisfy SEN-32 and SEN-35 end to end", async () => {
-  const login = await clerkFixture.login("deals-owner@example.test", "Correct Deal Password 99!")
+  const login = await supabaseFixture.login("deals-owner@example.test", "Correct Deal Password 99!")
   assert.equal(login.response.status, 200, JSON.stringify(login.payload))
   const adminCookie = login.cookie
   const workspaceId = login.payload.membership.workspaceId
@@ -209,7 +209,7 @@ test("deal routes satisfy SEN-32 and SEN-35 end to end", async () => {
   assert.equal((await request(`/api/mca/deals/${managedOriginator.payload.id}`, { cookie: managerCookie })).response.status, 404)
   assert.equal((await request(`/api/mca/deals/${managedOriginator.payload.id}`, { cookie: replacementManagerCookie })).response.status, 200)
 
-  const repExport = await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await clerkFixture.headers(managedRepCookie) })
+  const repExport = await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await supabaseFixture.headers(managedRepCookie) })
   assert.equal(repExport.status, 403)
   assert.equal((await repExport.json()).error.code, "permission_denied")
   const readScopeExport = await request("/api/mca/deals/export", { bearer: readKey, origin: null })
@@ -227,11 +227,11 @@ test("deal routes satisfy SEN-32 and SEN-35 end to end", async () => {
   assert.match(exportedCsv, /'=2\+3/)
   assert.equal(exportedCsv.includes("4321"), false)
   assert.equal(exportedCsv.includes("ari@harbor.test"), false)
-  const adminExport = await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await clerkFixture.headers(adminCookie) })
+  const adminExport = await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await supabaseFixture.headers(adminCookie) })
   assert.equal(adminExport.status, 200)
   const disableExport = await request("/api/workspace", { method: "PATCH", cookie: adminCookie, body: { actionVisibility: { exportDeals: false } } })
   assert.equal(disableExport.response.status, 200)
-  assert.equal((await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await clerkFixture.headers(adminCookie) })).status, 403)
+  assert.equal((await fetch(`${baseUrl}/api/mca/deals/export`, { headers: await supabaseFixture.headers(adminCookie) })).status, 403)
   assert.equal((await fetch(`${baseUrl}/api/mca/deals/export`, { headers: { authorization: `Bearer ${exportKey}` } })).status, 403)
 
   const note = await request(`/api/mca/deals/${draft.payload.id}/notes`, { method: "POST", bearer: writeKey, origin: null, body: { body: "Requested updated statements", expectedVersion: draft.payload.version } })

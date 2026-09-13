@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -98,6 +98,7 @@ export const memberships = pgTable("memberships", {
 ]);
 
 export const users = pgTable("users", {
+	supabase_user_id: uuid().unique("users_supabase_user_id_key"),
 	clerk_user_id: text().unique(),
 	id: text().primaryKey().notNull(),
 	email: text().notNull(),
@@ -238,13 +239,71 @@ export const audit_events = pgTable("audit_events", {
 	check("audit_events_source_check", sql`source = ANY (ARRAY['user'::text, 'api_key'::text, 'system'::text])`),
 ]);
 
+export const mca_merchants = pgTable("mca_merchants", {
+	id: text().primaryKey().notNull(),
+	workspace_id: text().notNull(),
+	legal_name: text(),
+	dba_name: text(),
+	ein_cipher: text(),
+	ein_lookup_hash: text(),
+	contact_name: text(),
+	contact_email_cipher: text(),
+	contact_phone_cipher: text(),
+	address_json: text().default("{}").notNull(),
+	created_at: text().notNull(),
+	updated_at: text().notNull(),
+}, (table) => [
+	index("mca_merchants_workspace_id_idx").on(table.workspace_id),
+	index("mca_merchants_workspace_ein_lookup_hash_idx")
+		.on(table.workspace_id, table.ein_lookup_hash)
+		.where(sql`${table.ein_lookup_hash} IS NOT NULL`),
+	foreignKey({
+		columns: [table.workspace_id],
+		foreignColumns: [workspaces.id],
+		name: "mca_merchants_workspace_id_fkey",
+	}),
+]);
+
+export const mca_merchant_owners = pgTable("mca_merchant_owners", {
+	id: text().primaryKey().notNull(),
+	workspace_id: text().notNull(),
+	merchant_id: text().notNull(),
+	first_name: text(),
+	last_name: text(),
+	ownership_percent: doublePrecision(),
+	is_primary: integer().default(0).notNull(),
+	date_of_birth_cipher: text(),
+	identity_last4_cipher: text(),
+	identity_last4_lookup_hash: text(),
+	email_cipher: text(),
+	phone_cipher: text(),
+}, (table) => [
+	index("mca_merchant_owners_workspace_id_idx").on(table.workspace_id),
+	index("mca_merchant_owners_merchant_id_idx").on(table.merchant_id),
+	index("mca_merchant_owners_workspace_identity_last4_lookup_hash_idx")
+		.on(table.workspace_id, table.identity_last4_lookup_hash)
+		.where(sql`${table.identity_last4_lookup_hash} IS NOT NULL`),
+	foreignKey({
+		columns: [table.workspace_id],
+		foreignColumns: [workspaces.id],
+		name: "mca_merchant_owners_workspace_id_fkey",
+	}),
+	foreignKey({
+		columns: [table.merchant_id],
+		foreignColumns: [mca_merchants.id],
+		name: "mca_merchant_owners_merchant_id_fkey",
+	}).onDelete("cascade"),
+]);
+
 export const deals = pgTable("deals", {
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
+	merchant_id: text(),
 	display_id: text().notNull(),
 	legal_name: text(),
 	dba_name: text(),
 	ein_cipher: text(),
+	ein_lookup_hash: text(),
 	entity_type: text(),
 	address_json: text().default('{}').notNull(),
 	contact_name: text(),
@@ -268,11 +327,18 @@ export const deals = pgTable("deals", {
 	updated_at: text().notNull(),
 }, (table) => [
 	index("deals_workspace_status_idx").using("btree", table.workspace_id.asc().nullsLast(), table.status.asc().nullsLast(), table.updated_at.desc().nullsFirst()),
+	index("deals_merchant_id_idx").on(table.merchant_id),
+	index("deals_workspace_ein_lookup_hash_idx").on(table.workspace_id, table.ein_lookup_hash).where(sql`${table.ein_lookup_hash} IS NOT NULL`),
 	foreignKey({
 			columns: [table.workspace_id],
 			foreignColumns: [workspaces.id],
 			name: "deals_workspace_id_fkey"
 		}),
+	foreignKey({
+			columns: [table.merchant_id],
+			foreignColumns: [mca_merchants.id],
+			name: "deals_merchant_id_fkey"
+		}).onDelete("set null"),
 	unique("deals_workspace_id_display_id_key").on(table.display_id, table.workspace_id),
 	unique("deals_workspace_id_idempotency_key_key").on(table.idempotency_key, table.workspace_id),
 ]);
@@ -287,10 +353,12 @@ export const deal_owners = pgTable("deal_owners", {
 	is_primary: integer().default(0).notNull(),
 	date_of_birth_cipher: text(),
 	identity_last4_cipher: text(),
+	identity_last4_lookup_hash: text(),
 	email_cipher: text(),
 	phone_cipher: text(),
 }, (table) => [
 	index("deal_owners_scope_idx").using("btree", table.workspace_id.asc().nullsLast(), table.deal_id.asc().nullsLast()),
+	index("deal_owners_workspace_identity_last4_lookup_hash_idx").on(table.workspace_id, table.identity_last4_lookup_hash).where(sql`${table.identity_last4_lookup_hash} IS NOT NULL`),
 	foreignKey({
 			columns: [table.deal_id],
 			foreignColumns: [deals.id],

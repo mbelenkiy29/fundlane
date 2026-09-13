@@ -35,11 +35,11 @@ export const FUNDER_ANALYTICS_ATTRIBUTION = {
 } as const
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
-const SUBMITTED_SUBMISSION_STATUSES = new Set(["sent", "errored", "declined", "approved"])
-const SUBMITTED_JOB_STATES = new Set(["sent", "sending", "pending_portal"])
-const APPROVED_SUBMISSION_STATUSES = new Set(["approved"])
-const APPROVED_OFFER_STATUSES = new Set(["received", "presented", "accepted"])
-const APPROVED_MANUAL_STATES = new Set(["approved", "funded"])
+export const SUBMITTED_SUBMISSION_STATUSES = new Set(["sent", "errored", "declined", "approved"])
+export const SUBMITTED_JOB_STATES = new Set(["sent", "sending", "pending_portal"])
+export const APPROVED_SUBMISSION_STATUSES = new Set(["approved"])
+export const APPROVED_OFFER_STATUSES = new Set(["received", "presented", "accepted"])
+export const APPROVED_MANUAL_STATES = new Set(["approved", "funded"])
 
 export interface FunderCountMetric {
   count: number

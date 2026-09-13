@@ -1,90 +1,39 @@
 "use client"
 
+import Link from "next/link"
 import { Eye, MoreHorizontal } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { NO_ACTIVITY_YET, type Dashboard2ActivityRow } from "@/lib/mca/dashboard2/map-kpis"
 
-const transactions = [
-  {
-    id: "TXN-001",
-    customer: {
-      name: "Olivia Martin",
-      email: "olivia.martin@email.com",
-      avatar: "https://notion-avatars.netlify.app/api/avatar/?preset=female-7",
-    },
-    amount: "$1,999.00",
-    status: "completed",
-    date: "2 hours ago",
-  },
-  {
-    id: "TXN-002",
-    customer: {
-      name: "Jackson Lee",
-      email: "jackson.lee@email.com",
-      avatar: "https://notion-avatars.netlify.app/api/avatar/?preset=male-1",
-    },
-    amount: "$2,999.00",
-    status: "pending",
-    date: "5 hours ago",
-  },
-  {
-    id: "TXN-003",
-    customer: {
-      name: "Isabella Nguyen",
-      email: "isabella.nguyen@email.com",
-      avatar: "https://notion-avatars.netlify.app/api/avatar/?preset=female-2",
-    },
-    amount: "$39.00",
-    status: "completed",
-    date: "1 day ago",
-  },
-  {
-    id: "TXN-004",
-    customer: {
-      name: "William Kim",
-      email: "will@email.com",
-      avatar: "https://notion-avatars.netlify.app/api/avatar/?preset=male-5",
-    },
-    amount: "$299.00",
-    status: "failed",
-    date: "2 days ago",
-  },
-  {
-    id: "TXN-005",
-    customer: {
-      name: "Sofia Davis",
-      email: "sofia.davis@email.com",
-      avatar: "https://notion-avatars.netlify.app/api/avatar/?preset=female-4",
-    },
-    amount: "$99.00",
-    status: "completed",
-    date: "3 days ago",
-  },
-]
+export function RecentTransactions({ activity }: { activity?: Dashboard2ActivityRow[] }) {
+  const transactions = activity ?? []
 
-export function RecentTransactions() {
   return (
     <Card className="cursor-pointer">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <div>
           <CardTitle>Recent Transactions</CardTitle>
-          <CardDescription>Latest customer transactions</CardDescription>
+          <CardDescription>Latest funding and payment activity</CardDescription>
         </div>
-        <Button variant="outline" size="sm" className="cursor-pointer">
-          <Eye className="h-4 w-4 mr-2" />
-          View All
+        <Button variant="outline" size="sm" className="cursor-pointer" asChild>
+          <Link href="/payments">
+            <Eye className="h-4 w-4 mr-2" />
+            View All
+          </Link>
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        {transactions.map((transaction) => (
+        {transactions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{NO_ACTIVITY_YET}</p>
+        ) : transactions.map((transaction) => (
           <div key={transaction.id} >
             <div className="flex p-3 rounded-lg border gap-2">
               <Avatar className="h-8 w-8">
-                <AvatarImage src={transaction.customer.avatar} alt={transaction.customer.name} />
-                <AvatarFallback>{transaction.customer.name.split(" ").map(n => n[0]).join("")}</AvatarFallback>
+                <AvatarFallback>{transaction.customer.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</AvatarFallback>
               </Avatar>
               <div className="flex flex-1 items-center flex-wrap justify-between gap-1">
                 <div className="flex items-center space-x-3">

@@ -20,11 +20,7 @@ export default function SignInPage() {
     event.preventDefault()
     await flow.password(email, password)
   }
-  if (
-    flow.codeSent ||
-    flow.signIn.status === "needs_second_factor" ||
-    flow.signIn.status === "needs_client_trust"
-  )
+  if (flow.codeSent)
     return (
       <AuthShell
         title="Verify your sign-in"
@@ -38,7 +34,6 @@ export default function SignInPage() {
         <VerificationForm
           busy={loading}
           onVerify={flow.verify}
-          mfa={flow.signIn.status !== "needs_first_factor"}
         />
       </AuthShell>
     )
@@ -99,8 +94,9 @@ export default function SignInPage() {
           disabled={loading || !email}
           onClick={() => flow.sendCode(email)}
         >
-          Verify email / activate migrated account
+          Resend email verification
         </Button>
+        <p className="text-center text-xs text-muted-foreground">Existing users: <Link href="/forgot-password" className="underline">set a new password</Link> to activate your migrated account.</p>
         <p className="text-center text-xs text-muted-foreground">
           New team members join through an invitation.{" "}
           <Link href="/sign-up" className="underline">

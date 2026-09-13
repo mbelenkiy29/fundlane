@@ -49,12 +49,6 @@ services:
           name: fundlane-chatkit
           type: pserv
           envVarKey: MCA_ASSISTANT_SIGNING_SECRET
-      - key: MCA_CLERK_BILLING_ENABLED
-        value: "false"
-      - key: NEXT_PUBLIC_CLERK_SIGN_IN_URL
-        value: /sign-in
-      - key: NEXT_PUBLIC_CLERK_SIGN_UP_URL
-        value: /sign-up
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_URL_UNPOOLED
@@ -66,12 +60,6 @@ services:
       - key: MCA_DOCUMENT_TOKEN_SECRET
         sync: false
       - key: MCA_CLOSING_ARTIFACT_TOKEN_SECRET
-        sync: false
-      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-        sync: false
-      - key: CLERK_SECRET_KEY
-        sync: false
-      - key: CLERK_WEBHOOK_SIGNING_SECRET
         sync: false
       - key: MCA_CLOSING_EMAIL_PROVIDER
         sync: false

@@ -232,6 +232,13 @@ async function publicLink(token: string, lock = false, executor: DbExecutor = ge
   return row
 }
 
+export async function merchantUploadBinding(token: string, allowConsumed = false): Promise<{ workspaceId: string; dealId: string; linkId: string; category: DocumentCategory }> {
+  if (!/^[A-Za-z0-9_-]{30,200}$/.test(token)) throw new AppError(404, "upload_link_invalid", "This upload link is invalid or expired.")
+  const row = await getDatabase().prepare<Row>("SELECT * FROM mca_merchant_upload_links WHERE token_hash=?").get(hashOpaqueToken(token))
+  if (!row || row.revoked_at || String(row.expires_at) <= nowIso() || (!allowConsumed && Number(row.used_count) >= Number(row.max_uploads))) throw new AppError(404, "upload_link_invalid", "This upload link is invalid or expired.")
+  return { workspaceId: String(row.workspace_id), dealId: String(row.deal_id), linkId: String(row.id), category: String(row.destination_category) as DocumentCategory }
+}
+
 export async function inspectMerchantUpload(token: string): Promise<{ requestLabel: string; destinationCategory: string; expiresAt: string; remainingUploads: number }> {
   const row = await publicLink(token)
   return { requestLabel: row.label ? String(row.label) : "Requested document", destinationCategory: String(row.destination_category), expiresAt: String(row.expires_at), remainingUploads: Number(row.max_uploads) - Number(row.used_count) }

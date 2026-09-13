@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 import { randomBytes, createHmac } from "node:crypto"
 import { rmSync } from "node:fs"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { createClerkHttpFixture } from "./helpers/clerk-http.mjs"
+import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 const port = 4300 + (process.pid % 500),
   base = `http://localhost:${port}`,
   dist = ".next-test-foundation"
@@ -16,7 +16,7 @@ let db,
 const signingKey = randomBytes(32)
 before(async () => {
   db = await createPostgresTestDatabase("foundation_http")
-  fixture = await createClerkHttpFixture(db)
+  fixture = await createSupabaseHttpFixture(db)
   owner = await fixture.login(
     "owner@example.test",
     "Fixture unused password 99!"
@@ -90,7 +90,7 @@ async function request(
   return { response, payload }
 }
 
-test("Clerk session contract, unauthenticated JSON, and legacy cutover", async () => {
+test("Supabase session contract, unauthenticated JSON, and legacy cutover", async () => {
   const current = await request("/api/auth/session")
   assert.equal(current.response.status, 200, JSON.stringify(current.payload))
   assert.equal(current.payload.membership.id, owner.payload.membership.id)
@@ -101,20 +101,13 @@ test("Clerk session contract, unauthenticated JSON, and legacy cutover", async (
     headers: { cookie: owner.cookie },
   })
   assert.equal(old.response.status, 401)
-  for (const path of [
-    "auth/sign-in",
-    "auth/company-signup",
-    "auth/recovery/request",
-    "auth/recovery/reset",
-    "invitations/accept",
-  ]) {
-    const result = await request(`/api/${path}`, {
-      method: "POST",
-      body: { email: "owner@example.test", password: "ignored" },
-    })
-    assert.equal(result.response.status, 410)
-    assert.equal(result.response.headers.get("set-cookie"), null)
-  }
+  const credentials = await request("/api/auth/sign-in", { cookie:null,method:"POST",body:{email:"owner@example.test",password:"wrong-password"} })
+  assert.equal(credentials.response.status,401)
+  const migrated=await request("/api/auth/recovery/request",{cookie:null,method:"POST",body:{email:"unknown@example.test"}})
+  assert.equal(migrated.response.status,200)
+  const unauthReset=await request("/api/auth/recovery/reset",{cookie:null,method:"POST",body:{password:"Strong replacement password99!"}})
+  assert.equal(unauthReset.response.status,401)
+
 })
 test("unverified or passwordless identities and revoked or expired sessions cannot enter MCA", async () => {
   for (const [key, value] of [
@@ -135,7 +128,7 @@ test("unverified or passwordless identities and revoked or expired sessions cann
   }
   assert.equal((await request("/api/auth/session")).response.status, 200)
 })
-test("Clerk invitation reserves a seat, resends once, and activates only the invited member", async () => {
+test("Supabase invitation reserves a seat, resends once, and activates only the invited member", async () => {
   const invited = await request("/api/invitations", {
     method: "POST",
     body: { email: "rep@example.test", name: "Rep", role: "rep" },
@@ -149,21 +142,11 @@ test("Clerk invitation reserves a seat, resends once, and activates only the inv
   assert.equal(resend.response.status, 201, JSON.stringify(resend.payload))
   assert.equal(resend.payload.membershipId, invited.payload.membershipId)
   assert.equal(resend.payload.id, invited.payload.id)
-  assert.equal(
-    fixture.invitations.filter((i) => i.status === "pending").length,
-    1
-  )
-  fixture.invitations.find((i) => i.status === "pending").status = "accepted"
-  const acceptedResend = await request(
-    `/api/invitations/${invited.payload.id}/resend`,
-    { method: "POST", body: {} }
-  )
-  assert.equal(acceptedResend.response.status, 201)
-  assert.equal(acceptedResend.payload.id, invited.payload.id)
-  assert.equal(
-    fixture.invitations.filter((i) => i.status === "pending").length,
-    0
-  )
+  assert.equal(fixture.invitations.length,2)
+  const originalToken=fixture.invitations[0].token
+  const activeToken=fixture.invitations.at(-1).token
+  assert.notEqual(originalToken,activeToken)
+  assert.equal((await request(`/api/invitations/accept?token=${encodeURIComponent(originalToken)}`)).response.status,400)
   // Mint a provider-authenticated session for the invited identity, while local membership remains pending.
   const row = (
     await db.query("SELECT user_id FROM memberships WHERE id=$1", [
@@ -173,6 +156,12 @@ test("Clerk invitation reserves a seat, resends once, and activates only the inv
   const { createSession } = await import("../src/lib/mca/sessions.ts")
   const sess = await createSession(row.user_id, invited.payload.membershipId)
   const repCookie = `mca_session=${sess.token}`
+  const accepted=await request("/api/invitations/accept",{cookie:repCookie,method:"POST",body:{token:activeToken}})
+  assert.equal(accepted.response.status,200,JSON.stringify(accepted.payload))
+  const used=await request("/api/invitations/accept",{cookie:repCookie,method:"POST",body:{token:activeToken}})
+  assert.equal(used.response.status,400)
+  const acceptedResend=await request(`/api/invitations/${invited.payload.id}/resend`,{method:"POST",body:{}})
+  assert.equal(acceptedResend.response.status,409)
   const joined = await request("/api/auth/session", { cookie: repCookie })
   assert.equal(joined.response.status, 200, JSON.stringify(joined.payload))
   assert.equal(joined.payload.membership.role, "rep")
@@ -222,16 +211,16 @@ test("seat races and direct cross-origin requests remain protected", async () =>
     403
   )
 })
-test("a Neon failure after provider delivery preserves the reserved seat and can be resent", async () => {
+test("a database failure after provider delivery preserves the reserved seat and can be resent", async () => {
   await db.query("UPDATE workspaces SET seat_limit=3 WHERE id=$1", [owner.payload.membership.workspaceId])
-  await db.query("CREATE FUNCTION fail_clerk_mapping() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic mapping failure'; END $$")
-  await db.query("CREATE TRIGGER fail_clerk_mapping BEFORE UPDATE OF clerk_invitation_id ON invitations FOR EACH ROW EXECUTE FUNCTION fail_clerk_mapping()")
+  await db.query("CREATE FUNCTION fail_invitation_delivery() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic mapping failure'; END $$")
+  await db.query("CREATE TRIGGER fail_invitation_delivery BEFORE UPDATE OF delivery_correlation_id ON invitations FOR EACH ROW EXECUTE FUNCTION fail_invitation_delivery()")
   try {
     const failed = await request("/api/invitations", { method: "POST", body: { email: "retry@example.test", name: "Retry", role: "rep" } })
     assert.equal(failed.response.status, 500)
   } finally {
-    await db.query("DROP TRIGGER fail_clerk_mapping ON invitations")
-    await db.query("DROP FUNCTION fail_clerk_mapping()")
+    await db.query("DROP TRIGGER fail_invitation_delivery ON invitations")
+    await db.query("DROP FUNCTION fail_invitation_delivery()")
   }
   const rows = (await db.query("SELECT i.id, i.membership_id FROM invitations i JOIN memberships m ON m.id=i.membership_id WHERE i.email='retry@example.test' AND m.status='pending'")).rows
   assert.equal(rows.length, 1)
@@ -240,9 +229,9 @@ test("a Neon failure after provider delivery preserves the reserved seat and can
   assert.equal(retried.response.status, 201, JSON.stringify(retried.payload))
   assert.equal(retried.payload.membershipId, rows[0].membership_id)
   assert.equal(retried.payload.id, rows[0].id)
-  assert.equal(fixture.invitations.filter((i) => i.email_address === "retry@example.test" && i.status === "pending").length, 1)
+  assert.equal(fixture.invitations.filter((i) => i.email_address === "retry@example.test").length, 2)
 })
-test("signed webhook replay is harmless and invalid signatures are rejected", async () => {
+test("retired Clerk webhook cannot change data even with a valid old signature", async () => {
   const event = {
     type: "user.updated",
     object: "event",
@@ -253,7 +242,7 @@ test("signed webhook replay is harmless and invalid signatures are rejected", as
     body: event,
     cookie: null,
   })
-  assert.equal(unsigned.response.status, 400)
+  assert.equal(unsigned.response.status, 410)
   const id = "evt_fixture",
     time = String(Math.floor(Date.now() / 1000))
   const signature = createHmac("sha256", signingKey)
@@ -270,7 +259,7 @@ test("signed webhook replay is harmless and invalid signatures are rejected", as
         "svix-signature": `v1,${signature}`,
       },
     })
-    assert.equal(result.response.status, 200, JSON.stringify(result.payload))
+    assert.equal(result.response.status, 410, JSON.stringify(result.payload))
   }
   assert.equal(
     (
@@ -279,6 +268,16 @@ test("signed webhook replay is harmless and invalid signatures are rejected", as
         [id]
       )
     ).rows[0].count,
-    1
+    0
   )
+})
+
+test("logout immediately revokes a still-cryptographically-valid Supabase access token", async () => {
+  const login=await fixture.login("logout@example.test","Logout fixture password 99!")
+  const authHeaders=await fixture.headers(login.cookie)
+  assert.equal((await request("/api/auth/session",{cookie:login.cookie})).response.status,200)
+  const signedOut=await fetch(`${base}/api/auth/sign-out`,{method:"POST",headers:{...authHeaders,origin:base}})
+  assert.equal(signedOut.status,200)
+  const replay=await fetch(`${base}/api/auth/session`,{headers:authHeaders})
+  assert.equal(replay.status,401)
 })

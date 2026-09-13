@@ -2,7 +2,8 @@ import "server-only"
 import { z } from "zod"
 import { getDatabase, newId, nowIso, withTransaction } from "../db"
 import { AppError } from "../errors"
-import { getClerkClient } from "../clerk-client"
+import { getSupabaseAdminClient } from "../../supabase/server"
+import { verifiedSupabaseUser } from "../supabase-auth"
 import { deliverEmail } from "../email"
 import { creditMonth, nextReset, type CreditAccount } from "./credits"
 import { seal, unseal } from "./repository"
@@ -221,31 +222,12 @@ export async function markCreditNotificationRead(
     )
     .run(nowIso(), id, workspaceId, userId)
 }
-async function currentAdmin(workspaceId: string, userId: string) {
-  const r = await getDatabase()
-    .prepare<{
-      email: string
-      clerk_user_id: string | null
-      clerk_organization_id: string | null
-    }>(
-      "SELECT u.email,u.clerk_user_id,w.clerk_organization_id FROM memberships m JOIN users u ON u.id=m.user_id JOIN workspaces w ON w.id=m.workspace_id WHERE m.workspace_id=? AND m.user_id=? AND m.status='active' AND m.role IN ('admin','super_admin') LIMIT 1"
-    )
-    .get(workspaceId, userId)
-  if (!r?.clerk_user_id || !r.clerk_organization_id) return null
-  const client = getClerkClient()
-  const user = await client.users.getUser(r.clerk_user_id)
-  if (user.banned || user.locked) return null
-  const members = await client.organizations.getOrganizationMembershipList({
-    organizationId: r.clerk_organization_id,
-    userId: [r.clerk_user_id],
-    limit: 1
-  })
-  const email = user.emailAddresses.find(
-    (e) =>
-      e.id === user.primaryEmailAddressId &&
-      e.verification?.status === "verified"
-  )
-  return members.data.length && email ? email.emailAddress : null
+async function currentAdmin(workspaceId: string,userId: string) {
+  const row=await getDatabase().prepare<{supabase_user_id:string|null}>(`SELECT u.supabase_user_id FROM memberships m JOIN users u ON u.id=m.user_id
+    WHERE m.workspace_id=? AND m.user_id=? AND m.status='active' AND m.role IN ('admin','super_admin') LIMIT 1`).get(workspaceId,userId)
+  if(!row?.supabase_user_id)return null
+  const {data,error}=await getSupabaseAdminClient().auth.admin.getUserById(row.supabase_user_id)
+  return !error && data.user && verifiedSupabaseUser(data.user) && data.user.app_metadata.mca_migration_pending !== true ? data.user.email! : null
 }
 export async function deliverCreditAlerts(
   workspaceId?: string,

@@ -194,7 +194,7 @@ test("MIC-180: credential is encrypted workspace-bound and never returned", asyn
 })
 
 test("MIC-180: disabled config hides run and API returns 409 datamerch_disabled", async () => {
-  const deal = (await createDeal(actor(), { idempotencyKey: "disabled-deal", legalName: "Harbor Coffee LLC", ein: "12-3456789" })).deal
+  const deal = (await createDeal(actor(), { idempotencyKey: "disabled-deal", legalName: "Harbor Coffee LLC", ein: "12-3456780" })).deal
   await saveDataMerchConfig(actor(), { enabled: false, credential: SECRET })
 
   const view = await getDealDataMerch(actor(), deal.id)
@@ -263,7 +263,7 @@ test("MIC-180: no_result versus failed persist with deal version", async () => {
 
 test("MIC-180: expired credential is recoverable and secrets stay out of the body", async () => {
   await enable(ids.workspace, SECRET, { credentialExpiresAt: "2020-01-01T00:00:00.000Z" })
-  const deal = (await createDeal(actor(), { idempotencyKey: "expired-deal", legalName: "Expired Merchant LLC", ein: "12-3456789" })).deal
+  const deal = (await createDeal(actor(), { idempotencyKey: "expired-deal", legalName: "Expired Merchant LLC", ein: "12-3456781" })).deal
 
   const expired = await runDataMerchCheck(actor(), deal.id)
   assert.equal(expired.status, "failed")
@@ -301,7 +301,7 @@ test("MIC-180: missing EIN and legal name is a validation error", async () => {
 
 test("MIC-180: cross-workspace access is 404 and retries keep the same check id", async () => {
   await enable()
-  const deal = (await createDeal(actor(), { idempotencyKey: "tenant-deal", legalName: "Tenant Merchant LLC", ein: "12-3456789" })).deal
+  const deal = (await createDeal(actor(), { idempotencyKey: "tenant-deal", legalName: "Tenant Merchant LLC", ein: "12-3456782" })).deal
   await assert.rejects(
     () => runDataMerchCheck(actor(ids.otherWorkspace), deal.id),
     (error: { code?: string; status?: number }) => error.code === "deal_not_found" && error.status === 404,
@@ -316,7 +316,7 @@ test("MIC-180: cross-workspace access is 404 and retries keep the same check id"
 
 test("MIC-180: concurrent retries claim one provider lookup and one completion audit", async () => {
   await enable()
-  const deal = (await createDeal(actor(), { idempotencyKey: "concurrent-deal", legalName: "Concurrent Merchant LLC", ein: "12-3456789" })).deal
+  const deal = (await createDeal(actor(), { idempotencyKey: "concurrent-deal", legalName: "Concurrent Merchant LLC", ein: "12-3456783" })).deal
   const concurrentActor = { ...actor(), correlationId: "corr-concurrent" }
   let releaseLookup!: () => void
   let markLookupStarted!: () => void
@@ -409,7 +409,7 @@ test("MIC-180: an expired claim can be recovered and its stale completion is fen
 })
 
 test("MIC-180: admin configures, deals:write runs, deals:read views, intake:write is 403", async () => {
-  const deal = (await createDeal(actor(), { idempotencyKey: "scope-deal", legalName: "Scope Merchant LLC", ein: "12-3456789" })).deal
+  const deal = (await createDeal(actor(), { idempotencyKey: "scope-deal", legalName: "Scope Merchant LLC", ein: "12-3456784" })).deal
 
   const intakeGet = await getConfig(bearerRequest("/api/mca/datamerch", "intake-secret"))
   assert.equal(intakeGet.status, 403)

@@ -1,11 +1,11 @@
-/** Business-service unit tests stub the identity boundary; Clerk itself is covered in clerk-auth.test.ts and browser/HTTP checks. */
+/** Business-service unit tests stub the identity boundary; Supabase itself is covered in supabase-auth.test.ts and browser/HTTP checks. */
 import { mock } from "node:test"
 import { getDatabase, nowIso } from "../../src/lib/mca/db"
 import { hashOpaqueToken } from "../../src/lib/mca/crypto"
 // The old fixture token is just a lookup key in these tests. Production rejects mca_session cookies.
-mock.module(new URL("../../src/lib/mca/clerk-auth.ts", import.meta.url).href, {
+mock.module(new URL("../../src/lib/mca/supabase-auth.ts", import.meta.url).href, {
   namedExports: {
-    authenticateClerkSession: async (request?: Request) => {
+    authenticateSupabaseSession: async (request?: Request) => {
       const token = request?.headers
         .get("cookie")
         ?.match(/(?:^|;\s*)mca_session=([^;]+)/)?.[1]

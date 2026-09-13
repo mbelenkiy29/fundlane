@@ -7,6 +7,7 @@ import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { getWorkspaceSettings } from "../workspaces"
 import { isHomeActionCategory, type HomeQueueQuery } from "./contracts"
+import { isHomeKpiPeriod, type HomeKpiQuery } from "./kpi-contracts"
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
 
@@ -31,4 +32,16 @@ export function parseHomeQueueQuery(search: URLSearchParams, fallbackNow: string
     throw new AppError(422, "invalid_filter", "category must be own_action, overdue_waiting, or renewal.", { category: ["Choose own_action, overdue_waiting, or renewal."] })
   }
   return { nowIso: now, ...(category && isHomeActionCategory(category) ? { category } : {}) }
+}
+
+export function parseHomeKpiQuery(search: URLSearchParams, fallbackNow: string): HomeKpiQuery {
+  const period = search.get("period")?.trim() ?? ""
+  if (!isHomeKpiPeriod(period)) {
+    throw new AppError(422, "invalid_filter", "period must be mtd or ytd.", { period: ["Choose mtd or ytd."] })
+  }
+  const now = search.get("now")?.trim() || fallbackNow
+  if (!ISO.test(now) || Number.isNaN(Date.parse(now))) {
+    throw new AppError(422, "invalid_filter", "now must be a UTC ISO-8601 timestamp.", { now: ["Use a UTC timestamp such as 2026-01-15T12:00:00.000Z."] })
+  }
+  return { period, nowIso: now }
 }

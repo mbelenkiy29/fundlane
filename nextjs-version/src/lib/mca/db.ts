@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
+import { postgresConnection } from "./db-connection";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
 
 export interface RunResult { changes: number }
@@ -38,7 +39,7 @@ function databaseUrl(): string {
 }
 
 function poolSize(): number {
-  const parsed = Number.parseInt(process.env.MCA_DB_POOL_MAX ?? "10", 10);
+  const parsed = Number.parseInt(process.env.MCA_DB_POOL_MAX ?? (process.env.VERCEL ? "2" : "10"), 10);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 50) : 10;
 }
 
@@ -52,12 +53,15 @@ function getPool(): Pool {
   }
   if (!globalDatabase.__mcaDatabasePool) {
     globalDatabase.__mcaDatabasePool = new Pool({
-      connectionString: url,
+      ...postgresConnection(url),
       max: poolSize(),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
-      ssl: { rejectUnauthorized: true },
-      enableChannelBinding: true,
+    });
+    // pg removes disconnected idle clients automatically, but emits an error that
+    // otherwise terminates the server. Active query errors still reject normally.
+    globalDatabase.__mcaDatabasePool.on("error", () => {
+      console.error(JSON.stringify({ event: "database_idle_connection_lost" }));
     });
     globalDatabase.__mcaDatabaseUrl = url;
   }

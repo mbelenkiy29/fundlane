@@ -42,6 +42,7 @@ import type {
 } from "./schema"
 import { submissionMissingFields, validateDealInput } from "./validation"
 import { DEAL_STATUS_LABELS } from "./schema"
+import { getAttachPayload, merchantCreateWarnings } from "../merchants/service"
 
 function maskEmail(value?: string): string | undefined {
   if (!value) return undefined
@@ -196,6 +197,28 @@ function assertValid(input: CreateDealInput | UpdateDealInput): void {
   if (Object.keys(fieldErrors).length) throw new AppError(422, "validation_failed", "Review the highlighted deal fields.", fieldErrors)
 }
 
+function mergeOmittedWriteFields(input: CreateDealInput, fields: DealWriteInput): CreateDealInput {
+  return {
+    ...input,
+    legalName: input.legalName ?? fields.legalName,
+    dbaName: input.dbaName ?? fields.dbaName,
+    ein: input.ein ?? fields.ein,
+    entityType: input.entityType ?? fields.entityType,
+    address: input.address ?? fields.address,
+    contactName: input.contactName ?? fields.contactName,
+    contactEmail: input.contactEmail ?? fields.contactEmail,
+    contactPhone: input.contactPhone ?? fields.contactPhone,
+    startDate: input.startDate ?? fields.startDate,
+    industry: input.industry ?? fields.industry,
+    naicsCode: input.naicsCode ?? fields.naicsCode,
+    monthlyRevenue: input.monthlyRevenue ?? fields.monthlyRevenue,
+    ficoScore: input.ficoScore ?? fields.ficoScore,
+    fundingPurpose: input.fundingPurpose ?? fields.fundingPurpose,
+    requestedAmount: input.requestedAmount ?? fields.requestedAmount,
+    owners: input.owners ?? fields.owners,
+  }
+}
+
 export async function listDeals(actor: DealActor, filters: DealFilters): Promise<DealListResponse> {
   const visible = (await listDealRecords(actor.workspaceId, filters)).filter((record) => canActorAccessDeal(actor, record))
   const deals = visible.map(toDealListItem)
@@ -237,7 +260,7 @@ export async function getDealForDocument(actor: DealActor, id: string): Promise<
   return assertVisible(actor, await findDealById(actor.workspaceId, id))
 }
 
-export async function createDeal(actor: DealActor, input: CreateDealInput, transactionCheckpoint?: DealTransactionCheckpoint): Promise<{ deal: DealDetail; created: boolean }> {
+export async function createDeal(actor: DealActor, input: CreateDealInput, transactionCheckpoint?: DealTransactionCheckpoint): Promise<{ deal: DealDetail; created: boolean; warnings: string[] }> {
   const configuredActions = (await getWorkspaceSettings(actor.workspaceId)).actionVisibility
   const createAllowed = actor.role ? isActionAllowed(actor.role, "createDeal", configuredActions) : configuredActions.createDeal
   if (!createAllowed) throw new AppError(403, "action_disabled", "Creating deals is disabled for this workspace.")
@@ -246,9 +269,21 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
   }
   if (!transactionCheckpoint) {
     const retried = await findDealByIdempotencyKey(actor.workspaceId, input.idempotencyKey)
-    if (retried) return { deal: toDealDetail(assertVisible(actor, retried)), created: false }
+    if (retried) return { deal: toDealDetail(assertVisible(actor, retried)), created: false, warnings: [] }
+  }
+  const attachMerchantId = input.attachMerchantId?.trim() || undefined
+  const forceDuplicate = Boolean(input.forceDuplicate) && !attachMerchantId
+  if (attachMerchantId) {
+    const attached = await getAttachPayload(actor, attachMerchantId)
+    input = mergeOmittedWriteFields(input, attached.fields)
   }
   assertValid(input)
+  const warnings = await merchantCreateWarnings(actor, {
+    ein: input.ein,
+    owners: input.owners,
+    attachMerchantId,
+    forceDuplicate,
+  })
   const now = nowIso()
   const owners = mergeOwners([], input.owners)
   const defaultAssignments = !input.assignments && actor.membershipId
@@ -263,7 +298,7 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
   }
   const id = newId()
   const record: DealRecord = {
-    id, workspaceId: actor.workspaceId, displayId: `MCA-${id.slice(0, 8).toUpperCase()}`, ...base,
+    id, workspaceId: actor.workspaceId, merchantId: attachMerchantId, displayId: `MCA-${id.slice(0, 8).toUpperCase()}`, ...base,
     status: "lead" as const, pipelineVersion: 1 as const, draftState: "partial" as const, missingRequiredFields: [],
     owners, assignments, notes: [], activity: [], submissions: [], offers: [],
     fieldSources: updatedSources(undefined, input, actor, now), idempotencyKey: input.idempotencyKey,
@@ -272,10 +307,10 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
   record.missingRequiredFields = submissionMissingFields(record)
   record.draftState = record.missingRequiredFields.length ? "partial" : "submission_ready"
   record.activity = [activity(actor, "created", "Deal draft created", 1, now)]
-  const saved = await insertDeal(record, transactionCheckpoint)
+  const saved = await insertDeal(record, transactionCheckpoint, { forceNewMerchant: forceDuplicate })
   const visible = assertVisible(actor, saved.record)
   if (saved.inserted) await recordAuditEvent({ context: actor, action: "deal.created", resourceType: "deal", resourceId: visible.id, metadata: { version: 1, draftState: visible.draftState }, correlationId: actor.correlationId })
-  return { deal: toDealDetail(visible), created: saved.inserted }
+  return { deal: toDealDetail(visible), created: saved.inserted, warnings }
 }
 
 export async function updateDealRecord(actor: DealActor, id: string, input: UpdateDealInput): Promise<DealDetail> {

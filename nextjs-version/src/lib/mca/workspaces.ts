@@ -51,7 +51,7 @@ function mapWorkspace(row: WorkspaceRow): WorkspaceSettings {
     logoUrl: row.logo_url,
     timezone: row.timezone,
     seatLimit: row.seat_limit,
-    seatLimitManaged: billingEnabled() && Boolean(row.clerk_organization_id),
+    seatLimitManaged: billingEnabled(),
     featureFlags: parseJson(row.feature_flags, DEFAULT_FEATURE_FLAGS),
     pageVisibility: parseJson(row.page_visibility, DEFAULT_PAGE_VISIBILITY),
     actionVisibility: parseJson(row.action_visibility, DEFAULT_ACTION_VISIBILITY),

@@ -1,4 +1,4 @@
-import type { Role } from "../types"
+import type { ApiKeyScope, Role } from "../types"
 
 export const DEAL_STATUSES = [
   "lead",
@@ -52,6 +52,9 @@ export type DealSource = "manual" | "import" | "application_scan" | "api" | "sys
 export type DraftState = "partial" | "submission_ready"
 
 export interface DealActor {
+  apiKeyId?: string
+  sessionId?: string | null
+  scopes?: readonly ApiKeyScope[]
   workspaceId: string
   userId: string | null
   membershipId: string | null
@@ -150,6 +153,7 @@ export interface DealOfferSummary {
 export interface DealRecord {
   id: string
   workspaceId: string
+  merchantId?: string
   displayId: string
   legalName?: string
   dbaName?: string
@@ -228,6 +232,8 @@ export interface DealWriteInput {
 
 export interface CreateDealInput extends DealWriteInput {
   idempotencyKey: string
+  forceDuplicate?: boolean
+  attachMerchantId?: string
 }
 
 export interface UpdateDealInput extends DealWriteInput {

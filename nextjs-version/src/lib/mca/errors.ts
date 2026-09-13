@@ -7,6 +7,7 @@ export class AppError extends Error {
     public readonly code: string,
     message: string,
     public readonly fieldErrors?: Record<string, string[]>,
+    public readonly extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
@@ -15,6 +16,7 @@ export class AppError extends Error {
 
 export function apiError(error: unknown, correlationId?: string): NextResponse<ApiErrorBody> {
   const known = error instanceof AppError;
+  const extra = known && error.extra ? error.extra : undefined;
   const status = known ? error.status : 500;
   const body: ApiErrorBody = {
     error: {
@@ -22,7 +24,9 @@ export function apiError(error: unknown, correlationId?: string): NextResponse<A
       message: known ? error.message : "An unexpected error occurred.",
       ...(known && error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
       ...(correlationId ? { correlationId } : {}),
+      ...extra,
     },
+    ...(known && error.code === "merchant_exists" ? extra : {}),
   };
   return NextResponse.json(body, { status });
 }
