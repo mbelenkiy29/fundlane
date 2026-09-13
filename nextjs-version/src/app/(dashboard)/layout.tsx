@@ -2,6 +2,7 @@ import { assistantEnabled } from "@/lib/mca/assistant/security"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { DashboardChrome } from "@/components/mca/dashboard-chrome"
+import { NewDealProvider } from "@/components/mca/deals/new-deal-provider"
 import { authenticateClerkSession } from "@/lib/mca/clerk-auth"
 import { auth } from "@clerk/nextjs/server"
 import { getSessionResponse } from "@/lib/mca/sessions"
@@ -33,5 +34,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <><DashboardChrome session={session} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""}>{children}</DashboardChrome><PwaLifecycle /></>
+  return <><NewDealProvider><DashboardChrome session={session} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
 }

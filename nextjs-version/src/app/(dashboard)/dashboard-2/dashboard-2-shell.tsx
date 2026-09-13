@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { NewDealModal } from "@/components/mca/deals/new-deal-modal"
+import { useNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { HomeKpis } from "@/lib/mca/home/kpi-contracts"
 import { mapDashboard2, periodForDateRange, type Dashboard2DateRange } from "@/lib/mca/dashboard2/map-kpis"
@@ -15,11 +15,11 @@ import { SalesChart } from "./components/sales-chart"
 import { TopProducts } from "./components/top-products"
 
 export function Dashboard2Shell({ initialKpis }: { initialKpis: HomeKpis | null }) {
+  const newDeal = useNewDeal()
   const [dateRange, setDateRange] = React.useState<Dashboard2DateRange>("30d")
   const [kpis, setKpis] = React.useState<HomeKpis | null>(initialKpis)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState<string>()
-  const [dealOpen, setDealOpen] = React.useState(false)
   const period = periodForDateRange(dateRange)
   const view = mapDashboard2(kpis, { dateRange })
   const lastUpdated = kpis?.asOf ? new Date(kpis.asOf).toLocaleString() : "—"
@@ -41,6 +41,8 @@ export function Dashboard2Shell({ initialKpis }: { initialKpis: HomeKpis | null 
     void refresh()
   }, [kpis?.period, period, refresh])
 
+  React.useEffect(() => newDeal.subscribe(() => { void refresh() }), [newDeal, refresh])
+
   return (
     <div className="flex-1 space-y-6 px-6 pt-0">
         <div className="flex md:flex-row flex-col md:items-center justify-between gap-4 md:gap-6">
@@ -50,7 +52,7 @@ export function Dashboard2Shell({ initialKpis }: { initialKpis: HomeKpis | null 
               Monitor your business performance and key metrics in real-time
             </p>
           </div>
-          <QuickActions onNewDeal={() => setDealOpen(true)} />
+          <QuickActions onNewDeal={() => newDeal.open()} />
         </div>
 
         <DashboardHeader
@@ -82,7 +84,6 @@ export function Dashboard2Shell({ initialKpis }: { initialKpis: HomeKpis | null 
             states={view.states}
           />
         </div>
-        <NewDealModal open={dealOpen} onOpenChange={setDealOpen} onCreated={() => void refresh()} />
       </div>
   )
 }

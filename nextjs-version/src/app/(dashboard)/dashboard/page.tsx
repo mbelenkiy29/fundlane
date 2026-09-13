@@ -1,28 +1,28 @@
-import Link from "next/link"
-import { Plus } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { authenticateClerkSession } from "@/lib/mca/clerk-auth"
+import { actorForDeals } from "@/lib/mca/deals/service"
+import { nowIso } from "@/lib/mca/db"
+import type { HomeKpis } from "@/lib/mca/home/kpi-contracts"
+import { getHomeKpis } from "@/lib/mca/home/kpis"
+import { authenticateSupabaseSession } from "@/lib/mca/supabase-auth"
 import { getSessionResponse } from "@/lib/mca/sessions"
-import { NeedsAction } from "@/components/mca/home/needs-action"
+import { HomeWorkspace } from "@/components/mca/home/home-workspace"
 
 export default async function DashboardPage() {
-  const context = await authenticateClerkSession()
+  const context = await authenticateSupabaseSession()
   const session = context ? await getSessionResponse(context) : null
   const firstName = session?.user?.name.split(" ")[0] ?? "there"
+  let initialKpis: HomeKpis | null = null
+  if (context) {
+    try {
+      initialKpis = await getHomeKpis(await actorForDeals(context), { period: "mtd", nowIso: nowIso() })
+    } catch {
+      initialKpis = null
+    }
+  }
   return (
-    <div className="space-y-6 px-4 lg:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Good afternoon, {firstName}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Here’s where your brokerage needs attention.</p>
-        </div>
-        {session?.permissions?.actions.createDeal && (
-          <Button asChild>
-            <Link href="/pipeline?create=1"><Plus /> New deal</Link>
-          </Button>
-        )}
-      </div>
-      <NeedsAction />
-    </div>
+    <HomeWorkspace
+      firstName={firstName}
+      canCreateDeal={Boolean(session?.permissions?.actions.createDeal)}
+      initialKpis={initialKpis}
+    />
   )
 }
