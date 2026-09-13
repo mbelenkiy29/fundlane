@@ -1,3 +1,4 @@
+import { postgresConnection } from "../src/lib/mca/db-connection"
 import "./helpers/business-auth";
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
@@ -225,11 +226,7 @@ function params(id: string) {
 }
 
 async function holdFunderLock(workspaceId: string, funderId: string) {
-  const client = new Client({
-    connectionString: testDatabase.databaseUrlUnpooled,
-    ssl: { rejectUnauthorized: true },
-    enableChannelBinding: true,
-  })
+  const client = new Client(postgresConnection(testDatabase.databaseUrlUnpooled))
   await client.connect()
   await client.query("BEGIN")
   await client.query("SELECT id FROM mca_funders WHERE workspace_id = $1 AND id = $2 FOR UPDATE", [workspaceId, funderId])

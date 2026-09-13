@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
 import { postgresConnection } from "./db-connection";
+import { assertHostedSupabaseConfig } from "./hosted-config";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
 
 export interface RunResult { changes: number }
@@ -30,6 +31,7 @@ const transactionContext = new AsyncLocalStorage<DbExecutor>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
 
 function databaseUrl(): string {
+  assertHostedSupabaseConfig();
   const value = process.env.DATABASE_URL?.trim();
   if (!value) throw new Error("DATABASE_URL is required. Fundlane no longer supports a SQLite runtime fallback.");
   // Keep certificate and hostname verification explicit across pg versions.
