@@ -18,7 +18,7 @@ export default async function DashboardPage() {
         </div>
         {session?.permissions?.actions.createDeal && (
           <Button asChild>
-            <Link href="/deals?create=1"><Plus /> New deal</Link>
+            <Link href="/pipeline?create=1"><Plus /> New deal</Link>
           </Button>
         )}
       </div>

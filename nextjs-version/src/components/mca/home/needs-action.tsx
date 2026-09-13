@@ -239,7 +239,7 @@ export function NeedsAction() {
               <>
                 <div className="flex flex-wrap gap-2">
                   <Button asChild size="sm" variant="outline">
-                    <Link href={`/deals?deal=${encodeURIComponent(panel.dealId)}`}>{HOME_COPY.fullDeal} <ArrowUpRight className="size-4" /></Link>
+                    <Link href={`/pipeline?deal=${encodeURIComponent(panel.dealId)}`}>{HOME_COPY.fullDeal} <ArrowUpRight className="size-4" /></Link>
                   </Button>
                   {panel.workflowActions.find((item) => item.id === "pitched")?.enabled ? (
                     <Button type="button" size="sm" disabled={Boolean(busy)} onClick={pitched}>
@@ -249,7 +249,7 @@ export function NeedsAction() {
                   ) : null}
                   {panel.workflowActions.find((item) => item.id === "submit")?.enabled ? (
                     <Button asChild size="sm">
-                      <Link href={`/deals?deal=${encodeURIComponent(panel.dealId)}&submit=1`}>{HOME_COPY.submit}</Link>
+                      <Link href={`/pipeline?deal=${encodeURIComponent(panel.dealId)}&submit=1`}>{HOME_COPY.submit}</Link>
                     </Button>
                   ) : null}
                 </div>

@@ -887,13 +887,13 @@ export function DealAssistant({
             <div className="flex flex-wrap gap-3 text-xs">
               <a
                 className="underline"
-                href={`/deals?deal=${encodeURIComponent(view?.dealId ?? dealId ?? "")}&tab=submissions`}
+                href={`/pipeline?deal=${encodeURIComponent(view?.dealId ?? dealId ?? "")}&tab=submissions`}
               >
                 Submission records
               </a>
               <a
                 className="underline"
-                href={`/deals?deal=${encodeURIComponent(view?.dealId ?? dealId ?? "")}&tab=messages`}
+                href={`/pipeline?deal=${encodeURIComponent(view?.dealId ?? dealId ?? "")}&tab=messages`}
               >
                 Messages
               </a>

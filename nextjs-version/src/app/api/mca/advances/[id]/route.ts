@@ -8,7 +8,7 @@ import { getAdvance, recordAdvanceStatus } from "@/lib/mca/advances/service"
 
 export const runtime = "nodejs"
 const patchSchema = z.object({
-  status: z.enum(["on_track", "missed_payment", "default", "renewed", "closed"]),
+  status: z.enum(["on_track", "missed_payment", "default", "renewed", "closed", "in_collections"]),
   reason: z.string().trim().min(1).max(500), effectiveAt: z.string().datetime().optional(),
 }).strict()
 

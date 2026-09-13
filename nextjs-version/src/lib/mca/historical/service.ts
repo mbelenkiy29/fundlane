@@ -16,7 +16,7 @@ type RunRow = { id: string; source_id: string; state: "preview" | "committed" | 
 type StoredRow = { id: string; row_number: number; normalized_json: string; validation_errors_json: string; duplicate: number; outcome: string; funding_event_id: string | null }
 
 function requireImportPermission(actor: DealActor): void {
-  if (actor.source !== "user" || !["admin", "super_admin"].includes(actor.role ?? "")) throw new AppError(403, "historical_import_permission_required", "Historical funding imports require a workspace administrator session.")
+  if (actor.source !== "user" || !["admin", "super_admin", "manager"].includes(actor.role ?? "")) throw new AppError(403, "historical_import_permission_required", "Historical funding imports require a manager or administrator session.")
 }
 
 function dateValid(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}(?:T.*Z)?$/.test(value) && !Number.isNaN(Date.parse(value)) }

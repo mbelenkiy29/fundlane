@@ -75,3 +75,68 @@ export function estimateScheduledPaidIn(input: ScheduledPaidInInput): ScheduledP
   const paidInBasisPoints = input.paybackCents === 0 ? 0 : Math.min(10_000, Number((BigInt(paidInCents) * BigInt(10_000)) / BigInt(input.paybackCents)))
   return { paidInCents, paidInBasisPoints, elapsedPayments: elapsed, label: "scheduled_estimate" }
 }
+
+export interface ExpectedInstallment {
+  sequence: number
+  occurrenceDate: string
+  amountCents: number
+}
+
+function ymd(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * DAY_MS)
+}
+
+function addBusinessDays(start: Date, count: number): Date {
+  let cursor = start
+  let remaining = count
+  while (remaining > 0) {
+    cursor = addDays(cursor, 1)
+    const day = cursor.getUTCDay()
+    if (day !== 0 && day !== 6) remaining -= 1
+  }
+  return cursor
+}
+
+function monthlyOccurrence(start: Date, offset: number): Date {
+  const originalDay = start.getUTCDate()
+  const year = start.getUTCFullYear() + Math.floor((start.getUTCMonth() + offset) / 12)
+  const month = (start.getUTCMonth() + offset) % 12
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+  return new Date(Date.UTC(year, month, Math.min(originalDay, lastDay)))
+}
+
+/** First payment is due after one period, matching estimateScheduledPaidIn. */
+export function generateExpectedInstallments(input: {
+  fundedAt: string
+  paymentCount: number | null
+  paymentFrequency: string | null
+  calendarConvention: string | null
+  periodicPaymentCents: number | null
+  paybackCents?: number | null
+}): ExpectedInstallment[] {
+  if (input.paymentCount === null || input.periodicPaymentCents === null || !input.paymentFrequency || !input.calendarConvention) return []
+  if (!Number.isSafeInteger(input.paymentCount) || input.paymentCount <= 0) return []
+  if (!Number.isSafeInteger(input.periodicPaymentCents) || input.periodicPaymentCents <= 0) return []
+  if (!["calendar_days", "business_days", "fixed_count"].includes(input.calendarConvention)) return []
+  const funded = utcDay(input.fundedAt)
+  const dates: Date[] = []
+  for (let sequence = 1; sequence <= input.paymentCount; sequence += 1) {
+    if (input.paymentFrequency === "daily" && input.calendarConvention === "business_days") dates.push(addBusinessDays(funded, sequence))
+    else if (input.paymentFrequency === "daily") dates.push(addDays(funded, sequence))
+    else if (input.paymentFrequency === "weekly") dates.push(addDays(funded, sequence * 7))
+    else if (input.paymentFrequency === "biweekly") dates.push(addDays(funded, sequence * 14))
+    else if (input.paymentFrequency === "monthly") dates.push(monthlyOccurrence(funded, sequence))
+    else return []
+  }
+  return dates.map((date, index) => {
+    const isLast = index === dates.length - 1
+    const remaining = isLast && input.paybackCents != null
+      ? Math.max(0, input.paybackCents - input.periodicPaymentCents! * (dates.length - 1))
+      : input.periodicPaymentCents!
+    return { sequence: index + 1, occurrenceDate: ymd(date), amountCents: remaining || input.periodicPaymentCents! }
+  })
+}

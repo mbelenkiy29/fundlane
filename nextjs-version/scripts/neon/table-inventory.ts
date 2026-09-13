@@ -24,6 +24,7 @@ export const APP_TABLES = [
   "mca_advance_status_history", "mca_accounting_payments", "mca_accounting_adjustments",
   "mca_split_templates", "mca_split_template_versions", "mca_payment_distributions",
   "mca_renewal_policies", "mca_renewal_actions",
+  "mca_merchant_installments", "mca_merchant_receipts", "mca_servicing_alerts",
   "mca_closing_stipulations", "mca_merchant_upload_links", "mca_closing_previews", "mca_closing_deliveries",
   "mca_contract_workflows", "mca_psf_config", "mca_psf_requests", "mca_offer_message_previews", "mca_pitch_events",
 ] as const;
