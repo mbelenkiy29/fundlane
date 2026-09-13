@@ -1,5 +1,5 @@
 import "server-only";
-import { authenticateClerkSession } from "./clerk-auth";
+import { authenticateSupabaseSession } from "./supabase-auth";
 
 import { AppError } from "./errors";
 import { nowIso, parseJson, withImmediateTransaction } from "./db";
@@ -15,7 +15,7 @@ interface AccessOptions {
   sessionOnly?: boolean;
 }
 
-/** Legacy cookies are deliberately rejected after the Clerk cutover. */
+/** Legacy cookies are deliberately rejected after the Supabase cutover. */
 export async function authenticateSessionToken(_token: string): Promise<MembershipContext | null> {
   void _token;
   return null;
@@ -40,6 +40,7 @@ async function consumeApiKey(token: string): Promise<AuthContext | null> {
     await database.prepare("DELETE FROM api_rate_windows WHERE bucket_start < ?").run(bucket - 2);
     return {
       authType: "api_key",
+      apiKeyId: String(row.id),
       userId: null,
       membershipId: null,
       workspaceId: String(row.workspace_id),
@@ -53,7 +54,7 @@ async function consumeApiKey(token: string): Promise<AuthContext | null> {
 export async function authenticateRequest(request: Request): Promise<AuthContext | null> {
   const authorization = request.headers.get("authorization");
   if (authorization?.startsWith("Bearer mca_")) return consumeApiKey(authorization.slice(7));
-  return authenticateClerkSession(request);
+  return authenticateSupabaseSession(request);
 }
 
 export async function requireWorkspaceAccess(request: Request, options: AccessOptions = {}): Promise<AuthContext> {

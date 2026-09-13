@@ -3,8 +3,7 @@ import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { DashboardChrome } from "@/components/mca/dashboard-chrome"
 import { NewDealProvider } from "@/components/mca/deals/new-deal-provider"
-import { authenticateClerkSession } from "@/lib/mca/clerk-auth"
-import { auth } from "@clerk/nextjs/server"
+import { authenticateSupabaseSession, supabaseIdentity } from "@/lib/mca/supabase-auth"
 import { getSessionResponse } from "@/lib/mca/sessions"
 import type { PageKey } from "@/lib/mca/types"
 import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
@@ -23,8 +22,8 @@ function pageForPath(pathname: string): PageKey | null {
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const headerStore = await headers()
-  const context = await authenticateClerkSession()
-  if (!context && (await auth()).userId) redirect("/onboarding")
+  const context = await authenticateSupabaseSession()
+  if (!context && await supabaseIdentity({ allowPasswordSetup: true })) redirect("/onboarding")
   if (!context) redirect(`/sign-in?returnTo=${encodeURIComponent(headerStore.get("x-mca-return-to") ?? "/dashboard")}`)
 
   const session = await getSessionResponse(context)

@@ -1,5 +1,3 @@
-import { shadcn } from "@clerk/ui/themes";
-import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import "./globals.css";
 
@@ -27,14 +25,12 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} antialiased`}>
       <body className={inter.className}>
-        <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up" signInFallbackRedirectUrl="/onboarding" signUpFallbackRedirectUrl="/onboarding" appearance={{ theme: shadcn }}>
           <ThemeProvider defaultTheme="system" storageKey="nextjs-ui-theme">
           <SidebarConfigProvider>
           {children}
           </SidebarConfigProvider>
           <Toaster richColors closeButton />
           </ThemeProvider>
-        </ClerkProvider>
       </body>
     </html>
   );

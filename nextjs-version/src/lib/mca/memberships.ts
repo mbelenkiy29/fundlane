@@ -1,8 +1,9 @@
 import "server-only";
-import { deliverClerkInvitation, syncClerkMember } from "./clerk-team";
+import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
 import { assertBillingCapacity } from "./billing";
 
 import { createOpaqueToken, hashOpaqueToken, hashPassword } from "./crypto";
+import { hashSupabaseInvitationToken } from "./invitation-token";
 import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction } from "./db";
 import { assertEmailDeliveryConfigured, deliverEmail } from "./email";
 import { AppError } from "./errors";
@@ -181,7 +182,7 @@ export async function inviteMember(
       (id, workspace_id, membership_id, email, token_hash, expires_at, status, delivery_status,
        delivery_correlation_id, created_by, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?, ?, ?)`).run(
-        invitationId, context.workspaceId, membershipId, email, hashOpaqueToken(token), expiresAt,
+        invitationId, context.workspaceId, membershipId, email, hashSupabaseInvitationToken(token), expiresAt,
         correlationId, context.userId, timestamp, timestamp,
       );
     return { invitationId, membershipId, email, expiresAt, token };
@@ -193,10 +194,9 @@ async function finishInvitationDelivery(
   context: MembershipContext,
   created: { invitationId: string; membershipId: string; email: string; expiresAt: string; token: string },
   appOrigin: string,
-  resend = false,
 ): Promise<InvitationResult> {
   try {
-    const result = await deliverClerkInvitation(context, created.invitationId, appOrigin, resend);
+    const result = await deliverSupabaseInvitation(context, created.invitationId, appOrigin, created.token);
     await getDatabase().prepare("UPDATE invitations SET delivery_status = ?, delivery_correlation_id = ?, updated_at = ? WHERE id = ?")
       .run(result.delivery, result.correlationId, nowIso(), created.invitationId);
     await recordAuditEvent({ context, action: "membership.invited", resourceType: "membership", resourceId: created.membershipId, metadata: { invitationId: created.invitationId, delivery: result.delivery } });
@@ -206,6 +206,7 @@ async function finishInvitationDelivery(
       email: created.email,
       expiresAt: created.expiresAt,
       delivery: result.delivery,
+      ...(result.previewUrl ? { previewUrl: result.previewUrl } : {}),
     };
   } catch (error) {
     await getDatabase().prepare("UPDATE invitations SET delivery_status = 'failed', updated_at = ? WHERE id = ?").run(nowIso(), created.invitationId);
@@ -232,10 +233,10 @@ export async function resendInvitation(context: MembershipContext, invitationId:
     if (!current) throw new AppError(409, "invitation_not_pending", "This invitation is no longer pending.");
     const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1_000).toISOString();
     await database.prepare("UPDATE invitations SET token_hash = ?, expires_at = ?, delivery_status = 'pending', updated_at = ? WHERE id = ?")
-      .run(hashOpaqueToken(token), expiresAt, timestamp, current.id);
+      .run(hashSupabaseInvitationToken(token), expiresAt, timestamp, current.id);
     return { invitationId: current.id, membershipId: previous.membership_id, email: previous.email, expiresAt, token };
   });
-  return finishInvitationDelivery(context, created, appOrigin, true);
+  return finishInvitationDelivery(context, created, appOrigin);
 }
 
 export async function acceptInvitation(input: { token: string; password: string; name?: string; phone?: string | null }): Promise<{
@@ -247,7 +248,7 @@ export async function acceptInvitation(input: { token: string; password: string;
     const timestamp = nowIso();
     const row = await database.prepare<{ invitation_id: string; email: string; membership_id: string; user_id: string; status: string; expires_at: string }>(`SELECT i.id invitation_id, i.email, i.membership_id, i.expires_at, m.user_id, m.status
       FROM invitations i JOIN memberships m ON m.id = i.membership_id AND m.workspace_id = i.workspace_id
-      WHERE i.token_hash = ? AND i.status = 'pending' FOR UPDATE`).get(hashOpaqueToken(input.token));
+      WHERE i.token_hash = ? AND i.status = 'pending' FOR UPDATE`).get(hashSupabaseInvitationToken(input.token));
     if (!row) throw new AppError(400, "invitation_invalid", "This invitation is invalid or has already been used.");
     if (row.expires_at <= timestamp) {
       await database.prepare("UPDATE invitations SET status = 'expired', updated_at = ? WHERE id = ?").run(timestamp, row.invitation_id);
@@ -302,7 +303,7 @@ export async function updateMembership(
     }
   });
   await recordAuditEvent({ context, action: "membership.updated", resourceType: "membership", resourceId: membershipId });
-  await syncClerkMember(context.workspaceId, membershipId);
+  await syncSupabaseMember(context.workspaceId, membershipId);
   return getMembership(context.workspaceId, membershipId);
 }
 
@@ -326,7 +327,7 @@ export async function deactivateMembership(context: MembershipContext, membershi
     await database.prepare("UPDATE invitations SET status = 'superseded', updated_at = ? WHERE membership_id = ? AND status = 'pending'")
       .run(timestamp, membershipId);
   });
-  await syncClerkMember(context.workspaceId, membershipId);
+  await syncSupabaseMember(context.workspaceId, membershipId);
   await recordAuditEvent({ context, action: "membership.deactivated", resourceType: "membership", resourceId: membershipId });
 }
 

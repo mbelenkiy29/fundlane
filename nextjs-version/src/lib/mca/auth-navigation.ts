@@ -11,7 +11,7 @@ export function safeAuthReturnTo(value: string | null): string {
   return value
 }
 
-export function clerkErrorMessage(error: unknown): string {
+export function authErrorMessage(error: unknown): string {
   if (
     error &&
     typeof error === "object" &&
@@ -20,7 +20,4 @@ export function clerkErrorMessage(error: unknown): string {
   )
     return error.message
   return "We couldn't complete that request. Please try again."
-}
-export function checkClerk(result: { error: unknown }) {
-  if (result.error) throw new Error(clerkErrorMessage(result.error))
 }

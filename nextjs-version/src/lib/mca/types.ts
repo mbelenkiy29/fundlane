@@ -71,6 +71,7 @@ export interface SessionUser {
 }
 
 export interface AuthContext {
+  apiKeyId?: string;
   authType: "session" | "api_key";
   userId: string | null;
   membershipId: string | null;

@@ -1,18 +1,24 @@
 import { NextResponse } from "next/server"
-import { completeCompanyOnboarding } from "@/lib/mca/clerk-auth"
+import { z } from "zod"
+import { completeCompanyOnboarding, listSupabaseWorkspaces, setActiveWorkspace, supabaseIdentity } from "@/lib/mca/supabase-auth"
 import { assertTrustedMutation } from "@/lib/mca/auth"
+import { readJson } from "@/lib/mca/http"
 import { billingEnabled } from "@/lib/mca/billing"
-import { apiError } from "@/lib/mca/errors"
+import { apiError, AppError } from "@/lib/mca/errors"
+export async function GET() {
+  try {
+    const identity=await supabaseIdentity({ allowPasswordSetup:true })
+    if (!identity) return NextResponse.json({ authenticated:false,workspaces:[] },{ headers:{ "Cache-Control":"no-store" } })
+    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "" },{ headers:{ "Cache-Control":"no-store" } })
+  } catch(error) { return apiError(error) }
+}
 export async function POST(request: Request) {
   try {
     assertTrustedMutation(request)
-    const context = await completeCompanyOnboarding()
-    return NextResponse.json({
-      workspaceId: context.workspaceId,
-      role: context.role,
-      billingEnabled: billingEnabled(),
-    })
-  } catch (error) {
-    return apiError(error)
-  }
+    const input=await readJson(request,z.union([z.object({ workspaceId:z.uuid() }),z.object({ name:z.string().trim().min(2).max(200) })]))
+    const identity=await supabaseIdentity()
+    if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
+    const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name)
+    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled() })
+  } catch(error) { return apiError(error) }
 }
