@@ -4,12 +4,13 @@ import { AppError } from "../errors"
 import { canActorAccessDeal } from "../deals/access-policy"
 import type { DealActor, DealWriteInput } from "../deals/schema"
 import {
-  findMerchantByEinHash,
   findMerchantById,
+  listDealAccessByIds,
   listDealIdsByEinHash,
   listDealIdsByLast4Hashes,
   listDocumentSummariesForDeals,
   listMerchantDealAccess,
+  listMerchantIdsByEinHash,
   listMerchantIdsByLast4Hashes,
   listMerchantsByIds,
   loadDealIdentity,
@@ -52,10 +53,15 @@ function matchFrom(merchant: MerchantRow, kind: MerchantMatch["match"], deals: A
   }
 }
 
-async function merchantIdsFromUnbackfilledDeals(actor: DealActor, dealIds: string[]): Promise<string[]> {
+async function merchantIdsFromVisibleDeals(actor: DealActor, dealIds: string[]): Promise<string[]> {
   const ids: string[] = []
-  for (const dealId of dealIds) {
-    const identity = await loadDealIdentity(actor.workspaceId, dealId)
+  for (const deal of await listDealAccessByIds(actor.workspaceId, dealIds)) {
+    if (!canActorAccessDeal(actor, { workspaceId: actor.workspaceId, assignments: deal.assignments })) continue
+    if (deal.merchantId) {
+      ids.push(deal.merchantId)
+      continue
+    }
+    const identity = await loadDealIdentity(actor.workspaceId, deal.dealId)
     if (!identity) continue
     ids.push(await upsertMerchantFromDeal(identity))
   }
@@ -73,20 +79,15 @@ export async function lookupMerchants(actor: DealActor, query: MerchantLookupQue
   const last4MerchantIds = new Set<string>()
 
   if (einHash) {
-    const merchant = await findMerchantByEinHash(actor.workspaceId, einHash)
-    if (merchant) einMerchantIds.add(merchant.id)
-    else {
-      for (const merchantId of await merchantIdsFromUnbackfilledDeals(actor, await listDealIdsByEinHash(actor.workspaceId, einHash))) {
-        einMerchantIds.add(merchantId)
-      }
+    for (const merchantId of await listMerchantIdsByEinHash(actor.workspaceId, einHash)) einMerchantIds.add(merchantId)
+    for (const merchantId of await merchantIdsFromVisibleDeals(actor, await listDealIdsByEinHash(actor.workspaceId, einHash))) {
+      einMerchantIds.add(merchantId)
     }
   }
   if (last4Hashes.length) {
     for (const merchantId of await listMerchantIdsByLast4Hashes(actor.workspaceId, last4Hashes)) last4MerchantIds.add(merchantId)
-    if (!last4MerchantIds.size) {
-      for (const merchantId of await merchantIdsFromUnbackfilledDeals(actor, await listDealIdsByLast4Hashes(actor.workspaceId, last4Hashes))) {
-        last4MerchantIds.add(merchantId)
-      }
+    for (const merchantId of await merchantIdsFromVisibleDeals(actor, await listDealIdsByLast4Hashes(actor.workspaceId, last4Hashes))) {
+      last4MerchantIds.add(merchantId)
     }
   }
 

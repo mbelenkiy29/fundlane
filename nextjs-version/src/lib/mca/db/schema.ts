@@ -254,7 +254,7 @@ export const mca_merchants = pgTable("mca_merchants", {
 	updated_at: text().notNull(),
 }, (table) => [
 	index("mca_merchants_workspace_id_idx").on(table.workspace_id),
-	uniqueIndex("mca_merchants_workspace_ein_lookup_hash_uidx")
+	index("mca_merchants_workspace_ein_lookup_hash_idx")
 		.on(table.workspace_id, table.ein_lookup_hash)
 		.where(sql`${table.ein_lookup_hash} IS NOT NULL`),
 	foreignKey({

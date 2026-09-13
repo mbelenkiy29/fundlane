@@ -106,10 +106,17 @@ export async function findMerchantById(workspaceId: string, merchantId: string, 
 export async function findMerchantByEinHash(workspaceId: string, hash: string, executor?: DbExecutor): Promise<MerchantRow | undefined> {
   const database = db(executor)
   const row = await database.prepare<Row>(
-    "SELECT * FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ?",
+    "SELECT * FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ? ORDER BY created_at, id",
   ).get(workspaceId, hash)
   if (!row) return undefined
   return merchantFrom(row, await listOwners(database, workspaceId, String(row.id)))
+}
+
+export async function listMerchantIdsByEinHash(workspaceId: string, hash: string, executor?: DbExecutor): Promise<string[]> {
+  const rows = await db(executor).prepare<{ id: string }>(
+    "SELECT id FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ? ORDER BY created_at, id",
+  ).all(workspaceId, hash)
+  return rows.map((row) => row.id)
 }
 
 export async function listMerchantsByIds(workspaceId: string, merchantIds: string[], executor?: DbExecutor): Promise<MerchantRow[]> {
@@ -146,6 +153,49 @@ export async function listDealIdsByLast4Hashes(workspaceId: string, hashes: stri
   return rows.map((row) => row.deal_id)
 }
 
+export interface DealAccessRow {
+  dealId: string
+  merchantId?: string
+  updatedAt: string
+  assignments: MerchantDealAccess["assignments"]
+}
+
+async function assignmentsForDeals(
+  database: DbExecutor,
+  workspaceId: string,
+  dealIds: string[],
+): Promise<Map<string, MerchantDealAccess["assignments"]>> {
+  const assignmentsByDeal = new Map<string, MerchantDealAccess["assignments"]>()
+  if (!dealIds.length) return assignmentsByDeal
+  const assignmentRows = await database.prepare<{ deal_id: string; membership_id: string; kind: string }>(
+    `SELECT deal_id, membership_id, kind FROM deal_assignments
+     WHERE workspace_id = ? AND deal_id IN (${dealIds.map(() => "?").join(",")})`,
+  ).all(workspaceId, ...dealIds)
+  for (const row of assignmentRows) {
+    const list = assignmentsByDeal.get(row.deal_id) ?? []
+    list.push({ membershipId: row.membership_id, kind: row.kind as DealAssignment["kind"] })
+    assignmentsByDeal.set(row.deal_id, list)
+  }
+  return assignmentsByDeal
+}
+
+export async function listDealAccessByIds(workspaceId: string, dealIds: string[], executor?: DbExecutor): Promise<DealAccessRow[]> {
+  if (!dealIds.length) return []
+  const database = db(executor)
+  const deals = await database.prepare<{ id: string; merchant_id: string | null; updated_at: string }>(
+    `SELECT id, merchant_id, updated_at FROM deals
+     WHERE workspace_id = ? AND id IN (${dealIds.map(() => "?").join(",")})
+     ORDER BY updated_at DESC, id DESC`,
+  ).all(workspaceId, ...dealIds)
+  const assignmentsByDeal = await assignmentsForDeals(database, workspaceId, deals.map((deal) => deal.id))
+  return deals.map((deal) => ({
+    dealId: deal.id,
+    merchantId: deal.merchant_id ? String(deal.merchant_id) : undefined,
+    updatedAt: deal.updated_at,
+    assignments: assignmentsByDeal.get(deal.id) ?? [],
+  }))
+}
+
 export async function listMerchantDealAccess(workspaceId: string, merchantIds: string[], executor?: DbExecutor): Promise<MerchantDealAccess[]> {
   if (!merchantIds.length) return []
   const database = db(executor)
@@ -154,18 +204,7 @@ export async function listMerchantDealAccess(workspaceId: string, merchantIds: s
      WHERE workspace_id = ? AND merchant_id IN (${merchantIds.map(() => "?").join(",")})
      ORDER BY updated_at DESC, id DESC`,
   ).all(workspaceId, ...merchantIds)
-  if (!deals.length) return []
-  const dealIds = deals.map((deal) => deal.id)
-  const assignmentRows = await database.prepare<{ deal_id: string; membership_id: string; kind: string }>(
-    `SELECT deal_id, membership_id, kind FROM deal_assignments
-     WHERE workspace_id = ? AND deal_id IN (${dealIds.map(() => "?").join(",")})`,
-  ).all(workspaceId, ...dealIds)
-  const assignmentsByDeal = new Map<string, MerchantDealAccess["assignments"]>()
-  for (const row of assignmentRows) {
-    const list = assignmentsByDeal.get(row.deal_id) ?? []
-    list.push({ membershipId: row.membership_id, kind: row.kind as DealAssignment["kind"] })
-    assignmentsByDeal.set(row.deal_id, list)
-  }
+  const assignmentsByDeal = await assignmentsForDeals(database, workspaceId, deals.map((deal) => deal.id))
   return deals.map((deal) => ({
     merchantId: deal.merchant_id,
     dealId: deal.id,

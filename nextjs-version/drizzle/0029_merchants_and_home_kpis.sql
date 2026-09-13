@@ -13,7 +13,7 @@ CREATE TABLE mca_merchants (
   updated_at text NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX mca_merchants_workspace_ein_lookup_hash_uidx
+CREATE INDEX mca_merchants_workspace_ein_lookup_hash_idx
   ON mca_merchants (workspace_id, ein_lookup_hash)
   WHERE ein_lookup_hash IS NOT NULL;
 --> statement-breakpoint
