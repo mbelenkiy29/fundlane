@@ -4,6 +4,7 @@ import { calculateOffer } from "../accounting/calculations"
 import { writeFundingAccounting } from "../accounting/funding-writer"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import { getDealForDocument } from "../deals/service"
+import { persistInstallments } from "../deals/remittance"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing } from "../offers/service"
@@ -151,6 +152,14 @@ export async function confirmOfferFunding(
       input.paymentCount ?? null, input.paymentFrequency ?? revision.payment_frequency, input.calendarConvention ?? null,
       commissionCents, feeCents, expectedCommissionAt ?? null, expectedFeeAt ?? null, source, JSON.stringify(calculation), createdAt, createdAt,
     )
+    await persistInstallments(database, {
+      workspaceId: actor.workspaceId, advanceId, fundedAt,
+      paymentCount: input.paymentCount ?? null,
+      paymentFrequency: input.paymentFrequency ?? revision.payment_frequency,
+      calendarConvention: input.calendarConvention ?? null,
+      periodicPaymentCents: revision.payment_amount_cents ?? calculation?.periodicPaymentEstimateCents ?? null,
+      paybackCents: calculation?.paybackCents ?? null, createdAt,
+    })
     let accounting: { recordIds: string[] }
     try {
       accounting = await accountingWriter(database, { workspaceId: actor.workspaceId, fundingEventId: eventId, advanceId, dealId: input.dealId, offerId: input.offerId, offerRevisionId: input.offerRevisionId, fundedAt, amountCents, commissionCents, feeCents, expectedCommissionAt, expectedFeeAt, splits, source, idempotencyKey: input.idempotencyKey.trim() })

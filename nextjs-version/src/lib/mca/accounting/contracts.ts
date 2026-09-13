@@ -1,6 +1,6 @@
 import type { BasisPointAllocation } from "./money"
 
-export type AdvancePerformanceStatus = "on_track" | "missed_payment" | "default" | "renewed" | "closed"
+export type AdvancePerformanceStatus = "on_track" | "missed_payment" | "default" | "renewed" | "closed" | "in_collections"
 export type AccountingPaymentType = "commission" | "fee"
 export type AccountingPaymentStatus = "expected" | "partial" | "received" | "void"
 

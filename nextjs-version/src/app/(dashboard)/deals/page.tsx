@@ -1,6 +1,5 @@
-import { DealsWorkspace } from "./components/deals-workspace"
-import { ApplicationScanPanel } from "@/components/mca/documents/application-scan-panel"
+import { DealsBook } from "@/components/mca/deals-book/deals-book"
 
 export default function DealsPage() {
-  return <div className="space-y-6"><ApplicationScanPanel /><DealsWorkspace /></div>
+  return <DealsBook />
 }

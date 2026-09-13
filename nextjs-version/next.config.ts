@@ -77,7 +77,7 @@ const nextConfig: NextConfig = {
       },
       {
         source: '/deals/new',
-        destination: '/deals?create=1',
+        destination: '/pipeline?create=1',
         permanent: false,
       },
     ];

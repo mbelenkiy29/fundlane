@@ -20,7 +20,7 @@ export const mca_advance_status_history = pgTable("mca_advance_status_history", 
 }, (table) => [
   index("mca_advance_status_history_advance_idx").on(table.workspace_id, table.advance_id, table.effective_at),
   unique("mca_advance_status_history_correlation_key").on(table.workspace_id, table.advance_id, table.correlation_id),
-  check("mca_advance_status_history_status_check", sql`${table.status} in ('on_track','missed_payment','default','renewed','closed')`),
+  check("mca_advance_status_history_status_check", sql`${table.status} in ('on_track','missed_payment','default','renewed','closed','in_collections')`),
 ])
 
 export const mca_accounting_payments = pgTable("mca_accounting_payments", {
