@@ -1,7 +1,13 @@
 import type { ApiErrorBody } from "./types"
 
 export class RequestError extends Error {
-  constructor(public readonly status: number, message: string, public readonly code = "request_failed", public readonly fieldErrors?: Record<string, string[]>) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code = "request_failed",
+    public readonly fieldErrors?: Record<string, string[]>,
+    public readonly matches?: unknown,
+  ) {
     super(message)
   }
 }
@@ -14,8 +20,15 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
-    const error = (payload as ApiErrorBody).error
-    throw new RequestError(response.status, error?.message ?? "The request could not be completed.", error?.code, error?.fieldErrors)
+    const body = payload as ApiErrorBody
+    const error = body.error
+    throw new RequestError(
+      response.status,
+      error?.message ?? "The request could not be completed.",
+      error?.code,
+      error?.fieldErrors,
+      body.matches ?? error?.matches,
+    )
   }
   return (payload.data ?? payload) as T
 }

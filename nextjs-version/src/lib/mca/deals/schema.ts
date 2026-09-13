@@ -232,6 +232,8 @@ export interface DealWriteInput {
 
 export interface CreateDealInput extends DealWriteInput {
   idempotencyKey: string
+  forceDuplicate?: boolean
+  attachMerchantId?: string
 }
 
 export interface UpdateDealInput extends DealWriteInput {

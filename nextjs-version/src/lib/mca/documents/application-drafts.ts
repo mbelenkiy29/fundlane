@@ -134,7 +134,7 @@ export async function previewDraftMerge(actor: DealActor, id: string, targetDeal
   return { conflicts: conflicts(target, proposed), targetVersion: target.version, proposed }
 }
 
-export async function confirmApplicationDraft(actor: DealActor, input: { draftId: string; confirmationId: string; mode: "create" | "merge"; targetDealId?: string; expectedVersion?: number; acceptedConflictFields?: string[]; manualFields?: DealWriteInput }): Promise<{ deal: DealDetail; created: boolean; sourceDocumentId: string; extractionVersion: number; replayed: boolean }> {
+export async function confirmApplicationDraft(actor: DealActor, input: { draftId: string; confirmationId: string; mode: "create" | "merge"; targetDealId?: string; expectedVersion?: number; acceptedConflictFields?: string[]; manualFields?: DealWriteInput; forceDuplicate?: boolean; attachMerchantId?: string }): Promise<{ deal: DealDetail; created: boolean; sourceDocumentId: string; extractionVersion: number; replayed: boolean }> {
   if (!input.confirmationId?.trim() || input.confirmationId.length > 160) throw new AppError(422, "confirmation_id_invalid", "Provide an immutable confirmation ID.")
   const record = await getApplicationDraft(actor, input.draftId)
   if (record.processingState !== "clean" || !record.extractionVersion) throw new AppError(422, "extraction_required", "Scan, extract, and review the application before confirmation.")
@@ -158,7 +158,12 @@ export async function confirmApplicationDraft(actor: DealActor, input: { draftId
   let deal: DealDetail, created: boolean
   try {
   if (input.mode === "create") {
-    const result = await createDeal(actor, { ...proposed, idempotencyKey: `application-draft:${input.confirmationId}` })
+    const result = await createDeal(actor, {
+      ...proposed,
+      idempotencyKey: `application-draft:${input.confirmationId}`,
+      forceDuplicate: input.forceDuplicate,
+      attachMerchantId: input.attachMerchantId,
+    })
     deal = result.deal; created = result.created
   } else {
     if (!input.targetDealId || input.expectedVersion === undefined) throw new AppError(422, "merge_target_required", "Choose a target deal and current version.")

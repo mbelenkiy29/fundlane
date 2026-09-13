@@ -8,7 +8,7 @@ export const runtime = "nodejs"
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const actor = await requireDocumentActor(request, "write")
-    const body = await request.json() as { confirmationId: string; mode: "create" | "merge"; targetDealId?: string; expectedVersion?: number; acceptedConflictFields?: string[]; manualFields?: DealWriteInput }
+    const body = await request.json() as { confirmationId: string; mode: "create" | "merge"; targetDealId?: string; expectedVersion?: number; acceptedConflictFields?: string[]; manualFields?: DealWriteInput; forceDuplicate?: boolean; attachMerchantId?: string }
     return NextResponse.json(await confirmApplicationDraft(actor, { draftId: (await context.params).id, ...body }), { headers: { "cache-control": "no-store" } })
   } catch (error) { return apiError(error) }
 }

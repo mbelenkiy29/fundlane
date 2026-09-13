@@ -2,7 +2,7 @@ import "server-only"
 
 import { AppError } from "../errors"
 import { canActorAccessDeal } from "../deals/access-policy"
-import type { DealActor, DealWriteInput } from "../deals/schema"
+import type { DealActor, DealAssignment, DealWriteInput } from "../deals/schema"
 import {
   findMerchantById,
   listDealAccessByIds,
@@ -25,6 +25,13 @@ import { normalizeEin } from "./normalize"
 export { upsertMerchantFromDeal }
 export type { MerchantDealIdentity }
 
+export class MerchantExistsError extends AppError {
+  constructor(public readonly matches: MerchantMatch[]) {
+    super(409, "merchant_exists", "This business already exists.", undefined, { matches })
+    this.name = "MerchantExistsError"
+  }
+}
+
 function maskEmail(value?: string): string | undefined {
   if (!value) return undefined
   const [name, domain] = value.split("@")
@@ -35,8 +42,19 @@ function actorSeesUnassigned(actor: DealActor): boolean {
   return actor.source === "api_key" || actor.role === "admin" || actor.role === "super_admin"
 }
 
+function asDealAssignments(assignments: Array<Pick<DealAssignment, "membershipId" | "kind">>): DealAssignment[] {
+  return assignments.map((item) => ({
+    id: "",
+    membershipId: item.membershipId,
+    kind: item.kind,
+    isPrimary: false,
+    assignedAt: "",
+    assignedByUserId: null,
+  }))
+}
+
 function visibleDealsFor(actor: DealActor, deals: Awaited<ReturnType<typeof listMerchantDealAccess>>) {
-  return deals.filter((deal) => canActorAccessDeal(actor, { workspaceId: actor.workspaceId, assignments: deal.assignments }))
+  return deals.filter((deal) => canActorAccessDeal(actor, { workspaceId: actor.workspaceId, assignments: asDealAssignments(deal.assignments) }))
 }
 
 function matchFrom(merchant: MerchantRow, kind: MerchantMatch["match"], deals: Awaited<ReturnType<typeof listMerchantDealAccess>>): MerchantMatch {
@@ -56,7 +74,7 @@ function matchFrom(merchant: MerchantRow, kind: MerchantMatch["match"], deals: A
 async function merchantIdsFromVisibleDeals(actor: DealActor, dealIds: string[]): Promise<string[]> {
   const ids: string[] = []
   for (const deal of await listDealAccessByIds(actor.workspaceId, dealIds)) {
-    if (!canActorAccessDeal(actor, { workspaceId: actor.workspaceId, assignments: deal.assignments })) continue
+    if (!canActorAccessDeal(actor, { workspaceId: actor.workspaceId, assignments: asDealAssignments(deal.assignments) })) continue
     if (deal.merchantId) {
       ids.push(deal.merchantId)
       continue
@@ -137,4 +155,17 @@ export async function getAttachPayload(actor: DealActor, merchantId: string): Pr
     fields,
     documentSummaries: await listDocumentSummariesForDeals(actor.workspaceId, visibleDeals.map((deal) => deal.dealId)),
   }
+}
+
+export async function merchantCreateWarnings(
+  actor: DealActor,
+  input: { ein?: string; owners?: Array<{ identityLast4?: string }>; attachMerchantId?: string; forceDuplicate?: boolean },
+): Promise<string[]> {
+  if (input.attachMerchantId || input.forceDuplicate) return []
+  const lookup = await lookupMerchants(actor, { ein: input.ein, owners: input.owners })
+  const einMatches = lookup.matches.filter((match) => match.match === "ein")
+  if (einMatches.length) throw new MerchantExistsError(einMatches)
+  return lookup.matches
+    .filter((match) => match.match === "identity_last4")
+    .map((match) => `This business already exists: ${match.legalName}`)
 }

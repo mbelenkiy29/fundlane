@@ -248,6 +248,73 @@ test("MIC-182 pre-deal drafts are workspace scoped, recover scanning, and retain
   assert.equal((await confirmApplicationDraft(actor(), { draftId: draft.id, confirmationId: "predeal-confirm", mode: "create" })).replayed, true)
 })
 
+test("application-scan confirm create blocks duplicate EIN unless attach or force", async () => {
+  setDocumentScannerForTests(scanner("clean"))
+  const seed = await createDeal(actor(), {
+    idempotencyKey: "dup-scan-seed",
+    legalName: "Dup Scan Existing LLC",
+    ein: "88-1112223",
+    contactName: "Scan Contact",
+    owners: [{ firstName: "Scan", lastName: "Owner", isPrimary: true }],
+  })
+  const uploaded = await storeDocument(actor(), {
+    dealId: stagingDealId, idempotencyKey: "dup-scan-source", filename: "dup-scan.pdf",
+    mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\ndup-scan\n%%EOF\n")), category: "application", source: "test",
+  })
+  const blockedReview = await scanApplicationDocument(actor(), uploaded.id)
+  await assert.rejects(
+    () => confirmApplicationScan(actor(), {
+      extractionId: blockedReview.id, confirmationId: "dup-scan-blocked", mode: "create",
+      manualFields: { ein: "88-1112223", legalName: "Dup Scan Blocked LLC" },
+    }),
+    (error: { code?: string; status?: number }) => error.code === "merchant_exists" && error.status === 409,
+  )
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM deals WHERE workspace_id = ? AND legal_name = ?",
+  ).get(actor().workspaceId, "Dup Scan Blocked LLC"))?.count, 0)
+
+  const attachReview = await scanApplicationDocument(actor(), uploaded.id)
+  const attached = await confirmApplicationScan(actor(), {
+    extractionId: attachReview.id, confirmationId: "dup-scan-attach", mode: "create",
+    attachMerchantId: seed.deal.merchantId,
+    manualFields: { ein: "88-1112223", legalName: "Dup Scan Attached LLC" },
+  })
+  assert.notEqual(attached.deal.id, seed.deal.id)
+  assert.equal(attached.deal.merchantId, seed.deal.merchantId)
+  const attachedFull = await getDealForDocument(actor(), attached.deal.id)
+  assert.equal(attachedFull.contactName, "Scan Contact")
+
+  const forceReview = await scanApplicationDocument(actor(), uploaded.id)
+  const forced = await confirmApplicationScan(actor(), {
+    extractionId: forceReview.id, confirmationId: "dup-scan-force", mode: "create",
+    forceDuplicate: true,
+    manualFields: { ein: "88-1112223", legalName: "Dup Scan Forced LLC" },
+  })
+  assert.notEqual(forced.deal.merchantId, seed.deal.merchantId)
+})
+
+test("application-draft confirm create hits the same EIN duplicate gate", async () => {
+  setDocumentScannerForTests(scanner("clean"))
+  await createDeal(actor(), { idempotencyKey: "dup-draft-seed", legalName: "Dup Draft Existing LLC", ein: "88-1112233" })
+  const draft = await createApplicationDraft(actor(), {
+    idempotencyKey: "dup-draft-file", filename: "dup-draft.pdf", mimeType: "application/pdf", bytes: minimalPdf,
+  })
+  await extractApplicationDraft(actor(), draft.id, { legalName: "Dup Draft Blocked LLC", ein: "88-1112233" })
+  await assert.rejects(
+    () => confirmApplicationDraft(actor(), { draftId: draft.id, confirmationId: "dup-draft-blocked", mode: "create" }),
+    (error: { code?: string; status?: number }) => error.code === "merchant_exists" && error.status === 409,
+  )
+  const forcedDraft = await createApplicationDraft(actor(), {
+    idempotencyKey: "dup-draft-force-file", filename: "dup-draft-force.pdf", mimeType: "application/pdf",
+    bytes: new Uint8Array(Buffer.from("%PDF-1.4\ndup-draft-force\n%%EOF\n")),
+  })
+  await extractApplicationDraft(actor(), forcedDraft.id, { legalName: "Dup Draft Forced LLC", ein: "88-1112233" })
+  const forced = await confirmApplicationDraft(actor(), {
+    draftId: forcedDraft.id, confirmationId: "dup-draft-force", mode: "create", forceDuplicate: true,
+  })
+  assert.equal(forced.deal.legalName, "Dup Draft Forced LLC")
+})
+
 test("MIC-177 suggests readable stable statement names without full account numbers and preserves original name", async () => {
   setDocumentScannerForTests(scanner("clean"))
   const document = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "statement-name", filename: "download (19).pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.7\n%%EOF\n")), category: "statement", source: "test" })

@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     const context = await requireWorkspaceAccess(request, { anyScopes: ["deals:write", "intake:write"] })
     const input = await request.json() as CreateDealInput
     const result = await createDeal(await actorForDeals(context), input)
-    return NextResponse.json(result.deal, {
+    return NextResponse.json(result.warnings.length ? { ...result.deal, warnings: result.warnings } : result.deal, {
       status: result.created ? 201 : 200,
       headers: { "x-idempotent-replay": result.created ? "false" : "true" },
     })

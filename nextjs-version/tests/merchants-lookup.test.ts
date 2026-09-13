@@ -1,13 +1,15 @@
+import "./helpers/business-auth"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
-import { encryptSensitive } from "../src/lib/mca/crypto"
-import { createDeal } from "../src/lib/mca/deals/service"
+import { encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
+import { createDeal, getDealForDocument } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import { normalizeEin } from "../src/lib/mca/merchants/normalize"
 import { einLookupHash, identityLookupHash } from "../src/lib/mca/merchants/lookup-hash"
 import { lookupMerchants } from "../src/lib/mca/merchants/service"
 import { backfillMerchantHashes } from "../src/lib/mca/merchants/backfill"
+import { POST as lookupMerchantsPost } from "../src/app/api/mca/merchants/lookup/route"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -57,6 +59,15 @@ before(async () => {
     VALUES ('merchant-admin-member', ?, 'merchant-admin', 'admin', NULL, 'active', NULL, ?, ?)`).run(workspaceId, now, now)
   await getDatabase().prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,manager_membership_id,status,sender_association,created_at,updated_at)
     VALUES ('merchant-rep-member', ?, 'merchant-rep', 'rep', NULL, 'active', NULL, ?, ?)`).run(workspaceId, now, now)
+  await getDatabase().prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
+    VALUES ('merchant-admin-session', 'merchant-admin', 'merchant-admin-member', ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run(
+    hashOpaqueToken("merchant-admin-token"), now, now,
+  )
+  await getDatabase().prepare(`INSERT INTO api_keys
+    (id,workspace_id,name,prefix,secret_hash,scopes,expires_at,last_used_at,revoked_at,rate_limit_per_minute,created_by,created_at)
+    VALUES ('merchant-write-key', ?, 'write', 'mca_test', ?, ?, NULL, NULL, NULL, 60, 'merchant-admin', ?)`).run(
+    workspaceId, hashOpaqueToken("mca_write-secret"), JSON.stringify(["deals:write"]), now,
+  )
 })
 
 after(async () => {
@@ -218,4 +229,150 @@ test("a rep does not receive merchants whose deals they cannot see", async () =>
   assert.equal((await getDatabase().prepare<{ merchant_id: string | null }>("SELECT merchant_id FROM deals WHERE id = ?").get(hiddenDealId))?.merchant_id, null)
   assert.equal((await lookupMerchants(rep, { ein: "334445556" })).matches[0]?.legalName, "Visible Merchant LLC")
   assert.equal((await lookupMerchants(rep, { owners: [{ identityLast4: "1122" }] })).matches[0]?.legalName, "Visible Merchant LLC")
+})
+
+function isMerchantExists(error: unknown): error is { code: string; status: number; matches: Array<{ legalName: string; match: string }> } {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && error.code === "merchant_exists"
+    && "status" in error
+    && error.status === 409
+    && "matches" in error
+    && Array.isArray(error.matches),
+  )
+}
+
+async function dealCountForEin(ein: string): Promise<number> {
+  const hash = einLookupHash(workspaceId, ein)
+  return (await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM deals WHERE workspace_id = ? AND ein_lookup_hash = ?",
+  ).get(workspaceId, hash))?.count ?? 0
+}
+
+async function merchantCountForEin(ein: string): Promise<number> {
+  const hash = einLookupHash(workspaceId, ein)
+  return (await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ?",
+  ).get(workspaceId, hash))?.count ?? 0
+}
+
+test("creating a deal with an existing EIN and no flags returns 409 and does not insert", async () => {
+  await createDeal(actor(), { idempotencyKey: nextKey("dup-ein-seed"), legalName: "Blocked Merchant LLC", ein: "12-1100220" })
+  const beforeDeals = await dealCountForEin("12-1100220")
+  const beforeMerchants = await merchantCountForEin("12-1100220")
+  await assert.rejects(
+    () => createDeal(actor(), { idempotencyKey: nextKey("dup-ein-blocked"), legalName: "Should Not Exist LLC", ein: "12-1100220" }),
+    (error: unknown) => {
+      assert.equal(isMerchantExists(error), true)
+      if (!isMerchantExists(error)) return false
+      assert.equal(error.matches[0]?.legalName, "Blocked Merchant LLC")
+      assert.equal(error.matches[0]?.match, "ein")
+      assert.equal(error.matches.every((match) => match.match === "ein"), true)
+      return true
+    },
+  )
+  assert.equal(await dealCountForEin("12-1100220"), beforeDeals)
+  assert.equal(await merchantCountForEin("12-1100220"), beforeMerchants)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM deals WHERE workspace_id = ? AND legal_name = ?",
+  ).get(workspaceId, "Should Not Exist LLC"))?.count, 0)
+})
+
+test("attachMerchantId creates a new deal on the same merchant and copies omitted contact/owners", async () => {
+  const first = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-src"),
+    legalName: "Attach Source LLC",
+    ein: "12-1100660",
+    contactName: "Pat Source",
+    contactEmail: "pat@example.test",
+    contactPhone: "2125550100",
+    owners: [{ firstName: "Pat", lastName: "Source", isPrimary: true, identityLast4: "3210" }],
+  })
+  assert.ok(first.deal.merchantId)
+  const attached = await createDeal(actor(), {
+    idempotencyKey: nextKey("attach-new"),
+    attachMerchantId: first.deal.merchantId,
+  })
+  assert.notEqual(attached.deal.id, first.deal.id)
+  assert.equal(attached.deal.merchantId, first.deal.merchantId)
+  assert.equal(attached.deal.legalName, "Attach Source LLC")
+  const full = await getDealForDocument(actor(), attached.deal.id)
+  assert.equal(full.merchantId, first.deal.merchantId)
+  assert.equal(full.contactName, "Pat Source")
+  assert.equal(full.contactEmail, "pat@example.test")
+  assert.equal(full.contactPhone, "2125550100")
+  assert.equal(full.owners[0]?.firstName, "Pat")
+  assert.equal(full.owners[0]?.lastName, "Source")
+  assert.equal(full.owners[0]?.identityLast4, "3210")
+})
+
+test("forceDuplicate inserts a new merchant even when the EIN hash collides", async () => {
+  const first = await createDeal(actor(), {
+    idempotencyKey: nextKey("force-one"),
+    legalName: "Force One LLC",
+    ein: "12-1100110",
+  })
+  const second = await createDeal(actor(), {
+    idempotencyKey: nextKey("force-two"),
+    legalName: "Force Two LLC",
+    ein: "12-1100110",
+    forceDuplicate: true,
+  })
+  assert.notEqual(second.deal.id, first.deal.id)
+  assert.notEqual(second.deal.merchantId, first.deal.merchantId)
+  assert.equal(await dealCountForEin("12-1100110"), 2)
+  assert.equal(await merchantCountForEin("12-1100110"), 2)
+})
+
+test("owner last4 matches do not 409 create and are returned as lookup-only plus create warnings", async () => {
+  await createDeal(actor(), {
+    idempotencyKey: nextKey("last4-warn-a"),
+    legalName: "Last4 Existing LLC",
+    ein: "12-1100770",
+    owners: [{ firstName: "Lee", lastName: "Four", isPrimary: true, identityLast4: "4455" }],
+  })
+  const lookup = await lookupMerchants(actor(), { owners: [{ identityLast4: "4455" }] })
+  assert.ok(lookup.matches.some((match) => match.match === "identity_last4" && match.legalName === "Last4 Existing LLC"))
+  const second = await createDeal(actor(), {
+    idempotencyKey: nextKey("last4-warn-b"),
+    legalName: "Last4 New Ein LLC",
+    ein: "12-1100880",
+    owners: [{ firstName: "Lee", lastName: "Four", isPrimary: true, identityLast4: "4455" }],
+  })
+  assert.equal(second.deal.legalName, "Last4 New Ein LLC")
+  assert.notEqual(second.deal.merchantId, lookup.matches[0]?.merchantId)
+  assert.ok(second.warnings.some((warning) => warning.includes("Last4 Existing LLC")))
+})
+
+function lookupRequest(body: unknown, init: { cookie?: string; bearer?: string; origin?: string } = {}) {
+  return new Request("http://localhost/api/mca/merchants/lookup", {
+    method: "POST",
+    headers: {
+      origin: init.origin ?? "http://localhost",
+      "content-type": "application/json",
+      ...(init.cookie ? { cookie: `mca_session=${init.cookie}` } : {}),
+      ...(init.bearer ? { authorization: `Bearer mca_${init.bearer}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+test("POST /api/mca/merchants/lookup returns matches for session and deals:write actors", async () => {
+  await createDeal(actor(), { idempotencyKey: nextKey("http-ein"), legalName: "Http Lookup LLC", ein: "12-1100990" })
+  const unauth = await lookupMerchantsPost(lookupRequest({ ein: "12-1100990" }))
+  assert.equal(unauth.status, 401)
+
+  const sessionRes = await lookupMerchantsPost(lookupRequest({ ein: "12-1100990" }, { cookie: "merchant-admin-token" }))
+  assert.equal(sessionRes.status, 200)
+  assert.equal(sessionRes.headers.get("cache-control"), "no-store")
+  const sessionBody = await sessionRes.json() as { matches: Array<{ legalName: string; match: string }> }
+  assert.equal(sessionBody.matches[0]?.legalName, "Http Lookup LLC")
+  assert.equal(sessionBody.matches[0]?.match, "ein")
+
+  const writeRes = await lookupMerchantsPost(lookupRequest({ ein: "121100990" }, { bearer: "write-secret" }))
+  assert.equal(writeRes.status, 200)
+  const writeBody = await writeRes.json() as { matches: Array<{ legalName: string; match: string }> }
+  assert.equal(writeBody.matches[0]?.legalName, "Http Lookup LLC")
 })

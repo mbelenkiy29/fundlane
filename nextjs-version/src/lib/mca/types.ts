@@ -158,7 +158,10 @@ export interface ApiErrorBody {
     message: string;
     fieldErrors?: Record<string, string[]>;
     correlationId?: string;
+    matches?: unknown;
   };
+  code?: string;
+  matches?: unknown;
 }
 
 export interface AuditEvent {

@@ -243,15 +243,24 @@ async function replaceMerchantOwners(database: DbExecutor, record: MerchantDealI
   }
 }
 
-export async function upsertMerchantFromDeal(record: MerchantDealIdentity, executor?: DbExecutor): Promise<string> {
+export async function upsertMerchantFromDeal(
+  record: MerchantDealIdentity,
+  executor?: DbExecutor,
+  options?: { forceNew?: boolean },
+): Promise<string> {
   const database = db(executor)
   const einHash = einLookupHash(record.workspaceId, record.ein)
-  let merchantId = einHash
-    ? (await database.prepare<{ id: string }>(
-      "SELECT id FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ?",
+  let merchantId: string | undefined
+  if (options?.forceNew) {
+    merchantId = newId()
+  } else if (record.merchantId) {
+    merchantId = record.merchantId
+  } else if (einHash) {
+    merchantId = (await database.prepare<{ id: string }>(
+      "SELECT id FROM mca_merchants WHERE workspace_id = ? AND ein_lookup_hash = ? ORDER BY created_at, id",
     ).get(record.workspaceId, einHash))?.id
-    : undefined
-  merchantId = merchantId ?? record.merchantId ?? newId()
+  }
+  merchantId = merchantId ?? newId()
   const existing = await database.prepare<{ id: string }>(
     "SELECT id FROM mca_merchants WHERE workspace_id = ? AND id = ?",
   ).get(record.workspaceId, merchantId)
