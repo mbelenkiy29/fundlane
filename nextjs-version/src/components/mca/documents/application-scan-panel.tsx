@@ -271,7 +271,10 @@ export function ApplicationScanPanel({ embedded = false, onCreated }: { embedded
         }),
       })
       try { await uploadSupporting(result.deal.id) }
-      catch (caught) { setError(caught instanceof Error ? `Deal saved, but a supporting file failed: ${caught.message}` : "Deal saved, but a supporting file failed.") }
+      catch (caught) {
+        setError(caught instanceof Error ? `Deal saved, but a supporting file failed: ${caught.message}` : "Deal saved, but a supporting file failed.")
+        return
+      }
       setMessage(`${result.replayed ? "Recovered" : mode === "create" ? "Created" : "Updated"} ${result.deal.displayId}. The source PDF and extraction version are retained.`)
       onCreated?.(result.deal)
     } catch (caught) {
