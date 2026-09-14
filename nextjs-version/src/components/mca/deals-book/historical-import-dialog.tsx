@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { uploadMultipart } from "@/components/mca/documents/upload"
+import { parseHistoricalPreview } from "@/lib/mca/historical/preview-client"
 import { requestJson } from "@/lib/mca/client"
 import type { HistoricalImportPreview, HistoricalImportResult } from "@/lib/mca/historical/contracts"
 
@@ -25,43 +26,77 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
   const [batchId, setBatchId] = React.useState(() => new Date().toISOString().slice(0, 10))
   const [preview, setPreview] = React.useState<HistoricalImportPreview>()
   const [result, setResult] = React.useState<HistoricalImportResult>()
-  const [busy, setBusy] = React.useState(false)
+  const [phase, setPhase] = React.useState<"idle" | "uploading" | "preparing">("idle")
+  const [progress, setProgress] = React.useState(0)
+  const [committing, setCommitting] = React.useState(false)
+  const requestRef = React.useRef<AbortController | null>(null)
+  const generation = React.useRef(0)
+  const busy = phase !== "idle" || committing
   const [error, setError] = React.useState("")
+
+  const invalidatePreview = React.useCallback(() => {
+    generation.current += 1
+    requestRef.current?.abort()
+    requestRef.current = null
+    setPhase("idle")
+    setPreview(undefined)
+    setResult(undefined)
+    setError("")
+  }, [])
+
+  React.useEffect(() => {
+    if (!open) invalidatePreview()
+  }, [open, invalidatePreview])
+  React.useEffect(() => () => {
+    generation.current += 1
+    requestRef.current?.abort()
+  }, [])
 
   async function previewHistory(event: React.FormEvent) {
     event.preventDefault()
-    if (!file) return
-    setBusy(true); setError("")
+    if (!file || busy) return
+    invalidatePreview()
+    const controller = new AbortController()
+    requestRef.current = controller
+    const current = generation.current
+    setPhase("uploading"); setProgress(0)
     try {
       const form = new FormData()
       form.set("sourceId", sourceId)
       form.set("batchId", batchId)
       form.set("file", file)
-      setPreview(await uploadMultipart<HistoricalImportPreview>("/api/mca/historical/preview", form, () => undefined))
-      setResult(undefined)
+      const payload = await uploadMultipart<unknown>("/api/mca/historical/preview", form, (percent) => {
+        if (current !== generation.current) return
+        setProgress(percent)
+        if (percent >= 100) setPhase("preparing")
+      }, { timeoutMs: 60_000, signal: controller.signal })
+      if (current === generation.current) setPreview(parseHistoricalPreview(payload))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Historical preview failed.")
-    } finally { setBusy(false) }
+      if (current === generation.current) setError(caught instanceof Error ? caught.message : "Historical preview failed.")
+    } finally {
+      if (current === generation.current) { setPhase("idle"); requestRef.current = null }
+    }
   }
 
   async function commit() {
-    if (!preview) return
-    setBusy(true); setError("")
+    if (!preview || busy || preview.state === "committed") return
+    const current = generation.current
+    setCommitting(true); setError("")
     try {
       const next = await requestJson<HistoricalImportResult>(`/api/mca/historical/${encodeURIComponent(preview.runId)}/commit`, {
         method: "POST",
         body: JSON.stringify({ expectedPreviewRevision: preview.previewRevision }),
       })
-      setResult(next)
+      if (current === generation.current) setResult(next)
       toast.success("Historical funding imported and reconciled by its actual dates.")
       onImported()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Historical commit failed.")
-    } finally { setBusy(false) }
+      if (current === generation.current) setError(caught instanceof Error ? caught.message : "Historical commit failed.")
+    } finally { setCommitting(false) }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) invalidatePreview(); onOpenChange(next) }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Upload funded deals CSV</DialogTitle>
@@ -69,11 +104,12 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
         </DialogHeader>
         <a className="text-sm underline" download="historical-funding-example.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(EXAMPLE)}`}>Download example CSV</a>
         <form onSubmit={previewHistory} className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5"><Label htmlFor="historical-source">Source ID</Label><Input id="historical-source" value={sourceId} onChange={(event) => setSourceId(event.target.value)} required /></div>
-          <div className="space-y-1.5"><Label htmlFor="historical-batch">Batch ID</Label><Input id="historical-batch" value={batchId} onChange={(event) => setBatchId(event.target.value)} required /></div>
-          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="historical-file">CSV, TSV, XLSX, or XLS</Label><Input id="historical-file" type="file" accept=".csv,.tsv,.xlsx,.xls" onChange={(event) => setFile(event.target.files?.[0])} required /></div>
-          <Button disabled={busy} className="sm:col-span-2">{busy ? <Loader2 className="animate-spin" /> : <Upload />}Preview history</Button>
+          <div className="space-y-1.5"><Label htmlFor="historical-source">Source ID</Label><Input id="historical-source" value={sourceId} disabled={busy} onChange={(event) => { invalidatePreview(); setSourceId(event.target.value) }} required /></div>
+          <div className="space-y-1.5"><Label htmlFor="historical-batch">Batch ID</Label><Input id="historical-batch" value={batchId} disabled={busy} onChange={(event) => { invalidatePreview(); setBatchId(event.target.value) }} required /></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="historical-file">CSV, TSV, XLSX, or XLS</Label><Input id="historical-file" type="file" accept=".csv,.tsv,.xlsx,.xls" disabled={busy} onChange={(event) => { invalidatePreview(); setFile(event.target.files?.[0]) }} required /></div>
+          <Button disabled={busy} className="sm:col-span-2">{phase !== "idle" ? <Loader2 className="animate-spin" /> : <Upload />}Preview history</Button>
         </form>
+        {phase !== "idle" && <p role="status" className="text-sm text-muted-foreground">{phase === "uploading" ? `Uploading… ${progress}%` : "Preparing preview…"}</p>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {preview && <div className="space-y-2 rounded-md border p-3 text-sm">
           <p>{preview.totals.rows} rows · {preview.totals.valid} valid · {preview.totals.duplicates} duplicates · {preview.totals.invalid} invalid</p>
@@ -81,8 +117,9 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
           {preview.rows.filter((row) => row.errors.length || row.duplicate).map((row) => (
             <p key={row.rowNumber} className={row.errors.length ? "text-destructive" : "text-amber-700"}>Row {row.rowNumber}: {row.duplicate ? "duplicate external ID" : row.errors.join(" ")}</p>
           ))}
-          <Button onClick={() => void commit()} disabled={busy || preview.totals.valid === 0}>Commit historical records</Button>
+          <Button onClick={() => void commit()} disabled={busy || preview.totals.valid === 0 || preview.state === "committed" || result?.state === "committed"}>Commit historical records</Button>
         </div>}
+        {preview?.state === "committed" && <p role="status" className="text-sm">This batch has already been imported.</p>}
         {result && <p role="status" className="text-sm">Created {result.created}; duplicates {result.duplicates}; failed {result.failed}.</p>}
       </DialogContent>
     </Dialog>

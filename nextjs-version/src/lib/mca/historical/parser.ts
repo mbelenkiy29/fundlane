@@ -5,18 +5,22 @@ import { parseSpreadsheet } from "../imports/parser"
 import type { HistoricalFundingRowInput } from "./contracts"
 
 const key = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
-const integer = (value: string, field: string, optional = false): number | undefined => {
+const integer = (value: string = "", field: string, optional = false): number | undefined => {
   if (!value.trim() && optional) return undefined
   if (!/^\d+$/.test(value.trim())) throw new AppError(422, "historical_parse_failed", `${field} must contain whole cents.`)
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed)) throw new AppError(422, "historical_parse_failed", `${field} is outside the supported range.`)
   return parsed
 }
-const decimal = (value: string): number | undefined => value.trim() ? Number(value.trim()) : undefined
+const decimal = (value: string = ""): number | undefined => value.trim() ? Number(value.trim()) : undefined
 
 export function parseHistoricalSpreadsheet(input: { filename: string; bytes: Uint8Array }): HistoricalFundingRowInput[] {
   const parsed = parseSpreadsheet(input)
   const headers = parsed.headers.map(key)
+  for (const required of ["external_id", "funder_name", "funded_at", "amount_cents"]) {
+    if (!headers.includes(required)) throw new AppError(422, "historical_parse_failed", `Missing required column: ${required}.`)
+  }
+  if (!headers.includes("deal_id") && !headers.includes("legal_name")) throw new AppError(422, "historical_parse_failed", "Provide a deal_id or legal_name column.")
   const rows = parsed.rows.map((cells, index) => {
     const item = Object.fromEntries(headers.map((header, cell) => [header, cells[cell] ?? ""]))
     try {
