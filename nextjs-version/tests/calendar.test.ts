@@ -303,6 +303,6 @@ test("additive calendar migration can replay without losing scheduled activity",
  await database.query(migration)
  await database.query(migration)
  const tables=await database.query("SELECT count(*)::int count FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'mca_calendar_%' AND rowsecurity")
- assert.equal(tables.rows[0].count,6)
+ assert.equal((tables.rows[0] as unknown as {count:number}).count,6)
  assert.ok((await calendarFeed(admin,query("team"))).events.some(event=>event.id===activity.id))
 })

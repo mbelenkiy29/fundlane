@@ -105,3 +105,7 @@ Staging acceptance with a real Google account remains a release prerequisite: co
 - Google OAuth credentials were not configured locally; real-account OAuth, delivery, push renewal and production activation remain unverified release prerequisites.
 
 The calendar migration is replay-safe and includes the established server-only RLS grants without changing role credentials. When released independently of earlier pending migrations, it may be applied through Supabase migration history first; do not advance the Drizzle journal past unapplied earlier entries. A later normal guarded migration run can safely replay it and record the ordered Drizzle journal.
+
+### Main release verification
+
+The isolated main-based release passed 16 calendar tests, including repeated migration replay, typecheck, focused lint, and the production build. The six calendar tables were applied to the `fundlane` Supabase project with RLS enabled, `mca_app` access, and no browser-role grants. Google credentials remain unconfigured and the integration remains disabled.

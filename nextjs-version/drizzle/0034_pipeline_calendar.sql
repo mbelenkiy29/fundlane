@@ -47,7 +47,7 @@ ALTER TABLE mca_calendar_event_links ENABLE ROW LEVEL SECURITY;
 
 -- Preserve the first actual delivery timestamp; attempt creation can precede sending.
 ALTER TABLE mca_submission_attempts ADD COLUMN IF NOT EXISTS sent_at text;
-CREATE OR REPLACE FUNCTION mca_submission_capture_sent_at() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION mca_submission_capture_sent_at() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
  IF NEW.state='sent' AND NEW.sent_at IS NULL THEN
    NEW.sent_at=to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
