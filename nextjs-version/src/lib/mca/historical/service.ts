@@ -1,5 +1,7 @@
 import "server-only"
 
+import { timeHistoricalPhase } from "./telemetry"
+
 import { createHash } from "node:crypto"
 import { reconcilePayment } from "../accounting/service"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
@@ -22,12 +24,18 @@ function requireImportPermission(actor: DealActor): void {
 function dateValid(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}(?:T.*Z)?$/.test(value) && !Number.isNaN(Date.parse(value)) }
 function centsValid(value: unknown, positive = false): value is number { return Number.isSafeInteger(value) && (positive ? Number(value) > 0 : Number(value) >= 0) }
 
-async function validateRow(actor: DealActor, sourceId: string, raw: HistoricalFundingRowInput, rowNumber: number, seen: Set<string>): Promise<HistoricalRowPreview> {
+async function validateRow(actor: DealActor, raw: HistoricalFundingRowInput, rowNumber: number, seen: Set<string>, persistedIds: Set<string>, dealAccess: Map<string, Promise<boolean>>): Promise<HistoricalRowPreview> {
   const errors: string[] = []
   const externalId = typeof raw.externalId === "string" ? raw.externalId.trim() : ""
   if (!externalId || externalId.length > 160) errors.push("External ID is required and must be at most 160 characters.")
   if (!raw.dealId && !(typeof raw.legalName === "string" && raw.legalName.trim())) errors.push("Provide an existing deal ID or a legal name for a new historical deal.")
-  if (raw.dealId) { try { await getDealForDocument(actor, raw.dealId) } catch { errors.push("Deal ID was not found or is not accessible.") } }
+  if (raw.dealId) {
+    if (!dealAccess.has(raw.dealId)) dealAccess.set(raw.dealId, getDealForDocument(actor, raw.dealId).then(() => true).catch((error) => {
+      if (error instanceof AppError && [403, 404].includes(error.status)) return false
+      throw error
+    }))
+    if (!await dealAccess.get(raw.dealId)) errors.push("Deal ID was not found or is not accessible.")
+  }
   if (typeof raw.funderName !== "string" || !raw.funderName.trim()) errors.push("Funder name is required.")
   if (!dateValid(raw.fundedAt)) errors.push("Funding date must be a valid ISO date or UTC timestamp.")
   if (!centsValid(raw.amountCents, true)) errors.push("Amount must be positive integer cents.")
@@ -50,7 +58,7 @@ async function validateRow(actor: DealActor, sourceId: string, raw: HistoricalFu
     }
     if (paidTotal !== (raw.paidCommissionCents ?? 0)) errors.push("Paid split amounts must total paid commission cents.")
   }
-  const persisted = Boolean(externalId && await getDatabase().prepare("SELECT id FROM mca_historical_import_rows WHERE workspace_id = ? AND source_id = ? AND external_id = ?").get(actor.workspaceId, sourceId, externalId))
+  const persisted = persistedIds.has(externalId)
   const duplicate = persisted || seen.has(externalId)
   if (externalId) seen.add(externalId)
   return { ...raw, externalId, legalName: raw.legalName?.trim() || undefined, funderName: raw.funderName?.trim() ?? "", rowNumber, duplicate, errors }
@@ -69,31 +77,52 @@ export async function previewHistoricalImport(actor: DealActor, input: { sourceI
   requireImportPermission(actor)
   if (!input.sourceId?.trim() || !input.batchId?.trim()) throw new AppError(422, "validation_failed", "Source and batch IDs are required.")
   if (!Array.isArray(input.rows) || !input.rows.length || input.rows.length > 5000) throw new AppError(422, "validation_failed", "Provide 1 to 5,000 historical rows.")
-  const prior = await getDatabase().prepare<RunRow>("SELECT * FROM mca_historical_import_runs WHERE workspace_id = ? AND source_id = ? AND batch_id = ?").get(actor.workspaceId, input.sourceId.trim(), input.batchId.trim())
-  if (prior) return getHistoricalImport(actor, prior.id)
-  const rows: HistoricalRowPreview[] = []
-  const seen = new Set<string>()
-  for (const [index, row] of input.rows.entries()) rows.push(await validateRow(actor, input.sourceId.trim(), row, index + 2, seen))
-  const summary = totals(rows), runId = newId(), createdAt = nowIso()
-  const concurrentRunId = await withImmediateTransaction(async (database) => {
-    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:${input.sourceId.trim()}:${input.batchId.trim()}`)
-    const existing = await database.prepare<RunRow>("SELECT * FROM mca_historical_import_runs WHERE workspace_id = ? AND source_id = ? AND batch_id = ? FOR UPDATE").get(actor.workspaceId, input.sourceId.trim(), input.batchId.trim())
-    if (existing) return existing.id
-    await database.prepare(`INSERT INTO mca_historical_import_runs
-      (id, workspace_id, source_id, batch_id, state, preview_revision, totals_json, reconciliation_json, created_by_user_id, created_at)
-      VALUES (?, ?, ?, ?, 'preview', 1, ?, '{}', ?, ?)`).run(runId, actor.workspaceId, input.sourceId.trim(), input.batchId.trim(), JSON.stringify(summary), actor.userId, createdAt)
-    for (const row of rows) {
-      if (row.duplicate) continue
-      await database.prepare(`INSERT INTO mca_historical_import_rows
-        (id, workspace_id, run_id, source_id, external_id, row_number, normalized_json, validation_errors_json, duplicate, outcome, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-        ON CONFLICT (workspace_id, source_id, external_id) DO NOTHING`).run(newId(), actor.workspaceId, runId, input.sourceId.trim(), row.externalId, row.rowNumber, JSON.stringify(row), JSON.stringify(row.errors), row.errors.length ? "invalid" : "pending", createdAt)
+  const sourceId = input.sourceId.trim(), batchId = input.batchId.trim()
+  try {
+    return await withImmediateTransaction(async (database) => {
+      // Scope wait limits to this preview; they reset at transaction completion.
+      await database.execute("SET LOCAL lock_timeout = '10s'")
+      await database.execute("SET LOCAL statement_timeout = '30s'")
+      await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:${sourceId}:${batchId}`)
+      const prior = await database.prepare<RunRow>("SELECT * FROM mca_historical_import_runs WHERE workspace_id = ? AND source_id = ? AND batch_id = ?").get(actor.workspaceId, sourceId, batchId)
+      if (prior) return getHistoricalImport(actor, prior.id)
+      const rows = await timeHistoricalPhase(actor.correlationId, "validation", async () => {
+        const externalIds = [...new Set(input.rows.map((row) => typeof row.externalId === "string" ? row.externalId.trim() : "").filter(Boolean))]
+        const persisted = await database.prepare<{ external_id: string }>("SELECT external_id FROM mca_historical_import_rows WHERE workspace_id = ? AND source_id = ? AND external_id = ANY(?::text[])").all(actor.workspaceId, sourceId, externalIds)
+        const persistedIds = new Set(persisted.map((row) => row.external_id))
+        const seen = new Set<string>(), dealAccess = new Map<string, Promise<boolean>>()
+        const validated: HistoricalRowPreview[] = []
+        for (const [index, row] of input.rows.entries()) validated.push(await validateRow(actor, row, index + 2, seen, persistedIds, dealAccess))
+        return validated
+      })
+      return timeHistoricalPhase(actor.correlationId, "persistence", async () => {
+        const runId = newId(), createdAt = nowIso()
+        await database.prepare(`INSERT INTO mca_historical_import_runs
+          (id, workspace_id, source_id, batch_id, state, preview_revision, totals_json, reconciliation_json, created_by_user_id, created_at)
+          VALUES (?, ?, ?, ?, 'preview', 1, '{}', '{}', ?, ?)`).run(runId, actor.workspaceId, sourceId, batchId, actor.userId, createdAt)
+        const candidates = rows.filter((row) => !row.duplicate)
+        for (let offset = 0; offset < candidates.length; offset += 250) {
+          const chunk = candidates.slice(offset, offset + 250)
+          const inserted = await database.prepare<{ row_number: number }>(`INSERT INTO mca_historical_import_rows
+            (id, workspace_id, run_id, source_id, external_id, row_number, normalized_json, validation_errors_json, duplicate, outcome, created_at)
+            VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").join(", ")}
+            ON CONFLICT (workspace_id, source_id, external_id) DO NOTHING RETURNING row_number`).all(...chunk.flatMap((row) => [newId(), actor.workspaceId, runId, sourceId, row.externalId, row.rowNumber, JSON.stringify(row), JSON.stringify(row.errors), row.errors.length ? "invalid" : "pending", createdAt]))
+          const insertedNumbers = new Set(inserted.map((row) => Number(row.row_number)))
+          // Another batch can reserve the same external ID after validation.
+          for (const row of chunk) if (!insertedNumbers.has(row.rowNumber)) row.duplicate = true
+        }
+        const summary = totals(rows)
+        await database.prepare("UPDATE mca_historical_import_runs SET totals_json = ? WHERE workspace_id = ? AND id = ?").run(JSON.stringify(summary), actor.workspaceId, runId)
+        await recordAuditEvent({ context: actor, action: "historical.preview_created", resourceType: "historical_import", resourceId: runId, metadata: summary, correlationId: actor.correlationId, executor: database })
+        return { runId, state: "preview" as const, previewRevision: 1, rows, totals: summary }
+      })
+    })
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && ["55P03", "57014"].includes(String(error.code))) {
+      throw new AppError(503, "historical_preview_timeout", "Preview preparation timed out. Retry with the same file, source and batch IDs.")
     }
-    await recordAuditEvent({ context: actor, action: "historical.preview_created", resourceType: "historical_import", resourceId: runId, metadata: summary, correlationId: actor.correlationId, executor: database })
-    return undefined
-  })
-  if (concurrentRunId) return getHistoricalImport(actor, concurrentRunId)
-  return { runId, state: "preview", previewRevision: 1, rows, totals: summary }
+    throw error
+  }
 }
 
 export async function getHistoricalImport(actor: DealActor, runId: string): Promise<HistoricalImportPreview & { reconciliation?: HistoricalImportResult }> {
