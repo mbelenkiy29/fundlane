@@ -1,12 +1,13 @@
 "use client"
 
 import Link from "next/link"
+import { useState } from "react"
 import { Phone } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { DocumentPanel } from "@/components/mca/documents/document-panel"
-import { SmsComposerPanel } from "@/components/mca/sms/composer-panel"
+import { DealMessages } from "@/components/mca/email/deal-messages"
 import { formatCents, formatMcaDate } from "@/components/mca/accounting/format"
 import { ordinal } from "@/lib/mca/deals/book-math"
 import type { BookDetail } from "@/lib/mca/deals/book-contracts"
@@ -19,6 +20,7 @@ export function MerchantSheet({ detail, open, onOpenChange, focusSms }: {
   onOpenChange: (open: boolean) => void
   focusSms?: boolean
 }) {
+  const [channel,setChannel]=useState<"sms"|"email">("sms")
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
@@ -32,6 +34,8 @@ export function MerchantSheet({ detail, open, onOpenChange, focusSms }: {
               <Badge variant="outline">{STATUS_LABEL[detail.servicingStatus]}</Badge>
               {detail.renewalEligible && <Badge>Renewal eligible</Badge>}
               {detail.contactPhone && <Button size="sm" variant="outline" asChild><a href={`tel:${detail.contactPhone}`}><Phone className="size-3.5" />Call</a></Button>}
+              <Button size="sm" variant="outline" onClick={()=>{setChannel("sms");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Text</Button>
+              <Button size="sm" variant="outline" onClick={()=>{setChannel("email");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Email</Button>
               <Button size="sm" variant="outline" asChild><Link href={`/pipeline?deal=${detail.dealId}`}>Full application</Link></Button>
             </div>
             <div className="grid gap-3 rounded-lg border p-4 sm:grid-cols-3">
@@ -56,9 +60,9 @@ export function MerchantSheet({ detail, open, onOpenChange, focusSms }: {
               <DocumentPanel dealId={detail.dealId} />
             </div>
             <div id="merchant-sms">
-              <SmsComposerPanel dealId={detail.dealId} />
+              <DealMessages dealId={detail.dealId} channel={channel} />
             </div>
-            {focusSms && <p className="text-xs text-muted-foreground">SMS composer is on this sheet. Consent is still required before a send.</p>}
+            {focusSms && <p className="text-xs text-muted-foreground">The SMS composer is in the Messages section. Consent is required before a send.</p>}
           </div>
         </>}
       </SheetContent>

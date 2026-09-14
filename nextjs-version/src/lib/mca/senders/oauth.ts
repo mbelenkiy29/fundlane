@@ -13,12 +13,14 @@ const MICROSOFT_ME = "https://graph.microsoft.com/v1.0/me"
 
 export const GOOGLE_SENDER_SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
 ] as const
 
 export const MICROSOFT_SENDER_SCOPES = [
   "offline_access",
   "https://graph.microsoft.com/Mail.Send",
+  "https://graph.microsoft.com/Mail.Read",
   "https://graph.microsoft.com/User.Read",
 ] as const
 
@@ -119,6 +121,8 @@ async function oauthPost(url: string, body: URLSearchParams): Promise<Record<str
     })
     const payload = await response.json() as Record<string, unknown>
     if (!response.ok) {
+      if (response.status === 429) throw new AppError(429, "sender_oauth_rate_limited", "The email provider is rate limited. Try again shortly.")
+      if (response.status >= 500) throw new AppError(503, "sender_oauth_unavailable", "The email provider is temporarily unavailable.")
       throw new AppError(502, "sender_oauth_exchange_failed", "The email provider did not accept the authorization grant. Start the connection again.")
     }
     return payload

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { apiError, AppError } from "@/lib/mca/errors"
 import {
   getSender,
-  requireSenderAdmin,
+  requireSenderUse,
   requireSenderRead,
   updateSender,
   type UpdateSenderInput,
@@ -24,7 +24,7 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
-    const actor = await requireSenderAdmin(request)
+    const actor = await requireSenderUse(request)
     let input: UpdateSenderInput
     try {
       input = await request.json() as UpdateSenderInput

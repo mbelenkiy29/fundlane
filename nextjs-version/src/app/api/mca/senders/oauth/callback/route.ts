@@ -9,7 +9,7 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 function redirectToConnections(request: Request, query: string) {
-  return NextResponse.redirect(new URL(`/settings/connections?${query}`, request.url))
+  return NextResponse.redirect(new URL(`/mail?${query}`, request.url))
 }
 
 export async function GET(request: Request) {
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url)
     const oauthError = url.searchParams.get("error")
     if (oauthError) throw new AppError(403, "sender_oauth_denied", "Email sender authorization was cancelled or denied.")
-    const auth = await requireWorkspaceAccess(request, { roles: ["admin", "super_admin"], sessionOnly: true })
+    const auth = await requireWorkspaceAccess(request, { sessionOnly: true })
     const actor = { ...await actorForDeals(auth), correlationId: requestCorrelationId(request) }
     await completeSenderOAuth(actor, {
       state: url.searchParams.get("state") ?? "",
