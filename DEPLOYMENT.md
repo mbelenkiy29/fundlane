@@ -1,6 +1,8 @@
 # Fundlane deployment — September 10, 2026
 
-The application is live on Render at https://fundlane.io. https://www.fundlane.io redirects to the apex. Vercel remains the domain registrar and DNS provider; Neon remains the production database.
+**Historical snapshot.** This record describes the Render + Neon web hosting from 10 September 2026. The current public app is Next.js on Vercel; Postgres, Auth, and private Storage are on Supabase. Render remains for native workers only. See `nextjs-version/README.md` and `WORKSPACE_NAVIGATION.md`.
+
+The application was live on Render at https://fundlane.io. https://www.fundlane.io redirected to the apex. Vercel was the domain registrar and DNS provider; Neon was the production database.
 
 ## Resources
 

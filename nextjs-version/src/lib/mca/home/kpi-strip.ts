@@ -25,12 +25,19 @@ export type HomeKpiCardKey =
   | "approvalRate"
   | "collectionsToday"
 
+export interface HomeKpiSparkPoint {
+  t: string
+  v: number
+}
+
 export interface HomeKpiCard {
   key: HomeKpiCardKey
   title: string
   value: string
   detail: string
   periodSensitive: boolean
+  sparkline: HomeKpiSparkPoint[]
+  sparklineHidden: boolean
 }
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
@@ -77,6 +84,9 @@ function emptyKpis(period: KpiPeriod = "mtd"): HomeKpis {
     empty: true,
     series: {
       fundedByMonth: [],
+      pipelineByMonth: [],
+      approvalByMonth: [],
+      collectionsByDay: [],
       revenueBreakdown: [],
       recentActivity: [],
       topFunders: [],
@@ -85,6 +95,11 @@ function emptyKpis(period: KpiPeriod = "mtd"): HomeKpis {
       states: [],
     },
   }
+}
+
+function sparkline(points: HomeKpiSparkPoint[], hidden: boolean): { sparkline: HomeKpiSparkPoint[]; sparklineHidden: boolean } {
+  if (hidden) return { sparkline: [], sparklineHidden: true }
+  return { sparkline: points, sparklineHidden: false }
 }
 
 export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?.period ?? "mtd"): HomeKpiCard[] {
@@ -98,6 +113,13 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: money(source.pipeline.volumeDollars, source.pipeline.dollarsHidden, false),
       detail: countLabel(source.pipeline.count, "deal"),
       periodSensitive: false,
+      ...sparkline(
+        source.series.pipelineByMonth.map((row) => ({
+          t: row.month,
+          v: source.pipeline.dollarsHidden ? row.count : row.volumeDollars,
+        })),
+        false,
+      ),
     },
     {
       key: "funded",
@@ -105,6 +127,10 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: money(source.funded.amountCents, source.funded.dollarsHidden, true),
       detail: `${countLabel(source.funded.count, "funding")} · ${label}`,
       periodSensitive: true,
+      ...sparkline(
+        source.series.fundedByMonth.map((row) => ({ t: row.month, v: row.fundedCents })),
+        source.funded.dollarsHidden,
+      ),
     },
     {
       key: "commission",
@@ -112,6 +138,10 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: money(source.commission.amountCents, source.commission.dollarsHidden, true),
       detail: `${countLabel(source.commission.count, "payment")} · ${label}`,
       periodSensitive: true,
+      ...sparkline(
+        source.series.fundedByMonth.map((row) => ({ t: row.month, v: row.commissionCents })),
+        source.commission.dollarsHidden,
+      ),
     },
     {
       key: "activeMerchants",
@@ -119,6 +149,10 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: String(source.activeMerchants.count),
       detail: countLabel(source.activeMerchants.count, "merchant"),
       periodSensitive: false,
+      ...sparkline(
+        source.series.merchantGrowth.map((row) => ({ t: row.month, v: row.new + row.returning })),
+        false,
+      ),
     },
     {
       key: "approvalRate",
@@ -126,6 +160,12 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: approval,
       detail: source.empty || source.approvalRate.rate == null ? label : `${source.approvalRate.numerator} / ${source.approvalRate.denominator} · ${label}`,
       periodSensitive: true,
+      ...sparkline(
+        source.series.approvalByMonth
+          .filter((row) => row.rate != null)
+          .map((row) => ({ t: row.month, v: (row.rate ?? 0) * 100 })),
+        false,
+      ),
     },
     {
       key: "collectionsToday",
@@ -133,6 +173,10 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: money(source.collectionsToday.expectedCents, source.collectionsToday.dollarsHidden, true),
       detail: `Received ${money(source.collectionsToday.receivedCents, source.collectionsToday.dollarsHidden, true)}`,
       periodSensitive: false,
+      ...sparkline(
+        source.series.collectionsByDay.map((row) => ({ t: row.day, v: row.receivedCents })),
+        source.collectionsToday.dollarsHidden,
+      ),
     },
   ]
 }

@@ -22,11 +22,29 @@ const sample: HomeKpis = {
   collectionsToday: { expectedCents: 50_000, receivedCents: 25_000, dollarsHidden: false, source: "accounting_payments" },
   empty: false,
   series: {
-    fundedByMonth: [],
+    fundedByMonth: [
+      { month: "2026-01", fundedCents: 100_000, commissionCents: 10_000 },
+      { month: "2026-02", fundedCents: 200_000, commissionCents: 20_000 },
+    ],
+    pipelineByMonth: [
+      { month: "2026-01", count: 1, volumeDollars: 50000 },
+      { month: "2026-02", count: 2, volumeDollars: 100000 },
+    ],
+    approvalByMonth: [
+      { month: "2026-01", numerator: 1, denominator: 2, rate: 0.5 },
+      { month: "2026-02", numerator: 0, denominator: 0, rate: null },
+    ],
+    collectionsByDay: [
+      { day: "2026-03-14", expectedCents: 10_000, receivedCents: 5_000 },
+      { day: "2026-03-15", expectedCents: 50_000, receivedCents: 25_000 },
+    ],
     revenueBreakdown: [],
     recentActivity: [],
     topFunders: [],
-    merchantGrowth: [],
+    merchantGrowth: [
+      { month: "2026-01", new: 1, returning: 0, churn: 0 },
+      { month: "2026-02", new: 2, returning: 1, churn: 0 },
+    ],
     industries: [],
     states: [],
   },
@@ -57,6 +75,11 @@ test("maps six home KPI cards with volume, counts, percent, and collections", ()
   assert.equal(cards[5]?.value, "$500")
   assert.equal(cards[5]?.detail, "Received $250")
   assert.equal(JSON.stringify(cards).search(DUMMY), -1)
+  assert.deepEqual(cards[0]?.sparkline.map((point) => point.v), [50000, 100000])
+  assert.equal(cards[0]?.sparklineHidden, false)
+  assert.deepEqual(cards[1]?.sparkline.map((point) => point.v), [100_000, 200_000])
+  assert.deepEqual(cards[4]?.sparkline.map((point) => point.v), [50])
+  assert.deepEqual(cards[5]?.sparkline.map((point) => point.v), [5_000, 25_000])
 })
 
 test("empty workspace shows zeros and N/A, never dummy copy", () => {
@@ -101,6 +124,12 @@ test("dollarsHidden shows Restricted while counts remain", () => {
   assert.equal(cards[3]?.value, "3")
   assert.equal(cards[5]?.value, HOME_KPI_RESTRICTED)
   assert.equal(cards[5]?.detail, `Received ${HOME_KPI_RESTRICTED}`)
+  assert.equal(cards[0]?.sparklineHidden, false)
+  assert.deepEqual(cards[0]?.sparkline.map((point) => point.v), [1, 2])
+  assert.equal(cards[1]?.sparklineHidden, true)
+  assert.deepEqual(cards[1]?.sparkline, [])
+  assert.equal(cards[2]?.sparklineHidden, true)
+  assert.equal(cards[5]?.sparklineHidden, true)
 })
 
 test("approval rate null is N/A even when deals exist", () => {

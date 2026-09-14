@@ -430,6 +430,26 @@ export async function resolveAttributionToken(tokenHash: string): Promise<{ work
   } : undefined
 }
 
+export async function resolveNativeAttributionToken(tokenHash: string): Promise<{ workspaceId: string; integrationId: string; membershipId: string } | undefined> {
+  const row = await intakeDatabase().prepare(`SELECT t.workspace_id, t.integration_id, t.membership_id
+    FROM intake_attribution_tokens t
+    JOIN intake_integrations i ON i.id=t.integration_id AND i.workspace_id=t.workspace_id AND i.enabled=1
+    JOIN memberships m ON m.id=t.membership_id AND m.workspace_id=t.workspace_id AND m.status='active'
+    WHERE t.token_hash=? AND t.revoked_at IS NULL AND i.provider='native'`).get(tokenHash) as Row | undefined
+  return row ? {
+    workspaceId: String(row.workspace_id),
+    integrationId: String(row.integration_id),
+    membershipId: String(row.membership_id),
+  } : undefined
+}
+
+export async function findNativeApplyIntegration(workspaceId: string): Promise<IntegrationRecord | undefined> {
+  const row = await intakeDatabase().prepare(
+    "SELECT * FROM intake_integrations WHERE workspace_id=? AND provider='native' AND form_id='apply' AND enabled=1"
+  ).get(workspaceId) as Row | undefined
+  return row ? integrationFromRow(row, false) : undefined
+}
+
 export interface ReceiptRecord {
   id: string
   workspaceId: string

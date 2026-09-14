@@ -2,7 +2,7 @@
 
 ## Start here
 
-The active application is `nextjs-version/` (Next.js 16, React 19, TypeScript). `vite-version/` and the root `docs/` are the original template/reference, not the MCA implementation. Prefer `nextjs-version/README.md` and its package scripts over legacy template instructions in the root README.
+The active application is `nextjs-version/` (Next.js 16, React 19, TypeScript) hosted on Vercel. Supabase owns Postgres, Auth, and private Storage. Render runs native workers only (document scanning and the Python ChatKit service). `vite-version/` and the root `docs/` are the original template/reference, not the MCA implementation. Prefer `nextjs-version/README.md` and its package scripts over legacy template instructions in the root README. Clerk and Neon are not part of the runtime.
 
 Linear project: [MCA](https://linear.app/michael-belenkiy/project/mca-1e94b0617388), ID `b223a780-3987-440c-8e04-41516a97e69b`. Current team: Michael Belenkiy (`MIC`), ID `bfc9ec70-5c0f-4515-a13b-a8d2f3ef3f9a`. Historical documents can use `SEN-*` identifiers; resolve tickets through Linear before relying on an old identifier or status.
 
@@ -26,8 +26,9 @@ All paths below are relative to `nextjs-version/`.
 | Pages and HTTP endpoints | `src/app/`, `src/app/api/` |
 | MCA UI and shared components | `src/components/mca/`, `src/components/ui/`, `src/components/layouts/` |
 | Read-only ChatKit panel | `src/lib/mca/assistant/chatkit-context.ts`, `gateway.ts`, `security.ts`, `store.ts`, `tools.ts`, `src/app/api/mca/chatkit/`, `../chatkit-service/`, `docs/chatkit-assistant.md` |
-| Authentication and workspace isolation | `src/lib/mca/auth.ts`, `sessions.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts` |
+| Authentication and workspace isolation | `src/lib/mca/auth.ts`, `supabase-auth.ts`, `src/lib/supabase/`, `src/proxy.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts`, `docs/supabase-auth.md` |
 | Database and schema | `src/lib/mca/db.ts`, `src/lib/mca/db/schema.ts`, `drizzle/` |
+| Company billing | `src/lib/mca/billing.ts`, `/api/billing`, `/api/webhooks/stripe`, `docs/supabase-billing.md` |
 | Deals and pipeline | `src/lib/mca/deals/` |
 | Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
 | Intake, documents and imports | `src/lib/mca/intake/`, `documents/`, `imports/` |
@@ -35,18 +36,20 @@ All paths below are relative to `nextjs-version/`.
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | Closing, offer messaging and SMS routing | `src/lib/mca/closing/`, `sms/`, `src/components/mca/closing/`, `src/components/mca/sms/` |
 | Company SMS onboarding, provisioning and inbox | `src/lib/mca/sms/onboarding.ts`, `provisioning.ts`, `inbox.ts`, `src/lib/mca/db/sms-onboarding.ts`, `docs/sms/company-onboarding.md` |
-| Render deployment | `../render.yaml`, `Dockerfile`, `docs/render-deployment.md` |
-| Previous Railway deployment and verification | `Dockerfile`, `railway.json`, `scripts/railway/`, `docs/milestone-05/provider-activation.md` |
+| Vercel frontend | Next.js App Router on Vercel; runtime pool defaults to two connections when `VERCEL` is set |
+| Supabase Auth, Postgres and private Storage | `src/lib/supabase/`, `src/lib/mca/supabase-auth.ts`, `supabase-ca.ts`, `docs/supabase-auth.md`, `docs/supabase-billing.md` |
+| Render workers | `../render.yaml`, `Dockerfile`, `Dockerfile.worker`, `docs/render-deployment.md` — ClamAV processing and Python ChatKit only, not the public web host |
+| Previous Railway / Render web hosting | `Dockerfile`, `railway.json`, `scripts/railway/`, `../DEPLOYMENT.md`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
-| Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts` |
-| Migration tooling | `scripts/neon/`, `drizzle.config.ts` |
-| Plans, contracts and verification evidence | `docs/milestone-*/`, `docs/acceptance/`, `docs/neon-*.md` |
+| Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts`, `tests/supabase-auth.test.ts` |
+| Migration tooling | `scripts/database/`, `scripts/supabase/`, `drizzle.config.ts` |
+| Plans, contracts and verification evidence | `docs/milestone-*/`, `docs/acceptance/`, `docs/supabase-*.md`; `docs/neon-*.md` and `docs/clerk-*.md` are historical |
 
-The app uses Neon Postgres. SQLite references concern historical state or migration tooling. Document bytes remain in filesystem storage. Read the active README before environment setup or database work. Local runtime data and environment files are excluded from Graphify.
+The app uses Supabase Postgres. Identity is Supabase Auth; document bytes live in private Supabase Storage. SQLite, Neon, Clerk, and filesystem document storage are historical or isolated-test paths. Read the active README before environment setup or database work. Local runtime data and environment files are excluded from Graphify.
 
 ## Graphify setup and refresh
 
-Clerk owns browser authentication through `src/proxy.ts`, `src/lib/mca/clerk-auth.ts`, and the existing custom auth forms. Neon remains authoritative for MCA memberships, roles, and financial permissions. Team delivery is in `clerk-team.ts`; signed event reconciliation is in `clerk-webhooks.ts`. See `nextjs-version/docs/clerk-auth.md` and `scripts/clerk/migrate.ts` for the additive migration and separate production cutover. Legacy password/session HTTP issuance returns 410; API keys retain their existing gateway.
+Supabase Auth owns browser identity through `src/proxy.ts`, `src/lib/mca/supabase-auth.ts`, and `src/lib/supabase/`. Application tables remain authoritative for companies, memberships, roles, and financial permissions. Team invitations are application-issued tokens that require a matching verified Supabase email. The old Clerk webhook returns HTTP 410. Legacy password/session HTTP issuance returns 410; API keys retain their existing gateway. See `nextjs-version/docs/supabase-auth.md`.
 
 Following the [official Graphify README](https://github.com/Graphify-Labs/graphify), this workspace uses `graphifyy` (double y), version 0.9.18 with SQL support. It is a Python developer tool, not an application dependency.
 
@@ -77,10 +80,10 @@ This local workspace had no `.git` at setup. After it becomes a Git checkout, ru
 
 ## Validate implementation changes
 
-Use Node.js 24+ and pnpm. From `nextjs-version/`, the verification commands are `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Run checks appropriate to the changed behavior. Database tests require the protected Neon verification environment described in the active README; do not substitute application data for an isolated test database.
+Use Node.js 24+ and pnpm. From `nextjs-version/`, the verification commands are `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Run checks appropriate to the changed behavior. Database tests require a disposable local PostgreSQL cluster (`MCA_TEST_DATABASE_ADMIN_URL`); they create and drop isolated databases and must never use the application Supabase database. Hosted staging acceptance uses real Supabase Auth/Storage and the Vercel frontend.
 
 Refresh the graph after changes and update this guide when module ownership or entry points change. Fetch live Linear status before selecting work or recording completion; milestone snapshots and generated graphs can become stale.
 
-Clerk company billing uses `nextjs-version/src/lib/mca/billing.ts`, `/api/billing`, and `workspace_billing` (migration 0019). Neon enforces active/pending seat reservations; company features remain accessible. See `nextjs-version/docs/clerk-billing.md` for the development catalog, least-privilege roles, and reconciliation commands.
+Company billing uses Stripe Checkout and Customer Portal with the Supabase Stripe Sync Engine (`stripe` schema). Application entitlements live in `workspace_billing_entitlements`; historical Clerk `workspace_billing` rows are retained but unused. See `nextjs-version/docs/supabase-billing.md`. `docs/clerk-billing.md` is historical.
 
-Public Fundlane marketing lives at `/` and `/demo`, with components in `nextjs-version/src/components/marketing/` and the demo-delivery endpoint at `/api/marketing/demo`. See `nextjs-version/docs/marketing-site.md` for sales webhook/privacy activation, receiver deduplication requirements, synthetic product captures, and verification. Demo requests use the existing shared request-rate table; no lead data is written to MCA workspaces.
+Public Fundlane marketing lives at `/`, `/features`, and `/demo`, with components in `nextjs-version/src/components/marketing/` and the demo-delivery endpoint at `/api/marketing/demo`. See `nextjs-version/docs/marketing-site.md` for sales webhook/privacy activation, receiver deduplication requirements, synthetic product captures, and verification. Demo requests use the existing shared request-rate table; no lead data is written to MCA workspaces.
