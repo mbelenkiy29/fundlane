@@ -90,7 +90,7 @@
     "semantic_hash": "b94bcf436f10e5edfaf14fe0656843f6"
   },
   "nextjs-version/drizzle/meta/_journal.json": {
-    "mtime": 1789355159.2222044,
+    "mtime": 1789355665.9943562,
     "ast_hash": "8ae498e6f5204a0fc467eacb0e64e83f",
     "semantic_hash": ""
   },
@@ -480,8 +480,8 @@
     "semantic_hash": "20bf6b4501be55cf3b1df14b670fe317"
   },
   "nextjs-version/src/app/(dashboard)/layout.tsx": {
-    "mtime": 1789355159.2385395,
-    "ast_hash": "1f6ac7d7900f0aad4a52982b8a044250",
+    "mtime": 1789355666.00715,
+    "ast_hash": "e39540d9602123ca97e678c3fe3f39c6",
     "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/loading.tsx": {
@@ -1195,9 +1195,9 @@
     "semantic_hash": "283c51fd00d1a544e4cc0a8d1cc97c03"
   },
   "nextjs-version/src/app/apply/[formId]/page.tsx": {
-    "mtime": 1789354723.1231775,
-    "ast_hash": "380bb07bd7753d0bc2a22bd37487e916",
-    "semantic_hash": "380bb07bd7753d0bc2a22bd37487e916"
+    "mtime": 1789355635.888978,
+    "ast_hash": "3e3ec2ddcf8c2104934fe9164debfffc",
+    "semantic_hash": ""
   },
   "nextjs-version/src/app/landing/components/about-section.tsx": {
     "mtime": 1789354723.1256516,
@@ -1305,8 +1305,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/app-sidebar.tsx": {
-    "mtime": 1789355159.2538168,
-    "ast_hash": "33c3d1329c119b49225d941ef1b08ba9",
+    "mtime": 1789355635.8895206,
+    "ast_hash": "7f96e73bdd7c02f1bce06f83540584cd",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/color-picker.tsx": {
@@ -1825,8 +1825,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/db/schema.ts": {
-    "mtime": 1789355159.2839284,
-    "ast_hash": "5bd3bcda9531e11dd1360040fdef4112",
+    "mtime": 1789355666.0313509,
+    "ast_hash": "4c09a64fe758455d21154b39fa345b34",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/deals/acceptance.test.ts": {
@@ -1925,9 +1925,9 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/email.ts": {
-    "mtime": 1789354723.22812,
-    "ast_hash": "c23efbd5ce9a1fcc56f872eb157a2d2e",
-    "semantic_hash": "c23efbd5ce9a1fcc56f872eb157a2d2e"
+    "mtime": 1789355635.8923333,
+    "ast_hash": "32d694bedca5546c683611c03ac751f4",
+    "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/errors.ts": {
     "mtime": 1789354723.2283018,
@@ -2045,13 +2045,13 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/ingress.ts": {
-    "mtime": 1789354723.2424622,
-    "ast_hash": "a73f4a0d17a10ae83039e3daf748567c",
+    "mtime": 1789355635.8930397,
+    "ast_hash": "b19c2abbfce68d65b2f6f174eaa29310",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/providers.ts": {
-    "mtime": 1789354723.2429273,
-    "ast_hash": "f34a0123d1b1502e8e4cc1264400ff3b",
+    "mtime": 1789355635.8936718,
+    "ast_hash": "daac85c022434cd2eedc2f31f0c0b3ce",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/repository.ts": {
@@ -2440,13 +2440,13 @@
     "semantic_hash": ""
   },
   "WORKSPACE_NAVIGATION.md": {
-    "mtime": 1789354770.8010507,
-    "ast_hash": "5f9a4f5b1319fdeaf3f756c057241ec7",
+    "mtime": 1789355635.7619226,
+    "ast_hash": "2a2f45ffb6032b818e33f39c5fc0c6b4",
     "semantic_hash": ""
   },
   "nextjs-version/README.md": {
-    "mtime": 1789355120.3089044,
-    "ast_hash": "d1db6920e3dca12d670713b68f36621a",
+    "mtime": 1789355635.8781104,
+    "ast_hash": "718ef3f8f3bbb0abd858d7d85715f4f1",
     "semantic_hash": ""
   },
   "nextjs-version/docs/acceptance/SEN-32-SEN-35.md": {
@@ -4645,9 +4645,9 @@
     "semantic_hash": "fb4ac169525437d48e1950130dcc1470"
   },
   "nextjs-version/src/app/(dashboard)/reports/page.tsx": {
-    "mtime": 1789354723.0119267,
-    "ast_hash": "b3827203b09192870dd0a5fd15a30cea",
-    "semantic_hash": "b3827203b09192870dd0a5fd15a30cea"
+    "mtime": 1789355635.8863485,
+    "ast_hash": "740ef43b6e683902dd961a8510bf0b59",
+    "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/settings/templates/page.tsx": {
     "mtime": 1789354723.0174162,
@@ -7065,8 +7065,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/jobs/queue.ts": {
-    "mtime": 1789354723.2452557,
-    "ast_hash": "d1ed5d176cd3e391159c5bdfa95e2f0c",
+    "mtime": 1789355635.8944016,
+    "ast_hash": "054f760eaa3ccf442800c7375d804dab",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/jobs/remote-scan.ts": {
@@ -7075,8 +7075,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/jobs/worker.ts": {
-    "mtime": 1789354723.2455735,
-    "ast_hash": "7d4e2d209fa3a252f4f12062ac063aac",
+    "mtime": 1789355635.8946877,
+    "ast_hash": "d7e56f0483f0929435f23a8f57574ff7",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/maintenance/capture.ts": {
@@ -7502,6 +7502,76 @@
   "nextjs-version/drizzle/0035_application_outreach.sql": {
     "mtime": 1789354811.405252,
     "ast_hash": "ff5c6ce07c2dd51bba4d54e7620318b4",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/(dashboard)/applications/page.tsx": {
+    "mtime": 1789355635.884183,
+    "ast_hash": "fd01422af9967ee48b228caf0fad601e",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/applications/track/route.ts": {
+    "mtime": 1789355635.8867486,
+    "ast_hash": "7118aaf667055f984487baa87826c606",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/applications/[invitationId]/link/route.ts": {
+    "mtime": 1789355635.887379,
+    "ast_hash": "99ed1797c47ce372c3bf12240cf26912",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/applications/[invitationId]/send/route.ts": {
+    "mtime": 1789355635.8876414,
+    "ast_hash": "a2dc3357b69581b1760ee5bf0971be80",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/applications/route.ts": {
+    "mtime": 1789355635.8879106,
+    "ast_hash": "79c8720af48e25db3577c9f64687fc03",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/reports/application-outreach/route.ts": {
+    "mtime": 1789355635.8883815,
+    "ast_hash": "0ecc4f2890bce40c8d4e846bcb9e41e8",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/mca/applications/applications-workspace.tsx": {
+    "mtime": 1789355635.8899598,
+    "ast_hash": "f9806e35876c4fb767c62283c7e71e02",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/mca/applications/outreach-report.tsx": {
+    "mtime": 1789355635.8903456,
+    "ast_hash": "cb5625aef7604e9f29c53a0e8b88e743",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/mca/applications/public-application.tsx": {
+    "mtime": 1789355635.8905644,
+    "ast_hash": "b985e3e84da8ff9632184421a1a625a2",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/applications/contracts.ts": {
+    "mtime": 1789355635.8907907,
+    "ast_hash": "e58f4bf9552a6c538eb09168ec462e73",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/applications/report.ts": {
+    "mtime": 1789355635.8910193,
+    "ast_hash": "8d6df756d2b8626a8f4a21eae55f22a8",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/applications/service.ts": {
+    "mtime": 1789355635.8913045,
+    "ast_hash": "0acac67566545cad5d84168eea78f9dc",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/application-outreach.test.ts": {
+    "mtime": 1789355635.8951719,
+    "ast_hash": "ea1c6950a4868142c1b32317a98a5b0a",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/application-outreach.md": {
+    "mtime": 1789355635.8818707,
+    "ast_hash": "6f260d854cbb903d09633e7ff4d6e1b6",
     "semantic_hash": ""
   },
   "nextjs-version/drizzle/0036_email_conversations.sql": {

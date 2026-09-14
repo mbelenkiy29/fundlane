@@ -5,7 +5,7 @@ import { newId } from "./db";
 
 interface EmailMessage {
   recipient: string;
-  template: "workspace_invitation" | "account_recovery" | "funder_analysis_review" | "company_email_verification" | "ai_credit_alert";
+  template: "workspace_invitation" | "account_recovery" | "funder_analysis_review" | "company_email_verification" | "ai_credit_alert" | "application_invitation";
   actionUrl: string;
   expiresAt: string;
   data?: Record<string, unknown>;

@@ -49,3 +49,5 @@ Tests create randomly named isolated databases, apply checked migrations and dro
 Clerk and Neon are not part of the runtime. Identity is Supabase Auth; Postgres is the Supabase project named by `DATABASE_URL`.
 
 Pipeline calendar setup: [Calendar and Google sync](docs/pipeline-calendar.md). Web hosting remains Vercel; database, authentication, and private storage remain Supabase.
+
+Client invitation workflow and production activation: [Application outreach](docs/application-outreach.md).
