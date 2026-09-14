@@ -107,9 +107,12 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
           <div className="space-y-1.5"><Label htmlFor="historical-source">Source ID</Label><Input id="historical-source" value={sourceId} disabled={busy} onChange={(event) => { invalidatePreview(); setSourceId(event.target.value) }} required /></div>
           <div className="space-y-1.5"><Label htmlFor="historical-batch">Batch ID</Label><Input id="historical-batch" value={batchId} disabled={busy} onChange={(event) => { invalidatePreview(); setBatchId(event.target.value) }} required /></div>
           <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="historical-file">CSV file</Label><Input id="historical-file" type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => { invalidatePreview(); setFile(event.target.files?.[0]) }} required /></div>
-          <Button disabled={busy} className="sm:col-span-2">{phase !== "idle" ? <Loader2 className="animate-spin" /> : <Upload />}Preview history</Button>
+          <Button disabled={busy || !file} className="sm:col-span-2">{phase !== "idle" ? <Loader2 className="animate-spin" /> : <Upload />}{phase === "uploading" ? "Uploading CSV…" : phase === "preparing" ? "Preparing preview…" : "Preview history"}</Button>
         </form>
-        {phase !== "idle" && <p role="status" className="text-sm text-muted-foreground">{phase === "uploading" ? `Uploading… ${progress}%` : "Preparing preview…"}</p>}
+        {phase !== "idle" && <div className="flex items-center justify-between gap-3">
+          <p role="status" className="text-sm text-muted-foreground">{phase === "uploading" ? `Uploading… ${progress}%` : "Upload complete. Checking rows and duplicates…"}</p>
+          <Button type="button" variant="ghost" onClick={invalidatePreview}>Cancel preview</Button>
+        </div>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {preview && <div className="space-y-2 rounded-md border p-3 text-sm">
           <p>{preview.totals.rows} rows · {preview.totals.valid} valid · {preview.totals.duplicates} duplicates · {preview.totals.invalid} invalid</p>
