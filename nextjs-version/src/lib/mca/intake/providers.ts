@@ -233,6 +233,16 @@ function attachments(values: unknown[], defaultCategory?: DocumentCategory): Pro
   })
 }
 
+function categorizedAttachments(source: Record<string, unknown>, integration: IntegrationRecord, existing: ProviderAttachment[]): ProviderAttachment[] {
+  const mapped = (["application", "statement"] as const).flatMap(category => {
+    const path = integration.mapping[`files:${category}`]
+    const value = path ? valueAt(source, path) : undefined
+    return attachments(value === undefined ? [] : [value], category)
+  })
+  const urls = new Set(mapped.map(file => file.url))
+  return [...mapped, ...existing.filter(file => !urls.has(file.url))]
+}
+
 function jotform(payload: Record<string, unknown>, integration: IntegrationRecord): ProviderApplication {
   const formId = text(payload.formID) ?? text(payload.formId)
   if (!formId || formId !== integration.formId) throw new AppError(422, "provider_binding_mismatch", "Jotform form ID does not match this integration.")
@@ -245,7 +255,7 @@ function jotform(payload: Record<string, unknown>, integration: IntegrationRecor
   const uploads = Object.values(raw).filter((value) => typeof value === "string" && value.startsWith("https://www.jotform.com/uploads/"))
   return {
     eventId, sourceReference: `jotform:submission:${eventId}`, application: withDefaultMapping(raw, integration),
-    attachments: attachments([...(Array.isArray(payload.attachments) ? payload.attachments : []), ...uploads]),
+    attachments: categorizedAttachments(raw, integration, attachments([...(Array.isArray(payload.attachments) ? payload.attachments : []), ...uploads])),
     attributionToken: text(raw.mca_rep) ?? text(payload.mca_rep), receiptRecipient: text(raw.contactEmail),
     externalAssignee: text(raw.assignedRep) ?? text(raw.assigned_rep),
   }
@@ -288,7 +298,7 @@ function highlevel(payload: Record<string, unknown>, integration: IntegrationRec
   source.customFields = customFields
   return {
     eventId, sourceReference: `highlevel:webhook:${eventId}`, application: withDefaultMapping(source, integration),
-    attachments: attachments(Array.isArray(payload.attachments) ? payload.attachments : []), receiptRecipient: text(payload.email),
+    attachments: categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : [])), receiptRecipient: text(payload.email),
     externalAssignee: text(payload.assignedTo) ?? text(payload.assignedUserId),
   }
 }
@@ -302,7 +312,7 @@ function custom(payload: Record<string, unknown>, integration: IntegrationRecord
   return {
     eventId, sourceReference: text(payload.sourceReference) ?? `custom:event:${eventId}`,
     application: Object.keys(integration.mapping).length ? mappedApplication(source, integration.mapping) : source as DealWriteInput,
-    attachments: attachments(Array.isArray(payload.attachments) ? payload.attachments : []),
+    attachments: categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : [])),
     attributionToken: text(payload.attributionToken), receiptRecipient: text(source.contactEmail),
     externalAssignee: text(payload.assignedRep),
   }

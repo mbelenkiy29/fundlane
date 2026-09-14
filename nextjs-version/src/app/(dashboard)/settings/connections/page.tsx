@@ -1,7 +1,7 @@
 import { SmsOnboardingPanel } from "@/components/mca/sms/onboarding-panel"
 import { DataMerchConfigPanel } from "@/components/mca/datamerch/data-merch-panel"
 import { ImportPanel } from "@/components/mca/imports/import-panel"
-import { IntakePanel } from "@/components/mca/intake/intake-panel"
+import Link from "next/link"
 import { SenderConnectionsPanel } from "@/components/mca/senders/sender-connections-panel"
 import { SmsConnectionsPanel } from "@/components/mca/sms"
 import { ProvidersPanel } from "@/components/mca/leads/providers-panel"
@@ -21,7 +21,7 @@ export default function ConnectionSettings() {
       <WebhookConsole />
       <ProvidersPanel />
       <AdapterCredentialsPanel />
-      <IntakePanel />
+      <div className="rounded-lg border p-5"><h3 className="font-semibold">Application intake</h3><p className="mt-1 text-sm text-muted-foreground">Connect forms, route applications, and track automatic underwriting.</p><Link href="/intake" className="mt-3 inline-block text-sm font-medium underline">Open Application Intake</Link></div>
       <ImportPanel />
       <DataMerchConfigPanel />
     </div>
