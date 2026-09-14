@@ -2,6 +2,7 @@ import { FunderAnalytics } from "@/components/mca/reports/funder-analytics"
 import { LeadRoi } from "@/components/mca/reports/lead-roi"
 import { RepFunnel } from "@/components/mca/reports/rep-funnel"
 import { TeamProfit } from "@/components/mca/reports/team-profit"
+import { ApplicationOutreachReport } from "@/components/mca/applications/outreach-report"
 
 export default function ReportsPage() {
   return (
@@ -12,6 +13,7 @@ export default function ReportsPage() {
           Rep, team, funder and lead reports load from verified workspace data. Incomplete periods stay labeled and permission-restricted views do not invent zeros.
         </p>
       </div>
+      <ApplicationOutreachReport />
       <div id="mca-reports-rep-funnel">
         <RepFunnel />
       </div>

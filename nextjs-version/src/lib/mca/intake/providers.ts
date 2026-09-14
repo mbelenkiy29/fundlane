@@ -22,6 +22,7 @@ export interface ProviderApplication {
   sourceReference: string
   application: DealWriteInput
   attachments: ProviderAttachment[]
+  invitationToken?: string
   attributionToken?: string
   receiptRecipient?: string
   externalAssignee?: string
@@ -246,6 +247,7 @@ function jotform(payload: Record<string, unknown>, integration: IntegrationRecor
   return {
     eventId, sourceReference: `jotform:submission:${eventId}`, application: withDefaultMapping(raw, integration),
     attachments: attachments([...(Array.isArray(payload.attachments) ? payload.attachments : []), ...uploads]),
+    invitationToken: raw.mca_invite !== undefined ? String(raw.mca_invite) : payload.mca_invite !== undefined ? String(payload.mca_invite) : undefined,
     attributionToken: text(raw.mca_rep) ?? text(payload.mca_rep), receiptRecipient: text(raw.contactEmail),
     externalAssignee: text(raw.assignedRep) ?? text(raw.assigned_rep),
   }

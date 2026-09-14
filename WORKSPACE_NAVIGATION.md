@@ -87,3 +87,5 @@ Refresh the graph after changes and update this guide when module ownership or e
 Company billing uses Stripe Checkout and Customer Portal with the Supabase Stripe Sync Engine (`stripe` schema). Application entitlements live in `workspace_billing_entitlements`; historical Clerk `workspace_billing` rows are retained but unused. See `nextjs-version/docs/supabase-billing.md`. `docs/clerk-billing.md` is historical.
 
 Public Fundlane marketing lives at `/`, `/features`, and `/demo`, with components in `nextjs-version/src/components/marketing/` and the demo-delivery endpoint at `/api/marketing/demo`. See `nextjs-version/docs/marketing-site.md` for sales webhook/privacy activation, receiver deduplication requirements, synthetic product captures, and verification. Demo requests use the existing shared request-rate table; no lead data is written to MCA workspaces.
+
+Client invitation outreach: `nextjs-version/src/lib/mca/applications/`, `nextjs-version/src/components/mca/applications/`, and `nextjs-version/docs/application-outreach.md`.

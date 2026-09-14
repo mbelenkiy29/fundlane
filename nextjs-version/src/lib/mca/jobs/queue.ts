@@ -16,7 +16,7 @@ export function inBackgroundWorker(): boolean { return execution.getStore() === 
 export function runAsBackgroundWorker<T>(callback: () => Promise<T>): Promise<T> { return execution.run(true, callback) }
 export function backgroundJobsEnabled(): boolean { return process.env.MCA_BACKGROUND_JOBS === "enabled" || Boolean(process.env.VERCEL) }
 
-export type BackgroundJobKind = "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
+export type BackgroundJobKind = "application_invitation_email" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
 export interface BackgroundJob {
   id: string; workspace_id: string; kind: BackgroundJobKind; resource_id: string; actor_json: string; payload_json: string
   state: "queued" | "running" | "complete" | "failed"; attempts: number; lease_token: string | null

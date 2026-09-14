@@ -1675,3 +1675,24 @@ export const mcaAssistantExecutions = pgTable("mca_assistant_executions", {
   id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), tool_name: text().notNull(), status: text().notNull(),
   result_cipher: text(), created_at: text().notNull(), completed_at: text(),
 }, t => [index("assistant_run_executions").on(t.run_id)]);
+
+// Client invitation attribution remains independent of mutable deal assignments.
+export const applicationInvitations = pgTable("mca_application_invitations", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
+  integration_id: text().notNull().references(() => intake_integrations.id),
+  form_id: text().notNull(),
+  membership_id: text().notNull().references(() => memberships.id),
+  client_name: text().notNull(), email_cipher: text().notNull(), token_hash: text().notNull().unique(), token_cipher: text().notNull(), request_key: text().notNull(),
+  created_at: text().notNull(), expires_at: text().notNull(), revoked_at: text(), copied_at: text(), sent_at: text(), opened_at: text(), started_at: text(), submitted_at: text(),
+  submission_event_id: text(), intake_id: text().references(() => intake_events.id), deal_id: text().references(() => deals.id),
+}, t => [unique().on(t.workspace_id,t.membership_id,t.request_key), unique().on(t.workspace_id,t.integration_id,t.submission_event_id), unique().on(t.workspace_id,t.deal_id),
+  index("application_invitation_cohort_idx").on(t.workspace_id,t.created_at,t.membership_id)]);
+export const applicationInvitationEvents = pgTable("mca_application_invitation_events", {
+  invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  kind: text().notNull(), occurred_at: text().notNull(),
+}, t => [primaryKey({columns:[t.invitation_id,t.kind]}),check("mca_application_invitation_events_kind_check",sql`kind IN ('opened','started')`)]);
+export const applicationInvitationDeliveries = pgTable("mca_application_invitation_deliveries", {
+  id: text().primaryKey(), invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  request_key: text().notNull(), job_id: text(), delivery: text(), created_at: text().notNull(), accepted_at: text(),
+}, t => [unique().on(t.invitation_id,t.request_key), index("application_invitation_delivery_idx").on(t.workspace_id,t.invitation_id,t.created_at),
+  check("mca_application_invitation_deliveries_delivery_check",sql`delivery IN ('sent','preview')`)]);

@@ -46,3 +46,5 @@ pnpm build
 Tests create randomly named isolated databases, apply checked migrations and drop each database afterward. They never fall back to the application database. Hosted test clusters additionally require `MCA_TEST_DATABASE_DISPOSABLE=true`. HTTP fixtures implement Supabase cookie/session behavior; hosted staging acceptance checks use real Supabase Auth and Storage.
 
 Clerk and Neon are not part of the runtime. Identity is Supabase Auth; Postgres is the Supabase project named by `DATABASE_URL`.
+
+Client invitation workflow and production activation: [Application outreach](docs/application-outreach.md).

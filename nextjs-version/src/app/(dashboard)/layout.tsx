@@ -10,7 +10,7 @@ import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard" || pathname === "/dashboard-2" || pathname.startsWith("/dashboard-2/")) return "dashboard"
-  if (["/assistant", "/sms", "/submissions", "/deals", "/pipeline", "/offers", "/advances", "/renewals"].some((path) => pathname === path || pathname.startsWith(`${path}/`))) return "deals"
+  if (["/applications", "/assistant", "/sms", "/submissions", "/deals", "/pipeline", "/offers", "/advances", "/renewals"].some((path) => pathname === path || pathname.startsWith(`${path}/`))) return "deals"
   if (pathname === "/reports" || pathname.startsWith("/reports/")) return "reports"
   if (pathname === "/payments" || pathname.startsWith("/payments/")) return "payments"
   if (pathname === "/settings/team" || pathname === "/settings/access") return "users"
