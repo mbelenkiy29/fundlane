@@ -10,6 +10,7 @@ import type { MembershipContext, Role, SessionResponse } from "./types";
 const SESSION_DURATION_MS = 12 * 60 * 60 * 1_000;
 
 interface ActiveMembershipRow {
+  supabase_user_id?: string;
   membership_id: string;
   workspace_id: string;
   workspace_name: string;
@@ -29,6 +30,7 @@ async function responseForRow(row: ActiveMembershipRow): Promise<SessionResponse
   const actions = effectiveActionVisibility(row.role, settings.actionVisibility);
   return {
     authenticated: true,
+    platformOwner: Boolean(process.env.MCA_PLATFORM_OWNER_USER_ID && row.supabase_user_id === process.env.MCA_PLATFORM_OWNER_USER_ID),
     user: {
       id: row.user_id,
       email: row.email,
@@ -73,7 +75,7 @@ export async function signIn(input: { email: string; password: string; workspace
   await ensureBootstrapFromEnvironment();
   const row = await getDatabase().prepare<ActiveMembershipRow>(`SELECT
       m.id membership_id, m.workspace_id, w.name workspace_name, m.role, m.manager_membership_id,
-      u.id user_id, u.email, u.password_hash, u.name, u.phone, u.application_identifier
+      u.id user_id, u.email, u.password_hash, u.name, u.phone, u.application_identifier, u.supabase_user_id
     FROM users u
     JOIN memberships m ON m.user_id = u.id AND m.status = 'active'
     JOIN workspaces w ON w.id = m.workspace_id
@@ -89,7 +91,7 @@ export async function signIn(input: { email: string; password: string; workspace
 export async function getSessionResponse(context: MembershipContext): Promise<SessionResponse> {
   const row = await getDatabase().prepare<ActiveMembershipRow>(`SELECT
       m.id membership_id, m.workspace_id, w.name workspace_name, m.role, m.manager_membership_id,
-      u.id user_id, u.email, u.password_hash, u.name, u.phone, u.application_identifier
+      u.id user_id, u.email, u.password_hash, u.name, u.phone, u.application_identifier, u.supabase_user_id
     FROM memberships m JOIN users u ON u.id = m.user_id JOIN workspaces w ON w.id = m.workspace_id
     WHERE m.id = ? AND m.workspace_id = ? AND m.status = 'active'`).get(context.membershipId, context.workspaceId);
   if (!row) throw new AppError(401, "session_invalid", "Your session is no longer valid.");

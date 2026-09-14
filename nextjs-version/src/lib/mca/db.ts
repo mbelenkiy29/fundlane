@@ -1,3 +1,4 @@
+import { recordOperationalError } from "./operations/telemetry";
 import "server-only";
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -63,7 +64,7 @@ function getPool(): Pool {
     // pg removes disconnected idle clients automatically, but emits an error that
     // otherwise terminates the server. Active query errors still reject normally.
     globalDatabase.__mcaDatabasePool.on("error", () => {
-      console.error(JSON.stringify({ event: "database_idle_connection_lost" }));
+      void recordOperationalError("database", "idle_connection_lost");
     });
     globalDatabase.__mcaDatabaseUrl = url;
   }

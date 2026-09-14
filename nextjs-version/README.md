@@ -51,3 +51,5 @@ Clerk and Neon are not part of the runtime. Identity is Supabase Auth; Postgres 
 Pipeline calendar setup: [Calendar and Google sync](docs/pipeline-calendar.md). Web hosting remains Vercel; database, authentication, and private storage remain Supabase.
 
 Client invitation workflow and production activation: [Application outreach](docs/application-outreach.md).
+
+Owner operations and alert activation: [Platform status](docs/platform-status.md).

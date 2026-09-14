@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { AssistantButton } from "@/components/mca/assistant/assistant-panel"
 import { Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -22,6 +23,7 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
             </Button>
           ) : null}
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
+          {session?.platformOwner && <Link href="/admin/status" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform status</Link>}
           <AssistantButton />
           <ModeToggle />
         </div>

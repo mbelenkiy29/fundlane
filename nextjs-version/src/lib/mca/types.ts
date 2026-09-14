@@ -89,6 +89,7 @@ export interface MembershipContext extends AuthContext {
 }
 
 export interface SessionResponse {
+  platformOwner?: boolean;
   authenticated: boolean;
   user?: SessionUser;
   membership?: {

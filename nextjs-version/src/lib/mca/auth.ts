@@ -1,3 +1,4 @@
+import { recordActivity } from "./operations/telemetry";
 import "server-only";
 import { authenticateSupabaseSession } from "./supabase-auth";
 
@@ -76,6 +77,7 @@ export async function requireWorkspaceAccess(request: Request, options: AccessOp
   if (options.anyScopes?.length && context.authType === "api_key" && !options.anyScopes.some((scope) => context.scopes.includes(scope))) {
     throw new AppError(403, "scope_required", "The API key does not have a required scope.");
   }
+  if (context.authType === "session" && context.userId) recordActivity(request, context.userId);
   return context;
 }
 

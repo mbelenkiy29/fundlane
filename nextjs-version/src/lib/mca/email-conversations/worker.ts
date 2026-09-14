@@ -1,3 +1,4 @@
+import { recordOperationalError } from "../operations/telemetry"
 import "server-only"
 import {
   getDatabase,
@@ -200,7 +201,7 @@ async function delivery(
   } catch (error) {
     await expireRejectedCredential(error, mailbox)
     const failure = providerFailure(error)
-    await fenced(c.sender_id, token, async (executor) => {
+    const terminalState = await fenced(c.sender_id, token, async (executor) => {
       const state =
         failure.unknown && attempted
           ? "unknown"
@@ -225,7 +226,9 @@ async function delivery(
           nowIso(),
           m.id
         )
+      return state
     })
+    if (terminalState === "failed" || terminalState === "unknown") await recordOperationalError("email", terminalState === "unknown" ? "delivery_unknown" : "delivery_failed")
   }
 }
 /** Only persist messages linked by references to an app-created message, with the expected participants. */
