@@ -35,9 +35,14 @@ before(async()=>{testDatabase=await createPostgresTestDatabase("imports_core");p
 
 function workbookBytes(bookType:"xlsx"|"xls"):Uint8Array{const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([["Business Name","Revenue"],["Acme LLC",125000]]),"Merchants");return XLSX.write(workbook,{type:"buffer",bookType})}
 
-test("MIC-119 parses CSV, TSV, XLSX and XLS with encoding and header detection",async()=>{const csv=parseSpreadsheet({filename:"leads.csv",bytes:Buffer.from("Exported 2026-09-08\nBusiness Name,Revenue\nCafé Uno,100000")});assert.equal(csv.headerRow,2);assert.equal(csv.rows[0][0],"Café Uno")
-  const tsv=parseSpreadsheet({filename:"leads.tsv",bytes:Buffer.from("Business Name\tCity\nCaf\xe9\tMontr\xe9al","binary")});assert.equal(tsv.encoding,"windows-1252");assert.equal(tsv.rows[0][0],"Café")
-  for(const format of ["xlsx","xls"] as const){const parsed=parseSpreadsheet({filename:`leads.${format}`,bytes:workbookBytes(format)});assert.equal(parsed.format,format);assert.equal(parsed.rows[0][0],"Acme LLC")}})
+test("parses CSV with encoding and header detection; rejects other spreadsheet formats", () => {
+  const csv = parseSpreadsheet({ filename: "leads.csv", bytes: Buffer.from("Exported 2026-09-08\nBusiness Name,Revenue\nCafé Uno,100000") })
+  assert.equal(csv.headerRow, 2); assert.equal(csv.rows[0][0], "Café Uno")
+  const legacy = parseSpreadsheet({ filename: "leads.csv", bytes: Buffer.from("Business Name,City\nCaf\xe9,Montr\xe9al", "binary") })
+  assert.equal(legacy.encoding, "windows-1252"); assert.equal(legacy.rows[0][0], "Café")
+  for (const format of ["xlsx", "xls"] as const) assert.throws(() => parseSpreadsheet({ filename: `leads.${format}`, bytes: workbookBytes(format) }), /Choose a CSV/)
+  assert.throws(() => parseSpreadsheet({ filename: "leads.tsv", bytes: Buffer.from("a\tb\n1\t2") }), /Choose a CSV/)
+})
 
 test("MIC-119 stages a realistic 1,000-row sheet and preserves unmapped samples",async()=>{const rows=Array.from({length:1000},(_,index)=>`Merchant ${index+1},${100000+index},note ${index+1}`);const parsed=parseSpreadsheet({filename:"1000.csv",bytes:Buffer.from(`Business Name,Monthly Revenue,Unmapped Note\n${rows.join("\n")}`)});assert.equal(parsed.rows.length,1000);const guessed=heuristicMapping(parsed.headers);const mapped=mapRow(parsed.headers,parsed.rows[999],guessed.mapping);assert.equal(mapped.application.legalName,"Merchant 1000");assert.equal(mapped.sourceValues["Unmapped Note"],"note 1000")})
 

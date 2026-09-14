@@ -2,7 +2,6 @@ import "server-only"
 
 import { extname } from "node:path"
 import iconv from "iconv-lite"
-import * as XLSX from "xlsx"
 import { AppError } from "../errors"
 import type { ImportFormat, ParsedSpreadsheet } from "./contracts"
 
@@ -12,8 +11,8 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024
 
 function formatFor(filename: string): ImportFormat {
   const extension = extname(filename).toLowerCase().slice(1)
-  if (["csv", "tsv", "xlsx", "xls"].includes(extension)) return extension as ImportFormat
-  throw new AppError(422, "unsupported_import_format", "Choose a CSV, TSV, XLSX, or XLS spreadsheet.")
+  if (extension === "csv") return "csv"
+  throw new AppError(422, "unsupported_import_format", "Choose a CSV file. Export Excel or Google Sheets as CSV first.")
 }
 
 function decodeText(bytes: Uint8Array): { text: string; encoding: string; warnings: string[] } {
@@ -61,36 +60,53 @@ function uniqueHeaders(row: string[]): { headers: string[]; warning?: string } {
   return { headers, ...(changed ? { warning: "Duplicate header names were given stable suffixes." } : {}) }
 }
 
+/** Parse CSV as text only. Never invoke workbook, HTML, or formula interpreters. */
+function csvRows(text: string): string[][] {
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) throw new AppError(422, "csv_binary_content", "The file contains binary data. Export a plain-text CSV file.")
+  const rows: string[][] = []
+  let row: string[] = [], cell = "", quoted = false, closed = false
+  const finishCell = () => {
+    row.push(cleanCell(cell)); cell = ""; closed = false
+    if (row.length > MAX_COLUMNS) throw new AppError(422, "spreadsheet_column_limit", `Import at most ${MAX_COLUMNS} columns.`)
+  }
+  const finishRow = () => {
+    finishCell()
+    if (row.some(Boolean)) rows.push(row)
+    row = []
+    if (rows.length > MAX_ROWS + 20) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
+  }
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (quoted) {
+      if (char === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++ }
+        else { quoted = false; closed = true }
+      } else cell += char
+    } else if (char === ",") finishCell()
+    else if (char === "\n" || char === "\r") { finishRow(); if (char === "\r" && text[i + 1] === "\n") i++ }
+    else if (char === '"' && !cell && !closed) quoted = true
+    else if (char === '"' || (closed && char !== " " && char !== "\t")) throw new AppError(422, "csv_invalid_quotes", "The CSV contains invalid quotes. Export it again as CSV.")
+    else if (!closed) cell += char
+  }
+  if (quoted) throw new AppError(422, "csv_invalid_quotes", "A quoted CSV value is incomplete.")
+  if (cell || closed || row.length) finishRow()
+  return rows
+}
+
 export function parseSpreadsheet(input: { filename: string; bytes: Uint8Array }): ParsedSpreadsheet {
   if (!input.bytes.byteLength || input.bytes.byteLength > MAX_FILE_BYTES) throw new AppError(422, "import_file_size", "Import files must contain data and be no larger than 25 MiB.")
   const format = formatFor(input.filename)
-  let workbook: XLSX.WorkBook
-  let encoding = "binary"
-  const warnings: string[] = []
-  try {
-    if (format === "csv" || format === "tsv") {
-      const decoded = decodeText(input.bytes)
-      encoding = decoded.encoding
-      warnings.push(...decoded.warnings)
-      workbook = XLSX.read(decoded.text, { type: "string", raw: false, FS: format === "tsv" ? "\t" : undefined })
-    } else {
-      workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, dense: true })
-    }
-  } catch {
-    throw new AppError(422, "spreadsheet_parse_failed", "The spreadsheet could not be read. Confirm that the file is not encrypted or corrupted.")
-  }
-  const sheetName = workbook.SheetNames[0]
-  if (!sheetName) throw new AppError(422, "spreadsheet_empty", "The spreadsheet does not contain a worksheet.")
-  const matrix = (XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false }) as unknown[][])
-    .map((row) => row.slice(0, MAX_COLUMNS).map(cleanCell))
-    .filter((row) => row.some(Boolean))
-  if (!matrix.length) throw new AppError(422, "spreadsheet_empty", "The spreadsheet does not contain any rows.")
-  if (matrix.length > MAX_ROWS + 20) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
+  const decoded = decodeText(input.bytes)
+  const matrix = csvRows(decoded.text)
+  if (!matrix.length) throw new AppError(422, "spreadsheet_empty", "The CSV does not contain any rows.")
   const headerRow = chooseHeader(matrix)
   const deduped = uniqueHeaders(matrix[headerRow])
+  const warnings = [...decoded.warnings]
   if (deduped.warning) warnings.push(deduped.warning)
-  const rows = matrix.slice(headerRow + 1, headerRow + 1 + MAX_ROWS).map((row) => deduped.headers.map((_, index) => row[index] ?? ""))
-  if (!rows.length) throw new AppError(422, "spreadsheet_no_data", "The spreadsheet has headers but no data rows.")
-  if (workbook.SheetNames.length > 1) warnings.push(`Imported the first worksheet (${sheetName}); ${workbook.SheetNames.length - 1} additional worksheet(s) were not staged.`)
-  return { format, encoding, sheetName, headerRow: headerRow + 1, headers: deduped.headers, rows, warnings }
+  const data = matrix.slice(headerRow + 1)
+  if (data.length > MAX_ROWS) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
+  if (!data.length) throw new AppError(422, "spreadsheet_no_data", "The CSV has headers but no data rows.")
+  if (data.some(row => row.length > deduped.headers.length)) throw new AppError(422, "csv_row_width", "A CSV row contains more values than the header. Check commas and quoted values.")
+  const rows = data.map(row => deduped.headers.map((_, index) => row[index] ?? ""))
+  return { format, encoding: decoded.encoding, sheetName: "CSV", headerRow: headerRow + 1, headers: deduped.headers, rows, warnings }
 }

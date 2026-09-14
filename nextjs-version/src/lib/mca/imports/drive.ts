@@ -89,7 +89,7 @@ export async function downloadDriveFile(file: DriveListedFile, credential: Drive
   if (file.size !== null && file.size > MAX_DRIVE_FILE_BYTES) throw new AppError(422, "drive_file_too_large", `${file.name} exceeds the 25 MiB transfer limit.`)
   const isSheet = file.mimeType === GOOGLE_SHEET_MIME
   const path = isSheet
-    ? `/files/${encodeURIComponent(file.id)}/export?mimeType=${encodeURIComponent("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}`
+    ? `/files/${encodeURIComponent(file.id)}/export?mimeType=${encodeURIComponent("text/csv")}`
     : `/files/${encodeURIComponent(file.id)}?alt=media&supportsAllDrives=true`
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 30_000)
   let bytes: Uint8Array
@@ -105,7 +105,7 @@ export async function downloadDriveFile(file: DriveListedFile, credential: Drive
     bytes = new Uint8Array(total); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
   } catch (error) { if (error instanceof AppError) throw error; throw new AppError(503, "drive_download_timeout", `${file.name} did not finish downloading in time. Retry from the saved checkpoint.`) }
   finally { clearTimeout(timeout) }
-  return { bytes, filename: isSheet && !file.name.toLocaleLowerCase().endsWith(".xlsx") ? `${file.name}.xlsx` : file.name, mimeType: isSheet ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : file.mimeType }
+  return { bytes, filename: isSheet && !file.name.toLocaleLowerCase().endsWith(".csv") ? `${file.name}.csv` : file.name, mimeType: isSheet ? "text/csv" : file.mimeType }
 }
 
 export async function revokeDriveCredential(credential: DriveCredential): Promise<void> {

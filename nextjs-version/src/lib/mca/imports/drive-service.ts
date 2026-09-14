@@ -14,7 +14,7 @@ import { consumeDriveOauthState, driveConnectionStatus, driveTransfersForRun, fi
 import { previewSpreadsheetImport } from "./service"
 
 const FOLDER_MIME = "application/vnd.google-apps.folder"
-const SHEET_MIMES = new Set(["text/csv","text/tab-separated-values","application/vnd.ms-excel","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.google-apps.spreadsheet"])
+const SHEET_MIMES = new Set(["text/csv","application/vnd.google-apps.spreadsheet"])
 const MAX_TREE_FILES = 2_000
 
 function requireAdmin(actor: DealActor): void { if (!actor.role || !["admin","super_admin"].includes(actor.role)) throw new AppError(403,"permission_denied","Only workspace administrators can manage the Google Drive connection.") }
@@ -30,7 +30,7 @@ async function listTree(actor:DealActor):Promise<DriveListedFile[]>{const connec
     do{const page=await listDriveFolder(folderId,connection.credential,{pageToken,pageSize:200});for(const file of page.files){if(output.length>=MAX_TREE_FILES)throw new AppError(422,"drive_file_limit",`Google Drive packages may contain at most ${MAX_TREE_FILES.toLocaleString()} items.`);const item={...file,name:`${prefix}${file.name}`};output.push(item);if(file.mimeType===FOLDER_MIME)queue.push([file.id,`${item.name}/`])}pageToken=page.nextPageToken??undefined}while(pageToken)}return output}
 
 export async function listDrivePackage(actor:DealActor):Promise<DriveListedFile[]>{return listTree(actor)}
-export async function previewDrivePackage(actor:DealActor,input:{sourceId:string;batchId:string;assignmentPool?:string[];useAiMapping?:boolean}):Promise<{preview:ImportPreview;files:DriveListedFile[];matches:ArchiveEntryPreview[]}>{const connection=await activeConnection(actor);const files=await listTree(actor);const sheets=files.filter((file)=>SHEET_MIMES.has(file.mimeType)||/\.(csv|tsv|xlsx|xls)$/i.test(file.name))
+export async function previewDrivePackage(actor:DealActor,input:{sourceId:string;batchId:string;assignmentPool?:string[];useAiMapping?:boolean}):Promise<{preview:ImportPreview;files:DriveListedFile[];matches:ArchiveEntryPreview[]}>{const connection=await activeConnection(actor);const files=await listTree(actor);const sheets=files.filter((file)=>SHEET_MIMES.has(file.mimeType)||/\.csv$/i.test(file.name))
   if(!sheets.length)throw new AppError(422,"drive_spreadsheet_missing","The granted folder does not contain a supported spreadsheet.");if(sheets.length>1)throw new AppError(422,"drive_spreadsheet_ambiguous","The folder contains multiple spreadsheets. Keep one roster spreadsheet or choose a file explicitly.")
   const downloaded=await downloadDriveFile(sheets[0],connection.credential)
   const preview=await previewSpreadsheetImport(actor,{sourceId:input.sourceId,batchId:input.batchId,filename:downloaded.filename,bytes:downloaded.bytes,assignmentPool:input.assignmentPool,useAiMapping:input.useAiMapping})
