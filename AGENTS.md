@@ -1,6 +1,6 @@
 # MCA workspace
 
-Read `WORKSPACE_NAVIGATION.md` for the source map, Linear project, setup, and verification commands. Work in `nextjs-version/` for MCA features; `vite-version/` and root `docs/` are template references. The active app uses Supabase Postgres and Supabase Auth; consult `nextjs-version/README.md` for current setup.
+Read `WORKSPACE_NAVIGATION.md` for the source map, Linear project, setup, and verification commands. Work in `nextjs-version/` for MCA features; `vite-version/` and root `docs/` are template references. The active app is Next.js on Vercel with Supabase Postgres, Auth, and private Storage; Render is workers only. Consult `nextjs-version/README.md` for current setup. Clerk and Neon are not part of the runtime.
 
 Linear project: https://linear.app/michael-belenkiy/project/mca-1e94b0617388 (`b223a780-3987-440c-8e04-41516a97e69b`). Fetch current issue requirements and dependencies from Linear; historical `SEN-*` references and local status snapshots may be stale.
 

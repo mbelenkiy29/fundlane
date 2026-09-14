@@ -3,6 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { KpiSparkline } from "@/components/mca/home/kpi-sparkline"
 import type { HomeKpis, KpiPeriod } from "@/lib/mca/home/kpi-contracts"
 import { HOME_KPI_COPY, mapHomeKpiStrip } from "@/lib/mca/home/kpi-strip"
 
@@ -41,8 +42,9 @@ export function KpiStrip({
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-7 w-20" />
             </CardHeader>
-            <CardContent className="px-4">
+            <CardContent className="px-4 space-y-3">
               <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-16 w-full" />
             </CardContent>
           </Card>
         )) : cards.map((card) => (
@@ -51,7 +53,10 @@ export function KpiStrip({
               <CardDescription>{card.title}</CardDescription>
               <CardTitle className="text-xl font-semibold tabular-nums">{card.value}</CardTitle>
             </CardHeader>
-            <CardContent className="px-4 text-sm text-muted-foreground">{card.detail}</CardContent>
+            <CardContent className="space-y-2 px-4 text-sm text-muted-foreground">
+              <p>{card.detail}</p>
+              <KpiSparkline points={card.sparkline} hidden={card.sparklineHidden} label={card.key} />
+            </CardContent>
           </Card>
         ))}
       </div>

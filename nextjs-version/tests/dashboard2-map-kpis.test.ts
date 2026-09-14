@@ -51,6 +51,20 @@ const sample: HomeKpis = {
       },
     ],
     topFunders: [{ name: "Rapid Finance", fundedCents: 1_000_000, dealCount: 2 }],
+    pipelineByMonth: [
+      { month: "2026-01", count: 1, volumeDollars: 50000 },
+      { month: "2026-02", count: 1, volumeDollars: 100000 },
+      { month: "2026-03", count: 2, volumeDollars: 150000 },
+    ],
+    approvalByMonth: [
+      { month: "2026-01", numerator: 0, denominator: 1, rate: 0 },
+      { month: "2026-02", numerator: 1, denominator: 2, rate: 0.5 },
+      { month: "2026-03", numerator: 1, denominator: 2, rate: 0.5 },
+    ],
+    collectionsByDay: [
+      { day: "2026-03-14", expectedCents: 10_000, receivedCents: 5_000 },
+      { day: "2026-03-15", expectedCents: 50_000, receivedCents: 25_000 },
+    ],
     merchantGrowth: [
       { month: "2026-01", new: 1, returning: 0, churn: 0 },
       { month: "2026-02", new: 0, returning: 1, churn: 0 },
