@@ -26,6 +26,7 @@ Run the document worker with `node --conditions=react-server --import tsx script
 
 Application invitations and business messages use the existing transactional delivery adapter. Supabase Auth uses separately configured SMTP. Company SMS, signature providers, sender OAuth, and assistant credit packs retain their individual activation requirements:
 
+- [In-app email and SMS conversations](docs/email-conversations.md)
 - [Company SMS onboarding](docs/sms/company-onboarding.md)
 - [Provider activation](docs/milestone-05/provider-activation.md)
 - [Deal assistant](docs/deal-assistant.md)

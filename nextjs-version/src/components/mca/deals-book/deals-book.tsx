@@ -173,7 +173,7 @@ export function DealsBook() {
             onCall={onCall}
           />}
 
-      <MerchantSheet detail={detail} open={sheetOpen} focusSms={focusSms} onOpenChange={(open) => { setSheetOpen(open); if (!open) { setParam("advance", undefined); setParam("deal", undefined); setParam("sms", undefined) } }} />
+      <MerchantSheet key={`${detail?.dealId ?? "none"}:${sheetOpen}:${focusSms}`} detail={detail} open={sheetOpen} focusSms={focusSms} onOpenChange={(open) => { setSheetOpen(open); if (!open) { setParam("advance", undefined); setParam("deal", undefined); setParam("sms", undefined) } }} />
       <HistoricalImportDialog open={importOpen} onOpenChange={setImportOpen} onImported={() => void load()} />
     </div>
   )

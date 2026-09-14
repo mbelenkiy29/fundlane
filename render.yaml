@@ -121,3 +121,34 @@ services:
         sync: false
       - key: MCA_DB_POOL_MAX
         value: "4"
+
+  # Apply messaging migrations and runtime grants before starting this worker.
+  - type: worker
+    name: fundlane-messaging-worker
+    runtime: docker
+    repo: https://github.com/mbelenkiy29/fundlane
+    branch: main
+    rootDir: nextjs-version
+    dockerfilePath: ./Dockerfile.messaging
+    dockerContext: .
+    region: ohio
+    plan: starter
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MCA_DATA_ENCRYPTION_KEY
+        sync: false
+      - key: MCA_APP_ORIGIN
+        sync: false
+      - key: MCA_GOOGLE_SENDER_CLIENT_ID
+        sync: false
+      - key: MCA_GOOGLE_SENDER_CLIENT_SECRET
+        sync: false
+      - key: MCA_MICROSOFT_SENDER_CLIENT_ID
+        sync: false
+      - key: MCA_MICROSOFT_SENDER_CLIENT_SECRET
+        sync: false
+      - key: MCA_DB_POOL_MAX
+        value: "2"

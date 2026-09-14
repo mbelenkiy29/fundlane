@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigint, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -1356,6 +1356,7 @@ export const mca_review_approvals = pgTable("mca_review_approvals", {
 ]);
 
 export const mca_email_senders = pgTable("mca_email_senders", {
+	owner_membership_id: text().references(() => memberships.id),
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	provider: text().notNull(),
@@ -1408,6 +1409,7 @@ export const mca_email_sender_members = pgTable("mca_email_sender_members", {
 ]);
 
 export const mca_email_oauth_states = pgTable("mca_email_oauth_states", {
+	user_id: text().references(() => users.id),
 	state_hash: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	sender_id: text(),
@@ -1687,3 +1689,24 @@ export const intake_processing = pgTable("intake_processing", {
   job_id: text(), progress_json: text().default('{}').notNull(),
   checked_at: text().notNull(), updated_at: text().notNull(),
 }, table => [index("intake_processing_workspace_idx").on(table.workspace_id)]);
+
+
+export const mca_email_conversations = pgTable("mca_email_conversations", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
+  deal_id: text().notNull().references(() => deals.id), sender_id: text().notNull().references(() => mca_email_senders.id),
+  recipient_cipher: text().notNull(), subject_cipher: text().notNull(), provider_thread_id: text(),
+  created_at: text().notNull(), updated_at: text().notNull(), next_sync_at: text().notNull(), last_synced_at: text(), sync_error: text(),
+}, table => [unique().on(table.workspace_id,table.id),index("email_conversations_deal_idx").on(table.workspace_id,table.deal_id,table.updated_at,table.id),index("email_conversations_workspace_idx").on(table.workspace_id,table.updated_at,table.id),index("email_conversations_sync_idx").on(table.next_sync_at)])
+export const mca_email_messages = pgTable("mca_email_messages", {
+  id: text().primaryKey(), workspace_id: text().notNull(), conversation_id: text().notNull(),
+  sequence: bigserial({mode:"bigint"}).notNull().unique(), direction: text().notNull(), body_cipher: text().notNull(), author_cipher: text().notNull(),
+  actor_membership_id: text().references(() => memberships.id),request_key: text(),payload_hash: text(),provider_message_id: text(),
+  internet_message_id: text().notNull(),reply_to_message_id: text(),state: text().notNull(),attempts: integer().notNull().default(0),
+  next_attempt_at: text().notNull(),error: text(),created_at: text().notNull(),updated_at: text().notNull(),
+}, table => [foreignKey({columns:[table.workspace_id,table.conversation_id],foreignColumns:[mca_email_conversations.workspace_id,mca_email_conversations.id]}),unique().on(table.workspace_id,table.request_key),unique().on(table.conversation_id,table.provider_message_id),index("email_messages_queue_idx").on(table.state,table.next_attempt_at),index("email_messages_thread_idx").on(table.conversation_id,table.sequence),check("email_message_direction",sql`${table.direction} IN ('inbound','outbound')`),check("email_message_state",sql`${table.state} IN ('queued','sending','accepted','sent','received','failed','unknown','blocked')`)])
+export const mca_email_reads = pgTable("mca_email_reads", {
+  workspace_id:text().notNull(),conversation_id:text().notNull(),membership_id:text().notNull().references(() => memberships.id),last_sequence:bigint({mode:"bigint"}).notNull().default(BigInt(0)),
+}, table => [primaryKey({columns:[table.conversation_id,table.membership_id]}),foreignKey({columns:[table.workspace_id,table.conversation_id],foreignColumns:[mca_email_conversations.workspace_id,mca_email_conversations.id]})])
+export const mca_email_worker_leases = pgTable("mca_email_worker_leases", {
+  sender_id:text().primaryKey().references(() => mca_email_senders.id),workspace_id:text().notNull().references(() => workspaces.id),token:text().notNull(),expires_at:text().notNull(),
+})

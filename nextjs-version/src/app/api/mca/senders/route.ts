@@ -3,7 +3,7 @@ import { apiError, AppError } from "@/lib/mca/errors"
 import {
   createSender,
   listSenders,
-  requireSenderAdmin,
+  requireSenderUse,
   requireSenderRead,
   type CreateSenderInput,
 } from "@/lib/mca/senders/service"
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = await requireSenderAdmin(request)
+    const actor = await requireSenderUse(request)
     let input: CreateSenderInput
     try {
       input = await request.json() as CreateSenderInput

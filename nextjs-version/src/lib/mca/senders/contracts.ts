@@ -22,6 +22,9 @@ export interface EmailSender {
   verifiedAt?: string
   lastError?: string
   hasCredential: boolean
+  ownerMembershipId?: string
+  conversationReady?: boolean
+  canReconnect?: boolean
   memberIds: string[]
   createdAt: string
   updatedAt: string

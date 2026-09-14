@@ -49,6 +49,7 @@ export interface StoredEmailSender {
   createdByUserId?: string
   createdAt: string
   updatedAt: string
+  ownerMembershipId?: string
   memberIds: string[]
 }
 
@@ -65,6 +66,7 @@ type SenderRow = {
   is_default: number | string
   verified_at: string | null
   last_error: string | null
+  owner_membership_id: string | null
   created_by_user_id: string | null
   created_at: string
   updated_at: string
@@ -74,6 +76,7 @@ type MemberRow = { sender_id: string; membership_id: string }
 
 function mapSender(row: SenderRow, memberIds: string[]): StoredEmailSender {
   return {
+    ownerMembershipId: row.owner_membership_id ?? undefined,
     id: row.id,
     workspaceId: row.workspace_id,
     provider: row.provider as SenderProvider,
@@ -122,8 +125,19 @@ export function decryptSenderCredential(workspaceId: string, cipher: string): St
   }
 }
 
+export function senderConversationReady(record: StoredEmailSender): boolean {
+  const credential = record.credentialCipher ? decryptSenderCredential(record.workspaceId, record.credentialCipher) : undefined
+  if (record.state !== "verified" || credential?.kind !== "oauth" || !credential.refreshToken || credential.email?.toLowerCase() !== record.fromAddress.toLowerCase()) return false
+  const scopes = new Set((credential.scope ?? "").toLowerCase().split(/\s+/).map(s => s.replace("https://graph.microsoft.com/", "")))
+  return record.provider === "google"
+    ? scopes.has("https://www.googleapis.com/auth/gmail.readonly") && scopes.has("https://www.googleapis.com/auth/gmail.send")
+    : record.provider === "microsoft" && scopes.has("mail.read") && scopes.has("mail.send")
+}
+
 export function toPublicSender(record: StoredEmailSender): EmailSender {
   return {
+    ownerMembershipId: record.ownerMembershipId,
+    conversationReady: senderConversationReady(record),
     id: record.id,
     workspaceId: record.workspaceId,
     provider: record.provider,
@@ -173,11 +187,12 @@ export async function insertSender(input: {
   createdByUserId?: string | null
   createdAt: string
   updatedAt: string
+  ownerMembershipId?: string | null
   memberIds: string[]
 }, executor: DbExecutor = db()): Promise<StoredEmailSender> {
   await executor.prepare(`INSERT INTO mca_email_senders
-    (id, workspace_id, provider, purpose, from_name, from_address, signature, credential_cipher, state, is_default, verified_at, last_error, created_by_user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    (id, workspace_id, provider, purpose, from_name, from_address, signature, credential_cipher, state, is_default, verified_at, last_error, created_by_user_id, created_at, updated_at, owner_membership_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     input.id,
     input.workspaceId,
     input.provider,
@@ -193,6 +208,7 @@ export async function insertSender(input: {
     input.createdByUserId ?? null,
     input.createdAt,
     input.updatedAt,
+    input.ownerMembershipId ?? null,
   )
   await replaceSenderMembers(input.workspaceId, input.id, input.memberIds, input.createdAt, executor)
   const saved = await findSenderById(input.workspaceId, input.id, executor)
@@ -275,6 +291,7 @@ export async function activeMembershipIdsInWorkspace(workspaceId: string, member
 
 export async function saveOauthState(input: {
   stateHash: string
+  userId?: string | null
   workspaceId: string
   senderId: string
   provider: SenderProvider
@@ -283,8 +300,8 @@ export async function saveOauthState(input: {
   createdAt: string
 }, executor: DbExecutor = db()): Promise<void> {
   await executor.prepare(`INSERT INTO mca_email_oauth_states
-    (state_hash, workspace_id, sender_id, provider, purpose, expires_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    (state_hash, workspace_id, sender_id, provider, purpose, expires_at, created_at, user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
     input.stateHash,
     input.workspaceId,
     input.senderId,
@@ -292,10 +309,11 @@ export async function saveOauthState(input: {
     input.purpose,
     input.expiresAt,
     input.createdAt,
+    input.userId ?? null,
   )
 }
 
-export async function consumeOauthState(workspaceId: string, stateHash: string, now: string, executor: DbExecutor = db()): Promise<{
+export async function consumeOauthState(workspaceId: string, stateHash: string, now: string, executor: DbExecutor = db(), userId?: string | null): Promise<{
   senderId: string
   provider: SenderProvider
   purpose: SenderPurpose
@@ -305,8 +323,7 @@ export async function consumeOauthState(workspaceId: string, stateHash: string, 
     provider: string
     purpose: string
     expires_at: string
-  }>("SELECT sender_id, provider, purpose, expires_at FROM mca_email_oauth_states WHERE state_hash = ? AND workspace_id = ?").get(stateHash, workspaceId)
-  await executor.prepare("DELETE FROM mca_email_oauth_states WHERE state_hash = ? AND workspace_id = ?").run(stateHash, workspaceId)
+  }>("DELETE FROM mca_email_oauth_states WHERE state_hash = ? AND workspace_id = ? AND user_id = ? RETURNING sender_id, provider, purpose, expires_at").get(stateHash, workspaceId, userId ?? null)
   if (!row?.sender_id || row.expires_at <= now) return undefined
   return {
     senderId: row.sender_id,
