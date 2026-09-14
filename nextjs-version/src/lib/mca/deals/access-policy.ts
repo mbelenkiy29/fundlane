@@ -1,7 +1,8 @@
 import type { DealActor, DealAssignment, DealRecord } from "./schema"
 
-export function canActorAccessDeal(actor: DealActor, record: Pick<DealRecord, "workspaceId" | "assignments">): boolean {
+export function canActorAccessDeal(actor: DealActor, record: Pick<DealRecord, "workspaceId" | "assignments"> & { id?: string }): boolean {
   if (actor.workspaceId !== record.workspaceId) return false
+  if (actor.source === "system" && actor.intakeDealId) return actor.intakeDealId === record.id
   if (actor.source === "api_key" || actor.role === "admin" || actor.role === "super_admin") return true
   if (!actor.membershipId) return false
   if (record.assignments.some((item) => item.membershipId === actor.membershipId)) return true

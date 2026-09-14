@@ -64,7 +64,11 @@ function scanState(result: ScanResult): DocumentRecord["processingState"] {
 }
 
 async function applyScan(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
-  const result = await documentScanner().scan(bytes, record.originalFilename)
+  let result = await documentScanner().scan(bytes, record.originalFilename)
+  if (result.status === "clean") {
+    try { await documentStorage().promoteClean?.(record.storageKey, bytes) }
+    catch { result = { status: "error", provider: "storage", evidence: { recoverable: true, reason: "clean_promotion_failed" } } }
+  }
   const attemptedAt = nowIso()
   const updated = await updateDocumentScan(actor.workspaceId, record.id, scanState(result), result.provider, result.evidence, attemptedAt)
   await recordAuditEvent({

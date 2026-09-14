@@ -13,6 +13,7 @@ import {
   findIntake,
   findIntegrationByPublicId,
   reserveIntake,
+  intakeDatabase,
   resolveAttributionToken,
   updateIntake,
 } from "./repository"
@@ -106,6 +107,8 @@ export async function ingestProviderDelivery(input: {
       membershipId = eligible[digest.readUInt32BE(0) % eligible.length]
     }
   }
+  const prior = await intakeDatabase().prepare<{ id: string }>("SELECT id FROM intake_events WHERE workspace_id=? AND event_namespace=? AND provider=? AND provider_event_id=?").get(integration.workspaceId, integration.id, input.provider, normalized.eventId)
+  const priorRecord = prior ? await findIntake(integration.workspaceId, prior.id) : undefined
   const application = membershipId
     ? { ...normalized.application, assignments: [{ membershipId, kind: "originator" as const, isPrimary: true }] }
     : normalized.application
@@ -113,10 +116,10 @@ export async function ingestProviderDelivery(input: {
     schemaVersion: 1,
     provider: input.provider,
     eventId: normalized.eventId,
-    application,
+    application: priorRecord?.dealId ? { ...application, assignments: priorRecord.application.assignments } : application,
     sourceReference: normalized.sourceReference,
     initialStatus: integration.initialStatus,
-  })
+  }, undefined, integration.id)
   await associateIntakeIntegration(integration.workspaceId, result.intakeId, integration.id)
   if (result.dealId) {
     for (const file of normalized.attachments) {
@@ -130,6 +133,10 @@ export async function ingestProviderDelivery(input: {
         category: file.category,
       })
     }
+  }
+  if (!membershipId && !priorRecord?.dealId) {
+    const saved = await findIntake(integration.workspaceId, result.intakeId)
+    if (saved) await updateIntake({ workspaceId: integration.workspaceId, intakeId: result.intakeId, state: saved.state, warnings: [...saved.warnings, "Assignment needed: no active rep is available. Open the deal to assign a rep."] })
   }
   const current = await findIntake(integration.workspaceId, result.intakeId)
   return current ? { intakeId: current.intakeId, dealId: current.dealId, created: result.created, state: current.state, warnings: current.warnings } : result

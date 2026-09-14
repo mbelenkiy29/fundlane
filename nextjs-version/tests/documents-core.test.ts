@@ -93,6 +93,20 @@ test("MIC-169 vault fails closed, retries real scan state, keeps versions, and b
   await assert.rejects(() => getDocumentContent(actor(), infected.id), (error: { code?: string }) => error.code === "document_not_clean")
 })
 
+test("clean storage promotion must succeed before a document becomes usable, and can be retried", async () => {
+  setDocumentScannerForTests(scanner("clean"))
+  let unavailable = true
+  let promotions = 0
+  setDocumentStorageForTests({ ...storage, async promoteClean() { promotions++; if (unavailable) throw new Error("storage unavailable") } })
+  try {
+    const document = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "promotion-recovery", filename: "promotion.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\npromotion\n%%EOF\n")), category: "other_stip", source: "test" })
+    assert.equal(document.processingState, "scan_failed")
+    unavailable = false
+    assert.equal((await retryDocumentScan(actor(), document.id)).processingState, "clean")
+    assert.equal(promotions, 2)
+  } finally { setDocumentStorageForTests(storage) }
+})
+
 test("MIC-169 atomically reserves uploads, recovers lost responses, and preserves version lineage across category correction", async () => {
   setDocumentScannerForTests(scanner("clean"))
   const key = "concurrent-replay"

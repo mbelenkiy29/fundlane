@@ -273,7 +273,7 @@ test("MIC-148 run override leaves workspace defaults and retries keep identity w
   assert.equal(analysisQueueCallsForTests().length, 1)
 })
 
-test("MIC-148 no-qualified-funder is first-class and readiness trigger fires once per completeness version", async () => {
+test("MIC-148 no-qualified-funder is first-class and readiness refreshes changed criteria", async () => {
   const workspaceId = `ws-analysis-ready-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)
   resetAnalysisQueueCallsForTests()
@@ -287,8 +287,9 @@ test("MIC-148 no-qualified-funder is first-class and readiness trigger fires onc
 
   const readyDeal = await merchantDeal(workspaceId, "ready-run")
   await seedFunder(workspaceId, "rd-fit", fitRules())
-  const skipped = await runAnalysisIfReady(actor(workspaceId), emptyDeal.id)
-  assert.equal(skipped.ran, false)
+  const refreshed = await runAnalysisIfReady(actor(workspaceId), emptyDeal.id)
+  assert.equal(refreshed.ran, true)
+  assert.notEqual(refreshed.run?.id, none.run.id)
 
   const first = await runAnalysisIfReady(actor(workspaceId), readyDeal.id)
   assert.equal(first.ran, true)
