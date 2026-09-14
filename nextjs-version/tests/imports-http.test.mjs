@@ -200,3 +200,35 @@ test("import routes enforce sessions and support reviewed create/update replay w
   assert.equal(invalidDriveCategory.response.status, 422)
   assert.equal(invalidDriveCategory.payload.error.code, "document_category_invalid")
 })
+
+test("historical CSV preview accepts small files and retries without creating business records", async () => {
+  const path = "/api/mca/historical/preview"
+  const login = await supabaseFixture.login("historical-http@example.test", "Synthetic Preview Password 99!")
+  const preview = async (batchId, size, cookie = login.cookie) => multipart(path, cookie, { sourceId: "historical-http", batchId }, [{
+    field: "file", name: "synthetic.csv", type: "text/csv",
+    bytes: Buffer.from("external_id,legal_name,funder_name,funded_at,amount_cents\n" + Array.from({ length: size }, (_, i) => `${batchId}-${i},Synthetic Merchant,Synthetic Funder,2025-01-01,10000`).join("\n")),
+  }])
+  assert.equal((await preview("denied", 1, null)).response.status, 401)
+  const tables = ["deals", "mca_funding_events", "mca_accounting_payments"]
+  const counts = async () => Promise.all(tables.map(async (table) => Number((await testDatabase.query(`SELECT count(*) FROM ${table}`)).rows[0].count)))
+  const before = await counts()
+  for (const size of [1, 99]) {
+    const { response, payload } = await preview(`small-${size}`, size)
+    assert.equal(response.status, 201, JSON.stringify(payload))
+    assert.ok(response.headers.get("x-request-id"))
+    assert.equal(payload.totals.valid, size)
+    assert.equal(payload.totals.principalCents, size * 10000)
+    assert.equal(payload.rows.at(-1).rowNumber, size + 1)
+    const replay = await preview(`small-${size}`, size)
+    assert.equal(replay.payload.runId, payload.runId)
+    assert.deepEqual(replay.payload.rows, payload.rows)
+  }
+  assert.deepEqual(await counts(), before)
+  const malformed = await multipart(path, login.cookie, { sourceId: "historical-http", batchId: "bad" }, [{ field: "file", name: "bad.csv", type: "text/csv", bytes: Buffer.from("legal_name,funder_name\nExample,Funder") }])
+  assert.equal(malformed.response.status, 422)
+  assert.match(malformed.payload.error.message, /Missing required column/)
+  const member = (await testDatabase.query("SELECT m.id FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=$1", ["historical-http@example.test"])).rows[0]
+  await testDatabase.query("UPDATE memberships SET role='rep' WHERE id=$1", [member.id])
+  try { assert.equal((await preview("rep-denied", 1)).response.status, 403) }
+  finally { await testDatabase.query("UPDATE memberships SET role='admin' WHERE id=$1", [member.id]) }
+})
