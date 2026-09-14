@@ -1,3 +1,5 @@
+> Deployment status (2026-09-14): the legacy Python Render service is suspended and removed from the active Blueprint. Retain this implementation and historical verification for rollback. No production Supabase assistant function is deployed. See [the deployment audit](render-deployment.md); the private-host wiring below describes the previous Render web deployment.
+
 # MCA ChatKit assistant
 
 The global assistant reads accessible deals, pipeline counts and existing underwriting scores. It does not write business records, send communications, run underwriting, or upload documents. It is separate from the template `/chat` screen.

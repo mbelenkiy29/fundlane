@@ -8,9 +8,9 @@ Use Node.js 24+ and pnpm. Follow [`nextjs-version/README.md`](nextjs-version/REA
 
 ## Deployment
 
-Live application: https://fundlane.io. The public Next.js app is on Vercel; data, identity, and private files are on Supabase. Follow [`nextjs-version/README.md`](nextjs-version/README.md) for the current stack.
+Live application: https://fundlane.io. See [current deployment and verification](DEPLOYMENT.md).
 
-[`DEPLOYMENT.md`](DEPLOYMENT.md) is a September 2026 Render + Neon snapshot, not the current web host. [`render.yaml`](render.yaml) still describes Render workers for native document processing and ChatKit. See [`nextjs-version/docs/render-deployment.md`](nextjs-version/docs/render-deployment.md) for worker configuration.
+The website runs on Vercel. [`render.yaml`](render.yaml) retains the document and messaging workers; the old Render website and Python ChatKit service are suspended. See [`nextjs-version/docs/render-deployment.md`](nextjs-version/docs/render-deployment.md) for configuration and release checks.
 
 ## Workspace
 
