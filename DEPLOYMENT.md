@@ -1,6 +1,14 @@
-# Fundlane deployment — September 10, 2026
+# Fundlane deployment — September 14, 2026
 
-**Historical snapshot.** This record describes the Render + Neon web hosting from 10 September 2026. The current public app is Next.js on Vercel; Postgres, Auth, and private Storage are on Supabase. Render remains for native workers only. See `nextjs-version/README.md` and `WORKSPACE_NAVIGATION.md`.
+The website responds from Vercel; application data, authentication and private files use Supabase. The legacy Render web and Python ChatKit services are suspended. The retained document and messaging workers both have failed initial builds and must not be described as running.
+
+See [the live inventory, dependency trace, build fix, and exact Render notification steps](nextjs-version/docs/render-deployment.md). Root `render.yaml` now defines only those two workers. Automatic deploys were disabled live on the two suspended legacy services. No resources were deleted and notification preferences were not changed.
+
+## Historical September 10 cutover record
+
+The following record is retained for rollback provenance and does not describe current hosting.
+
+# Fundlane deployment — September 10, 2026
 
 The application was live on Render at https://fundlane.io. https://www.fundlane.io redirected to the apex. Vercel was the domain registrar and DNS provider; Neon was the production database.
 

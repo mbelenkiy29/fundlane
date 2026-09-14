@@ -1,6 +1,6 @@
 # Fundlane
 
-Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, Stripe test billing, and Render workers for native processing and the Python ChatKit service. Production cutover is a separate controlled operation; see the [migration and deployment runbook](docs/supabase-vercel-migration.md) for the current deployment status.
+Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, Stripe test billing, and retained Render document/messaging workers. The old Render web and ChatKit services are suspended; both workers have failed initial builds. See the [deployment audit](docs/render-deployment.md) for recovery steps.
 
 ## Local setup
 

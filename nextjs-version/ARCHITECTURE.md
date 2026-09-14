@@ -1,3 +1,5 @@
+> Historical architecture assessment. Current hosting is Vercel with Supabase Postgres/Auth/Storage. See [the live Render dependency audit](docs/render-deployment.md) for retained workers and known processing gaps; the Neon/Clerk and single-container recommendations below are not current deployment instructions.
+
 # MCA / Fundlane architecture and hosting brief
 
 Prepared September 2026 from the local application source. This describes the checked-in-style workspace implementation, not a fresh audit of what is currently deployed at the live URL. Authentication cutover and provider activation can differ between development and production.
