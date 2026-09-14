@@ -1715,3 +1715,24 @@ export const mcaCalendarExternalEvents = pgTable("mca_calendar_external_events",
 export const mcaCalendarEventLinks = pgTable("mca_calendar_event_links", {
   connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),activity_id:text().notNull().references(()=>mcaCalendarActivities.id),event_id:text().notNull(),etag:text(),local_version:integer().default(0).notNull(),baseline_json:text(),conflict_json:text(),resolution:text(),
 },t=>[primaryKey({columns:[t.connection_id,t.activity_id]}),unique("mca_calendar_event_links_connection_id_event_id_key").on(t.connection_id,t.event_id),check("mca_calendar_event_links_resolution_check",sql`${t.resolution} IN ('local','google')`)]).enableRLS();
+
+// Client invitation attribution remains independent of mutable deal assignments.
+export const applicationInvitations = pgTable("mca_application_invitations", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
+  integration_id: text().notNull().references(() => intake_integrations.id),
+  form_id: text().notNull(),
+  membership_id: text().notNull().references(() => memberships.id),
+  client_name: text().notNull(), email_cipher: text().notNull(), token_hash: text().notNull().unique(), token_cipher: text().notNull(), request_key: text().notNull(),
+  created_at: text().notNull(), expires_at: text().notNull(), revoked_at: text(), copied_at: text(), sent_at: text(), opened_at: text(), started_at: text(), submitted_at: text(),
+  submission_event_id: text(), intake_id: text().references(() => intake_events.id), deal_id: text().references(() => deals.id),
+}, t => [unique().on(t.workspace_id,t.membership_id,t.request_key), unique().on(t.workspace_id,t.integration_id,t.submission_event_id), unique().on(t.workspace_id,t.deal_id),
+  index("application_invitation_cohort_idx").on(t.workspace_id,t.created_at,t.membership_id)]);
+export const applicationInvitationEvents = pgTable("mca_application_invitation_events", {
+  invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  kind: text().notNull(), occurred_at: text().notNull(),
+}, t => [primaryKey({columns:[t.invitation_id,t.kind]}),check("mca_application_invitation_events_kind_check",sql`kind IN ('opened','started')`)]);
+export const applicationInvitationDeliveries = pgTable("mca_application_invitation_deliveries", {
+  id: text().primaryKey(), invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  request_key: text().notNull(), job_id: text(), delivery: text(), created_at: text().notNull(), accepted_at: text(),
+}, t => [unique().on(t.invitation_id,t.request_key), index("application_invitation_delivery_idx").on(t.workspace_id,t.invitation_id,t.created_at),
+  check("mca_application_invitation_deliveries_delivery_check",sql`delivery IN ('sent','preview')`)]);
