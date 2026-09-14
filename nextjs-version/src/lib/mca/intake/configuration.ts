@@ -2,7 +2,7 @@ import "server-only"
 
 import { createHash } from "node:crypto"
 import { createOpaqueToken, hashOpaqueToken } from "../crypto"
-import { newId, recordAuditEvent } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent } from "../db"
 import { AppError } from "../errors"
 import { getMembership, listMemberships } from "../memberships"
 import type { DealStatus } from "../deals/schema"
@@ -51,6 +51,7 @@ export interface IntegrationInput {
   senderRules?: string[]
   assignmentPool?: string[]
   initialStatus?: DealStatus
+  automaticProcessing?: boolean
   enabled?: boolean
   customerContractApproved?: boolean
   contractKey?: string
@@ -62,6 +63,7 @@ export interface IntegrationStatus {
   provider: string
   displayName: string
   binding: string | null
+  automaticProcessing: boolean
   enabled: boolean
   credential: "configured" | "missing" | "expired"
   credentialVersion: number
@@ -76,6 +78,7 @@ export interface IntegrationStatus {
   attachmentMethod?: string
   emailGateway?: EmailGateway
   providerServerId?: string
+  lastDeliveryAt?: string
   readiness: "local_tested" | "live_unverified" | "live_configured"
   updatedAt: string
 }
@@ -90,7 +93,7 @@ function status(record: IntegrationRecord): IntegrationStatus {
   const binding = record.formId ?? record.templateId ?? record.locationId ?? null
   return {
     id: record.id, provider: record.provider, displayName: record.displayName, binding,
-    enabled: record.enabled,
+    enabled: record.enabled, automaticProcessing: Boolean(record.automaticProcessing),
     credential: !record.credentialConfigured ? "missing" : record.credentialExpiresAt && record.credentialExpiresAt <= new Date().toISOString() ? "expired" : "configured",
     credentialVersion: record.credentialVersion, approvalState: record.approvalState,
     mapping: record.mapping, allowedHosts: record.allowedHosts, senderRules: record.senderRules,
@@ -136,6 +139,9 @@ export async function configureIntegration(actor: MembershipContext, input: Inte
     const member = await getMembership(actor.workspaceId, membershipId)
     if (member.status !== "active") throw new AppError(422, "inactive_assignee", "Assignment pools may contain only active workspace members.")
   }
+  if (input.automaticProcessing !== undefined && typeof input.automaticProcessing !== "boolean") throw new AppError(422, "integration_validation_failed", "Automatic processing must be enabled or disabled.")
+  const automaticProcessing = input.automaticProcessing ?? previous?.automaticProcessing ?? false
+  if ((automaticProcessing || (input.enabled === true && !previous?.enabled)) && !(input.assignmentPool ?? previous?.assignmentPool)?.length) throw new AppError(422, "assignment_required", "Select a fallback rep or team before enabling automatic processing.")
   const generatedSecret = input.admissionSecret ?? (!previous && input.provider !== "highlevel" ? createOpaqueToken() : undefined)
   const contractKey = input.provider === "zoho" ? input.contractKey ?? previous?.contractKey ?? ZOHO_CONTRACT_KEY : undefined
   const emailGateway = input.provider === "email" ? input.emailGateway ?? previous?.emailGateway ?? "usesend" : undefined
@@ -147,6 +153,7 @@ export async function configureIntegration(actor: MembershipContext, input: Inte
     admissionSecretHash: generatedSecret ? hashOpaqueToken(generatedSecret) : previous?.admissionSecretHash,
     signingSecret: hmacSecret,
     credential: input.credential, credentialExpiresAt: input.credentialExpiresAt ?? previous?.credentialExpiresAt,
+    automaticProcessing, automaticSince: automaticProcessing ? previous?.automaticSince ?? nowIso() : previous?.automaticSince,
     credentialVersion: previous?.credentialVersion ?? 1,
     mapping: input.provider === "zoho" && (!input.mapping || Object.keys(input.mapping).length === 0)
       ? previous?.mapping && Object.keys(previous.mapping).length ? previous.mapping : zohoDefaultMapping
@@ -186,7 +193,8 @@ export async function rotateIntegrationCredentials(actor: MembershipContext, id:
 
 export async function listIntegrationStatuses(actor: MembershipContext): Promise<IntegrationStatus[]> {
   assertAdmin(actor)
-  return (await listIntegrations(actor.workspaceId)).map(status)
+  const deliveries = await getDatabase().prepare<{ integration_id: string; received_at: string }>("SELECT integration_id,MAX(created_at) received_at FROM intake_events WHERE workspace_id=? AND deal_id IS NOT NULL GROUP BY integration_id").all(actor.workspaceId)
+  return (await listIntegrations(actor.workspaceId)).map(record => ({ ...status(record), lastDeliveryAt: deliveries.find(d => d.integration_id === record.id)?.received_at }))
 }
 
 type PostmarkServer = { ID?: number; Name?: string; InboundHash?: string; InboundAddress?: string }

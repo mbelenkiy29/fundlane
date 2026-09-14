@@ -17,7 +17,6 @@ import {
   DEFAULT_ANALYSIS_SETTINGS,
   DEFAULT_ANALYSIS_TOP_N,
   REVIEW_NOTIFICATION_CHANNELS,
-  findAnalysisRunForCompleteness,
   findLatestAnalysisRun,
   findMatchingAnalysisRun,
   insertAnalysisRun,
@@ -387,14 +386,12 @@ export async function runAnalysis(actor: DealActor, dealId: string, override: An
 export async function runAnalysisIfReady(actor: DealActor, dealId: string): Promise<ReadinessRunResult> {
   const deal = await getDealForDocument(actor, dealId)
   await getDeal(actor, dealId)
-  let completeness = await getCompleteness(actor, deal.id)
-  if (!completeness) completeness = await checkCompleteness(actor, deal.id)
+  const completeness = await getCompleteness(actor, deal.id) ?? await checkCompleteness(actor, deal.id)
   if (!completeness.ready) {
     const existing = await findLatestAnalysisRun(actor.workspaceId, deal.id)
     return { ran: false, run: existing ? toView(existing) : null }
   }
-  const existing = await findAnalysisRunForCompleteness(actor.workspaceId, deal.id, completeness.version)
-  if (existing) return { ran: false, run: toView(existing) }
+  const existing = await findLatestAnalysisRun(actor.workspaceId, deal.id)
   const result = await runAnalysis(actor, deal.id, { trigger: "readiness" })
-  return { ran: true, run: result.run }
+  return { ran: existing?.id !== result.run.id, run: result.run }
 }

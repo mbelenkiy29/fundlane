@@ -89,3 +89,35 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+
+  # Supabase-backed durable processing. Configure staging secrets before activation.
+  - type: worker
+    name: fundlane-document-worker
+    runtime: docker
+    repo: https://github.com/mbelenkiy29/fundlane
+    branch: main
+    rootDir: nextjs-version
+    dockerfilePath: ./Dockerfile.worker
+    dockerContext: .
+    region: ohio
+    plan: standard
+    autoDeployTrigger: off
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MCA_DATA_ENCRYPTION_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: MCA_APP_ORIGIN
+        sync: false
+      - key: MCA_DOCUMENT_AI_PROVIDER
+        value: openai
+      - key: MCA_DOCUMENT_AI_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MCA_DB_POOL_MAX
+        value: "4"
