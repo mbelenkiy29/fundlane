@@ -45,18 +45,17 @@ function DuplicateMerchantDialogView({
 
 export function DuplicateMerchantDialogHost({ children }: { children: React.ReactNode }) {
   const slots = React.useRef(new Map<string, React.MutableRefObject<DuplicateMerchantDialogProps>>())
-  const [, rerender] = React.useReducer((count: number) => count + 1, 0)
+  const [values, setValues] = React.useState<DuplicateMerchantDialogProps[]>([])
   const host = React.useMemo(() => ({
     set(id: string, props: React.MutableRefObject<DuplicateMerchantDialogProps> | null) {
       if (props) slots.current.set(id, props)
       else slots.current.delete(id)
-      rerender()
+      setValues([...slots.current.values()].map((slot) => slot.current))
     },
     notify() {
-      rerender()
+      setValues([...slots.current.values()].map((slot) => slot.current))
     },
   }), [])
-  const values = [...slots.current.values()].map((slot) => slot.current)
   const active = values.find((item) => item.open) ?? values[0]
   function latest(): DuplicateMerchantDialogProps {
     const current = [...slots.current.values()].map((slot) => slot.current)
@@ -85,7 +84,9 @@ export function DuplicateMerchantDialog(props: DuplicateMerchantDialogProps) {
   const host = React.useContext(DuplicateMerchantDialogHostContext)
   const id = React.useId()
   const propsRef = React.useRef(props)
-  propsRef.current = props
+  React.useLayoutEffect(() => {
+    propsRef.current = props
+  })
   React.useLayoutEffect(() => {
     if (!host) return
     host.set(id, propsRef)

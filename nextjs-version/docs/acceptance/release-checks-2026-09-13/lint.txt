@@ -1,0 +1,83 @@
+$ eslint .
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/dashboard/components/data-table.tsx
+  384:32  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/dashboard/components/data-table.tsx:384:32
+  382 |   )
+  383 |
+> 384 |   const pastPerformanceTable = useReactTable({
+      |                                ^^^^^^^^^^^^^ TanStack Table's `useReactTable()` API returns functions that cannot be memoized safely
+  385 |     data: pastPerformance,
+  386 |     columns,
+  387 |     state: {  react-hooks/incompatible-library
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/tasks/components/data-table.tsx
+  51:17  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/tasks/components/data-table.tsx:51:17
+  49 |   const [sorting, setSorting] = React.useState<SortingState>([])
+  50 |
+> 51 |   const table = useReactTable({
+     |                 ^^^^^^^^^^^^^ TanStack Table's `useReactTable()` API returns functions that cannot be memoized safely
+  52 |     data,
+  53 |     columns,
+  54 |     state: {  react-hooks/incompatible-library
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/users/components/data-table.tsx
+  275:17  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/mbele/Desktop/mca/nextjs-version/src/app/(dashboard)/users/components/data-table.tsx:275:17
+  273 |   ]
+  274 |
+> 275 |   const table = useReactTable({
+      |                 ^^^^^^^^^^^^^ TanStack Table's `useReactTable()` API returns functions that cannot be memoized safely
+  276 |     data: users,
+  277 |     columns,
+  278 |     onSortingChange: setSorting,  react-hooks/incompatible-library
+
+/Users/mbele/Desktop/mca/nextjs-version/src/components/mca/comms/template-editor.tsx
+  143:10  warning  'detail' is assigned a value but never used                                                                                                                                                                                                @typescript-eslint/no-unused-vars
+  159:9   warning  The 'variables' logical expression could make the dependencies of useMemo Hook (at line 383) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'variables' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/closing/service.ts
+  20:33  warning  'ClosingTransportRequest' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/comms/digest.ts
+  305:10  warning  'emptyGroups' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/db/milestone06.ts
+  250:5  warning  'table' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/reports/funder-analytics.ts
+  825:25  warning  '_occurredAt' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/submissions/adapters/credentials.ts
+  241:55  warning  'fallback' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/src/lib/mca/submissions/reconciliation.ts
+  7:10  warning  'nowIso' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/tests/milestone06-digest.test.ts
+  20:3  warning  'updateDigestSubscription' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/tests/milestone06-followups.test.ts
+  360:9  warning  'smsPolicy' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/tests/milestone06-templates.test.ts
+  23:18  warning  'validatePost' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/tests/milestone06-webhooks.test.ts
+  26:3  warning  'updateWorkflowWebhookEndpoint' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mbele/Desktop/mca/nextjs-version/tests/submissions-compress.test.ts
+  146:5  warning  'pdfChecksum' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+✖ 16 problems (0 errors, 16 warnings)
+
