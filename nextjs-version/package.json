@@ -13,7 +13,8 @@
     "db:migrate": "tsx scripts/database/migrate.ts",
     "db:secure": "tsx scripts/database/secure-runtime.ts",
     "assistant:worker": "node --conditions=react-server --env-file=.env.local --import tsx scripts/assistant/worker.ts",
-    "documents:worker": "node --conditions=react-server --import tsx scripts/workers/run.ts"
+    "documents:worker": "node --conditions=react-server --import tsx scripts/workers/run.ts",
+    "documents:worker:build": "node scripts/workers/build.mjs"
   },
   "engines": {
     "node": "24.x"

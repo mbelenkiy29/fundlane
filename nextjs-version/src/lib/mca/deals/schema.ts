@@ -52,6 +52,8 @@ export type DealSource = "manual" | "import" | "application_scan" | "api" | "sys
 export type DraftState = "partial" | "submission_ready"
 
 export interface DealActor {
+  /** Internal intake worker authority, restricted to one existing deal. */
+  intakeDealId?: string
   apiKeyId?: string
   sessionId?: string | null
   scopes?: readonly ApiKeyScope[]

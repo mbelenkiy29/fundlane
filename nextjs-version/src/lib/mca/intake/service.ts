@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
 import { AppError } from "../errors"
-import { newId, recordAuditEvent, withImmediateTransaction } from "../db"
+import { getDatabase, newId, recordAuditEvent, withImmediateTransaction } from "../db"
 import { actorForDeals, createDeal, getDeal, transitionDeal } from "../deals/service"
 import type { DealTransactionCheckpoint } from "../deals/repository"
 import { allowedTransitions } from "../deals/pipeline"
@@ -101,10 +101,10 @@ async function applyInitialStatus(actor: DealActor, deal: DealDetail, target: De
   }
 }
 
-export async function ingestApplication(actor: DealActor, input: NormalizedIntakeInput, checkpoint?: DealTransactionCheckpoint): Promise<IntakeResult> {
+export async function ingestApplication(actor: DealActor, input: NormalizedIntakeInput, checkpoint?: DealTransactionCheckpoint, integrationId?: string): Promise<IntakeResult> {
   validateInput(input)
   const checksum = intakePayloadChecksum(input)
-  const reserved = await reserveIntake(actor.workspaceId, input, checksum)
+  const reserved = await reserveIntake(actor.workspaceId, input, checksum, integrationId)
   if (reserved.record.payloadChecksum !== checksum) {
     throw new AppError(409, "intake_event_conflict", "This provider event ID was already used for a different application.")
   }
@@ -123,7 +123,7 @@ export async function ingestApplication(actor: DealActor, input: NormalizedIntak
   try {
     const created = await createDeal(actor, {
       ...input.application,
-      idempotencyKey: `intake:${createHash("sha256").update(`${input.provider}\0${input.eventId}`).digest("hex")}`,
+      idempotencyKey: `intake:${createHash("sha256").update(integrationId ? `${integrationId}\0${input.provider}\0${input.eventId}` : `${input.provider}\0${input.eventId}`).digest("hex")}`,
       fieldSource: input.application.fieldSource ?? "api",
     }, checkpoint)
     const status = await applyInitialStatus(actor, created.deal, input.initialStatus)
@@ -172,7 +172,7 @@ export async function replayIntake(actor: DealActor, intakeId: string, appOrigin
     application: record.application,
     sourceReference: record.sourceReference,
     initialStatus: record.initialStatus,
-  })
+  }, undefined, record.eventNamespace)
 }
 
 export interface IntakeListItem {
@@ -186,17 +186,33 @@ export interface IntakeListItem {
   errorCode?: string
   errorMessage?: string
   attachmentStates: Record<string, number>
+  merchantName: string
+  requestedAmount?: number
+  assignedReps: string[]
+  receivedAt: string
+  automaticProcessing: boolean
+  canRetry: boolean
+  progress?: import("./processing-contracts").IntakeProgress
   updatedAt: string
 }
 
 export async function listIntakeSummaries(actor: DealActor): Promise<IntakeListItem[]> {
   const output: IntakeListItem[] = []
+  const members = await getDatabase().prepare<{ id: string; name: string }>("SELECT m.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?").all(actor.workspaceId)
   for (const record of await listIntakes(actor.workspaceId)) {
+    let deal: DealDetail | undefined
     if (record.dealId) {
-      try { await getDeal(actor, record.dealId) } catch { continue }
+      try { deal = await getDeal(actor, record.dealId) } catch { continue }
     } else if (actor.role !== "admin" && actor.role !== "super_admin") continue
     const jobs = await listAttachmentJobs(actor.workspaceId, record.intakeId)
+    const integration = record.integrationId ? await getIntegration(actor.workspaceId, record.integrationId) : undefined
+    const progress = await (await import("./processing")).intakeProgress(actor.workspaceId, record.intakeId)
     output.push({
+      merchantName: deal?.legalName ?? record.application.legalName ?? "Application needs review",
+      requestedAmount: deal?.requestedAmount ?? record.application.requestedAmount,
+      assignedReps: (deal?.assignments ?? []).map(a => members.find(m => m.id === a.membershipId)?.name ?? "Former team member"),
+      receivedAt: record.createdAt, automaticProcessing: Boolean(integration?.automaticProcessing), progress,
+      canRetry: Boolean(deal && integration?.enabled && integration.automaticProcessing && (actor.source !== "api_key" || actor.scopes?.includes("deals:write"))),
       intakeId: record.intakeId, provider: record.provider, eventId: record.eventId,
       sourceReference: record.sourceReference, dealId: record.dealId, state: record.state,
       warnings: record.warnings, errorCode: record.errorCode, errorMessage: record.errorMessage,
@@ -382,6 +398,8 @@ export async function processAttachmentJob(job: AttachmentJob, options: { fetchI
   if (!integration || !integration.enabled) return (await completeAttachmentJob(claimed.workspaceId, claimed.id, leaseToken, { state: "failed", lastError: "Integration is disabled or missing." })).job
   try {
     const bytes = await fetchPrivateAttachment(claimed, integration, { fetchImpl: options.fetchImpl, lookupImpl: options.lookupImpl })
+    const live = await getIntegration(job.workspaceId, integration.id)
+    if (!live?.enabled || live.approvalState !== "approved" || live.credentialVersion !== integration.credentialVersion) throw new AppError(403, "integration_changed", "The connection changed during file retrieval. Retry with its current settings.")
     const document = await attachIntakeDocument(await actorForIntegration(integration), {
       intakeId: claimed.intakeId, attachmentId: claimed.attachmentId, filename: claimed.filename,
       mimeType: claimed.mimeType, bytes, category: claimed.category as DocumentCategory,

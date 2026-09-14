@@ -13,6 +13,7 @@ const groups = [
     { title: "Home", url: "/dashboard", icon: CircleGauge, page: "dashboard" },
     { title: "AI Assistant", url: "/assistant", icon: Bot, page: "deals" },
     { title: "Applications", url: "/applications", icon: FileCheck2, page: "deals" },
+    { title: "Application Intake", url: "/intake", icon: FileCheck2, page: "deals" },
     { title: "Deals", url: "/deals", icon: BriefcaseBusiness, page: "deals" },
     { title: "Pipeline", url: "/pipeline", icon: Columns3, page: "deals" },
     { title: "Submissions", url: "/submissions", icon: FileCheck2, page: "deals" },

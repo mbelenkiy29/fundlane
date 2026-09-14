@@ -113,7 +113,7 @@ export async function ingestProviderDelivery(input: {
         membershipId = eligible[digest.readUInt32BE(0) % eligible.length]
       }
     }
-    const prior = await intakeDatabase().prepare<{ id: string }>("SELECT id FROM intake_events WHERE workspace_id=? AND provider=? AND provider_event_id=?").get(integration.workspaceId, input.provider, normalized.eventId)
+    const prior = await intakeDatabase().prepare<{ id: string }>("SELECT id FROM intake_events WHERE workspace_id=? AND event_namespace=? AND provider=? AND provider_event_id=?").get(integration.workspaceId, integration.id, input.provider, normalized.eventId)
     const priorRecord = prior ? await findIntake(integration.workspaceId, prior.id) : undefined
     const application = membershipId
       ? { ...normalized.application, assignments: [{ membershipId, kind: "originator" as const, isPrimary: true }] }
@@ -125,7 +125,7 @@ export async function ingestProviderDelivery(input: {
       application: priorRecord?.dealId ? { ...application, assignments: priorRecord.application.assignments } : application,
       sourceReference: normalized.sourceReference,
       initialStatus: integration.initialStatus,
-    })
+    }, undefined, integration.id)
     await associateIntakeIntegration(integration.workspaceId, result.intakeId, integration.id)
     if (invitation) await completeInvitationSubmission(invitation, result.intakeId, result.dealId)
     if (result.dealId) {

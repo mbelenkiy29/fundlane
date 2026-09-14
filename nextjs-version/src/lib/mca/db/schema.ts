@@ -952,6 +952,8 @@ export const intake_integrations = pgTable("intake_integrations", {
 	allowed_hosts_json: text().default('[]').notNull(),
 	sender_rules_json: text().default('[]').notNull(),
 	assignment_pool_json: text().default('[]').notNull(),
+	automatic_processing: integer().default(0).notNull(),
+	automatic_since: text(),
 	initial_status: text().default('lead').notNull(),
 	inbound_address: text(),
 	enabled: integer().default(1).notNull(),
@@ -981,6 +983,8 @@ export const intake_events = pgTable("intake_events", {
 	workspace_id: text().notNull(),
 	provider: text().notNull(),
 	provider_event_id: text().notNull(),
+	event_namespace: text().default('').notNull(),
+	legacy_identity: integer().default(0).notNull(),
 	payload_checksum: text().notNull(),
 	application_cipher: text().notNull(),
 	email_source_cipher: text(),
@@ -1007,7 +1011,7 @@ export const intake_events = pgTable("intake_events", {
 			foreignColumns: [workspaces.id],
 			name: "intake_events_workspace_id_fkey"
 		}),
-	unique("intake_events_workspace_id_provider_provider_event_id_key").on(table.provider, table.provider_event_id, table.workspace_id),
+	unique("intake_events_scoped_event_key").on(table.workspace_id, table.event_namespace, table.provider, table.provider_event_id),
 	check("intake_events_state_check", sql`state = ANY (ARRAY['received'::text, 'validated'::text, 'created'::text, 'file_pending'::text, 'error'::text])`),
 ]);
 
@@ -1675,6 +1679,14 @@ export const mcaAssistantExecutions = pgTable("mca_assistant_executions", {
   id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), tool_name: text().notNull(), status: text().notNull(),
   result_cipher: text(), created_at: text().notNull(), completed_at: text(),
 }, t => [index("assistant_run_executions").on(t.run_id)]);
+
+export const intake_processing = pgTable("intake_processing", {
+  intake_id: text().primaryKey().references(() => intake_events.id),
+  workspace_id: text().notNull().references(() => workspaces.id),
+  fingerprint: text(), generation: integer().default(0).notNull(),
+  job_id: text(), progress_json: text().default('{}').notNull(),
+  checked_at: text().notNull(), updated_at: text().notNull(),
+}, table => [index("intake_processing_workspace_idx").on(table.workspace_id)]);
 
 // Client invitation attribution remains independent of mutable deal assignments.
 export const applicationInvitations = pgTable("mca_application_invitations", {

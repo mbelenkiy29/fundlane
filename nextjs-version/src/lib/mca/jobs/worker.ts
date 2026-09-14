@@ -21,6 +21,7 @@ import { replayIntake } from "../intake/service"
 import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-service"
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
+  if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {

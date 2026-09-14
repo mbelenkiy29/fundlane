@@ -1,6 +1,7 @@
 import { setTimeout } from "node:timers/promises"
 import { closeDatabaseForTests } from "../../src/lib/mca/db"
 import { runNextBackgroundJob } from "../../src/lib/mca/jobs/worker"
+import { scheduleIntakeProcessing } from "../../src/lib/mca/intake/processing"
 import { runDueAttachmentJobs } from "../../src/lib/mca/intake/service"
 import { cleanupWorkerStorage } from "../../src/lib/mca/jobs/cleanup"
 let stopped = false
@@ -14,6 +15,7 @@ async function main() {
       try {
         if (Date.now() >= intakeAt) {
           await runDueAttachmentJobs(5)
+          await scheduleIntakeProcessing(25)
           intakeAt = Date.now() + 5000
         }
         const worked = await runNextBackgroundJob()
