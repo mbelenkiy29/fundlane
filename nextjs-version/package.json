@@ -12,11 +12,12 @@
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
     "db:migrate": "tsx scripts/database/migrate.ts",
     "db:secure": "tsx scripts/database/secure-runtime.ts",
-    "messaging:worker": "node --conditions=react-server --import tsx scripts/messaging/worker.ts",
-    "messaging:worker:build": "node scripts/messaging/build.mjs",
+    "calendar:worker": "node --conditions=react-server --import tsx scripts/calendar/worker.ts",
     "assistant:worker": "node --conditions=react-server --env-file=.env.local --import tsx scripts/assistant/worker.ts",
     "documents:worker": "node --conditions=react-server --import tsx scripts/workers/run.ts",
-    "documents:worker:build": "node scripts/workers/build.mjs"
+    "documents:worker:build": "node scripts/workers/build.mjs",
+    "messaging:worker": "node --conditions=react-server --import tsx scripts/messaging/worker.ts",
+    "messaging:worker:build": "node scripts/messaging/build.mjs"
   },
   "engines": {
     "node": "24.x"

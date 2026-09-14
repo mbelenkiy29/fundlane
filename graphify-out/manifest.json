@@ -90,7 +90,7 @@
     "semantic_hash": "b94bcf436f10e5edfaf14fe0656843f6"
   },
   "nextjs-version/drizzle/meta/_journal.json": {
-    "mtime": 1789354770.8027709,
+    "mtime": 1789355159.2222044,
     "ast_hash": "8ae498e6f5204a0fc467eacb0e64e83f",
     "semantic_hash": ""
   },
@@ -105,8 +105,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/package.json": {
-    "mtime": 1789354770.7987745,
-    "ast_hash": "3ef8ec296de8a033cba90c9d8938778b",
+    "mtime": 1789355159.2067547,
+    "ast_hash": "510609172ec07d2365ec390ad25081ea",
     "semantic_hash": ""
   },
   "nextjs-version/postcss.config.mjs": {
@@ -325,9 +325,9 @@
     "semantic_hash": "978c2ff85519bb0c6bf1a317d671c83d"
   },
   "nextjs-version/src/app/(dashboard)/calendar/page.tsx": {
-    "mtime": 1789354722.9891458,
-    "ast_hash": "463d151409d6da159aa30c551d13ab43",
-    "semantic_hash": "463d151409d6da159aa30c551d13ab43"
+    "mtime": 1789355120.3175673,
+    "ast_hash": "2fc4f8a6eb880f2eb1821d25b470b371",
+    "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/calendar/types.ts": {
     "mtime": 1789354722.9892683,
@@ -480,8 +480,8 @@
     "semantic_hash": "20bf6b4501be55cf3b1df14b670fe317"
   },
   "nextjs-version/src/app/(dashboard)/layout.tsx": {
-    "mtime": 1789354770.799224,
-    "ast_hash": "a3892fd6e6ff2b223f1824201be20760",
+    "mtime": 1789355159.2385395,
+    "ast_hash": "1f6ac7d7900f0aad4a52982b8a044250",
     "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/loading.tsx": {
@@ -1305,8 +1305,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/app-sidebar.tsx": {
-    "mtime": 1789354770.7990277,
-    "ast_hash": "4b35f76ddd6991a804fb229f18ee800f",
+    "mtime": 1789355159.2538168,
+    "ast_hash": "33c3d1329c119b49225d941ef1b08ba9",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/color-picker.tsx": {
@@ -1825,8 +1825,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/db/schema.ts": {
-    "mtime": 1789354770.7999048,
-    "ast_hash": "25d754b2e40b9124d9de1964c4aa81ac",
+    "mtime": 1789355159.2839284,
+    "ast_hash": "5bd3bcda9531e11dd1360040fdef4112",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/deals/acceptance.test.ts": {
@@ -2445,8 +2445,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/README.md": {
-    "mtime": 1789354770.8001409,
-    "ast_hash": "bfa03844ccedaafe8dc152bab170cba0",
+    "mtime": 1789355120.3089044,
+    "ast_hash": "d1db6920e3dca12d670713b68f36621a",
     "semantic_hash": ""
   },
   "nextjs-version/docs/acceptance/SEN-32-SEN-35.md": {
@@ -6785,8 +6785,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/pipeline/components/pipeline-workspace.tsx": {
-    "mtime": 1789354837.2281537,
-    "ast_hash": "17997606431fa292c269961f22b9c109",
+    "mtime": 1789355159.2992332,
+    "ast_hash": "cbf9df16ed462f963fbf8b4e23ae02fd",
     "semantic_hash": ""
   },
   "nextjs-version/src/app/(dashboard)/pipeline/page.tsx": {
@@ -7314,6 +7314,111 @@
     "ast_hash": "24ad2c4ff374306dfa2e56f9fa81f340",
     "semantic_hash": ""
   },
+  "nextjs-version/drizzle/0034_pipeline_calendar.sql": {
+    "mtime": 1789354140.856971,
+    "ast_hash": "00c4b6f806239a2c5495c2a6eddb2cb4",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/calendar/build.mjs": {
+    "mtime": 1789355120.3138373,
+    "ast_hash": "0b2629d24bf9047b1f911a1b91ef72b0",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/calendar/preview.mjs": {
+    "mtime": 1789355120.3139462,
+    "ast_hash": "1f6fbc268ffd4312adc0b6d4a7b4da81",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/calendar/worker.ts": {
+    "mtime": 1789355120.3140676,
+    "ast_hash": "a466581672163b63fa05906b1f220172",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/activities/[id]/resolve/route.ts": {
+    "mtime": 1789355120.3232274,
+    "ast_hash": "08282d9cc3637e2754b09ebc3cf695dc",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/activities/[id]/route.ts": {
+    "mtime": 1789355120.3233352,
+    "ast_hash": "d0d69f6a7f0ce42b59ccc4cef7eaf4b6",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/google/callback/route.ts": {
+    "mtime": 1789355120.3235276,
+    "ast_hash": "b9af8bc87d1cd3db85a2c6dd1cf4da06",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/google/connect/route.ts": {
+    "mtime": 1789355120.3236642,
+    "ast_hash": "8c1170ac480d82f13b69f5b73f374dc9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/google/route.ts": {
+    "mtime": 1789355120.3237572,
+    "ast_hash": "9c68b3c11e25ec6b9f204602eaaeb67a",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/google/webhook/route.ts": {
+    "mtime": 1789355120.3238766,
+    "ast_hash": "045718cd57542c02f38629661b9169a1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/calendar/route.ts": {
+    "mtime": 1789355120.3239644,
+    "ast_hash": "5c38425a7c8082082f737335078e1aa8",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/mca/calendar/calendar-workspace.tsx": {
+    "mtime": 1789355120.3246963,
+    "ast_hash": "73666b177c0a02345e445608dc5ffc73",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/calendar/contracts.ts": {
+    "mtime": 1789355120.324871,
+    "ast_hash": "99362cde85bb61424eeab49c63d9ef87",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/calendar/google.ts": {
+    "mtime": 1789355120.3249779,
+    "ast_hash": "c2a2029e6c74bcf957c6eb1dc2071cf3",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/calendar/service.ts": {
+    "mtime": 1789355120.3250952,
+    "ast_hash": "55a0d20372b76d502938171ab854f1c1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/calendar/sync.ts": {
+    "mtime": 1789355120.3252358,
+    "ast_hash": "8abee5ffba3fa4c9915bddc2724dd035",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/hosted-config.ts": {
+    "mtime": 1789354723.2372334,
+    "ast_hash": "5c865d1664b07a748b4c4d27dabe8112",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/calendar.test.ts": {
+    "mtime": 1789355120.331668,
+    "ast_hash": "b6e136a129df1e5ef164dbc125d72541",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/hosted-config.test.ts": {
+    "mtime": 1789354723.3117619,
+    "ast_hash": "282ab9d9f79124d3f6a883be9b2c8107",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/pipeline-calendar.md": {
+    "mtime": 1789355120.3100827,
+    "ast_hash": "735fd8b089320790e547aaa20f4200e1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/supabase-vercel-migration.md": {
+    "mtime": 1789354722.8187668,
+    "ast_hash": "7eac4831a2c7bd20045ed8c99d539053",
+    "semantic_hash": ""
+  },
   "nextjs-version/src/lib/mca/historical/preview-client.ts": {
     "mtime": 1789354723.2334077,
     "ast_hash": "e700b1675239acd3a220ac3ba910c06d",
@@ -7324,11 +7429,6 @@
     "ast_hash": "f00fee7ca627880bd1c266d47ef7a5f0",
     "semantic_hash": ""
   },
-  "nextjs-version/src/lib/mca/hosted-config.ts": {
-    "mtime": 1789354723.2372334,
-    "ast_hash": "5c865d1664b07a748b4c4d27dabe8112",
-    "semantic_hash": ""
-  },
   "nextjs-version/tests/historical-preview.test.ts": {
     "mtime": 1789354723.311254,
     "ast_hash": "62621448bf7bbdd01c1f62fa41b0e1a3",
@@ -7337,16 +7437,6 @@
   "nextjs-version/tests/historical-upload.test.ts": {
     "mtime": 1789354723.3113813,
     "ast_hash": "eb34856619ba8c2e5273bc577f6b1d47",
-    "semantic_hash": ""
-  },
-  "nextjs-version/tests/hosted-config.test.ts": {
-    "mtime": 1789354723.3117619,
-    "ast_hash": "282ab9d9f79124d3f6a883be9b2c8107",
-    "semantic_hash": ""
-  },
-  "nextjs-version/docs/supabase-vercel-migration.md": {
-    "mtime": 1789354722.8187668,
-    "ast_hash": "7eac4831a2c7bd20045ed8c99d539053",
     "semantic_hash": ""
   },
   "nextjs-version/drizzle/0033_application_intake.sql": {
@@ -7407,11 +7497,6 @@
   "nextjs-version/docs/application-intake.md": {
     "mtime": 1789354722.760049,
     "ast_hash": "67b862d7fc6b0bc2a85327798c3c2f93",
-    "semantic_hash": ""
-  },
-  "nextjs-version/drizzle/0034_pipeline_calendar.sql": {
-    "mtime": 1789354140.856971,
-    "ast_hash": "00c4b6f806239a2c5495c2a6eddb2cb4",
     "semantic_hash": ""
   },
   "nextjs-version/drizzle/0035_application_outreach.sql": {
