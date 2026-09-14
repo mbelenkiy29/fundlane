@@ -1,3 +1,4 @@
+import { logApiFailure } from "./operations/telemetry";
 import { NextResponse } from "next/server";
 import type { ApiErrorBody } from "./types";
 
@@ -18,6 +19,7 @@ export function apiError(error: unknown, correlationId?: string): NextResponse<A
   const known = error instanceof AppError;
   const extra = known && error.extra ? error.extra : undefined;
   const status = known ? error.status : 500;
+  if (status >= 500) logApiFailure(correlationId);
   const body: ApiErrorBody = {
     error: {
       code: known ? error.code : "internal_error",

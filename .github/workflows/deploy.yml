@@ -39,6 +39,12 @@ jobs:
           cache: pnpm
           cache-dependency-path: nextjs-version/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: node scripts/operations/build-monitor.mjs
+      - run: git diff --exit-code -- supabase/functions/platform-monitor/index.js
+      - run: deno check --node-modules-dir=none --unstable-sloppy-imports scripts/operations/edge-entry.ts
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test

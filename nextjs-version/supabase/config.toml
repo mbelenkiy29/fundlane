@@ -1,0 +1,3 @@
+[functions.platform-monitor]
+verify_jwt = false
+entrypoint = "./functions/platform-monitor/index.js"
