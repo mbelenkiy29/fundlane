@@ -198,7 +198,7 @@ export async function previewCsvUpdate(actor: DealActor, input:{sourceId:string;
   requireAdmin(actor)
   await sourceAndBatch(actor,input.sourceId,input.batchId)
   const parsed=parseSpreadsheet({filename:input.filename,bytes:input.bytes})
-  if(parsed.format!=="csv"&&parsed.format!=="tsv")throw new AppError(422,"update_format","Bulk updates accept CSV or TSV files.")
+  if(parsed.format!=="csv")throw new AppError(422,"update_format","Bulk updates accept CSV files.")
   const mapping=input.mapping??Object.fromEntries(parsed.headers.filter((header)=>updateFields.has(header)||["dealId","expectedVersion","clearFields"].includes(header)).map((header)=>[header,header]))
   for(const target of Object.values(mapping)){if(forbiddenUpdateTerms.test(target))throw new AppError(422,"update_field_forbidden",`The ${target} field cannot be changed by bulk update.`);if(!updateFields.has(target)&&!["dealId","expectedVersion","clearFields"].includes(target))throw new AppError(422,"update_field_forbidden",`The ${target} column is not allowed in bulk update.`)}
   const rows:UpdateRowPreview[]=await Promise.all(parsed.rows.map(async (values,index)=>{

@@ -106,7 +106,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
         <form onSubmit={previewHistory} className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5"><Label htmlFor="historical-source">Source ID</Label><Input id="historical-source" value={sourceId} disabled={busy} onChange={(event) => { invalidatePreview(); setSourceId(event.target.value) }} required /></div>
           <div className="space-y-1.5"><Label htmlFor="historical-batch">Batch ID</Label><Input id="historical-batch" value={batchId} disabled={busy} onChange={(event) => { invalidatePreview(); setBatchId(event.target.value) }} required /></div>
-          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="historical-file">CSV, TSV, XLSX, or XLS</Label><Input id="historical-file" type="file" accept=".csv,.tsv,.xlsx,.xls" disabled={busy} onChange={(event) => { invalidatePreview(); setFile(event.target.files?.[0]) }} required /></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="historical-file">CSV file</Label><Input id="historical-file" type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => { invalidatePreview(); setFile(event.target.files?.[0]) }} required /></div>
           <Button disabled={busy} className="sm:col-span-2">{phase !== "idle" ? <Loader2 className="animate-spin" /> : <Upload />}Preview history</Button>
         </form>
         {phase !== "idle" && <p role="status" className="text-sm text-muted-foreground">{phase === "uploading" ? `Uploading… ${progress}%` : "Preparing preview…"}</p>}

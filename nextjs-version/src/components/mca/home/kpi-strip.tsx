@@ -35,7 +35,7 @@ export function KpiStrip({
           <ToggleGroupItem value="ytd">{HOME_KPI_COPY.ytd}</ToggleGroupItem>
         </ToggleGroup>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {loading && !kpis ? Array.from({ length: 6 }, (_, index) => (
           <Card key={index} className="gap-3 py-4">
             <CardHeader className="px-4">
@@ -51,7 +51,7 @@ export function KpiStrip({
           <Card key={card.key} className="gap-3 py-4" data-testid={`mca-home-kpi-${card.key}`}>
             <CardHeader className="px-4">
               <CardDescription>{card.title}</CardDescription>
-              <CardTitle className="text-xl font-semibold tabular-nums">{card.value}</CardTitle>
+              <CardTitle className="text-lg font-semibold tabular-nums sm:text-xl">{card.value}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 px-4 text-sm text-muted-foreground">
               <p>{card.detail}</p>

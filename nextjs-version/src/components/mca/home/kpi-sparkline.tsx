@@ -18,7 +18,6 @@ export function KpiSparkline({
   label: string
 }) {
   if (hidden || points.length < 2) return null
-  if (!points.some((point) => point.v !== 0)) return null
   const gradientId = `kpi-spark-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`
 
   return (
@@ -35,7 +34,7 @@ export function KpiSparkline({
           dataKey="v"
           stroke="var(--color-v)"
           fill={`url(#${gradientId})`}
-          strokeWidth={1.5}
+          strokeWidth={2}
           isAnimationActive={false}
         />
       </AreaChart>
