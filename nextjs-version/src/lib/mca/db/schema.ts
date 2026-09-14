@@ -1463,6 +1463,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 ]);
 
 export const mca_submission_attempts = pgTable("mca_submission_attempts", {
+	sent_at: text(),
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	job_id: text().notNull(),
@@ -1675,3 +1676,30 @@ export const mcaAssistantExecutions = pgTable("mca_assistant_executions", {
   id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), tool_name: text().notNull(), status: text().notNull(),
   result_cipher: text(), created_at: text().notNull(), completed_at: text(),
 }, t => [index("assistant_run_executions").on(t.run_id)]);
+
+export const mcaCalendarActivities = pgTable("mca_calendar_activities", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(()=>workspaces.id), deal_id: text().notNull().references(()=>deals.id),
+  assignee_id: text().notNull().references(()=>memberships.id), kind: text().notNull(), title: text().notNull(),
+  starts_at: text().notNull(), ends_at: text().notNull(), all_day: integer().default(0).notNull(), timezone: text().notNull(),
+  notes_cipher: text(), status: text().default("scheduled").notNull(), version: integer().default(1).notNull(),
+  created_by: text().notNull(), created_at: text().notNull(), updated_at: text().notNull(),
+},t=>[index("mca_calendar_activities_range_idx").on(t.workspace_id,t.starts_at,t.ends_at),index("mca_calendar_activities_assignee_idx").on(t.workspace_id,t.assignee_id),
+  check("mca_calendar_activities_kind_check",sql`${t.kind} IN ('call','followup','submission_task')`),check("mca_calendar_activities_status_check",sql`${t.status} IN ('scheduled','completed','cancelled')`),check("mca_calendar_activities_all_day_check",sql`${t.all_day} IN (0,1)`),check("mca_calendar_activities_check",sql`${t.ends_at}>${t.starts_at}`)]).enableRLS();
+export const mcaCalendarConnections = pgTable("mca_calendar_connections", {
+  id:text().primaryKey(),workspace_id:text().notNull().references(()=>workspaces.id),user_id:text().notNull().references(()=>users.id),
+  membership_id:text().notNull().references(()=>memberships.id),email:text().notNull(),credential_cipher:text().notNull(),calendar_id:text(),
+  status:text().default("pending").notNull(),last_sync_at:text(),next_sync_at:text().notNull(),failures:integer().default(0).notNull(),error:text(),created_at:text().notNull(),
+},t=>[unique("mca_calendar_connections_workspace_id_user_id_key").on(t.workspace_id,t.user_id),index("mca_calendar_connections_due_idx").on(t.next_sync_at)]).enableRLS();
+export const mcaCalendarOAuthStates = pgTable("mca_calendar_oauth_states", {
+  state_hash:text().primaryKey(),workspace_id:text().notNull(),user_id:text().notNull(),membership_id:text().notNull(),verifier_cipher:text().notNull(),expires_at:text().notNull(),
+}).enableRLS();
+export const mcaCalendarSources = pgTable("mca_calendar_sources", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),calendar_id:text().notNull(),name:text().notNull(),selected:integer().default(0).notNull(),sync_token:text(),
+  channel_id:text(),channel_token_hash:text(),resource_id:text(),channel_expires_at:text(),
+},t=>[primaryKey({columns:[t.connection_id,t.calendar_id]}),uniqueIndex("mca_calendar_sources_channel_idx").on(t.channel_id).where(sql`${t.channel_id} IS NOT NULL`)]).enableRLS();
+export const mcaCalendarExternalEvents = pgTable("mca_calendar_external_events", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),calendar_id:text().notNull(),event_id:text().notNull(),event_cipher:text().notNull(),
+},t=>[primaryKey({columns:[t.connection_id,t.calendar_id,t.event_id]})]).enableRLS();
+export const mcaCalendarEventLinks = pgTable("mca_calendar_event_links", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),activity_id:text().notNull().references(()=>mcaCalendarActivities.id),event_id:text().notNull(),etag:text(),local_version:integer().default(0).notNull(),baseline_json:text(),conflict_json:text(),resolution:text(),
+},t=>[primaryKey({columns:[t.connection_id,t.activity_id]}),unique("mca_calendar_event_links_connection_id_event_id_key").on(t.connection_id,t.event_id),check("mca_calendar_event_links_resolution_check",sql`${t.resolution} IN ('local','google')`)]).enableRLS();
