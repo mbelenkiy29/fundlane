@@ -1,4 +1,5 @@
 import "server-only"
+import { CloudmersiveScanner } from "./cloudmersive"
 
 import { spawn } from "node:child_process"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -64,7 +65,7 @@ export class ClamAvScanner implements DocumentScanner {
 class UnavailableScanner implements DocumentScanner {
   readonly name = "unconfigured"
   async scan(): Promise<ScanResult> {
-    return { status: "unavailable", provider: this.name, evidence: { reason: "Configure MCA_DOCUMENT_SCANNER=clamdscan or clamscan." } }
+    return { status: "unavailable", provider: this.name, evidence: { reason: "Configure MCA_DOCUMENT_SCANNER=cloudmersive and its API key." } }
   }
 }
 
@@ -77,6 +78,7 @@ export function setDocumentScannerForTests(scanner?: DocumentScanner): void {
 export function documentScanner(): DocumentScanner {
   if (scannerOverride) return scannerOverride
   const mode = process.env.MCA_DOCUMENT_SCANNER
+  if (mode === "cloudmersive") return new CloudmersiveScanner()
   if (mode === "clamdscan" || mode === "clamscan") {
     return new ClamAvScanner(mode, process.env.MCA_DOCUMENT_SCANNER_COMMAND ?? mode)
   }
