@@ -1,6 +1,6 @@
 # Fundlane marketing site
 
-The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped dark violet palette without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice.
+The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice.
 
 ## Enable demo requests
 
@@ -92,7 +92,7 @@ Render stores `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETI
 
 The supplied Luro AI template guides the centered hero, violet glow, framed product preview, rounded feature grid, and dark surfaces. Fundlane retains its logo and Manrope heading font. The template’s authentication, database, paid plans, customer logos, testimonials, and social-media content were not imported. Reused design attribution is in `licenses/luro-ai-MIT.txt` (Shreyas Sihasane, 2024).
 
-`src/components/marketing/catalog.ts` is the shared typed feature catalog. The six homepage cards link to stable anchors on `/features`; all eleven categories have benefit copy, capabilities, and either an actual synthetic capture or a labeled illustrative workflow. `FeatureVisual` renders these as ordinary server-rendered figures and definition lists, not live controls or fabricated assistant outputs. Images are lazy below the hero, have full-size links, and carry descriptive alt text. Native radio controls, anchor navigation, and FAQ details remain usable without JavaScript. The public routes do not mount PWA controls or change the application’s saved theme.
+`src/components/marketing/catalog.ts` is the shared typed feature catalog. All eleven homepage cards link to stable anchors on `/features`; all eleven categories have benefit copy, capabilities, and either an actual synthetic capture or a labeled illustrative workflow. `FeatureVisual` renders these as ordinary server-rendered figures and definition lists, not live controls or fabricated assistant outputs. Images are lazy below the hero, have full-size links, and carry descriptive alt text. Native radio controls, anchor navigation, and FAQ details remain usable without JavaScript. The public routes do not mount PWA controls or change the application’s saved theme.
 
 ### Copy evidence and availability
 
@@ -119,3 +119,30 @@ Production integration readiness is separate from code presence; current Linear 
 PR validation against the latest main passes typecheck, production build, full-repository lint (existing warnings only), and all seven marketing demo API tests.
 
 Browser verification covers desktop (1440px), tablet (768px), mobile (390px), feature anchors, all five workflow stages via keyboard, mobile navigation, FAQ keyboard expansion, and demo unavailable/validation/failure/retry/success states. Form success/failure checks use a temporary local fixture and mock receiver; no live sales request is sent. Homepage workflow/FAQ and feature navigation were also exercised with a `script-src 'none'` response policy. The temporary fixture and proxy are not shipped. The signed-in dashboard retains its existing light theme after visiting dark marketing pages.
+
+
+## Dark marketing redesign (September 14, 2026)
+
+The homepage uses a full-height architectural hero, square white “Book a demo” links, an illustrative selectable deal-activity table, all eleven feature categories, and a four-cell product-count grid. The first three feature cards illustrate document review, funder criteria, and offer revisions. Existing five-stage workflow controls and FAQ remain native HTML. Features, Demo, and the published Privacy page share the same black palette, borders, and typography. Demo links still open the request form; there is no calendar booking integration.
+
+Marketing fonts are self-hosted in `public/fonts/marketing/`: Inter Display Medium, Geist Regular, and Geist Mono Regular, with their SIL licenses. Inter body typography continues to use the app's existing font. Marketing font variables and styles live on `.fundlane`; dashboard theme state is untouched. Status pills have 100px corners; buttons have zero-radius corners. Blue is `#52a8ff`, positive green is `#62c073`, and other surfaces/text use the specified neutrals.
+
+`ActivityStream` contains synthetic records and illustrative minute-based timings, not measured processing performance or a live deal feed. Selecting a record changes the status and timeline; selecting a step highlights its bar. The table scrolls horizontally within its own region on small screens. Metrics describe product structure (11 categories, 5 stages, 3 submission modes, 1 workspace), not customer outcomes. Provider and permission qualifications remain in the feature cards.
+
+`MobileNav` progressively enhances native details with Escape handling, keyboard focus wrap/restoration, scroll locking, and desktop-resize cleanup. Without JavaScript, the full-screen menu still opens and its ordinary links navigate; workflow radio controls and FAQ details remain usable. Demo requests continue to require JavaScript and retain the existing API contract.
+
+### Hero asset provenance
+
+`public/marketing/architecture-hero.png` was generated with the built-in image-generation tool. Final prompt:
+
+> Use case: ads-marketing. Asset type: full-bleed website hero background for Fundlane, an MCA brokerage workspace. Create a sophisticated photoreal architectural abstraction: monumental brushed black metal and charcoal concrete fins forming a precise ascending corridor, dramatic oblique perspective, refined financial-district architecture, deep black shadows, fine metallic edges. Wide landscape composition, architecture concentrated in upper and right portions, lower left quiet and dark for white headline overlay. Monochrome black/gray/white with restrained blue #52a8ff light on a few edges. Premium editorial architectural photograph, crisp material detail, no people, no text, no logos, no watermark. 16:9 landscape.
+
+The decorative image uses Next Image with preload, cover sizing, the specified bottom scrim, and a supplemental top gradient for header contrast. Product captures retain their synthetic-data captions.
+
+### Verification for this redesign
+
+Targeted marketing ESLint, typecheck, production build, and all seven marketing demo API tests pass. Browser checks cover 1440px desktop, 768px tablet, and 390px mobile: eleven cards, feature anchor navigation, contained table overflow, deal selection and step highlighting, square CTAs, pill status indicators, and menu focus wrap/Escape/scroll restoration. An isolated local bundle of the existing DemoForm verified field validation, delivery failure, retained values, successful retry, and reuse of the same request ID. No request reached a sales receiver. A local proxy with `script-src 'none'` verified the native mobile menu, workflow selection, and FAQ expansion.
+
+Final production-preview checks also verified the published Privacy page with its existing public URL gate, all five workflow stages by keyboard, and 720×450 CSS-pixel reflow (equivalent to 200% zoom on 1440×900). The hero grows beyond the viewport height and the page remains horizontally contained. Dashboard isolation was reviewed through marketing-only font/style scoping and absence of theme-state writes; no authenticated dashboard session was used for this redesign.
+
+Merge validation on a clean branch from main (September 15, 2026): typecheck, production build, all seven marketing demo API tests, and full-repository lint pass (16 existing warnings, zero errors). Refreshed the graph and HTML from this isolated checkout.
