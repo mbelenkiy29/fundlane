@@ -72,3 +72,32 @@ test("book list sorts by funded date and records receipts as completed payments"
   assert.equal(book.dashboard.completed.amountCents, 100_000)
   assert.ok(book.dashboard.missed.count >= 1)
 })
+
+test("large repayment schedules use bounded batches and preserve every installment on retry", async () => {
+  const db = getDatabase()
+  await db.prepare("DELETE FROM mca_servicing_alerts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_receipts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_installments WHERE advance_id=?").run(ids.advance)
+  let inserts = 0
+  const counted = new Proxy(db, {
+    get(target, property) {
+      if (property === "prepare") return (sql: string) => {
+        if (sql.includes("INSERT INTO mca_merchant_installments")) inserts += 1
+        return target.prepare(sql)
+      }
+      return Reflect.get(target, property)
+    },
+  })
+  const input = { workspaceId: ids.workspace, advanceId: ids.advance, fundedAt: "2030-01-01", paymentCount: 1086,
+    paymentFrequency: "daily", calendarConvention: "business_days", periodicPaymentCents: 100, paybackCents: 108550, createdAt: now }
+  const { generateExpectedInstallments } = await import("../src/lib/mca/advances/performance")
+  assert.equal(await persistInstallments(counted, input), 1086)
+  assert.equal(inserts, 5)
+  const rows = await db.prepare<{ sequence: number; occurrenceDate: string; amountCents: number }>(`SELECT sequence,
+    occurrence_date AS "occurrenceDate", amount_cents AS "amountCents" FROM mca_merchant_installments
+    WHERE advance_id=? AND occurrence_date > '2030-01-01' ORDER BY sequence`).all(ids.advance)
+  assert.deepEqual(rows, generateExpectedInstallments(input))
+  assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 108550)
+  assert.equal(await persistInstallments(counted, input), 0)
+  assert.equal(inserts, 10)
+})

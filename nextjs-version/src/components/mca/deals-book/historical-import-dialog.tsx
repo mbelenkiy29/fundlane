@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { uploadMultipart } from "@/components/mca/documents/upload"
 import { historicalResultMessage, historicalRowMessage, parseHistoricalPreview } from "@/lib/mca/historical/preview-client"
-import { requestJson } from "@/lib/mca/client"
+import { commitHistoricalPreview } from "@/lib/mca/historical/commit-client"
 import type { HistoricalImportPreview, HistoricalImportResult } from "@/lib/mca/historical/contracts"
 
 const EXAMPLE = "external_id,legal_name,funder_name,funded_at,amount_cents,factor_rate,term_months,payment_amount_cents,payment_count,payment_frequency,calendar_convention,commission_cents,paid_commission_cents,paid_commission_at,fee_cents,expected_commission_at,expected_fee_at\nlegacy-001,Example Merchant,Example Funder,2025-03-14,10000000,1.35,8,56250,180,daily,business_days,1000000,500000,2025-03-21,25000,2025-03-21,2025-03-28"
@@ -91,10 +91,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
     const current = generation.current
     setCommitting(true); setError("")
     try {
-      const next = await requestJson<HistoricalImportResult>(`/api/mca/historical/${encodeURIComponent(preview.runId)}/commit`, {
-        method: "POST",
-        body: JSON.stringify({ expectedPreviewRevision: preview.previewRevision }),
-      })
+      const next = await commitHistoricalPreview(preview)
       if (current === generation.current) setResult(next)
       if (next.failed || next.invalid) toast.warning(historicalResultMessage(next))
       else if (next.created) toast.success(historicalResultMessage(next))
@@ -130,7 +127,8 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
           {preview.rows.filter((row) => row.errors.length || row.duplicate).map((row) => (
             <p key={row.rowNumber} className={row.errors.length ? "text-destructive" : "text-amber-700"}>Row {row.rowNumber}: {historicalRowMessage(row)}</p>
           ))}
-          <Button onClick={() => void commit()} disabled={busy || preview.totals.valid === 0 || preview.state === "committed" || result?.state === "committed"}>Commit historical records</Button>
+          <Button onClick={() => void commit()} disabled={busy || preview.totals.valid === 0 || preview.state === "committed" || result?.state === "committed"} aria-busy={committing}>{committing ? <><Loader2 className="animate-spin" />Importing…</> : "Commit historical records"}</Button>
+          {committing && <p role="status" className="text-sm text-muted-foreground">Creating funded records and repayment schedules. Please keep this preview open.</p>}
         </div>}
         {preview?.state === "committed" && <p role="status" className="text-sm">This batch has already been imported.</p>}
         {result && <p role="status" className="text-sm">{historicalResultMessage(result)}</p>}
