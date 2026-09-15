@@ -27,6 +27,7 @@ export interface HistoricalFundingRowInput {
 
 export interface HistoricalRowPreview extends HistoricalFundingRowInput {
   rowNumber: number
+  duplicateReason?: "already_imported" | "repeated_in_file"
   duplicate: boolean
   errors: string[]
 }

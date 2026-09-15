@@ -5,7 +5,7 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
 import { postgresConnection } from "../src/lib/mca/db-connection"
-import { previewHistoricalImport } from "../src/lib/mca/historical/service"
+import { getHistoricalImport, previewHistoricalImport } from "../src/lib/mca/historical/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -36,7 +36,7 @@ test("duplicates stay scoped by workspace and source; missing deal IDs are row e
   assert.equal(preview.totals.invalid, 2)
   assert.match(preview.rows[2].errors.join(" "), /not accessible/)
   const duplicate = await previewHistoricalImport(actor, { ...input, batchId: "second", rows: [row("same")] })
-  assert.equal(duplicate.totals.duplicates, 1)
+  assert.equal(duplicate.totals.duplicates, 0)
   const otherSource = await previewHistoricalImport(actor, { ...input, sourceId: "other-source", rows: [row("same")] })
   assert.equal(otherSource.totals.valid, 1)
   const otherLogin = await auth.login("historical-other@example.test", "Synthetic Preview Password 99!")
@@ -46,15 +46,15 @@ test("duplicates stay scoped by workspace and source; missing deal IDs are row e
   assert.equal((await previewHistoricalImport(otherActor, { ...input, rows: [row("same")] })).totals.valid, 1)
 })
 
-test("concurrent previews reserve each external ID once and same-batch retries share one run", async () => {
-  const input = { sourceId: "concurrent", batchId: "same", rows: Array.from({ length: 501 }, (_, i) => row(`bulk-${i}`)) }
+test("concurrent previews are independent and request retries share one run", async () => {
+  const input = { sourceId: "concurrent", batchId: "same", requestId: "retry-501", rows: Array.from({ length: 501 }, (_, i) => row(`bulk-${i}`)) }
   const [first, replay] = await Promise.all([previewHistoricalImport(actor, input), previewHistoricalImport(actor, input)])
   assert.equal(first.runId, replay.runId)
   assert.equal(first.totals.valid, 501)
   assert.equal(replay.rows.length, 501)
   const [a, b] = await Promise.all(["a", "b"].map((batchId) => previewHistoricalImport(actor, { sourceId: "competing", batchId, rows: [row("competing")] })))
-  assert.equal(a.totals.valid + b.totals.valid, 1)
-  assert.equal(a.totals.duplicates + b.totals.duplicates, 1)
+  assert.equal(a.totals.valid + b.totals.valid, 2)
+  assert.equal(a.totals.duplicates + b.totals.duplicates, 0)
 })
 
 test("a lock timeout rolls back staged run and rows; the same batch can safely retry", { timeout: 20_000 }, async () => {
@@ -62,7 +62,7 @@ test("a lock timeout rolls back staged run and rows; the same batch can safely r
   await blocker.connect()
   await blocker.query("BEGIN")
   await blocker.query("LOCK TABLE mca_historical_import_rows IN SHARE MODE")
-  const input = { sourceId: "locked", batchId: "retry", rows: [row("locked-row")] }
+  const input = { sourceId: "locked", batchId: "retry", requestId: "lock-retry", rows: [row("locked-row")] }
   try {
     await assert.rejects(previewHistoricalImport(actor, input), (error: unknown) => {
       assert.equal((error as { status: number }).status, 503)
@@ -75,4 +75,35 @@ test("a lock timeout rolls back staged run and rows; the same batch can safely r
   assert.equal(recovered.totals.valid, 1)
   assert.equal((await previewHistoricalImport(actor, input)).runId, recovered.runId)
   assert.equal(Number((await queryRow<{ count: string }>("SELECT count(*) FROM mca_historical_import_rows WHERE source_id='locked'")).count), 1)
+})
+
+test("abandoned 25-row previews never block same-batch or next-day uploads", async () => {
+  const input = { sourceId: "ben-regression", batchId: "2026-09-14", rows: Array.from({ length: 25 }, (_, i) => row(`sample-${i}`)) }
+  const first = await previewHistoricalImport(actor, input)
+  const second = await previewHistoricalImport(actor, input)
+  const third = await previewHistoricalImport(actor, { ...input, batchId: "2026-09-15" })
+  assert.equal(new Set([first.runId, second.runId, third.runId]).size, 3)
+  for (const preview of [first, second, third]) {
+    assert.equal(preview.totals.valid, 25)
+    assert.equal(preview.totals.duplicates, 0)
+  }
+})
+
+test("preview reload retains duplicate and invalid rows; corrected input is freshly validated", async () => {
+  const input = { sourceId: "corrected", batchId: "same", rows: [row("one"), row("one"), { ...row("two"), amountCents: -1 }] }
+  const preview = await previewHistoricalImport(actor, input)
+  const saved = await getHistoricalImport(actor, preview.runId)
+  assert.deepEqual(saved.rows, JSON.parse(JSON.stringify(preview.rows)))
+  assert.deepEqual(saved.totals, preview.totals)
+  assert.equal(saved.rows[1].duplicateReason, "repeated_in_file")
+  const corrected = await previewHistoricalImport(actor, { ...input, rows: [row("two")] })
+  assert.equal(corrected.totals.valid, 1)
+})
+
+test("request identities reject changed input and ignore object key order", async () => {
+  const input = { sourceId: "request-identity", batchId: "same", requestId: "fixed", rows: [row("one")] }
+  const first = await previewHistoricalImport(actor, input)
+  const reordered = { ...input, rows: [Object.fromEntries(Object.entries(input.rows[0]).reverse()) as ReturnType<typeof row>] }
+  assert.equal((await previewHistoricalImport(actor, reordered)).runId, first.runId)
+  await assert.rejects(() => previewHistoricalImport(actor, { ...input, rows: [row("two")] }), (error: unknown) => (error as { code: string }).code === "historical_request_conflict")
 })

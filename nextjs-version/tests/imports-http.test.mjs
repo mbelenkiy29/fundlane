@@ -204,7 +204,7 @@ test("import routes enforce sessions and support reviewed create/update replay w
 test("historical CSV preview accepts small files and retries without creating business records", async () => {
   const path = "/api/mca/historical/preview"
   const login = await supabaseFixture.login("historical-http@example.test", "Synthetic Preview Password 99!")
-  const preview = async (batchId, size, cookie = login.cookie) => multipart(path, cookie, { sourceId: "historical-http", batchId }, [{
+  const preview = async (batchId, size, cookie = login.cookie) => multipart(path, cookie, { sourceId: "historical-http", batchId, requestId: `retry-${batchId}` }, [{
     field: "file", name: "synthetic.csv", type: "text/csv",
     bytes: Buffer.from("external_id,legal_name,funder_name,funded_at,amount_cents\n" + Array.from({ length: size }, (_, i) => `${batchId}-${i},Synthetic Merchant,Synthetic Funder,2025-01-01,10000`).join("\n")),
   }])
@@ -231,4 +231,37 @@ test("historical CSV preview accepts small files and retries without creating bu
   await testDatabase.query("UPDATE memberships SET role='rep' WHERE id=$1", [member.id])
   try { assert.equal((await preview("rep-denied", 1)).response.status, 403) }
   finally { await testDatabase.query("UPDATE memberships SET role='admin' WHERE id=$1", [member.id]) }
+})
+
+test("historical CSV previews are fresh and transport retries preserve the run", async () => {
+  const login = await supabaseFixture.login("historical-http@example.test", "Synthetic History Password 99!")
+  const headers = { ...await supabaseFixture.headers(login.cookie), origin: baseUrl, "content-type": "application/json" }
+  const input = { sourceId: "history-http", batchId: "same", requestId: "http-retry", rows: Array.from({ length: 25 }, (_, i) => ({ externalId: `sample-${i}`, legalName: "Synthetic Merchant", funderName: "Synthetic Funder", fundedAt: "2025-01-01", amountCents: 10000 })) }
+  const post = (body, auth = true) => fetch(`${baseUrl}/api/mca/historical/preview`, { method: "POST", headers: auth ? headers : { origin: baseUrl, "content-type": "application/json" }, body: JSON.stringify(body) })
+  const form = new FormData()
+  form.set("sourceId", input.sourceId); form.set("batchId", input.batchId); form.set("requestId", "multipart-preview")
+  const csv = "external_id,legal_name,funder_name,funded_at,amount_cents\n" + input.rows.map((r) => `${r.externalId},${r.legalName},${r.funderName},${r.fundedAt},${r.amountCents}`).join("\n")
+  form.set("file", new File([csv], "historical-funding-sample-25.csv", { type: "text/csv" }))
+  const uploaded = await fetch(`${baseUrl}/api/mca/historical/preview`, { method: "POST", headers: { ...await supabaseFixture.headers(login.cookie), origin: baseUrl }, body: form })
+  assert.equal(uploaded.status, 201)
+  assert.equal((await uploaded.json()).totals.valid, 25)
+  assert.equal((await post({ ...input, requestId: "" })).status, 422)
+  const first = await post(input)
+  const saved = await first.json()
+  assert.equal(first.status, 201, JSON.stringify(saved))
+  assert.equal((await (await post(input)).json()).runId, saved.runId)
+  assert.equal((await post({ ...input, rows: [] })).status, 422)
+  assert.equal((await post({ ...input, rows: input.rows.slice(0, 1) })).status, 409)
+  assert.equal((await post(input, false)).status, 401)
+  const fresh = await (await post({ ...input, requestId: undefined })).json()
+  assert.notEqual(fresh.runId, saved.runId)
+  assert.equal(fresh.totals.valid, 25)
+  assert.equal(fresh.totals.duplicates, 0)
+  const commit = await fetch(`${baseUrl}/api/mca/historical/${fresh.runId}/commit`, { method: "POST", headers, body: JSON.stringify({ expectedPreviewRevision: 1 }) })
+  const result = await commit.json()
+  assert.equal(commit.status, 200, JSON.stringify(result))
+  assert.equal(result.created, 25)
+  const imported = await (await post({ ...input, requestId: undefined })).json()
+  assert.equal(imported.totals.duplicates, 25)
+  assert.ok(imported.rows.every((row) => row.duplicateReason === "already_imported"))
 })

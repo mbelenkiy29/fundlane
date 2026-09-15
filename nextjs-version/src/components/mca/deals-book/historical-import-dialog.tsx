@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { uploadMultipart } from "@/components/mca/documents/upload"
-import { parseHistoricalPreview } from "@/lib/mca/historical/preview-client"
+import { historicalResultMessage, historicalRowMessage, parseHistoricalPreview } from "@/lib/mca/historical/preview-client"
 import { requestJson } from "@/lib/mca/client"
 import type { HistoricalImportPreview, HistoricalImportResult } from "@/lib/mca/historical/contracts"
 
@@ -29,6 +29,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
   const [phase, setPhase] = React.useState<"idle" | "uploading" | "preparing">("idle")
   const [progress, setProgress] = React.useState(0)
   const [committing, setCommitting] = React.useState(false)
+  const retryRef = React.useRef<{ file: File; sourceId: string; batchId: string; requestId: string } | null>(null)
   const requestRef = React.useRef<AbortController | null>(null)
   const generation = React.useRef(0)
   const busy = phase !== "idle" || committing
@@ -36,6 +37,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
 
   const invalidatePreview = React.useCallback(() => {
     generation.current += 1
+    retryRef.current = null
     requestRef.current?.abort()
     requestRef.current = null
     setPhase("idle")
@@ -49,19 +51,25 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
   }, [open, invalidatePreview])
   React.useEffect(() => () => {
     generation.current += 1
+    retryRef.current = null
     requestRef.current?.abort()
   }, [])
 
   async function previewHistory(event: React.FormEvent) {
     event.preventDefault()
     if (!file || busy) return
+    const previous = retryRef.current
+    const attempt = previous?.file === file && previous.sourceId === sourceId && previous.batchId === batchId
+      ? previous : { file, sourceId, batchId, requestId: crypto.randomUUID() }
     invalidatePreview()
+    retryRef.current = attempt
     const controller = new AbortController()
     requestRef.current = controller
     const current = generation.current
     setPhase("uploading"); setProgress(0)
     try {
       const form = new FormData()
+      form.set("requestId", attempt.requestId)
       form.set("sourceId", sourceId)
       form.set("batchId", batchId)
       form.set("file", file)
@@ -70,7 +78,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
         setProgress(percent)
         if (percent >= 100) setPhase("preparing")
       }, { timeoutMs: 60_000, signal: controller.signal })
-      if (current === generation.current) setPreview(parseHistoricalPreview(payload))
+      if (current === generation.current) { setPreview(parseHistoricalPreview(payload)); retryRef.current = null }
     } catch (caught) {
       if (current === generation.current) setError(caught instanceof Error ? caught.message : "Historical preview failed.")
     } finally {
@@ -88,7 +96,9 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
         body: JSON.stringify({ expectedPreviewRevision: preview.previewRevision }),
       })
       if (current === generation.current) setResult(next)
-      toast.success("Historical funding imported and reconciled by its actual dates.")
+      if (next.failed || next.invalid) toast.warning(historicalResultMessage(next))
+      else if (next.created) toast.success(historicalResultMessage(next))
+      else toast.info(historicalResultMessage(next))
       onImported()
     } catch (caught) {
       if (current === generation.current) setError(caught instanceof Error ? caught.message : "Historical commit failed.")
@@ -100,7 +110,7 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Upload funded deals CSV</DialogTitle>
-          <DialogDescription>Import existing advances with integer-cent fields. Preview totals and duplicates, then commit. Nothing is sent to funders.</DialogDescription>
+          <DialogDescription>Import existing advances with integer-cent fields. Previewing creates no funded deals. You can upload again before committing. Nothing is sent to funders.</DialogDescription>
         </DialogHeader>
         <a className="text-sm underline" download="historical-funding-example.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(EXAMPLE)}`}>Download example CSV</a>
         <form onSubmit={previewHistory} className="grid gap-3 sm:grid-cols-2">
@@ -118,12 +128,12 @@ export function HistoricalImportDialog({ open, onOpenChange, onImported }: {
           <p>{preview.totals.rows} rows · {preview.totals.valid} valid · {preview.totals.duplicates} duplicates · {preview.totals.invalid} invalid</p>
           <p>Principal {money.format(preview.totals.principalCents / 100)} · expected commission {money.format(preview.totals.expectedCommissionCents / 100)}</p>
           {preview.rows.filter((row) => row.errors.length || row.duplicate).map((row) => (
-            <p key={row.rowNumber} className={row.errors.length ? "text-destructive" : "text-amber-700"}>Row {row.rowNumber}: {row.duplicate ? "duplicate external ID" : row.errors.join(" ")}</p>
+            <p key={row.rowNumber} className={row.errors.length ? "text-destructive" : "text-amber-700"}>Row {row.rowNumber}: {historicalRowMessage(row)}</p>
           ))}
           <Button onClick={() => void commit()} disabled={busy || preview.totals.valid === 0 || preview.state === "committed" || result?.state === "committed"}>Commit historical records</Button>
         </div>}
         {preview?.state === "committed" && <p role="status" className="text-sm">This batch has already been imported.</p>}
-        {result && <p role="status" className="text-sm">Created {result.created}; duplicates {result.duplicates}; failed {result.failed}.</p>}
+        {result && <p role="status" className="text-sm">{historicalResultMessage(result)}</p>}
       </DialogContent>
     </Dialog>
   )

@@ -161,6 +161,8 @@ export const mca_historical_import_runs = pgTable("mca_historical_import_runs", 
   workspace_id: text().notNull(),
   source_id: text().notNull(),
   batch_id: text().notNull(),
+  request_id: text(),
+  input_hash: text(),
   state: text().notNull(),
   preview_revision: integer().default(1).notNull(),
   totals_json: text().default("{}").notNull(),
@@ -169,7 +171,7 @@ export const mca_historical_import_runs = pgTable("mca_historical_import_runs", 
   created_at: text().notNull(),
   committed_at: text(),
 }, (table) => [
-  unique("mca_historical_import_runs_batch_key").on(table.workspace_id, table.source_id, table.batch_id),
+  unique("mca_historical_import_runs_request_key").on(table.workspace_id, table.request_id),
   check("mca_historical_import_runs_state_check", sql`state IN ('preview','committed','failed')`),
 ])
 
@@ -187,7 +189,7 @@ export const mca_historical_import_rows = pgTable("mca_historical_import_rows", 
   funding_event_id: text(),
   created_at: text().notNull(),
 }, (table) => [
-  unique("mca_historical_import_rows_external_key").on(table.workspace_id, table.source_id, table.external_id),
+  uniqueIndex("mca_historical_import_rows_created_key").on(table.workspace_id, table.source_id, table.external_id).where(sql`outcome = 'created'`),
   unique("mca_historical_import_rows_run_row_key").on(table.run_id, table.row_number),
   check("mca_historical_import_rows_outcome_check", sql`outcome IN ('pending','created','duplicate','invalid')`),
 ])
