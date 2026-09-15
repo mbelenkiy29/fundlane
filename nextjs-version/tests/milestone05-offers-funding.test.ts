@@ -155,8 +155,8 @@ test("MIC-120 preserves historical dates, reconciles paid commission, and dedupe
     { externalId: "legacy-101", legalName: "Historical Bakery", funderName: "Archive Capital", fundedAt: "2023-02-14", amountCents: 8_000_000, factorRate: 1.25, commissionCents: 640_000, paidCommissionCents: 640_000, paidCommissionAt: "2023-02-21", feeCents: 15_000, expectedCommissionAt: "2023-02-20", expectedFeeAt: "2023-02-18", splits: [{ recipientMembershipId: ids.member, percentageBasisPoints: 6000 }, { recipientMembershipId: ids.rep, percentageBasisPoints: 4000 }], paidSplits: [{ recipientMembershipId: ids.member, amountCents: 384_000, paidAt: "2023-02-21" }, { recipientMembershipId: ids.rep, amountCents: 256_000, paidAt: "2023-02-22" }] },
     { externalId: "legacy-102", legalName: "Historical Cafe", funderName: "Archive Capital", fundedAt: "2023-03-01", amountCents: 9_000_000, factorRate: 1.2, commissionCents: 450_000 },
   ]
-  const preview = await previewHistoricalImport(admin, { sourceId: "legacy-crm", batchId: "batch-1", rows })
-  const replayPreview = await previewHistoricalImport(admin, { sourceId: "legacy-crm", batchId: "batch-1", rows })
+  const preview = await previewHistoricalImport(admin, { sourceId: "legacy-crm", batchId: "batch-1", requestId: "legacy-retry", rows })
+  const replayPreview = await previewHistoricalImport(admin, { sourceId: "legacy-crm", batchId: "batch-1", requestId: "legacy-retry", rows })
   assert.equal(replayPreview.runId, preview.runId)
   const partial = await commitHistoricalImport(admin, { runId: preview.runId, expectedPreviewRevision: 1 }, async (database, input) => {
     if (input.amountCents === 9_000_000) throw new Error("injected historical row failure")
@@ -180,4 +180,40 @@ test("MIC-120 preserves historical dates, reconciles paid commission, and dedupe
   assert.notEqual(identities[0].advance_id, identities[1].advance_id)
   assert.notEqual(identities[0].deal_id, identities[1].deal_id)
   assert.equal(otherResult.created, 1)
+})
+
+test("concurrent overlapping historical commits create each financial identity once", async () => {
+  const rows = ["concurrent-one", "concurrent-two"].map((externalId) => ({ externalId, legalName: "Concurrent Merchant", funderName: "Concurrent Funder", fundedAt: "2025-02-01", amountCents: 250000, commissionCents: 25000 }))
+  const a = await previewHistoricalImport(admin, { sourceId: "concurrent-commit", batchId: "same", rows })
+  const b = await previewHistoricalImport(admin, { sourceId: "concurrent-commit", batchId: "same", rows: [...rows].reverse() })
+  const results = await Promise.all([a, b].map((preview) => commitHistoricalImport(admin, { runId: preview.runId, expectedPreviewRevision: 1 })))
+  assert.equal(results.reduce((n, r) => n + r.created, 0), 2)
+  assert.equal(results.reduce((n, r) => n + r.duplicates, 0), 2)
+  assert.equal(results.reduce((n, r) => n + r.failed, 0), 0)
+  const counts = await queryRow<{ events: number; advances: number; payments: number }>(`SELECT
+    count(DISTINCT f.id)::int events, count(DISTINCT a.id)::int advances, count(DISTINCT p.id)::int payments
+    FROM mca_historical_import_rows h JOIN mca_funding_events f ON f.id=h.funding_event_id
+    JOIN mca_advances a ON a.funding_event_id=f.id JOIN mca_accounting_payments p ON p.funding_event_id=f.id
+    WHERE h.source_id='concurrent-commit' AND p.type='commission'`)
+  assert.deepEqual(counts, { events: 2, advances: 2, payments: 2 })
+  const again = await previewHistoricalImport(admin, { sourceId: "concurrent-commit", batchId: "same", rows: rows.map((r) => ({ ...r, amountCents: 999999 })) })
+  assert.equal(again.totals.duplicates, 2)
+  assert.ok(again.rows.every((r) => r.duplicateReason === "already_imported"))
+})
+
+test("a fresh upload can finish a partially failed run without replaying its successful row", async () => {
+  const rows = [1, 2].map((n) => ({ externalId: `partial-${n}`, legalName: "Retry Merchant", funderName: "Retry Funder", fundedAt: "2025-02-01", amountCents: n * 100000, commissionCents: 10000 }))
+  const original = await previewHistoricalImport(admin, { sourceId: "partial-reupload", batchId: "same", rows })
+  const failed = await commitHistoricalImport(admin, { runId: original.runId, expectedPreviewRevision: 1 }, async (db, input) => {
+    if (input.amountCents === 200000) throw new Error("injected failure")
+    return writeFundingAccounting(db, input)
+  })
+  assert.equal(failed.created, 1); assert.equal(failed.failed, 1)
+  const fresh = await previewHistoricalImport(admin, { sourceId: "partial-reupload", batchId: "same", rows })
+  assert.equal(fresh.totals.valid, 1); assert.equal(fresh.totals.duplicates, 1)
+  const completed = await commitHistoricalImport(admin, { runId: fresh.runId, expectedPreviewRevision: 1 })
+  assert.equal(completed.created, 1); assert.equal(completed.duplicates, 1)
+  const retry = await commitHistoricalImport(admin, { runId: original.runId, expectedPreviewRevision: 1 })
+  assert.equal(retry.created, 1); assert.equal(retry.duplicates, 1); assert.equal(retry.failed, 0)
+  assert.equal((await queryRow<{ count: number }>("SELECT count(*)::int count FROM mca_historical_import_rows WHERE source_id='partial-reupload' AND outcome='created'")).count, 2)
 })
