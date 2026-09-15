@@ -1,5 +1,5 @@
 import Image from "next/image"
-import pipelineImage from "../../../public/marketing/pipeline.png"
+import heroImage from "../../../public/marketing/architecture-hero.png"
 import captureImage from "../../../public/marketing/capture.png"
 import reviewImage from "../../../public/marketing/review.png"
 import submitImage from "../../../public/marketing/submit.png"
@@ -14,8 +14,9 @@ import {
   ChevronDown,
 } from "lucide-react"
 import { MarketingShell, DemoLink } from "./shell"
-import { marketingFeatures, featuredIds } from "./catalog"
-import { FeatureVisual } from "./feature-visual"
+import { marketingFeatures } from "./catalog"
+import { BentoVisual } from "./bento-visual"
+import { ActivityStream } from "./activity-stream"
 import { MARKETING_DESCRIPTION } from "@/lib/marketing/metadata"
 
 const stages = [
@@ -90,58 +91,24 @@ const faqs = [
 
 export function MarketingHome() {
   return (
-    <MarketingShell>
+    <MarketingShell immersive>
       <main id="main">
-        <section className="fl-hero fl-container">
-          <div className="fl-hero-top">
+        <section className="fl-hero">
+          <Image src={heroImage} alt="" fill sizes="100vw" preload className="fl-hero-background" />
+          <div className="fl-hero-scrim" />
+          <div className="fl-container fl-hero-content">
             <div className="fl-hero-copy">
-              <p className="fl-audience">
-                <span />
-                The workspace for MCA brokerages
-              </p>
+              <p className="fl-audience"><span />The workspace for MCA brokerages</p>
               <h1>Run your MCA brokerage from application to renewal.</h1>
               <p className="fl-hero-description">{MARKETING_DESCRIPTION}</p>
-              <div className="fl-actions">
-                <DemoLink />
-                <Link href="#workflow" className="fl-text-link">
-                  Explore the workflow
-                  <ArrowRight size={17} aria-hidden="true" />
-                </Link>
-              </div>
+              <div className="fl-actions"><DemoLink /><Link href="#workflow" className="fl-text-link">Explore the workflow <ArrowRight size={17} aria-hidden="true" /></Link></div>
             </div>
+            <div className="fl-hero-foot"><span>One connected deal workflow</span><a href="#activity">Explore Fundlane <span aria-hidden="true">↓</span></a></div>
           </div>
-          <figure className="fl-hero-preview">
-            <div className="fl-preview-bar">
-              <span className="fl-preview-dots">
-                <i />
-                <i />
-                <i />
-              </span>
-              <span>Your deal pipeline</span>
-              <span className="fl-preview-label">Product preview</span>
-            </div>
-            <div className="fl-hero-image">
-              <Image
-                src={pipelineImage}
-                alt="Fundlane deal pipeline populated with synthetic brokerage applications"
-                sizes="(max-width: 1280px) 94vw, 1200px"
-                preload
-              />
-            </div>
-            <figcaption>
-              Applications, submissions, and next steps in one place.
-              <a href={pipelineImage.src} target="_blank" rel="noopener noreferrer" className="fl-inline-link">Illustrative data · View full-size</a>
-            </figcaption>
-          </figure>
-          <div className="fl-workflow-line" aria-label="Deal lifecycle">
-            <span>Application in</span>
-            <ArrowRight />
-            <span>Funder review</span>
-            <ArrowRight />
-            <span>Offer selected</span>
-            <ArrowRight />
-            <span className="fl-green">Funded. Ready for what’s next.</span>
-          </div>
+        </section>
+        <div id="activity"><ActivityStream /></div>
+        <section className="fl-container fl-metrics" aria-label="The Fundlane workspace">
+          {[["11", "categories", "Every part of the deal"], ["5", "stages", "Application through renewal"], ["3", "modes", "Control how submissions move"], ["1", "workspace", "A shared view for your team"]].map(([value, unit, description]) => <div key={unit}><p><span>{value}</span> <small>{unit}</small></p><p>{description}</p></div>)}
         </section>
         <section className="fl-container fl-purpose">
           <p className="fl-section-label">Built around the life of a deal</p>
@@ -242,13 +209,12 @@ export function MarketingHome() {
             </p>
           </div>
           <div className="fl-feature-grid">
-            {featuredIds.map(id => {
-              const feature = marketingFeatures.find(item => item.id === id)!
-              return <article key={id}>
-                <FeatureVisual feature={feature} compact />
-                <div className="fl-card-copy"><h3><Link href={`/features#${id}`}>{feature.title}<ArrowRight size={17} aria-hidden="true" /></Link></h3><p>{feature.summary}</p></div>
+            {[...marketingFeatures.filter(feature => ["underwriting", "funders", "closing"].includes(feature.id)), ...marketingFeatures.filter(feature => !["underwriting", "funders", "closing"].includes(feature.id))].map(feature => (
+              <article key={feature.id}>
+                <BentoVisual feature={feature} />
+                <div className="fl-card-copy"><h3><Link href={`/features#${feature.id}`}>{feature.title}<ArrowRight size={17} aria-hidden="true" /></Link></h3><p>{feature.summary}</p><ul className="fl-card-capabilities">{feature.capabilities.map(capability => <li key={capability}>{capability}</li>)}</ul>{feature.note && <p className="fl-feature-note">{feature.note}</p>}</div>
               </article>
-            })}
+            ))}
           </div>
           <div className="fl-feature-more"><Link href="/features" className="fl-button fl-button-secondary">Explore all features <ArrowRight size={16} aria-hidden="true" /></Link></div>
         </section>
