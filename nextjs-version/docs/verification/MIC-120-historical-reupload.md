@@ -41,6 +41,6 @@ Production rollout results will be recorded below after verification.
 
 ## Commit latency follow-up — September 14, 2026
 
-The production 10-row import completed successfully, but generated 1,086 installment INSERT requests while the UI only disabled its controls. Repayment schedule persistence now inserts at most 250 installments per request, preserving the original schedule and conflict handling. Both import interfaces show an importing status; a three-minute client timeout retains the saved preview and explains that retrying the same run is safe and the outcome may still be pending.
+The production 10-row import completed successfully, but generated 986 installment INSERT requests while the UI only disabled its controls. Repayment schedule persistence now inserts at most 250 installments per request, preserving the original schedule and conflict handling. Both import interfaces show an importing status; a three-minute client timeout retains the saved preview and explains that retrying the same run is safe and the outcome may still be pending.
 
 Validation: isolated PostgreSQL covers a 1,086-payment business-day schedule (five insert requests), exact amounts/dates, and replay with zero new installments. Existing historical concurrency and partial-failure tests remain in place. Client tests verify stable run/revision retries and timeout wording. Typecheck, lint (existing warnings only), and production build pass.
