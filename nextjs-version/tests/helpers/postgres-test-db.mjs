@@ -34,6 +34,8 @@ export async function createPostgresTestDatabase(label = "suite") {
   const databaseUrl = databaseUrlUnpooled;
   const migrationPool = new Pool({ ...postgresConnection(databaseUrlUnpooled), max: 1 });
   try {
+    // Hosted setup creates this namespace before migrations; disposable databases need it too.
+    await migrationPool.query("CREATE SCHEMA IF NOT EXISTS mca_private");
     await migrate(drizzle(migrationPool), { migrationsFolder: resolve(process.cwd(), "drizzle") });
   } catch (error) {
     await migrationPool.end();

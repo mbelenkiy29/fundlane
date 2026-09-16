@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { newId, nowIso, recordAuditEvent } from "../db"
 import { actorForDeals, getDealForDocument } from "../deals/service"
@@ -249,7 +251,7 @@ export async function analyzeDealStatements(
 ): Promise<StatementUnderwritingResult> {
   await getDealForDocument(actor, dealId)
   const documents = (await listDocuments(actor, dealId))
-    .filter((document) => document.category === "statement" && document.processingState === "clean")
+    .filter((document) => document.category === "statement" && isDocumentReady(document.processingState))
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
   const fingerprint = fingerprintFor(documents.map((document) => document.id))
   const replaceReviewed = Boolean(options?.replaceReviewed)

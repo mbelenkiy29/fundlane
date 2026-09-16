@@ -1,3 +1,4 @@
+import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -287,13 +288,13 @@ test("MIC-179 concurrent analysis serializes one semantic position and aggregate
 test("MIC-179 pending and quarantined statements are not analyzed", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "scan-deal", legalName: "Scan Filter LLC" })).deal
   const clean = await uploadStatement(actor(), deal.id, "clean-aug.pdf", "scan-clean", extraction({ deposits: known(9_000, "9000"), positions: [] }))
-  assert.equal(clean.processingState, "clean")
+  assert.equal(clean.processingState, "ready")
   setDocumentScannerForTests(undefined)
   const pending = await storeDocument(actor(), { dealId: deal.id, idempotencyKey: "scan-pending", filename: "pending-aug.pdf", mimeType: "application/pdf", bytes: pdf("pending"), category: "statement", source: "test" })
-  assert.equal(pending.processingState, "pending_scan")
+  await updateDocumentScan(actor().workspaceId, pending.id, "pending_scan", "legacy-scanner", {}, new Date().toISOString())
   setDocumentScannerForTests(scanner("infected"))
   const quarantined = await storeDocument(actor(), { dealId: deal.id, idempotencyKey: "scan-infected", filename: "infected-aug.pdf", mimeType: "application/pdf", bytes: pdf("infected"), category: "statement", source: "test" })
-  assert.equal(quarantined.processingState, "quarantined")
+  await updateDocumentScan(actor().workspaceId, quarantined.id, "quarantined", "legacy-scanner", {}, new Date().toISOString())
   const result = await analyzeDealStatements(actor(), deal.id)
   assert.equal(result.months.length, 1)
   assert.equal(result.months[0]?.documentId, clean.id)

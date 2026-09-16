@@ -16,7 +16,7 @@ The runtime pool defaults to two connections on Vercel. Never expose database UR
 
 Preserve `MCA_DATA_ENCRYPTION_KEY` and all immutable workspace IDs when transferring existing records. The key is base64url-encoded 32-byte AES-256-GCM material; replacing it makes encrypted values unreadable. Staging uses its own key and synthetic records.
 
-Documents upload directly to private Supabase quarantine storage. Completion verifies the authorized object and queues scanning; only clean objects are promoted. Download authorization issues short-lived private URLs. The worker uses ClamAV and durable Postgres job leases, retries, and the submission outbox. Filesystem storage remains available for isolated local tests and source-file transfer only.
+Deal documents become ready after upload validation and private storage completion; malware scanning is not required. Existing clean documents remain usable. See [Deal document uploads](docs/deal-document-uploads.md) for pending-upload recovery and rollout. Application drafts retain their separate scanning flow. Filesystem storage remains available for isolated local tests and source-file transfer only.
 
 Run the document worker with `node --conditions=react-server --import tsx scripts/workers/run.ts`, and assistant maintenance with `pnpm assistant:worker`. See `Dockerfile.worker` and root `render.yaml`. The Python service receives signed HTTPS requests from Vercel and calls back through the existing live permission checks. Preserve each provider's activation state until verified.
 

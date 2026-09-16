@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHash } from "node:crypto"
 import { getDatabase, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
 import { actorForDeals, getDeal } from "../deals/service"
@@ -156,14 +158,14 @@ export async function processIntakeJob(job: BackgroundJob, attachmentOptions: Pa
     ;({ actor, intake } = await guard())
     let documents = await listDocuments(actor, intake.dealId!)
     for (const document of documents) {
-      if (["pending_scan", "scan_failed"].includes(document.processingState)) { await guard(); await retryDocumentScan(actor, document.id) }
+      if (["pending_scan", "scan_failed", "pending_upload", "upload_failed"].includes(document.processingState)) { await guard(); await retryDocumentScan(actor, document.id) }
     }
     documents = await listDocuments(actor, intake.dealId!)
     const pending = (await listAttachmentJobs(actor.workspaceId, intake.intakeId)).filter(f => f.state !== "stored")
-    const unreadable = documents.some(d => ["application", "api_application", "statement"].includes(d.category) && d.processingState !== "clean")
+    const unreadable = documents.some(d => ["application", "api_application", "statement"].includes(d.category) && !isDocumentReady(d.processingState))
     if (pending.length || unreadable) {
       progress.state = "needs_attention"
-      progress.message = pending.length ? "Some attachments could not be retrieved. Check the connection credentials and retry." : "Documents are awaiting security scanning or are quarantined. Check document status before retrying."
+      progress.message = pending.length ? "Some attachments could not be retrieved. Check the connection credentials and retry." : "Document uploads are incomplete or blocked. Check document status before retrying."
       progress.stages.documents = { state: "blocked", message: progress.message }
     } else {
       progress.stages.documents.state = "complete"

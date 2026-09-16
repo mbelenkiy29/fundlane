@@ -13,6 +13,9 @@ export const DOCUMENT_CATEGORIES = [
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number]
 
 export const DOCUMENT_PROCESSING_STATES = [
+  "pending_upload",
+  "ready",
+  "upload_failed",
   "pending_scan",
   "clean",
   "quarantined",
@@ -79,4 +82,9 @@ export interface StatementMetadataExtraction {
   warnings: string[]
   provider: string
   requestId?: string
+}
+
+/** Available bytes, either validated on upload or previously malware-scanned. */
+export function isDocumentReady(state: string): boolean {
+  return state === "ready" || state === "clean"
 }

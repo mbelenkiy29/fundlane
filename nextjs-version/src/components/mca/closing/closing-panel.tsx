@@ -1,5 +1,7 @@
 "use client"
 
+import { isDocumentReady } from "../../../lib/mca/documents/contracts"
+
 import * as React from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -93,8 +95,8 @@ export function ClosingPanel({ dealId, onChanged }: { dealId: string; onChanged?
   }
   const merchantSenders = senders.filter((sender) => sender.purpose === "merchant" && sender.state === "verified")
   const submissionSenders = senders.filter((sender) => sender.purpose === "submission" && sender.state === "verified")
-  const cleanClosingDocs = documents.filter((document) => document.processingState === "clean" && document.category === "closing_document")
-  const cleanRequestDocs = documents.filter((document) => document.processingState === "clean" && ["driver_license", "voided_check"].includes(document.category))
+  const cleanClosingDocs = documents.filter((document) => isDocumentReady(document.processingState) && document.category === "closing_document")
+  const cleanRequestDocs = documents.filter((document) => isDocumentReady(document.processingState) && ["driver_license", "voided_check"].includes(document.category))
   const merchantRecipient = merchantChannel === "email" ? merchantEmail : merchantPhone
   const merchantEmailReady = merchantSenders.some((sender) => sender.id === senderId)
   const selectedSmsAccount = data?.merchantSmsAccounts.find((account) => account.id === smsAccountId)

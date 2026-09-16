@@ -1,3 +1,4 @@
+import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -160,7 +161,7 @@ test("MIC-164: unreadable statement blocks ready", async () => {
   await upload(deal.id, { key: "unread-m2", filename: `Bank-${months[2]}.pdf`, category: "statement" })
   setDocumentScannerForTests(scanner("infected"))
   const quarantined = await upload(deal.id, { key: "unread-bad", filename: `Bank-${months[2]}-copy.pdf`, category: "statement" })
-  assert.equal(quarantined.processingState, "quarantined")
+  await updateDocumentScan(actor().workspaceId, quarantined.id, "quarantined", "legacy-scanner", {}, new Date().toISOString())
 
   const result = await checkCompleteness(actor(), deal.id)
   assert.equal(result.ready, false)
