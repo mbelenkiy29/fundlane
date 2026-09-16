@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHash } from "node:crypto"
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib"
 import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess } from "../auth"
@@ -455,8 +457,8 @@ function skipReason(settings: StampSettings, funderId: string, pdf: boolean): Sk
 }
 
 async function originalBytes(row: OriginalRow, expectedChecksum?: string): Promise<Uint8Array> {
-  if (row.processing_state !== "clean") {
-    throw new AppError(423, "document_not_clean", "This document is unavailable until a configured malware scanner marks it clean.")
+  if (!isDocumentReady(row.processing_state)) {
+    throw new AppError(423, "document_not_clean", "This document is unavailable. Complete its upload before using it.")
   }
   const bytes = await documentStorage().get(row.storage_key)
   const stored = checksumOf(bytes)

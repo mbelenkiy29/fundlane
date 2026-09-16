@@ -1,3 +1,5 @@
+import { storeDocument } from "../src/lib/mca/documents/service"
+import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import "./helpers/business-auth"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -163,7 +165,7 @@ async function deliver(c: Awaited<ReturnType<typeof connection>>, eventId: strin
   return ingestProviderDelivery({ provider, integrationId:c.status.id, rawBody, request:new Request("https://mca.example.test/hook",{method:"POST",headers,body:rawBody}) })
 }
 
-test("all four providers run durable intake through scanned statements and review-only funder selection", async () => {
+test("all four providers run durable intake through ready statements and review-only funder selection", async () => {
   extraction()
   await seedFunder(ids.workspace,"ready-funder",fitRules())
   await updateAnalysisSettings(adminActor,{ mode:"automatic_send", automaticSendEnabled:true, reviewNotificationChannel:"both" })
@@ -257,7 +259,9 @@ test("expired private credentials and quarantined files never produce ready matc
   assert.equal((await intakeProgress(ids.workspace,result.intakeId))?.state,"needs_attention")
   await exec("UPDATE intake_integrations SET credential_expires_at=NULL WHERE id=?",c.status.id)
   await retryIntakeProcessing(adminActor,result.intakeId)
-  setDocumentScannerForTests({name:"infected-fixture",async scan(){return {status:"infected",provider:"infected-fixture",evidence:{fixture:true}}}})
+  // Existing quarantine must still block intake even though new uploads no longer scan.
+  const blocked = await storeDocument(adminActor, { dealId: result.dealId!, idempotencyKey: "legacy-quarantine", filename: "blocked.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\n%%EOF\n")), category: "statement", source: "test" })
+  await updateDocumentScan(ids.workspace, blocked.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
   await drain()
   assert.equal((await intakeProgress(ids.workspace,result.intakeId))?.stages.documents.state,"blocked")
   setDocumentScannerForTests({name:"clean-fixture",async scan(){return {status:"clean",provider:"clean-fixture",evidence:{fixture:true}}}})

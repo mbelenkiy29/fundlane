@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "./contracts"
+
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent } from "../db"
@@ -16,7 +18,7 @@ import {
   updateDocumentScan,
   type DocumentRecord,
 } from "./repository"
-import { documentScanner, type ScanResult } from "./scanner"
+import { documentScanner } from "./scanner"
 import { documentStorage } from "./storage"
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
@@ -56,29 +58,22 @@ function validateUpload(input: UploadDocumentInput): string {
   return normalizedFilename(input.filename)
 }
 
-function scanState(result: ScanResult): DocumentRecord["processingState"] {
-  if (result.status === "clean") return "clean"
-  if (result.status === "infected") return "quarantined"
-  if (result.status === "error") return "scan_failed"
-  return "pending_scan"
-}
-
-async function applyScan(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
-  let result = await documentScanner().scan(bytes, record.originalFilename)
-  if (result.status === "clean") {
-    try { await documentStorage().promoteClean?.(record.storageKey, bytes) }
-    catch { result = { status: "error", provider: "storage", evidence: { recoverable: true, reason: "clean_promotion_failed" } } }
+/** Complete storage without invoking a malware scanner. Never release quarantine. */
+async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
+  if (isDocumentReady(record.processingState) || record.processingState === "quarantined") return record
+  try {
+    if (bytes.byteLength !== record.byteLength || createHash("sha256").update(bytes).digest("hex") !== record.checksum) {
+      throw new AppError(409, "document_integrity_failed", "Stored file verification failed. Upload a new version of this document.")
+    }
+    validateUpload({ ...record, filename: record.originalFilename, bytes, idempotencyKey: record.id })
+    await documentStorage().promoteClean?.(record.storageKey, bytes)
+  } catch (error) {
+    await updateDocumentScan(actor.workspaceId, record.id, "upload_failed", "storage", { recoverable: true, reason: error instanceof AppError ? error.code : "storage_completion_failed" }, nowIso())
+    throw error instanceof AppError ? error : new AppError(503, "storage_completion_failed", "File storage could not be completed. Retry upload completion.")
   }
-  const attemptedAt = nowIso()
-  const updated = await updateDocumentScan(actor.workspaceId, record.id, scanState(result), result.provider, result.evidence, attemptedAt)
-  await recordAuditEvent({
-    context: actor,
-    action: "document.scanned",
-    resourceType: "document",
-    resourceId: record.id,
-    metadata: { state: updated.processingState, provider: result.provider, actualScannerEvidence: result.status === "clean" || result.status === "infected" },
-    correlationId: actor.correlationId,
-  })
+  const updated = await updateDocumentScan(actor.workspaceId, record.id, "ready", "upload_validation", { checksumVerified: true, malwareScanPerformed: false }, nowIso())
+  await recordAuditEvent({ context: actor, action: "document.ready", resourceType: "document", resourceId: record.id,
+    metadata: { state: "ready", malwareScanPerformed: false }, correlationId: actor.correlationId })
   return updated
 }
 
@@ -111,9 +106,9 @@ export async function storeDocument(actor: DealActor, input: UploadDocumentInput
     if (replay.dealId !== input.dealId || replay.checksum !== checksum || replay.category !== input.category) {
       throw new AppError(409, "idempotency_conflict", "That idempotency key was already used for a different document.")
     }
-    if (replay.processingState === "clean" || replay.processingState === "quarantined") return summary(replay)
+    if (isDocumentReady(replay.processingState) || replay.processingState === "quarantined") return summary(replay)
     await ensureStored(replay, input.bytes)
-    return summary(await applyScan(actor, replay, input.bytes))
+    return summary(await completeDocumentUpload(actor, replay, input.bytes))
   }
 
   const id = newId()
@@ -138,7 +133,7 @@ export async function storeDocument(actor: DealActor, input: UploadDocumentInput
     storageKey,
     source: input.source.trim().slice(0, 80) || "unknown",
     sourceReference: input.sourceReference?.trim().slice(0, 300),
-    processingState: "pending_scan",
+    processingState: "pending_upload",
     createdBy: actor.userId,
     createdAt: now,
     updatedAt: now,
@@ -155,7 +150,7 @@ export async function storeDocument(actor: DealActor, input: UploadDocumentInput
   try {
     await ensureStored(record, input.bytes)
   } catch (error) {
-    await updateDocumentScan(actor.workspaceId, record.id, "scan_failed", "storage", { recoverable: true, reason: "write_or_verification_failed" }, nowIso())
+    await updateDocumentScan(actor.workspaceId, record.id, "upload_failed", "storage", { recoverable: true, reason: "write_or_verification_failed" }, nowIso())
     throw error
   }
   await recordAuditEvent({
@@ -166,7 +161,7 @@ export async function storeDocument(actor: DealActor, input: UploadDocumentInput
     metadata: { dealId: input.dealId, category: input.category, version: record.version, lineageId: record.lineageId, byteLength: record.byteLength, checksum },
     correlationId: actor.correlationId,
   })
-  return summary(await applyScan(actor, record, input.bytes))
+  return summary(await completeDocumentUpload(actor, record, input.bytes))
 }
 
 export async function listDocuments(actor: DealActor, dealId: string): Promise<DocumentSummary[]> {
@@ -184,16 +179,19 @@ export async function getDocument(actor: DealActor, id: string): Promise<Documen
 
 export async function getDocumentContent(actor: DealActor, id: string): Promise<{ document: DocumentRecord; bytes: Uint8Array }> {
   const record = await getDocument(actor, id)
-  if (record.processingState !== "clean") {
-    throw new AppError(423, "document_not_clean", "This document is unavailable until a configured malware scanner marks it clean.")
+  if (!isDocumentReady(record.processingState)) {
+    throw new AppError(423, "document_not_clean", "This document is unavailable. Retry upload completion or upload a new version.")
   }
   return { document: record, bytes: await documentStorage().get(record.storageKey) }
 }
 
 export async function retryDocumentScan(actor: DealActor, id: string): Promise<DocumentSummary> {
   const record = await getDocument(actor, id)
-  const bytes = await documentStorage().get(record.storageKey)
-  return summary(await applyScan(actor, record, bytes))
+  if (isDocumentReady(record.processingState) || record.processingState === "quarantined") return summary(record)
+  let bytes: Uint8Array
+  try { bytes = await documentStorage().get(record.storageKey) }
+  catch { throw new AppError(503, "document_storage_unavailable", "The stored file could not be read. Retry later or upload a new version.") }
+  return summary(await completeDocumentUpload(actor, record, bytes))
 }
 
 function tokenSecret(): Buffer {
@@ -209,7 +207,7 @@ function signToken(payload: string): string {
 
 export async function createDocumentDownloadToken(actor: DealActor, id: string, now = Date.now()): Promise<{ token: string; expiresAt: string }> {
   const record = await getDocument(actor, id)
-  if (record.processingState !== "clean") throw new AppError(423, "document_not_clean", "Only clean documents can be downloaded.")
+  if (!isDocumentReady(record.processingState)) throw new AppError(423, "document_not_clean", "Complete this upload before downloading it.")
   const expires = now + 5 * 60_000
   const payload = Buffer.from(JSON.stringify({ d: record.id, v: record.version, w: actor.workspaceId, e: expires })).toString("base64url")
   return { token: `${payload}.${signToken(payload)}`, expiresAt: new Date(expires).toISOString() }

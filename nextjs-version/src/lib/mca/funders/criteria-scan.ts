@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { z } from "zod"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
@@ -334,7 +336,7 @@ export async function requireCriteriaScanActor(request: Request, mode: "read" | 
 
 export async function listCriteriaScanDocuments(actor: DealActor, dealId: string): Promise<DocumentSummary[]> {
   const documents = await listDocuments(actor, dealId)
-  return documents.filter((document) => document.processingState === "clean" && ALLOWED_MIME_TYPES.has(document.mimeType))
+  return documents.filter((document) => isDocumentReady(document.processingState) && ALLOWED_MIME_TYPES.has(document.mimeType))
 }
 
 export async function listCriteriaScans(actor: DealActor, funderId: string): Promise<CriteriaScanReview[]> {
