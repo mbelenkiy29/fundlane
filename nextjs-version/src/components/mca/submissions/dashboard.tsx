@@ -6,6 +6,7 @@ import { ArrowUpRight, FileCheck2, RefreshCw, Search, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
   Sheet,
   SheetContent,
@@ -373,10 +374,10 @@ export function SubmissionsDashboard() {
         )}
         {!!deals.length && (
           <>
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-muted/40 text-xs text-muted-foreground">
-                  <tr>
+            <div className="hidden md:block">
+              <Table aria-label="Submissions">
+                <TableHeader>
+                  <TableRow>
                     {[
                       "Business Name",
                       "Amount requested",
@@ -385,16 +386,16 @@ export function SubmissionsDashboard() {
                       "Date submitted",
                       "Outcome",
                     ].map((title) => (
-                      <th className="px-4 py-3 font-medium" key={title}>
+                      <TableHead key={title}>
                         {title}
-                      </th>
+                      </TableHead>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {deals.map((deal) => (
-                    <tr key={deal.dealId} className="border-t hover:bg-muted/30">
-                      <td className="px-4 py-4">
+                    <TableRow key={deal.dealId}>
+                      <TableCell>
                         <button
                           className="text-left font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2"
                           onClick={(event) => open(deal, event.currentTarget)}
@@ -404,9 +405,9 @@ export function SubmissionsDashboard() {
                             {deal.displayId}
                           </span>
                         </button>
-                      </td>
-                      <td className="px-4 py-4 tabular-nums">{amountLabel(deal)}</td>
-                      <td className="px-4 py-4">
+                      </TableCell>
+                      <TableCell className="tabular-nums">{amountLabel(deal)}</TableCell>
+                      <TableCell>
                         <div className="flex flex-wrap gap-1">
                           {deal.lenders.map((lender) => (
                             <button
@@ -418,18 +419,18 @@ export function SubmissionsDashboard() {
                             </button>
                           ))}
                         </div>
-                      </td>
-                      <td className="px-4 py-4">
+                      </TableCell>
+                      <TableCell>
                         <BusinessStatus value={deal.status} />
-                      </td>
-                      <td className="px-4 py-4 text-xs text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
                         {dateLabel(deal.submittedAt)}
-                      </td>
-                      <td className="px-4 py-4 text-sm">{deal.outcome}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="text-sm">{deal.outcome}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             <div className="divide-y md:hidden">
               {deals.map((deal) => (

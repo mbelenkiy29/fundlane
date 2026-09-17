@@ -78,7 +78,6 @@ export function BookTable({ rows, visible, onOpen, onSms, onCall }: {
   const show = (id: BookColumnId) => visible.has(id)
   return (
     <Card className="overflow-hidden">
-      <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -104,7 +103,7 @@ export function BookTable({ rows, visible, onOpen, onSms, onCall }: {
           <TableBody>
             {rows.map((row) => (
               <TableRow key={row.id} className="cursor-pointer" onClick={() => onOpen(row)}>
-                {show("business") && <TableCell className="sticky left-0 bg-background">
+                {show("business") && <TableCell className="sticky left-0 z-10 bg-background">
                   <button type="button" className="text-left font-medium underline-offset-2 hover:underline" onClick={(event) => { event.stopPropagation(); onOpen(row) }}>{row.dbaName || row.legalName}</button>
                   <p className="text-xs text-muted-foreground">{row.legalName}{row.dbaName ? ` · ${row.displayId}` : ` · ${row.displayId}`}</p>
                 </TableCell>}
@@ -133,7 +132,6 @@ export function BookTable({ rows, visible, onOpen, onSms, onCall }: {
             ))}
           </TableBody>
         </Table>
-      </div>
     </Card>
   )
 }

@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Check, Copy, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table"
 import type { Citation } from "@/lib/mca/assistant/experience-contracts"
 
 function safeLink(href: string) {
@@ -28,7 +29,7 @@ export function RichResponse({
   const [copied, setCopied] = useState(false)
   return (
     <div className="min-w-0">
-      <div className="space-y-3 break-words text-sm leading-7 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_pre_code]:p-0 [&_th]:border [&_th]:bg-muted [&_th]:p-2 [&_td]:border [&_td]:p-2">
+      <div className="space-y-3 break-words text-sm leading-7 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_pre_code]:p-0">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           skipHtml
@@ -50,13 +51,12 @@ export function RichResponse({
             img: ({ alt }) => (
               <span className="text-muted-foreground">{alt || "Image"}</span>
             ),
-            table: ({ children }) => (
-              <div className="max-w-full overflow-x-auto">
-                <table className="w-full border-collapse text-left text-xs">
-                  {children}
-                </table>
-              </div>
-            )
+            table: ({ children }) => <Table aria-label="Assistant response">{children}</Table>,
+            thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+            tbody: ({ children }) => <TableBody>{children}</TableBody>,
+            tr: ({ children }) => <TableRow>{children}</TableRow>,
+            th: ({ children, style }) => <TableHead style={style}>{children}</TableHead>,
+            td: ({ children, style }) => <TableCell style={style}>{children}</TableCell>
           }}
         >
           {text.replace(

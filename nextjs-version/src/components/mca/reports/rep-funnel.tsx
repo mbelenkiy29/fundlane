@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { MembershipSummary } from "@/lib/mca/types"
@@ -176,7 +176,6 @@ export function RepFunnelView(props: {
       )}
       {report && (status === "success" || status === "empty") && (
         <>
-          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -193,23 +192,6 @@ export function RepFunnelView(props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.permission.companyTotalsVisible && (
-                  <TableRow>
-                    <TableCell className="font-medium">{report.totals.name}</TableCell>
-                    {STAGES.map((stage) => (
-                      <TableCell key={stage}>
-                        <div>{report.totals.stages[stage].dealCount}</div>
-                        <div className="text-xs text-muted-foreground">{formatFunnelAmount(report.totals.stages[stage])}</div>
-                      </TableCell>
-                    ))}
-                    <TableCell className="text-xs">
-                      {report.totals.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatConversionRate(item.rate)}</div>
-                      ))}
-                    </TableCell>
-                    <TableCell>{formatDistributions(report.totals.distributions)}</TableCell>
-                  </TableRow>
-                )}
                 {rows.map((row) => (
                   <TableRow key={row.membershipId ?? "unassigned"}>
                     <TableCell>{row.name}</TableCell>
@@ -228,8 +210,24 @@ export function RepFunnelView(props: {
                   </TableRow>
                 ))}
               </TableBody>
+              {report.permission.companyTotalsVisible && (<TableFooter>
+                  <TableRow>
+                    <TableCell className="font-medium">{report.totals.name}</TableCell>
+                    {STAGES.map((stage) => (
+                      <TableCell key={stage}>
+                        <div>{report.totals.stages[stage].dealCount}</div>
+                        <div className="text-xs text-muted-foreground">{formatFunnelAmount(report.totals.stages[stage])}</div>
+                      </TableCell>
+                    ))}
+                    <TableCell className="text-xs">
+                      {report.totals.conversions.map((item) => (
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatConversionRate(item.rate)}</div>
+                      ))}
+                    </TableCell>
+                    <TableCell>{formatDistributions(report.totals.distributions)}</TableCell>
+                  </TableRow>
+                </TableFooter>)}
             </Table>
-          </div>
           <div>
             <h3 className="mb-2 text-sm font-medium capitalize">{drilldownStage} drilldown</h3>
             {drilldown.length === 0 ? (

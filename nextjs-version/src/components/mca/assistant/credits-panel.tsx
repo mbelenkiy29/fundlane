@@ -1,4 +1,5 @@
 "use client"
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import Link from "next/link"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
@@ -207,37 +208,36 @@ export function CreditsPanel() {
               Balances are private to this company. Chat contents are private to
               each user.
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="p-2">User</th>
-                    <th className="p-2">Used this month</th>
-                    <th className="p-2">Monthly left</th>
-                    <th className="p-2">Purchased</th>
-                    <th className="p-2">Available</th>
-                  </tr>
-                </thead>
-                <tbody>
+
+              <Table className="w-full text-left text-sm">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Used this month</TableHead>
+                    <TableHead>Monthly left</TableHead>
+                    <TableHead>Purchased</TableHead>
+                    <TableHead>Available</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {admin.members.map((u) => (
-                    <tr key={u.id} className="border-b">
-                      <td className="p-2">
+                    <TableRow key={u.id}>
+                      <TableCell>
                         {u.name}
                         <span className="block text-xs text-muted-foreground">
                           {u.email}
                         </span>
-                      </td>
-                      <td className="p-2">{u.consumed}</td>
-                      <td className="p-2">
+                      </TableCell>
+                      <TableCell>{u.consumed}</TableCell>
+                      <TableCell>
                         {u.balance.included} / {u.balance.allowance}
-                      </td>
-                      <td className="p-2">{u.balance.purchased}</td>
-                      <td className="p-2">{u.balance.total}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{u.balance.purchased}</TableCell>
+                      <TableCell>{u.balance.total}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+              </Table>
             <Link
               href="/settings/billing"
               className="inline-block text-sm underline"

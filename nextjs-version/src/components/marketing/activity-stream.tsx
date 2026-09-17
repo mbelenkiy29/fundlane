@@ -1,5 +1,6 @@
 "use client"
 
+import { Table, TableCaption, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import { useState } from "react"
 import { ArrowUpRight } from "lucide-react"
 import { StatusChip, TimelineBar } from "./status-chip"
@@ -22,11 +23,11 @@ export function ActivityStream() {
       <div className="fl-stream-header"><span>Deal activity <ArrowUpRight size={14} aria-hidden="true" /></span><div aria-live="polite"><span>{deal.id}</span><StatusChip status={deal.status === "READY" ? "success" : "neutral"}>{deal.status}</StatusChip><StatusChip>{deal.elapsed} min</StatusChip></div></div>
       <div className="fl-stream-body">
         <div className="fl-stream-sidebar" role="group" aria-label="Illustrative deals">{deals.map((item, index) => <button key={item.id} type="button" aria-pressed={selected === index} onClick={() => { setSelected(index); setFocused(2) }}><span className={`fl-event-dot ${item.status === "READY" ? "is-success" : ""}`} /><span><strong>{item.id}</strong><small>{item.name}</small></span><ArrowUpRight size={13} aria-hidden="true" /></button>)}</div>
-        <div className="fl-stream-table-wrap" role="region" aria-label="Deal activity timeline" tabIndex={0}>
-          <table className="fl-stream-table"><caption className="fl-sr-only">{deal.name}: illustrative processing steps over {deal.elapsed} minutes</caption><thead><tr><th scope="col">Step</th><th scope="col">Start</th><th scope="col">Duration</th></tr></thead><tbody>{deal.steps.map((duration, index) => {
+        <div className="fl-stream-table-wrap">
+          <Table className="fl-stream-table" aria-label="Deal activity timeline"><TableCaption className="fl-sr-only">{deal.name}: illustrative processing steps over {deal.elapsed} minutes</TableCaption><TableHeader><TableRow><TableHead scope="col">Step</TableHead><TableHead scope="col">Start</TableHead><TableHead scope="col">Duration</TableHead></TableRow></TableHeader><TableBody>{deal.steps.map((duration, index) => {
             const start = deal.steps.slice(0, index).reduce<number>((sum, value) => sum + value, 0)
-            return <tr key={names[index]} className={focused === index ? "is-active" : undefined}><th scope="row"><button type="button" aria-pressed={focused === index} onClick={() => setFocused(index)}><span className="fl-step-index">0{index + 1}</span>{names[index]}</button></th><td><span className="fl-time-label">+{start} min</span><TimelineBar start={start / deal.elapsed * 100} duration={duration / deal.elapsed * 100} active={focused === index} /></td><td>{duration} min</td></tr>
-          })}</tbody></table>
+            return <TableRow key={names[index]} className={focused === index ? "is-active" : undefined}><TableHead scope="row"><button type="button" aria-pressed={focused === index} onClick={() => setFocused(index)}><span className="fl-step-index">0{index + 1}</span>{names[index]}</button></TableHead><TableCell><span className="fl-time-label">+{start} min</span><TimelineBar start={start / deal.elapsed * 100} duration={duration / deal.elapsed * 100} active={focused === index} /></TableCell><TableCell>{duration} min</TableCell></TableRow>
+          })}</TableBody></Table>
           <div className="fl-stream-scale"><span>0 min</span><span>{deal.elapsed} min</span></div>
         </div>
       </div>
