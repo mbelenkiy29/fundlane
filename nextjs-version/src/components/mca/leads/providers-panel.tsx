@@ -1,5 +1,6 @@
 "use client"
 
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import * as React from "react"
 import { AlertCircle, CheckCircle2, LoaderCircle, Package, Plus, RefreshCw, Upload } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -324,11 +325,11 @@ export function ProvidersPanel() {
 
         <TabsContent value="unassigned" className="space-y-4">
           {!snapshot.unassignedDeals.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">All visible deals have a source and purchase batch.</div> : <>
-            <div className="max-h-64 overflow-auto rounded-lg border">
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-0 bg-muted"><tr><th className="p-2">Deal</th><th className="p-2">Business</th><th className="p-2">Status</th></tr></thead>
-                <tbody>{snapshot.unassignedDeals.map((deal) => <tr className="border-t" key={deal.id}><td className="p-2 font-mono text-xs">{deal.displayId}</td><td className="p-2">{deal.legalName}</td><td className="p-2">{deal.status}</td></tr>)}</tbody>
-              </table>
+            <div className="rounded-lg border">
+              <Table className="w-full text-left text-sm">
+                <TableHeader><TableRow><TableHead>Deal</TableHead><TableHead>Business</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>{snapshot.unassignedDeals.map((deal) => <TableRow key={deal.id}><TableCell className="font-mono text-xs">{deal.displayId}</TableCell><TableCell>{deal.legalName}</TableCell><TableCell>{deal.status}</TableCell></TableRow>)}</TableBody>
+              </Table>
             </div>
             <form className="grid gap-3 rounded-lg border p-3 md:grid-cols-2" onSubmit={(event) => void assignDeal(event)}>
               <div className="space-y-1.5">

@@ -1,5 +1,6 @@
 "use client"
 
+import { Table, TableFooter, TableCaption, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import * as React from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -17,6 +18,14 @@ function progress(stages: OutreachMetric[]): string {
   if (stages.includes("started")) return "Started, not submitted"
   if (stages.includes("opened")) return "Opened, not submitted"
   return "Awaiting client"
+}
+
+function OutreachRow({ row }: { row: OutreachReport["totals"] }) {
+  return <TableRow>
+    <TableHead scope="row" className="text-foreground">{row.name}</TableHead>
+    {OUTREACH_METRICS.map(metric => <TableCell key={metric} className={cell}>{row.counts[metric]}</TableCell>)}
+    <TableCell className={cell}>{money(row.fundedAmountCents)}{row.unknownFundedAmountCount > 0 && <span className="ml-1 text-xs font-normal text-muted-foreground">+ {row.unknownFundedAmountCount} unknown</span>}</TableCell>
+  </TableRow>
 }
 
 export function ApplicationOutreachReport() {
@@ -52,11 +61,11 @@ export function ApplicationOutreachReport() {
     {busy && <p role="status" className="p-5 text-sm text-muted-foreground">Loading outreach report…</p>}
     {!busy && report && <>
       <div className="p-5 pb-2 text-xs text-muted-foreground">Invitations created {report.period.from} through {report.period.to} ({report.period.timezone}). Outcomes through {new Date(report.period.asOf).toLocaleString()}; this cohort can still progress.</div>
-      <div className="overflow-x-auto p-2"><table className="w-full whitespace-nowrap text-sm"><caption className="sr-only">Employee outreach, application completion, and funding outcomes</caption><thead><tr className="border-b text-xs text-muted-foreground"><th scope="col" className="px-3 py-3 text-left">Original sender</th>{OUTREACH_METRICS.map(metric => <th scope="col" key={metric} className={cell}>{labels[metric]}</th>)}<th scope="col" className={cell}>Funded amount</th></tr></thead><tbody>{[report.totals, ...report.reps].map(row => <tr key={row.membershipId ?? "total"} className={`border-b last:border-0 ${row.membershipId ? "" : "bg-muted/40 font-semibold"}`}><th scope="row" className="px-3 py-3 text-left font-medium">{row.name}</th>{OUTREACH_METRICS.map(metric => <td key={metric} className={cell}>{row.counts[metric]}</td>)}<td className={cell}>{money(row.fundedAmountCents)}{row.unknownFundedAmountCount > 0 && <span className="ml-1 text-xs font-normal text-muted-foreground">+ {row.unknownFundedAmountCount} unknown</span>}</td></tr>)}</tbody></table></div>
+      <div className="p-2"><Table className="w-full whitespace-nowrap text-sm"><TableCaption className="sr-only">Employee outreach, application completion, and funding outcomes</TableCaption><TableHeader><TableRow className="text-xs text-muted-foreground"><TableHead scope="col" className="text-left">Original sender</TableHead>{OUTREACH_METRICS.map(metric => <TableHead scope="col" key={metric} className={cell}>{labels[metric]}</TableHead>)}<TableHead scope="col" className={cell}>Funded amount</TableHead></TableRow></TableHeader><TableBody>{report.reps.map(row => <OutreachRow key={row.membershipId ?? "unassigned"} row={row} />)}</TableBody><TableFooter><OutreachRow row={report.totals} /></TableFooter></Table></div>
       <div className="grid gap-4 border-y bg-muted/20 p-5 sm:grid-cols-3">{[["Emailed → opened", report.totals.conversions.emailedToOpened], ["Opened → application received", report.totals.conversions.openedToReceived], ["Application received → funded", report.totals.conversions.receivedToFunded]].map(([label, value]) => <div key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums">{percent(value as number | null)}</p></div>)}</div>
       <div className="p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">Client detail</h3><select className="h-9 max-w-full rounded-md border bg-background px-3 text-sm" aria-label="Filter client detail by metric" value={selected} onChange={event => setSelected(event.target.value as OutreachMetric)}>{OUTREACH_METRICS.map(metric => <option value={metric} key={metric}>{labels[metric]} ({report.totals.counts[metric]})</option>)}</select></div>
-        {!report.invitations.some(row => row.stages.includes(selected)) ? <p className="py-6 text-sm text-muted-foreground">No clients match this stage and invitation period.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="py-2 pr-4">Client</th><th className="py-2 pr-4">Original sender</th><th className="py-2 pr-4">Outreach</th><th className="py-2 pr-4">Progress</th><th className="py-2">Deal</th></tr></thead><tbody>{report.invitations.filter(row => row.stages.includes(selected)).map(row => <tr className="border-b last:border-0" key={row.id}><td className="py-3 pr-4"><p className="font-medium">{row.clientName}</p><p className="text-xs text-muted-foreground">{row.email}</p></td><td className="py-3 pr-4">{row.employeeName}</td><td className="py-3 pr-4">{row.sentAt ? "Email accepted" : row.copiedAt ? "Link copied; no email recorded" : "No email recorded"}</td><td className="py-3 pr-4">{progress(row.stages)}</td><td className="py-3">{row.dealId ? <Link className="text-primary underline underline-offset-4" href={`/deals?deal=${encodeURIComponent(row.dealId)}`}>View deal</Link> : "—"}</td></tr>)}</tbody></table></div>}
+        {!report.invitations.some(row => row.stages.includes(selected)) ? <p className="py-6 text-sm text-muted-foreground">No clients match this stage and invitation period.</p> : <Table className="w-full text-sm"><TableHeader><TableRow className="text-left text-xs text-muted-foreground"><TableHead>Client</TableHead><TableHead>Original sender</TableHead><TableHead>Outreach</TableHead><TableHead>Progress</TableHead><TableHead>Deal</TableHead></TableRow></TableHeader><TableBody>{report.invitations.filter(row => row.stages.includes(selected)).map(row => <TableRow key={row.id}><TableCell><p className="font-medium">{row.clientName}</p><p className="text-xs text-muted-foreground">{row.email}</p></TableCell><TableCell>{row.employeeName}</TableCell><TableCell>{row.sentAt ? "Email accepted" : row.copiedAt ? "Link copied; no email recorded" : "No email recorded"}</TableCell><TableCell>{progress(row.stages)}</TableCell><TableCell>{row.dealId ? <Link className="text-primary underline underline-offset-4" href={`/deals?deal=${encodeURIComponent(row.dealId)}`}>View deal</Link> : "—"}</TableCell></TableRow>)}</TableBody></Table>}
         <p className="mt-5 max-w-3xl text-xs leading-relaxed text-muted-foreground">Opens are observed visits and may include automated scanners. Started means “Start application” was clicked. Incomplete means opened without a submission. Resends do not increase invitation counts. Conversion rates use clients present in both stages; no denominator displays as —.</p>
       </div>
     </>}

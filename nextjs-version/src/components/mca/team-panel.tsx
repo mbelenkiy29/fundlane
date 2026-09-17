@@ -1,5 +1,6 @@
 "use client"
 
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import * as React from "react"
 import Link from "next/link"
 import {
@@ -422,24 +423,24 @@ export default function TeamSettingsPage() {
             ) : (
               <>
                 <div className="hidden overflow-hidden rounded-xl border md:block">
-                  <table className="w-full text-sm">
-                    <thead className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
-                      <tr>
-                        <th className="px-4 py-3 font-medium">Person</th>
-                        <th className="px-4 py-3 font-medium">Role</th>
-                        <th className="px-4 py-3 font-medium">
+                  <Table className="w-full text-sm">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="font-medium">Person</TableHead>
+                        <TableHead className="font-medium">Role</TableHead>
+                        <TableHead className="font-medium">
                           {view === "pending" ? "Invitation" : "Manager"}
-                        </th>
-                        <th className="px-4 py-3">
+                        </TableHead>
+                        <TableHead>
                           <span className="sr-only">Actions</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {visible.map((member) => (
-                        <tr
+                        <TableRow
                           key={member.id}
-                          className="cursor-pointer hover:bg-muted/30"
+                          className="cursor-pointer"
                           onClick={(e) => {
                             if (!(e.target as HTMLElement).closest("button")) {
                               const button =
@@ -448,7 +449,7 @@ export default function TeamSettingsPage() {
                             }
                           }}
                         >
-                          <td className="px-4 py-4">
+                          <TableCell>
                             <button
                               className="rounded text-left outline-offset-4 focus-visible:outline-2 focus-visible:outline-ring"
                               onClick={(e) =>
@@ -460,13 +461,13 @@ export default function TeamSettingsPage() {
                                 self={session.membership?.id}
                               />
                             </button>
-                          </td>
-                          <td className="px-4 py-4">
+                          </TableCell>
+                          <TableCell>
                             <Badge variant="outline">
                               {formatRole(member.role)}
                             </Badge>
-                          </td>
-                          <td className="px-4 py-4">
+                          </TableCell>
+                          <TableCell>
                             {view === "pending" ? (
                               <InvitationStatus member={member} />
                             ) : (
@@ -476,8 +477,8 @@ export default function TeamSettingsPage() {
                                 )?.name ?? "No manager"}
                               </span>
                             )}
-                          </td>
-                          <td className="px-4 py-4 text-right">
+                          </TableCell>
+                          <TableCell className="text-right">
                             {view === "pending" &&
                             canInvite &&
                             member.pendingInvitationId ? (
@@ -500,11 +501,11 @@ export default function TeamSettingsPage() {
                                 aria-hidden
                               />
                             )}
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
                 <div className="divide-y rounded-xl border md:hidden">
                   {visible.map((member) => (

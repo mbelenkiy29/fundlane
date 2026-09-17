@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { MembershipSummary } from "@/lib/mca/types"
@@ -265,7 +265,6 @@ export function TeamProfitView(props: {
               <p className="text-xs text-muted-foreground">Excluded from gross contribution</p>
             </div>
           </div>
-          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -279,20 +278,6 @@ export function TeamProfitView(props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.permission.companyTotalsVisible && (
-                  <TableRow>
-                    <TableCell className="font-medium">
-                      {report.company.name}
-                      <Badge variant="outline" className="ml-2">Unique</Badge>
-                    </TableCell>
-                    {STAGES.map((stage) => (
-                      <TableCell key={stage}>{report.company.stages[stage].dealCount}</TableCell>
-                    ))}
-                    <TableCell>{formatMoney(report.company.revenue, recognition)}</TableCell>
-                    <TableCell>{formatDistributions(report.company.distributions, recognition)}</TableCell>
-                    <TableCell>{formatMoney(report.company.grossContribution, recognition)}</TableCell>
-                  </TableRow>
-                )}
                 {rows.map((row) => (
                   <TableRow key={`${row.kind}-${row.membershipId ?? "unassigned"}`}>
                     <TableCell>
@@ -308,8 +293,21 @@ export function TeamProfitView(props: {
                   </TableRow>
                 ))}
               </TableBody>
+              {report.permission.companyTotalsVisible && (<TableFooter>
+                  <TableRow>
+                    <TableCell className="font-medium">
+                      {report.company.name}
+                      <Badge variant="outline" className="ml-2">Unique</Badge>
+                    </TableCell>
+                    {STAGES.map((stage) => (
+                      <TableCell key={stage}>{report.company.stages[stage].dealCount}</TableCell>
+                    ))}
+                    <TableCell>{formatMoney(report.company.revenue, recognition)}</TableCell>
+                    <TableCell>{formatDistributions(report.company.distributions, recognition)}</TableCell>
+                    <TableCell>{formatMoney(report.company.grossContribution, recognition)}</TableCell>
+                  </TableRow>
+                </TableFooter>)}
             </Table>
-          </div>
           <div>
             <h3 className="mb-2 text-sm font-medium">Ledger evidence</h3>
             {report.evidence.length === 0 ? (
@@ -317,7 +315,6 @@ export function TeamProfitView(props: {
                 {report.permission.paymentsVisible ? "No voided payments, reversals, or adjustments in this period." : "Restricted"}
               </p>
             ) : (
-              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -340,7 +337,6 @@ export function TeamProfitView(props: {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
             )}
           </div>
         </>

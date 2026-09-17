@@ -13,6 +13,7 @@ import {
   Legend,
 } from "recharts"
 import { Button } from "@/components/ui/button"
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table"
 import type { Status, Window, ErrorEvent } from "@/lib/mca/operations/contracts"
 const number = (n: number | null | undefined) =>
   n == null ? "Unavailable" : n.toLocaleString()
@@ -417,36 +418,34 @@ export function StatusDashboard({ preview }: { preview?: Status }) {
             ))}
           </select>
         </label>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b text-muted-foreground">
-              <tr>
+        <Table aria-label="Recent errors">
+            <TableHeader>
+              <TableRow>
                 {["Time", "Component", "Code", "Route", "Correlation ID"].map(
                   (x) => (
-                    <th className="p-2 font-medium" key={x}>
+                    <TableHead key={x}>
                       {x}
-                    </th>
+                    </TableHead>
                   )
                 )}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {errors.map((e) => (
-                <tr key={e.id} className="border-b">
-                  <td className="whitespace-nowrap p-2">
+                <TableRow key={e.id}>
+                  <TableCell>
                     {stamp(e.occurred_at)}
-                  </td>
-                  <td className="p-2">{e.component}</td>
-                  <td className="p-2">{e.code}</td>
-                  <td className="p-2">{e.route ?? "—"}</td>
-                  <td className="p-2 font-mono text-xs">
+                  </TableCell>
+                  <TableCell>{e.component}</TableCell>
+                  <TableCell>{e.code}</TableCell>
+                  <TableCell>{e.route ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">
                     {e.correlation_id ?? "—"}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
         {!errors.length && (
           <p className="py-4 text-sm text-muted-foreground">
             {error
