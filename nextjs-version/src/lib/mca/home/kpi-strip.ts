@@ -133,6 +133,7 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: String(source.newDeals.count),
       detail: `${countLabel(source.newDeals.count, "deal")} · ${label}`,
       periodSensitive: true,
+      ...sparkline([], false),
     },
     {
       key: "renewals",
@@ -140,6 +141,7 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       value: String(source.renewals.count),
       detail: `${countLabel(source.renewals.count, "renewal")} · ${label}`,
       periodSensitive: true,
+      ...sparkline([], false),
     },
     {
       key: "funded",
