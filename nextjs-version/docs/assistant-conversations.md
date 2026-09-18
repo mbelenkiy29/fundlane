@@ -1,6 +1,6 @@
 # Conversational assistant (version 2)
 
-`/assistant` and the embedded deal panel share the existing agent, permissions, credits and approved delivery services. The new experience supports ordinary conversation, writing, real activity events, provider-supplied reasoning summaries, Markdown, public web citations, private profile preferences, file uploads, file generation and revisions. It does not expose raw chain of thought or simulate progress.
+The sidebar `/assistant` tab is the read-only ChatKit workspace. The embedded deal panel still uses this write-capable agent, with the same permissions, credits and approved delivery services. That deal-panel experience supports ordinary conversation, writing, real activity events, provider-supplied reasoning summaries, Markdown, public web citations, private profile preferences, file uploads, file generation and revisions. It does not expose raw chain of thought or simulate progress.
 
 ## Configuration and rollout
 

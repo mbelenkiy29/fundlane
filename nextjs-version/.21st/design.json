@@ -347,6 +347,11 @@
       "id": "assistant-conversation",
       "decision": "Use the supplied expandable agent response timeline and 21st AI Input With File composer pattern. Real server events, existing green tokens, compact typography, no simulated thinking.",
       "source": "User-approved conversational assistant plan"
+    },
+    {
+      "id": "assistant-chat-tab-chatkit",
+      "decision": "The sidebar /assistant tab is a full-bleed ChatKit ChatGPT workspace sharing the header drawer engine. Write-capable Deal Assistant stays on the deal sheet. Fundlane tokens theme ChatKit; no generic ChatGPT skin.",
+      "source": "User-approved full-page ChatKit plan"
     }
   ],
   "evidence": [

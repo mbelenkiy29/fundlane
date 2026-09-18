@@ -6,7 +6,7 @@ The global assistant reads accessible deals, pipeline counts and existing underw
 
 ## Architecture
 
-The dashboard mounts the ChatKit React panel once per user/workspace. The header opens it alongside the page; mobile uses a full-screen dialog. Selected-deal context is opt-in; the deal dialog also offers an Assistant button. Source links use the existing `/deals?deal=…` route. History is private to the user and company, with rename and deletion through ChatKit.
+The dashboard mounts ChatKit for each user/workspace. `/assistant` is the full-page ChatGPT-style workspace (history, start prompts, composer). The header Assistant button opens the same session in a 440px drawer on other pages and is hidden on `/assistant` so two frames are not on screen at once. Mobile uses a full-screen dialog for the drawer. Selected-deal context is opt-in from the page deal bar, `@` deal tags, or the drawer checkbox. Source links use the existing `/deals?deal=…` route. History is private to the user and company, with rename and deletion through ChatKit. This surface is read-only. Sending messages, submissions, files, and credits stay on the deal-sheet Deal Assistant.
 
 `POST /api/mca/chatkit` requires a Clerk session, validates browser origin, checks deal-page access, and proxies the protocol to the private Python service without buffering. Turn requests have a shared Neon limit of 10/minute/user/workspace and one in-flight turn; metadata requests allow 120/minute. Cancellation, completion, and a 120-second timeout invalidate the request capability.
 
