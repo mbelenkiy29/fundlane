@@ -20,6 +20,7 @@ import {
 } from "./repository"
 import { documentScanner, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
+import { backgroundJobsEnabled, enqueueBackgroundJob, inBackgroundWorker } from "../jobs/queue"
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 const ALLOWED_MIME_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"])
@@ -70,7 +71,7 @@ async function failUploadCompletion(actor: DealActor, record: DocumentRecord, er
   throw error instanceof AppError ? error : new AppError(503, "storage_completion_failed", "File storage could not be completed. Retry upload completion.")
 }
 
-/** Scan after integrity checks; promote storage only when clean. Never release quarantine. */
+/** Scan after integrity checks (enqueue on Vercel); promote storage only when clean. Never release quarantine. */
 async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
   if (isDocumentReady(record.processingState) || record.processingState === "quarantined") return record
   try {
@@ -80,6 +81,13 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
     validateUpload({ ...record, filename: record.originalFilename, bytes, idempotencyKey: record.id })
   } catch (error) {
     await failUploadCompletion(actor, record, error)
+  }
+  if (backgroundJobsEnabled() && !inBackgroundWorker()) {
+    const pending = record.processingState === "pending_scan"
+      ? record
+      : await updateDocumentScan(actor.workspaceId, record.id, "pending_scan", "queued", { queued: true }, nowIso())
+    await enqueueBackgroundJob({ actor, kind: "document_scan", resourceId: record.id, idempotencyKey: `document_scan:${record.id}`, payload: { documentId: record.id } })
+    return pending
   }
   const result = await documentScanner().scan(bytes, record.originalFilename)
   if (result.status === "clean") {
