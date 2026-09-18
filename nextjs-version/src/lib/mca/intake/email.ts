@@ -321,7 +321,7 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
   const normalized: NormalizedIntakeInput = { ...initial, application, initialStatus: prior.dealId ? prior.initialStatus : integration.initialStatus }
   if (!prior.dealId) await saveEmailApplication(actor.workspaceId, prior.intakeId, normalized, intakePayloadChecksum(normalized))
   let result: IntakeResult
-  try { result = await ingestApplication(actor, normalized) }
+  try { result = await ingestApplication(actor, normalized, undefined, integration.id) }
   catch (error) { return recordError(error instanceof AppError ? error.code : "email_application_invalid", "The extracted application could not be saved. Review its fields and retry.") }
   for (const [index, file] of genuine.entries()) {
     const attachmentId = file.id ?? createHash("sha256").update(`${messageId}\0${index}\0${file.filename ?? ""}`).digest("hex").slice(0, 24)

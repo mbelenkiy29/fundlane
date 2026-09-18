@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { AppError } from "../errors"
 import { decryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
@@ -317,7 +319,7 @@ async function persistArtifact(input: {
     sourceReference: input.sourceReference,
   })
   if (document.checksum !== artifact.checksum) throw new AppError(409, "docuseal_artifact_checksum_mismatch", "Stored DocuSeal evidence does not match the downloaded artifact.")
-  if (document.processingState !== "clean") throw new AppError(423, "docuseal_artifact_not_clean", "DocuSeal signature evidence must pass malware scanning before the request can be signed.")
+  if (!isDocumentReady(document.processingState)) throw new AppError(423, "docuseal_artifact_not_clean", "DocuSeal signature evidence must finish uploading before the request can be signed.")
   return document
 }
 
@@ -325,7 +327,7 @@ async function storedEvidence(request: DocuSealPsfRecord, submissionId: string, 
   const records = dependencies.listStoredEvidence
     ? await dependencies.listStoredEvidence(request.workspaceId, request.dealId)
     : await listDocumentRecords(request.workspaceId, request.dealId)
-  const prefix = `docuseal:${submissionId}:`, clean = records.filter((record) => record.processingState === "clean" && record.sourceReference?.startsWith(prefix))
+  const prefix = `docuseal:${submissionId}:`, clean = records.filter((record) => isDocumentReady(record.processingState) && record.sourceReference?.startsWith(prefix))
   const signedDocumentIds = clean.filter((record) => record.source === "docuseal_signed_psf" && /^signed:\d+$/.test(record.sourceReference!.slice(prefix.length))).map((record) => record.id)
   const audit = clean.find((record) => record.source === "docuseal_audit_log" && record.sourceReference === `${prefix}audit`)
   return { signedDocumentIds, ...(audit ? { auditDocumentId: audit.id } : {}) }

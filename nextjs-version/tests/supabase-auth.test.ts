@@ -15,7 +15,7 @@ before(async()=>{
   database=await createPostgresTestDatabase("supabase_auth");process.env.DATABASE_URL=database.databaseUrl
   await getDatabase().prepare("CREATE SCHEMA auth").run()
   await getDatabase().prepare("CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid NOT NULL,not_after timestamptz)").run()
-  await getDatabase().prepare("CREATE SCHEMA mca_private").run()
+  await getDatabase().prepare("CREATE SCHEMA IF NOT EXISTS mca_private").run()
   await getDatabase().prepare("CREATE VIEW mca_private.auth_sessions AS SELECT id,user_id,not_after FROM auth.sessions").run()
 })
 after(async()=>{await closeDatabaseForTests();await database?.close()})

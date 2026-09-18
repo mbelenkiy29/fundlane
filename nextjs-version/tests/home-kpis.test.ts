@@ -377,6 +377,10 @@ test("funded MTD ignores last year and YTD includes it", async () => {
   assert.equal(ytd.commission.amountCents, 400_000)
   const june = ytd.series.fundedByMonth.find((row) => row.month === "2025-06")
   assert.equal(june?.fundedCents, 2_500_000)
+  assert.equal(ytd.series.pipelineByMonth.length, 12)
+  assert.equal(ytd.series.approvalByMonth.length, 12)
+  assert.equal(ytd.series.collectionsByDay.length, 14)
+  assert.equal(ytd.series.collectionsByDay.at(-1)?.day, "2026-03-15")
 })
 
 test("active merchants count only on_track and missed_payment advances", async () => {

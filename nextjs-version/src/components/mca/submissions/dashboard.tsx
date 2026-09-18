@@ -6,6 +6,7 @@ import { ArrowUpRight, FileCheck2, RefreshCw, Search, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
   Sheet,
   SheetContent,
@@ -21,13 +22,18 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { requestJson } from "@/lib/mca/client"
+import { SubmissionsInsightsPanel } from "@/components/mca/submissions/insights-panel"
+import { IntakeLinkCard } from "@/components/mca/submissions/intake-link-card"
 import {
   dealSubmissionHref,
   submissionLabel,
   type DashboardResult,
+  type SubmissionBusinessStatus,
+  type SubmissionDealRow,
   type SubmissionDetail,
   type SubmissionRow,
 } from "@/lib/mca/submissions/dashboard-view"
+import { isInsightWindow, type InsightWindow, type SubmissionInsights } from "@/lib/mca/submissions/insights"
 
 const dateLabel = (date: string | null) =>
   date
@@ -50,9 +56,11 @@ function Status({ value }: { value: string }) {
           "preflight_failed",
           "blocked_duplicate",
           "declined",
+          "rejected",
+          "withdrawn",
         ].includes(value)
           ? "destructive"
-          : value === "sent" || value === "approved"
+          : value === "sent" || value === "approved" || value === "funded" || value === "offer_received"
             ? "default"
             : "secondary"
       }
@@ -62,11 +70,24 @@ function Status({ value }: { value: string }) {
     </Badge>
   )
 }
+
+function BusinessStatus({ value }: { value: SubmissionBusinessStatus }) {
+  return <Status value={value} />
+}
+
+function amountLabel(deal: SubmissionDealRow): string {
+  if (deal.amountHidden) return "Restricted"
+  if (deal.amountRequested == null) return "—"
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(deal.amountRequested)
+}
 export function SubmissionsDashboard() {
   const router = useRouter(),
     path = usePathname(),
     params = useSearchParams()
   const [data, setData] = React.useState<DashboardResult>()
+  const [insights, setInsights] = React.useState<SubmissionInsights>()
+  const [insightWindow, setInsightWindow] = React.useState<InsightWindow>("today")
+  const [insightsLoading, setInsightsLoading] = React.useState(true)
   const [loading, setLoading] = React.useState(true),
     [error, setError] = React.useState("")
   const [refresh, setRefresh] = React.useState(0),
@@ -98,6 +119,23 @@ export function SubmissionsDashboard() {
       active = false
     }
   }, [queryString, refresh])
+  React.useEffect(() => {
+    let active = true
+    setInsightsLoading(true)
+    requestJson<SubmissionInsights>(`/api/mca/submissions/insights?window=${insightWindow}`)
+      .then((result) => {
+        if (active) setInsights(result)
+      })
+      .catch(() => {
+        if (active) setInsights(undefined)
+      })
+      .finally(() => {
+        if (active) setInsightsLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [insightWindow, refresh])
   React.useEffect(() => {
     let active = true
     setDetail(undefined)
@@ -132,11 +170,12 @@ export function SubmissionsDashboard() {
     "from",
     "to",
   ].some((key) => params.has(key))
-  function open(row: SubmissionRow, target: HTMLElement) {
+  function open(row: SubmissionRow | SubmissionDealRow, target: HTMLElement, recordId = "id" in row ? row.id : row.recordId) {
     focusTarget.current = target
-    change("record", row.id)
+    change("record", recordId)
   }
   const choices = data?.choices
+  const deals = data?.deals ?? []
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -149,7 +188,7 @@ export function SubmissionsDashboard() {
             Submissions
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Track funder deliveries and responses across your deals.
+            Live submissions, lender volume, and what happened after each send.
           </p>
         </div>
         <div className="flex gap-2">
@@ -167,6 +206,15 @@ export function SubmissionsDashboard() {
           </Button>
         </div>
       </header>
+      <SubmissionsInsightsPanel
+        insights={insights}
+        window={insightWindow}
+        onWindowChange={(value) => {
+          if (isInsightWindow(value)) setInsightWindow(value)
+        }}
+        loading={insightsLoading}
+      />
+      <IntakeLinkCard />
       <section
         aria-label="Submission filters"
         className="space-y-3 rounded-xl border bg-card p-4"
@@ -292,7 +340,7 @@ export function SubmissionsDashboard() {
         <div className="flex items-center justify-between border-b px-4 py-3">
           <p className="text-sm font-medium">
             {data
-              ? `${data.total} submission${data.total === 1 ? "" : "s"}`
+              ? `${data.total} ${data.total === 1 ? "business" : "businesses"}`
               : "Submissions"}
           </p>
           <span role="status" className="text-xs text-muted-foreground">
@@ -304,7 +352,7 @@ export function SubmissionsDashboard() {
             Loading submissions…
           </p>
         )}
-        {data && data.rows.length === 0 && (
+        {data && deals.length === 0 && (
           <div className="space-y-3 p-12 text-center">
             <FileCheck2 className="mx-auto size-8 text-muted-foreground" />
             <h2 className="font-medium">
@@ -324,106 +372,91 @@ export function SubmissionsDashboard() {
             )}
           </div>
         )}
-        {!!data?.rows.length && (
+        {!!deals.length && (
           <>
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-muted/40 text-xs text-muted-foreground">
-                  <tr>
+            <div className="hidden md:block">
+              <Table aria-label="Submissions">
+                <TableHeader>
+                  <TableRow>
                     {[
-                      "Business / Deal",
-                      "Funder",
-                      "Assigned rep",
-                      "Delivery",
-                      "Response",
-                      "Submitted",
-                      "Updated",
+                      "Business Name",
+                      "Amount requested",
+                      "Lender(s) submitted to",
+                      "Status",
+                      "Date submitted",
+                      "Outcome",
                     ].map((title) => (
-                      <th className="px-4 py-3 font-medium" key={title}>
+                      <TableHead key={title}>
                         {title}
-                      </th>
+                      </TableHead>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.rows.map((row) => (
-                    <tr key={row.id} className="border-t hover:bg-muted/30">
-                      <td className="px-4 py-4">
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {deals.map((deal) => (
+                    <TableRow key={deal.dealId}>
+                      <TableCell>
                         <button
                           className="text-left font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2"
-                          onClick={(event) => open(row, event.currentTarget)}
+                          onClick={(event) => open(deal, event.currentTarget)}
                         >
-                          {row.business}
+                          {deal.business}
                           <span className="mt-1 block text-xs font-normal text-muted-foreground">
-                            {row.displayId}
+                            {deal.displayId}
                           </span>
                         </button>
-                      </td>
-                      <td className="px-4 py-4">
-                        {row.funder}
-                        {row.source !== "automated" && (
-                          <span className="block text-xs text-muted-foreground">
-                            {submissionLabel(row.source)}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-4">
-                        {row.reps.map((rep) => rep.name).join(", ") ||
-                          "Unassigned"}
-                      </td>
-                      <td className="px-4 py-4">
-                        <Status value={row.delivery} />
-                      </td>
-                      <td className="px-4 py-4">
-                        <Status value={row.response} />
-                      </td>
-                      <td className="px-4 py-4 text-xs text-muted-foreground">
-                        {dateLabel(row.submittedAt)}
-                      </td>
-                      <td className="px-4 py-4 text-xs text-muted-foreground">
-                        {dateLabel(row.updatedAt)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{amountLabel(deal)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {deal.lenders.map((lender) => (
+                            <button
+                              key={lender.recordId}
+                              className="rounded-full border px-2 py-0.5 text-xs hover:bg-muted"
+                              onClick={(event) => open(deal, event.currentTarget, lender.recordId)}
+                            >
+                              {lender.name}
+                            </button>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <BusinessStatus value={deal.status} />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {dateLabel(deal.submittedAt)}
+                      </TableCell>
+                      <TableCell className="text-sm">{deal.outcome}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             <div className="divide-y md:hidden">
-              {data.rows.map((row) => (
+              {deals.map((deal) => (
                 <button
-                  key={row.id}
+                  key={deal.dealId}
                   className="block w-full space-y-3 p-4 text-left hover:bg-muted/30"
-                  onClick={(event) => open(row, event.currentTarget)}
+                  onClick={(event) => open(deal, event.currentTarget)}
                 >
                   <div className="flex justify-between gap-3">
                     <span className="font-medium">
-                      {row.business}
+                      {deal.business}
                       <span className="block text-xs font-normal text-muted-foreground">
-                        {row.displayId}
+                        {deal.displayId}
                       </span>
                     </span>
                     <ArrowUpRight className="size-4 shrink-0 text-muted-foreground" />
                   </div>
-                  <p className="text-sm">
-                    {row.funder}{" "}
-                    <span className="text-muted-foreground">
-                      ·{" "}
-                      {row.reps.map((rep) => rep.name).join(", ") ||
-                        "Unassigned"}
-                    </span>
+                  <p className="text-sm">{amountLabel(deal)}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {deal.lenders.map((lender) => lender.name).join(", ")}
                   </p>
                   <div className="flex flex-wrap gap-3 text-xs">
-                    <span>
-                      Delivery <Status value={row.delivery} />
-                    </span>
-                    <span>
-                      Response <Status value={row.response} />
-                    </span>
+                    <BusinessStatus value={deal.status} />
+                    <span className="text-muted-foreground">{dateLabel(deal.submittedAt)}</span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Submitted {dateLabel(row.submittedAt)} · Updated{" "}
-                    {dateLabel(row.updatedAt)}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{deal.outcome}</p>
                 </button>
               ))}
             </div>

@@ -116,3 +116,6 @@ graphify-out/reflections/
 /chatkit-service/.venv/
 /chatkit-service/.pytest_cache/
 /chatkit-service/**/__pycache__/
+
+# Local Graphify refresh backups
+graphify-out/20??-??-??/

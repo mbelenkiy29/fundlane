@@ -1,4 +1,5 @@
 "use client"
+import { Table, TableBody, TableRow, TableCell } from "@/components/ui/table"
 import Image from "next/image"
 import { useEffect, useState } from "react"
 import { Download, Eye, FileText, Loader2, Trash2 } from "lucide-react"
@@ -149,21 +150,20 @@ export function FileCard({
               {preview.sheets.map((s) => (
                 <section key={s.name}>
                   <h3 className="mb-2 font-medium">{s.name}</h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <tbody>
+
+                    <Table className="w-full text-left text-xs">
+                      <TableBody>
                         {s.rows.map((r, i) => (
-                          <tr key={i}>
+                          <TableRow key={i}>
                             {r.slice(0, 50).map((v, j) => (
-                              <td key={j} className="border p-2">
+                              <TableCell key={j}>
                                 {String(v ?? "")}
-                              </td>
+                              </TableCell>
                             ))}
-                          </tr>
+                          </TableRow>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      </TableBody>
+                    </Table>
                 </section>
               ))}
             </div>

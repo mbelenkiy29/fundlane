@@ -38,13 +38,15 @@ export async function persistInstallments(database: DbExecutor, input: {
 }): Promise<number> {
   const expected = generateExpectedInstallments(input)
   let inserted = 0
-  for (const item of expected) {
-    const row = await database.prepare<{ id: string }>(`INSERT INTO mca_merchant_installments
+  // Bound both the parameter count and remote database round trips.
+  for (let offset = 0; offset < expected.length; offset += 250) {
+    const batch = expected.slice(offset, offset + 250)
+    const rows = await database.prepare<{ id: string }>(`INSERT INTO mca_merchant_installments
       (id, workspace_id, advance_id, sequence, occurrence_date, amount_cents, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ")}
       ON CONFLICT (workspace_id, advance_id, occurrence_date) DO NOTHING
-      RETURNING id`).get(newId(), input.workspaceId, input.advanceId, item.sequence, item.occurrenceDate, item.amountCents, input.createdAt)
-    if (row) inserted += 1
+      RETURNING id`).all(...batch.flatMap((item) => [newId(), input.workspaceId, input.advanceId, item.sequence, item.occurrenceDate, item.amountCents, input.createdAt]))
+    inserted += rows.length
   }
   return inserted
 }

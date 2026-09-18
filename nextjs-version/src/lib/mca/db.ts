@@ -1,3 +1,4 @@
+import { recordOperationalError } from "./operations/telemetry";
 import "server-only";
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -5,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
 import { postgresConnection } from "./db-connection";
+import { assertHostedSupabaseConfig } from "./hosted-config";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
 
 export interface RunResult { changes: number }
@@ -30,6 +32,7 @@ const transactionContext = new AsyncLocalStorage<DbExecutor>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
 
 function databaseUrl(): string {
+  assertHostedSupabaseConfig();
   const value = process.env.DATABASE_URL?.trim();
   if (!value) throw new Error("DATABASE_URL is required. Fundlane no longer supports a SQLite runtime fallback.");
   // Keep certificate and hostname verification explicit across pg versions.
@@ -61,7 +64,7 @@ function getPool(): Pool {
     // pg removes disconnected idle clients automatically, but emits an error that
     // otherwise terminates the server. Active query errors still reject normally.
     globalDatabase.__mcaDatabasePool.on("error", () => {
-      console.error(JSON.stringify({ event: "database_idle_connection_lost" }));
+      void recordOperationalError("database", "idle_connection_lost");
     });
     globalDatabase.__mcaDatabaseUrl = url;
   }

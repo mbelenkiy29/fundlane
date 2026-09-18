@@ -47,6 +47,9 @@ export interface HomeKpis {
   empty: boolean
   series: {
     fundedByMonth: Array<{ month: string; fundedCents: number; commissionCents: number }>
+    pipelineByMonth: Array<{ month: string; count: number; volumeDollars: number }>
+    approvalByMonth: Array<{ month: string; numerator: number; denominator: number; rate: number | null }>
+    collectionsByDay: Array<{ day: string; expectedCents: number; receivedCents: number }>
     revenueBreakdown: Array<{ key: "funded" | "commission" | "fees"; amountCents: number }>
     recentActivity: Array<{
       id: string

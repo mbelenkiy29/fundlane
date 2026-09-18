@@ -2,7 +2,7 @@ import "server-only"
 
 import { createOpaqueToken, hashOpaqueToken } from "../crypto"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
-import { newId, nowIso, recordAuditEvent, withTransaction } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
@@ -77,6 +77,7 @@ export interface SendGridSenderInput {
 }
 
 export interface CreateSenderInput {
+  personal?: boolean
   provider: SenderProvider
   purpose: SenderPurpose
   fromName: string
@@ -117,7 +118,7 @@ function isAdmin(actor: DealActor): boolean {
 }
 
 function isMember(actor: DealActor, sender: StoredEmailSender): boolean {
-  return Boolean(actor.membershipId && sender.memberIds.includes(actor.membershipId))
+  return Boolean(actor.membershipId && (sender.ownerMembershipId === actor.membershipId || sender.memberIds.includes(actor.membershipId)))
 }
 
 function canView(actor: DealActor, sender: StoredEmailSender): boolean {
@@ -309,7 +310,7 @@ async function audit(actor: DealActor, action: string, sender: StoredEmailSender
 export async function listSenders(actor: DealActor): Promise<SenderListResult> {
   const stored = await listSendersByWorkspace(actor.workspaceId)
   return {
-    senders: stored.filter((sender) => canView(actor, sender)).map(toConnection),
+    senders: stored.filter((sender) => canView(actor, sender)).map(sender => ({ ...toConnection(sender), canReconnect: sender.ownerMembershipId ? sender.ownerMembershipId === actor.membershipId : isAdmin(actor) })),
     oauth: { google: senderOAuthConfigured("google"), microsoft: senderOAuthConfigured("microsoft") },
     canManage: isAdmin(actor),
   }
@@ -320,7 +321,9 @@ export async function getSender(actor: DealActor, senderId: string): Promise<Sen
 }
 
 export async function createSender(actor: DealActor, input: CreateSenderInput): Promise<SenderConnection> {
-  assertAdmin(actor)
+  if (!input.personal) assertAdmin(actor)
+  if (input.personal && (!actor.membershipId || !actor.userId || actor.source !== "user" || !(await activeMembershipIdsInWorkspace(actor.workspaceId, [actor.membershipId])).length)) denied()
+  if (input.personal && (input.purpose !== "merchant" || !["google", "microsoft"].includes(input.provider) || input.isDefault || input.memberIds?.length || input.smtp || input.sendgrid)) denied("Personal connections must use your own Google or Microsoft merchant account.")
   const provider = asProvider(input.provider)
   const purpose = asPurpose(input.purpose)
   const fromName = asFromName(input.fromName)
@@ -344,6 +347,7 @@ export async function createSender(actor: DealActor, input: CreateSenderInput): 
       state: "pending",
       isDefault: Boolean(input.isDefault),
       createdByUserId: actor.userId,
+      ownerMembershipId: input.personal ? actor.membershipId : null,
       createdAt: now,
       updatedAt: now,
       memberIds,
@@ -354,8 +358,8 @@ export async function createSender(actor: DealActor, input: CreateSenderInput): 
 }
 
 export async function updateSender(actor: DealActor, senderId: string, input: UpdateSenderInput): Promise<SenderConnection> {
-  assertAdmin(actor)
   const current = assertCanView(actor, await findSenderById(actor.workspaceId, senderId))
+  if (!isAdmin(actor) && (!actor.membershipId || current.ownerMembershipId !== actor.membershipId || input.memberIds !== undefined || input.isDefault !== undefined || input.fromAddress !== undefined || input.smtp || input.sendgrid)) denied()
   if (input.revoke) return revokeSender(actor, senderId)
   const memberIds = input.memberIds !== undefined ? await normalizeMemberIds(actor.workspaceId, asMemberIds(input.memberIds)) : undefined
   const credential = mergeCredential(current, input)
@@ -384,8 +388,8 @@ export async function updateSender(actor: DealActor, senderId: string, input: Up
 }
 
 export async function revokeSender(actor: DealActor, senderId: string): Promise<SenderConnection> {
-  assertAdmin(actor)
   const current = assertCanView(actor, await findSenderById(actor.workspaceId, senderId))
+  if (!isAdmin(actor) && (!actor.membershipId || current.ownerMembershipId !== actor.membershipId)) denied()
   const stored = await updateSenderRecord({
     id: current.id,
     workspaceId: actor.workspaceId,
@@ -453,8 +457,8 @@ export async function testSend(actor: DealActor, senderId: string, input: { to?:
 }
 
 export async function startSenderOAuth(actor: DealActor, senderId: string): Promise<SenderOAuthStart> {
-  assertAdmin(actor)
   const sender = assertCanView(actor, await findSenderById(actor.workspaceId, senderId))
+  if (sender.ownerMembershipId ? sender.ownerMembershipId !== actor.membershipId : !isAdmin(actor)) denied("Only the account owner can reconnect this email account.")
   if (sender.provider !== "google" && sender.provider !== "microsoft") {
     invalid("provider", "OAuth is only available for Google and Microsoft senders.")
   }
@@ -463,6 +467,7 @@ export async function startSenderOAuth(actor: DealActor, senderId: string): Prom
   const now = nowIso()
   await saveOauthState({
     stateHash: hashOpaqueToken(state),
+    userId: actor.userId,
     workspaceId: actor.workspaceId,
     senderId: sender.id,
     provider: sender.provider,
@@ -478,16 +483,17 @@ export async function startSenderOAuth(actor: DealActor, senderId: string): Prom
 }
 
 export async function completeSenderOAuth(actor: DealActor, input: { state: string; code: string }): Promise<SenderConnection> {
-  assertAdmin(actor)
-  const pending = await consumeOauthState(actor.workspaceId, hashOpaqueToken(input.state), nowIso())
+  const pending = await consumeOauthState(actor.workspaceId, hashOpaqueToken(input.state), nowIso(), getDatabase(), actor.userId)
   if (!pending) throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
   const sender = await findSenderById(actor.workspaceId, pending.senderId)
   if (!sender || (sender.provider !== "google" && sender.provider !== "microsoft")) {
     throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
   }
+  if (sender.ownerMembershipId ? sender.ownerMembershipId !== actor.membershipId : !isAdmin(actor)) denied()
   const existing = sender.credentialCipher ? decryptSenderCredential(sender.workspaceId, sender.credentialCipher) : undefined
   const previous = existing?.kind === "oauth" ? existing : undefined
   const credential = await exchangeSenderAuthorizationCode(sender.provider, input.code, previous)
+  if (!credential.email || credential.email.toLowerCase() !== sender.fromAddress.toLowerCase()) throw new AppError(422, "sender_address_mismatch", "Connect the email account matching the saved sender address.")
   const now = nowIso()
   const stored = await updateSenderRecord({
     id: sender.id,

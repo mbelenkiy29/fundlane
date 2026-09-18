@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
@@ -156,7 +158,7 @@ export async function updateStipulation(actor: DealActor, id: string, input: { s
   if (input.status === "verified") {
     if (!row.linked_document_id || String(row.status) !== "received") throw new AppError(409, "stipulation_not_received", "Upload and validate the requested document before verification.")
     const document = await getDocument(actor, String(row.linked_document_id))
-    if (document.processingState !== "clean" || document.category !== row.document_category) throw new AppError(409, "document_not_valid_for_stipulation", "The uploaded document must be clean and retain the requested category before verification.")
+    if (!isDocumentReady(document.processingState) || document.category !== row.document_category) throw new AppError(409, "document_not_valid_for_stipulation", "The uploaded document must be ready and retain the requested category before verification.")
   } else if (!required(input.exceptionReason, "exceptionReason", 500)) throw new AppError(422, "exception_required", "Explain why this stipulation is waived.")
   const now = nowIso()
   const updated = await getDatabase().prepare<Row>(`UPDATE mca_closing_stipulations SET status=?, exception_reason=?, verified_at=?, updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(input.status, input.status === "waived" ? input.exceptionReason!.trim() : null, input.status === "verified" ? now : null, now, actor.workspaceId, id)
@@ -370,7 +372,7 @@ export async function acceptOfferForClosing(actor: DealActor, input: { dealId: s
 }
 
 async function validatedClosingDocuments(actor: DealActor, dealId: string, documentIds: string[], exceptions: Record<string, string>): Promise<{ attachments: string[]; missing: string[] }> {
-  const documents = await listDocuments(actor, dealId), clean = new Map(documents.filter((item) => item.processingState === "clean").map((item) => [item.id, item]))
+  const documents = await listDocuments(actor, dealId), clean = new Map(documents.filter((item) => isDocumentReady(item.processingState)).map((item) => [item.id, item]))
   for (const id of documentIds) if (!clean.has(id)) throw new AppError(422, "attachment_invalid", "Every attachment must be a clean document from this deal.")
   const attachments = [...new Set(documentIds)]
   const missing: string[] = []
@@ -418,7 +420,7 @@ export async function sendRequestPreview(actor: DealActor, previewId: string, at
   if (pinnedHash !== row.content_hash) throw new AppError(409, "preview_integrity_failed", "The saved preview no longer matches its immutable content hash.")
   const attachments = await Promise.all(attachmentRefs.map(async (ref) => {
     const current = await getDocument(actor, ref.id)
-    if (current.version !== ref.version || current.checksum !== ref.checksum || current.processingState !== "clean") throw new AppError(409, "attachment_changed", "A pinned contract attachment is no longer available in the validated version.")
+    if (current.version !== ref.version || current.checksum !== ref.checksum || !isDocumentReady(current.processingState)) throw new AppError(409, "attachment_changed", "A pinned contract attachment is no longer available in the validated version.")
     const content = await getDocumentContent(actor, ref.id)
     if (content.document.version !== ref.version || content.document.checksum !== ref.checksum) throw new AppError(409, "attachment_changed", "A pinned contract attachment is no longer available in the validated version.")
     const token = issueClosingArtifactToken(current)
@@ -438,7 +440,7 @@ export async function recordContractSignature(actor: DealActor, input: { workflo
     required(input.externalId, "externalId", 300)
     required(input.evidenceDocumentId, "evidenceDocumentId", 300)
     const evidence = await getDocument(actor, input.evidenceDocumentId!)
-    if (evidence.dealId !== row.deal_id || evidence.category !== "closing_document" || evidence.processingState !== "clean") throw new AppError(422, "signature_evidence_invalid", "External signature evidence must be a clean closing document from this deal.")
+    if (evidence.dealId !== row.deal_id || evidence.category !== "closing_document" || !isDocumentReady(evidence.processingState)) throw new AppError(422, "signature_evidence_invalid", "External signature evidence must be an available closing document from this deal.")
   } else required(input.manualReason, "manualReason", 500)
   const now = nowIso()
   const updated = await getDatabase().prepare<Row>(`UPDATE mca_contract_workflows SET state='signed',signed_at=?,signature_source=?,signature_external_id=?,signature_evidence_document_id=?,manual_signature_reason=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(now, input.source, input.source === "external" ? input.externalId!.trim() : null, input.evidenceDocumentId ?? null, input.source === "manual" ? input.manualReason!.trim() : null, now, actor.workspaceId, input.workflowId)

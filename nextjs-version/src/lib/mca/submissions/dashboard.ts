@@ -4,11 +4,14 @@ import { canActorAccessDeal } from "../deals/access-policy"
 import type { DealActor, DealAssignment } from "../deals/schema"
 import { AppError } from "../errors"
 import {
-  filterSubmissionRows,
+  pageSubmissionDeals,
   submissionGuidance,
+  type SubmissionDealFacts,
   type SubmissionRow,
   type SubmissionDetail,
 } from "./dashboard-view"
+import { isActionAllowed } from "../policy"
+import { getWorkspaceSettings } from "../workspaces"
 
 type RecordRow = {
   id: string
@@ -70,7 +73,9 @@ async function visibleRows(actor: DealActor): Promise<SubmissionRow[]> {
         id: string
         displayId: string
         legalName: string
-      }>(`SELECT id, display_id AS "displayId", COALESCE(NULLIF(legal_name,''),'Untitled draft') AS "legalName" FROM deals WHERE workspace_id=?`)
+        requestedAmount: number | string | null
+        status: string
+      }>(`SELECT id, display_id AS "displayId", COALESCE(NULLIF(legal_name,''),'Untitled draft') AS "legalName", requested_amount AS "requestedAmount", status FROM deals WHERE workspace_id=?`)
       .all(actor.workspaceId),
     database
       .prepare<
@@ -131,6 +136,9 @@ async function visibleRows(actor: DealActor): Promise<SubmissionRow[]> {
   return records.flatMap((record) => {
     const deal = visible.get(record.deal_id)
     if (!deal) return []
+    const originator =
+      deal.assignments.find((assignment) => assignment.kind === "originator" && assignment.isPrimary) ??
+      deal.assignments.find((assignment) => assignment.kind === "originator")
     // Transport cache states are not funder responses. Never infer an approval from a successful send.
     const response = [
       "sent",
@@ -158,6 +166,14 @@ async function visibleRows(actor: DealActor): Promise<SubmissionRow[]> {
           id: a.membershipId,
           name: names.get(a.membershipId) ?? "Former member",
         })),
+        originatorId: originator?.membershipId ?? null,
+        originatorName: originator ? names.get(originator.membershipId) ?? "Former member" : null,
+        requestedAmount:
+          deal.requestedAmount == null || deal.requestedAmount === ""
+            ? null
+            : Number(deal.requestedAmount),
+        amountHidden: false,
+        dealStatus: deal.status,
         delivery:
           record.source === "legacy" &&
           [
@@ -178,12 +194,65 @@ async function visibleRows(actor: DealActor): Promise<SubmissionRow[]> {
     ]
   })
 }
+async function dealFacts(actor: DealActor, dealIds: string[]): Promise<Map<string, SubmissionDealFacts>> {
+  const facts = new Map<string, SubmissionDealFacts>()
+  if (!dealIds.length) return facts
+  const database = getDatabase()
+  const placeholders = dealIds.map(() => "?").join(",")
+  const [offers, fundings] = await Promise.all([
+    database
+      .prepare<{ dealId: string; funderName: string }>(
+        `SELECT deal_id AS "dealId", funder_name AS "funderName" FROM mca_offers WHERE workspace_id=? AND deal_id IN (${placeholders})`
+      )
+      .all(actor.workspaceId, ...dealIds),
+    database
+      .prepare<{ dealId: string; amountCents: number; funderName: string | null }>(
+        `SELECT f.deal_id AS "dealId", f.amount_cents AS "amountCents", o.funder_name AS "funderName"
+         FROM mca_funding_events f
+         LEFT JOIN mca_offers o ON o.workspace_id=f.workspace_id AND o.id=f.offer_id
+         WHERE f.workspace_id=? AND f.state='committed' AND f.deal_id IN (${placeholders})`
+      )
+      .all(actor.workspaceId, ...dealIds),
+  ])
+  for (const id of dealIds) facts.set(id, { funded: false, fundedAmountCents: null, fundedFunder: null, offerFunders: [] })
+  for (const offer of offers) {
+    const current = facts.get(offer.dealId) ?? { funded: false, fundedAmountCents: null, fundedFunder: null, offerFunders: [] }
+    if (offer.funderName && !current.offerFunders.includes(offer.funderName)) current.offerFunders.push(offer.funderName)
+    facts.set(offer.dealId, current)
+  }
+  for (const funding of fundings) {
+    const current = facts.get(funding.dealId) ?? { funded: false, fundedAmountCents: null, fundedFunder: null, offerFunders: [] }
+    current.funded = true
+    current.fundedAmountCents = (current.fundedAmountCents ?? 0) + (Number(funding.amountCents) || 0)
+    current.fundedFunder = funding.funderName ?? current.fundedFunder
+    facts.set(funding.dealId, current)
+  }
+  return facts
+}
+
 export async function listSubmissionDashboard(
   actor: DealActor,
   params: URLSearchParams
 ) {
   validateDashboardParams(params)
-  return filterSubmissionRows(await visibleRows(actor), params)
+  const rows = await visibleRows(actor)
+  const settings = await getWorkspaceSettings(actor.workspaceId)
+  const amountHidden = !Boolean(actor.role && isActionAllowed(actor.role, "viewCompanyFinancials", settings.actionVisibility))
+  for (const row of rows) {
+    row.amountHidden = amountHidden
+    if (amountHidden) row.requestedAmount = null
+  }
+  const facts = await dealFacts(actor, [...new Set(rows.map((row) => row.dealId))])
+  if (amountHidden) {
+    for (const fact of facts.values()) {
+      fact.fundedAmountCents = null
+    }
+  }
+  return pageSubmissionDeals(rows, params, facts)
+}
+
+export async function listVisibleSubmissionRows(actor: DealActor): Promise<SubmissionRow[]> {
+  return visibleRows(actor)
 }
 export async function getSubmissionDashboardDetail(
   actor: DealActor,

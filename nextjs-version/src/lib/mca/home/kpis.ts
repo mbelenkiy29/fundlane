@@ -79,6 +79,16 @@ function monthKeysEnding(today: string, count: number): string[] {
   return keys
 }
 
+function dayKeysEnding(today: string, count: number): string[] {
+  const [year, month, day] = today.split("-").map(Number)
+  const utc = Date.UTC(year, month - 1, day)
+  const keys: string[] = []
+  for (let offset = count - 1; offset >= 0; offset -= 1) {
+    keys.push(new Date(utc - offset * 86_400_000).toISOString().slice(0, 10))
+  }
+  return keys
+}
+
 function addressState(raw: string | null): string {
   const parsed = parseJson<{ state?: string }>(raw ?? "", {})
   return parsed.state?.trim() || "Unknown"
@@ -115,6 +125,8 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   const today = calendarDateInTimeZone(query.nowIso, timezone) || query.nowIso.slice(0, 10)
   const range = periodRange(query.period, today)
   const months = monthKeysEnding(today, 12)
+  const days = dayKeysEnding(today, 14)
+  const monthSet = new Set(months)
   const companyVisible = Boolean(actor.role && isActionAllowed(actor.role, "viewCompanyFinancials", settings.actionVisibility))
   const paymentsVisible = Boolean(actor.role && isActionAllowed(actor.role, "viewPaymentTable", settings.actionVisibility))
 
@@ -218,10 +230,16 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   const empty = visible.size === 0
   let pipelineCount = 0
   let pipelineVolume = 0
+  const pipelineByMonth = new Map(months.map((month) => [month, { count: 0, volumeDollars: 0 }]))
   for (const deal of visible.values()) {
     if (!isPipelineOpenStatus(deal.status)) continue
     pipelineCount += 1
     pipelineVolume += deal.requestedAmount ?? 0
+    const bucket = pipelineByMonth.get(deal.createdOn.slice(0, 7))
+    if (bucket) {
+      bucket.count += 1
+      bucket.volumeDollars += deal.requestedAmount ?? 0
+    }
   }
 
   const offerName = new Map(offerRows.map((row) => [row.id, row.funder_name]))
@@ -269,6 +287,7 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   let expectedToday = 0
   let receivedToday = 0
   const commissionByMonth = new Map<string, number>()
+  const collectionsByDay = new Map(days.map((day) => [day, { expectedCents: 0, receivedCents: 0 }]))
   for (const row of visiblePayments) {
     const expectedOn = row.expected_at ? calendarDateInTimeZone(row.expected_at, timezone) : ""
     const receivedOn = row.received_at ? calendarDateInTimeZone(row.received_at, timezone) : ""
@@ -276,6 +295,10 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
     const expectedCents = Number(row.expected_amount_cents) || 0
     if (expectedOn === today) expectedToday += expectedCents
     if (receivedOn === today) receivedToday += receivedCents
+    const expectedBucket = expectedOn ? collectionsByDay.get(expectedOn) : undefined
+    if (expectedBucket) expectedBucket.expectedCents += expectedCents
+    const receivedBucket = receivedOn ? collectionsByDay.get(receivedOn) : undefined
+    if (receivedBucket) receivedBucket.receivedCents += receivedCents
     if (receivedOn) {
       const month = receivedOn.slice(0, 7)
       if (row.type === "commission") commissionByMonth.set(month, (commissionByMonth.get(month) ?? 0) + receivedCents)
@@ -304,14 +327,18 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   const submissionsById = new Map(submissionRows.map((row) => [row.id, row]))
   const submittedIds = new Set<string>()
   const approvedIds = new Set<string>()
+  const submittedByMonth = new Map(months.map((month) => [month, new Set<string>()]))
+  const approvedByMonth = new Map(months.map((month) => [month, new Set<string>()]))
 
   function addSubmitted(id: string, occurredOn: string | null) {
-    if (!dateInInclusiveRange(occurredOn, range.from, range.to)) return
-    submittedIds.add(id)
+    if (dateInInclusiveRange(occurredOn, range.from, range.to)) submittedIds.add(id)
+    const month = occurredOn?.slice(0, 7)
+    if (month && monthSet.has(month)) submittedByMonth.get(month)?.add(id)
   }
   function addApproved(id: string, occurredOn: string | null) {
-    if (!dateInInclusiveRange(occurredOn, range.from, range.to)) return
-    approvedIds.add(id)
+    if (dateInInclusiveRange(occurredOn, range.from, range.to)) approvedIds.add(id)
+    const month = occurredOn?.slice(0, 7)
+    if (month && monthSet.has(month)) approvedByMonth.get(month)?.add(id)
   }
 
   for (const job of jobRows) {
@@ -487,6 +514,27 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
         fundedCents: companyVisible ? fundedByMonth.get(month) ?? 0 : 0,
         commissionCents: paymentsVisible ? commissionByMonth.get(month) ?? 0 : 0,
       })),
+      pipelineByMonth: months.map((month) => {
+        const bucket = pipelineByMonth.get(month) ?? { count: 0, volumeDollars: 0 }
+        return {
+          month,
+          count: bucket.count,
+          volumeDollars: companyVisible ? bucket.volumeDollars : 0,
+        }
+      }),
+      approvalByMonth: months.map((month) => {
+        const numerator = approvedByMonth.get(month)?.size ?? 0
+        const denominator = submittedByMonth.get(month)?.size ?? 0
+        return { month, numerator, denominator, rate: conversionRate(numerator, denominator) }
+      }),
+      collectionsByDay: days.map((day) => {
+        const bucket = collectionsByDay.get(day) ?? { expectedCents: 0, receivedCents: 0 }
+        return {
+          day,
+          expectedCents: paymentsVisible ? bucket.expectedCents : 0,
+          receivedCents: paymentsVisible ? bucket.receivedCents : 0,
+        }
+      }),
       revenueBreakdown: [
         { key: "funded", amountCents: companyVisible ? fundedCents : 0 },
         { key: "commission", amountCents: paymentsVisible ? commissionCents : 0 },

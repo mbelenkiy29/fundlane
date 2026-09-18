@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHash } from "node:crypto"
 import { crc32 } from "node:zlib"
 import { PDFDocument, type PDFPage } from "pdf-lib"
@@ -404,8 +406,8 @@ async function storageGet(key: string): Promise<Uint8Array | undefined> {
 async function assertLogoAvailable(workspaceId: string, logoId: string): Promise<void> {
   const document = await loadLogoDocument(workspaceId, logoId)
   if (document) {
-    if (document.processing_state !== "clean") {
-      throw new AppError(423, "document_not_clean", "This document is unavailable until a configured malware scanner marks it clean.")
+    if (!isDocumentReady(document.processing_state)) {
+      throw new AppError(423, "document_not_clean", "This document is unavailable. Complete its upload before using it.")
     }
     if (document.mime_type !== "image/png" && document.mime_type !== "image/jpeg") {
       invalid("logoDocumentId", "Choose a PNG or JPEG document as the broker logo.")
@@ -420,8 +422,8 @@ async function resolveLogo(workspaceId: string, settings: WatermarkSettings): Pr
   if (settings.logoDocumentId) {
     const document = await loadLogoDocument(workspaceId, settings.logoDocumentId)
     if (document) {
-      if (document.processing_state !== "clean") {
-        throw new AppError(423, "document_not_clean", "This document is unavailable until a configured malware scanner marks it clean.")
+      if (!isDocumentReady(document.processing_state)) {
+        throw new AppError(423, "document_not_clean", "This document is unavailable. Complete its upload before using it.")
       }
       const stored = await documentStorage().get(document.storage_key)
       if (checksumOf(stored) !== document.checksum) {

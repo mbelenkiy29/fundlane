@@ -18,6 +18,7 @@ export interface IntakeEventRecord extends IntakeResult {
   sourceReference?: string
   initialStatus?: DealStatus
   integrationId?: string
+  eventNamespace?: string
   errorCode?: string
   errorMessage?: string
   createdAt: string
@@ -39,6 +40,7 @@ function eventFromRow(row: Row): IntakeEventRecord {
     emailSourceChecksum: row.email_source_checksum ? String(row.email_source_checksum) : undefined,
     sourceReference: row.source_reference ? String(row.source_reference) : undefined,
     initialStatus: row.initial_status ? row.initial_status as DealStatus : undefined,
+    eventNamespace: row.event_namespace ? String(row.event_namespace) : undefined,
     integrationId: row.integration_id ? String(row.integration_id) : undefined,
     dealId: row.deal_id ? String(row.deal_id) : null,
     created: Boolean(row.deal_id),
@@ -58,13 +60,18 @@ export async function reserveIntake(
   integrationId?: string,
 ): Promise<{ record: IntakeEventRecord; inserted: boolean }> {
   return withImmediateTransaction(async (database) => {
+    // Before namespaces existed there was at most one event per provider ID. Keep generic client retries valid.
+    if (!integrationId) {
+      const legacy = await database.prepare("SELECT * FROM intake_events WHERE workspace_id=? AND provider=? AND provider_event_id=? AND legacy_identity=1 FOR UPDATE").get(workspaceId, input.provider, input.eventId) as Row | undefined
+      if (legacy) return { record: eventFromRow(legacy), inserted: false }
+    }
     const id = newId()
     const timestamp = nowIso()
     const inserted = await database.prepare<{ id: string }>(`INSERT INTO intake_events
       (id, workspace_id, provider, provider_event_id, payload_checksum, application_cipher,
-       source_reference, initial_status, state, integration_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)
-      ON CONFLICT (workspace_id, provider, provider_event_id) DO NOTHING
+       source_reference, initial_status, state, integration_id, event_namespace, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)
+      ON CONFLICT (workspace_id, event_namespace, provider, provider_event_id) DO NOTHING
       RETURNING id`).get(
       id,
       workspaceId,
@@ -75,12 +82,13 @@ export async function reserveIntake(
       input.sourceReference ?? null,
       input.initialStatus ?? null,
       integrationId ?? null,
+      integrationId ?? "",
       timestamp,
       timestamp,
     )
     const row = await database.prepare(`SELECT * FROM intake_events
-      WHERE workspace_id = ? AND provider = ? AND provider_event_id = ? FOR UPDATE`).get(
-      workspaceId, input.provider, input.eventId,
+      WHERE workspace_id = ? AND event_namespace = ? AND provider = ? AND provider_event_id = ? FOR UPDATE`).get(
+      workspaceId, integrationId ?? "", input.provider, input.eventId,
     ) as Row
     return { record: eventFromRow(row), inserted: Boolean(inserted) }
   })
@@ -294,6 +302,8 @@ export interface IntegrationRecord {
   initialStatus: DealStatus
   inboundAddress?: string
   enabled: boolean
+  automaticProcessing?: boolean
+  automaticSince?: string
   approvalState: "approved" | "pending_customer_contract"
   contractKey?: string
   attachmentMethod?: string
@@ -320,6 +330,7 @@ function integrationFromRow(row: Row, revealCredential = false): IntegrationReco
     allowedHosts: parseJson(row.allowed_hosts_json, []), senderRules: parseJson(row.sender_rules_json, []),
     assignmentPool: parseJson(row.assignment_pool_json, []), initialStatus: row.initial_status as DealStatus,
     inboundAddress: row.inbound_address ? String(row.inbound_address) : undefined,
+    automaticProcessing: Boolean(row.automatic_processing), automaticSince: row.automatic_since ? String(row.automatic_since) : undefined,
     enabled: Boolean(row.enabled), approvalState: row.approval_state as IntegrationRecord["approvalState"],
     contractKey: row.contract_key ? String(row.contract_key) : undefined,
     attachmentMethod: row.attachment_method ? String(row.attachment_method) : undefined,
@@ -375,6 +386,9 @@ export async function saveIntegration(input: Omit<IntegrationRecord, "createdAt"
       input.providerServerId ?? null, input.providerEvidenceHash ?? null, timestamp, timestamp,
     )
   }
+  await database.prepare("UPDATE intake_integrations SET automatic_processing=?, automatic_since=? WHERE id=? AND workspace_id=?").run(
+    input.automaticProcessing ? 1 : 0, input.automaticSince ?? null, input.id, input.workspaceId,
+  )
   return (await getIntegration(input.workspaceId, input.id, false))!
 }
 
@@ -428,6 +442,26 @@ export async function resolveAttributionToken(tokenHash: string): Promise<{ work
     workspaceId: String(row.workspace_id), integrationId: String(row.integration_id),
     membershipId: String(row.membership_id), formId: String(row.form_id),
   } : undefined
+}
+
+export async function resolveNativeAttributionToken(tokenHash: string): Promise<{ workspaceId: string; integrationId: string; membershipId: string } | undefined> {
+  const row = await intakeDatabase().prepare(`SELECT t.workspace_id, t.integration_id, t.membership_id
+    FROM intake_attribution_tokens t
+    JOIN intake_integrations i ON i.id=t.integration_id AND i.workspace_id=t.workspace_id AND i.enabled=1
+    JOIN memberships m ON m.id=t.membership_id AND m.workspace_id=t.workspace_id AND m.status='active'
+    WHERE t.token_hash=? AND t.revoked_at IS NULL AND i.provider='native'`).get(tokenHash) as Row | undefined
+  return row ? {
+    workspaceId: String(row.workspace_id),
+    integrationId: String(row.integration_id),
+    membershipId: String(row.membership_id),
+  } : undefined
+}
+
+export async function findNativeApplyIntegration(workspaceId: string): Promise<IntegrationRecord | undefined> {
+  const row = await intakeDatabase().prepare(
+    "SELECT * FROM intake_integrations WHERE workspace_id=? AND provider='native' AND form_id='apply' AND enabled=1"
+  ).get(workspaceId) as Row | undefined
+  return row ? integrationFromRow(row, false) : undefined
 }
 
 export interface ReceiptRecord {

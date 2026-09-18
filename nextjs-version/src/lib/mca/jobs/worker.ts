@@ -21,9 +21,11 @@ import { replayIntake } from "../intake/service"
 import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-service"
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
+  if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {
+    case "application_invitation_email": return (await import("../applications/service")).processInvitationEmail(actor, job)
     case "drive_preview":
     case "drive_apply": {
       if (actor.source !== "user" || !["admin", "super_admin"].includes(actor.role ?? "")) throw new AppError(403, "job_permission_revoked", "Administrator access is required for imports.")

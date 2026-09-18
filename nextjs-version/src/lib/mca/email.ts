@@ -1,3 +1,4 @@
+import { sendTransactionalWebhook } from "./operations/email-transport";
 import "server-only";
 
 import { AppError } from "./errors";
@@ -5,7 +6,7 @@ import { newId } from "./db";
 
 interface EmailMessage {
   recipient: string;
-  template: "workspace_invitation" | "account_recovery" | "funder_analysis_review" | "company_email_verification" | "ai_credit_alert";
+  template: "workspace_invitation" | "account_recovery" | "funder_analysis_review" | "company_email_verification" | "ai_credit_alert" | "application_invitation" | "operations_alert";
   actionUrl: string;
   expiresAt: string;
   data?: Record<string, unknown>;
@@ -30,17 +31,7 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
     }
     return { delivery: "preview", correlationId, previewUrl: message.actionUrl };
   }
-  const response = await fetch(webhook, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(process.env.MCA_EMAIL_WEBHOOK_TOKEN ? { authorization: `Bearer ${process.env.MCA_EMAIL_WEBHOOK_TOKEN}` } : {}),
-      "x-correlation-id": correlationId,
-      "idempotency-key": correlationId,
-    },
-    body: JSON.stringify(message),
-    signal: AbortSignal.timeout(10_000),
-  });
+  const response = await sendTransactionalWebhook(webhook, process.env.MCA_EMAIL_WEBHOOK_TOKEN, message, correlationId);
   if (!response.ok) throw new AppError(502, response.status >= 500 ? "email_delivery_uncertain" : "email_delivery_failed", "The email provider did not accept the message.");
   return { delivery: "sent", correlationId };
 }

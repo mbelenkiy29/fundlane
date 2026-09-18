@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHash, createHmac } from "node:crypto"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
@@ -473,7 +475,7 @@ export function scopedMerchantUploadUrl(input: {
 }
 
 function documentChecklist(documents: DocumentSummary[], openStipulations: Array<{ label: string }>): { summary: string; missing: string } {
-  const clean = documents.filter((item) => item.processingState === "clean")
+  const clean = documents.filter((item) => isDocumentReady(item.processingState))
   const missing: string[] = []
   for (const bucket of DOCUMENT_BUCKETS) {
     if (!clean.some((item) => bucket.categories.includes(item.category))) missing.push(bucket.label)

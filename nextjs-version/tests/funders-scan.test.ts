@@ -1,3 +1,4 @@
+import { postgresConnection } from "../src/lib/mca/db-connection"
 import "./helpers/business-auth";
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
@@ -13,6 +14,7 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import type { DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { storeDocument } from "../src/lib/mca/documents/service"
+import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import { createFunder, getFunder } from "../src/lib/mca/funders/directory"
 import { listFunderCriteria, publishFunderCriteria, upsertIndustryAlias } from "../src/lib/mca/funders/criteria"
 import type { CriteriaOperator, EligibilityRule } from "../src/lib/mca/funders/contracts"
@@ -225,11 +227,7 @@ function params(id: string) {
 }
 
 async function holdFunderLock(workspaceId: string, funderId: string) {
-  const client = new Client({
-    connectionString: testDatabase.databaseUrlUnpooled,
-    ssl: { rejectUnauthorized: true },
-    enableChannelBinding: true,
-  })
+  const client = new Client(postgresConnection(testDatabase.databaseUrlUnpooled))
   await client.connect()
   await client.query("BEGIN")
   await client.query("SELECT id FROM mca_funders WHERE workspace_id = $1 AND id = $2 FOR UPDATE", [workspaceId, funderId])
@@ -422,7 +420,7 @@ test("concurrent accept and reject commit exactly one consistent decision", asyn
   }
 })
 
-test("MIC-194 only clean vault PDF/PNG/JPEG can be scanned", async () => {
+test("MIC-194 ready vault PDF/PNG/JPEG can be analyzed while quarantine stays blocked", async () => {
   const funder = (await createFunder(actor(), { idempotencyKey: "vault-funder", legalName: "Vault Capital LLC" })).funder
   const deal = (await createDeal(actor(), { idempotencyKey: "vault-deal", legalName: "Vault Merchant LLC" })).deal
   extraction({
@@ -440,6 +438,7 @@ test("MIC-194 only clean vault PDF/PNG/JPEG can be scanned", async () => {
   assert.equal(findRule(pngScan.rules, "positions")?.value, 3)
   assert.equal(findRule(jpegScan.rules, "positions")?.value, 2)
   const quarantined = await uploadSheet(actor(), deal.id, "dirty.pdf", "vault-dirty", pdf("dirty"), "application/pdf", "infected")
+  await updateDocumentScan(actor().workspaceId, quarantined.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
   await assert.rejects(
     () => scanFunderCriteria(actor(), { funderId: funder.id, documentId: quarantined.id }),
     (error: { status?: number; code?: string }) => error.status === 423 && error.code === "document_not_clean",

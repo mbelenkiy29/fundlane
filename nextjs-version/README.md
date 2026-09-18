@@ -1,6 +1,6 @@
 # Fundlane
 
-Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, Stripe test billing, and Render workers for native processing and the Python ChatKit service. Production cutover is a separate controlled operation; see the [migration and deployment runbook](docs/supabase-vercel-migration.md) for the current deployment status.
+Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, Stripe test billing, and retained Render document/messaging workers. The old Render web and ChatKit services are suspended; both workers have failed initial builds. See the [deployment audit](docs/render-deployment.md) for recovery steps.
 
 ## Local setup
 
@@ -16,7 +16,7 @@ The runtime pool defaults to two connections on Vercel. Never expose database UR
 
 Preserve `MCA_DATA_ENCRYPTION_KEY` and all immutable workspace IDs when transferring existing records. The key is base64url-encoded 32-byte AES-256-GCM material; replacing it makes encrypted values unreadable. Staging uses its own key and synthetic records.
 
-Documents upload directly to private Supabase quarantine storage. Completion verifies the authorized object and queues scanning; only clean objects are promoted. Download authorization issues short-lived private URLs. The worker uses ClamAV and durable Postgres job leases, retries, and the submission outbox. Filesystem storage remains available for isolated local tests and source-file transfer only.
+Deal documents become ready after upload validation and private storage completion; malware scanning is not required. Existing clean documents remain usable. See [Deal document uploads](docs/deal-document-uploads.md) for pending-upload recovery and rollout. Application drafts retain their separate scanning flow. Filesystem storage remains available for isolated local tests and source-file transfer only.
 
 Run the document worker with `node --conditions=react-server --import tsx scripts/workers/run.ts`, and assistant maintenance with `pnpm assistant:worker`. See `Dockerfile.worker` and root `render.yaml`. The Python service receives signed HTTPS requests from Vercel and calls back through the existing live permission checks. Preserve each provider's activation state until verified.
 
@@ -26,6 +26,7 @@ Run the document worker with `node --conditions=react-server --import tsx script
 
 Application invitations and business messages use the existing transactional delivery adapter. Supabase Auth uses separately configured SMTP. Company SMS, signature providers, sender OAuth, and assistant credit packs retain their individual activation requirements:
 
+- [In-app email and SMS conversations](docs/email-conversations.md)
 - [Company SMS onboarding](docs/sms/company-onboarding.md)
 - [Provider activation](docs/milestone-05/provider-activation.md)
 - [Deal assistant](docs/deal-assistant.md)
@@ -46,3 +47,9 @@ pnpm build
 Tests create randomly named isolated databases, apply checked migrations and drop each database afterward. They never fall back to the application database. Hosted test clusters additionally require `MCA_TEST_DATABASE_DISPOSABLE=true`. HTTP fixtures implement Supabase cookie/session behavior; hosted staging acceptance checks use real Supabase Auth and Storage.
 
 Clerk and Neon are not part of the runtime. Identity is Supabase Auth; Postgres is the Supabase project named by `DATABASE_URL`.
+
+Pipeline calendar setup: [Calendar and Google sync](docs/pipeline-calendar.md). Web hosting remains Vercel; database, authentication, and private storage remain Supabase.
+
+Client invitation workflow and production activation: [Application outreach](docs/application-outreach.md).
+
+Owner operations and alert activation: [Platform status](docs/platform-status.md).

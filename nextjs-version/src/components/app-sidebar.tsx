@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Bot, BanknoteArrowDown, BriefcaseBusiness, Building2, ChartNoAxesCombined, CircleGauge, Columns3, FileCheck2, HandCoins, Landmark, LayoutPanelLeft, RefreshCcw, Settings, MessageSquare, WalletCards } from "lucide-react"
+import { CalendarDays, Bot, BanknoteArrowDown, BriefcaseBusiness, Building2, ChartNoAxesCombined, CircleGauge, Columns3, FileCheck2, HandCoins, Landmark, LayoutPanelLeft, RefreshCcw, Settings, Mail, MessageSquare, WalletCards } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -12,14 +12,18 @@ const groups = [
   { label: "Pipeline", items: [
     { title: "Home", url: "/dashboard", icon: CircleGauge, page: "dashboard" },
     { title: "AI Assistant", url: "/assistant", icon: Bot, page: "deals" },
+    { title: "Applications", url: "/applications", icon: FileCheck2, page: "deals" },
+    { title: "Application Intake", url: "/intake", icon: FileCheck2, page: "deals" },
     { title: "Deals", url: "/deals", icon: BriefcaseBusiness, page: "deals" },
     { title: "Pipeline", url: "/pipeline", icon: Columns3, page: "deals" },
+    { title: "Calendar", url: "/calendar", icon: CalendarDays, page: "deals" },
     { title: "Submissions", url: "/submissions", icon: FileCheck2, page: "deals" },
     { title: "Offers", url: "/offers", icon: HandCoins, page: "deals" },
     { title: "Advances", url: "/advances", icon: BanknoteArrowDown, page: "deals" },
     { title: "Renewals", url: "/renewals", icon: RefreshCcw, page: "deals" },
   ]},
   { label: "Operations", items: [
+    { title: "Email inbox", url: "/mail", icon: Mail, page: "deals" },
     { title: "SMS inbox", url: "/sms", icon: MessageSquare, page: "deals" },
     { title: "Funders", url: "/funders", icon: Landmark },
     { title: "Payments", url: "/payments", icon: WalletCards, page: "payments" },

@@ -1,3 +1,4 @@
+import { recordOperationalError } from "../operations/telemetry"
 import "server-only"
 
 import { AsyncLocalStorage } from "node:async_hooks"
@@ -16,7 +17,7 @@ export function inBackgroundWorker(): boolean { return execution.getStore() === 
 export function runAsBackgroundWorker<T>(callback: () => Promise<T>): Promise<T> { return execution.run(true, callback) }
 export function backgroundJobsEnabled(): boolean { return process.env.MCA_BACKGROUND_JOBS === "enabled" || Boolean(process.env.VERCEL) }
 
-export type BackgroundJobKind = "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
+export type BackgroundJobKind = "application_invitation_email" | "intake_process" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
 export interface BackgroundJob {
   id: string; workspace_id: string; kind: BackgroundJobKind; resource_id: string; actor_json: string; payload_json: string
   state: "queued" | "running" | "complete" | "failed"; attempts: number; lease_token: string | null
@@ -137,6 +138,7 @@ export async function completeBackgroundJob(job: BackgroundJob, result: unknown)
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {
   const permanent = error instanceof AppError && error.status < 500
   const state = permanent || job.attempts >= 3 ? "failed" : "queued"
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,error_code=?,available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
+  const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,error_code=?,available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
     .run(state, error instanceof AppError ? error.code : "processing_failed", new Date(Date.now() + 30_000 * job.attempts).toISOString(), nowIso(), job.id, job.lease_token)
+  if (saved.changes > 0 && state === "failed") await recordOperationalError("worker", "job_failed")
 }

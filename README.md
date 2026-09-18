@@ -1,6 +1,6 @@
 # Fundlane
 
-Fundlane is the MCA brokerage workspace application. The active app is in [`nextjs-version/`](nextjs-version/); it uses Next.js 16, React 19, Clerk authentication, and Neon Postgres.
+Fundlane is the MCA brokerage workspace application. The active app is in [`nextjs-version/`](nextjs-version/); it uses Next.js 16 and React 19 on Vercel, with Supabase for Postgres, Auth, and private Storage. Clerk and Neon are not part of the runtime.
 
 ## Development
 
@@ -10,7 +10,7 @@ Use Node.js 24+ and pnpm. Follow [`nextjs-version/README.md`](nextjs-version/REA
 
 Live application: https://fundlane.io. See [current deployment and verification](DEPLOYMENT.md).
 
-[`render.yaml`](render.yaml) defines the Render Docker service and persistent document disk. Neon remains the external database. See [`nextjs-version/docs/render-deployment.md`](nextjs-version/docs/render-deployment.md) for configuration and release checks.
+The website runs on Vercel. [`render.yaml`](render.yaml) retains the document and messaging workers; the old Render website and Python ChatKit service are suspended. See [`nextjs-version/docs/render-deployment.md`](nextjs-version/docs/render-deployment.md) for configuration and release checks.
 
 ## Workspace
 

@@ -1,3 +1,5 @@
+import { recoverWorkspaceDocuments } from "../src/lib/mca/documents/recovery"
+import { DOCUMENT_CATEGORIES } from "../src/lib/mca/documents/contracts"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
@@ -24,7 +26,7 @@ import { generateApplicationPdf, recordMerchantAuthorization, renderApplicationP
 import { confirmApplicationScan, reviewApplicationMerge, saveApplicationReview, scanApplicationDocument } from "../src/lib/mca/documents/application-scan"
 import { applyStatementFilename, previewStatementFilename } from "../src/lib/mca/documents/statement-filenames"
 import { confirmApplicationDraft, createApplicationDraft, extractApplicationDraft, getApplicationDraft, retryApplicationDraftScan } from "../src/lib/mca/documents/application-drafts"
-import { claimApplicationConfirmation, completeApplicationConfirmation } from "../src/lib/mca/documents/repository"
+import { updateDocumentScan, claimApplicationConfirmation, completeApplicationConfirmation } from "../src/lib/mca/documents/repository"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 const temp = mkdtempSync(join(tmpdir(), "mca-documents-"))
@@ -72,14 +74,14 @@ after(async () => {
 
 const minimalPdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"))
 
-test("MIC-169 vault fails closed, retries real scan state, keeps versions, and binds download tokens", async () => {
+test("vault uploads without a scanner, preserves quarantine, keeps versions, and binds download tokens", async () => {
   setDocumentScannerForTests(undefined)
   const pending = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "vault-1", filename: "original.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
-  assert.equal(pending.processingState, "pending_scan")
+  assert.equal(pending.processingState, "ready")
   assert.equal((await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "vault-1", filename: "retry.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })).id, pending.id)
-  await assert.rejects(() => getDocumentContent(actor(), pending.id), (error: { code?: string }) => error.code === "document_not_clean")
+  assert.deepEqual((await getDocumentContent(actor(), pending.id)).bytes, minimalPdf)
   setDocumentScannerForTests(scanner("clean"))
-  assert.equal((await retryDocumentScan(actor(), pending.id)).processingState, "clean")
+  assert.equal((await retryDocumentScan(actor(), pending.id)).processingState, "ready")
   const token = await createDocumentDownloadToken(actor(), pending.id, 1_000)
   assert.equal(new Date(token.expiresAt).getTime(), 301_000)
   await assert.rejects(() => createDocumentDownloadToken(actor("workspace-other"), pending.id), (error: { code?: string }) => error.code === "document_not_found")
@@ -89,8 +91,28 @@ test("MIC-169 vault fails closed, retries real scan state, keeps versions, and b
   await assert.rejects(() => storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "bad-magic", filename: "image.png", mimeType: "image/png", bytes: minimalPdf, category: "other_stip", source: "test" }), (error: { code?: string }) => error.code === "document_content_mismatch")
   setDocumentScannerForTests(scanner("infected"))
   const infected = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: "infected", filename: "infected.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.6\n%%EOF\n")), category: "other_stip", source: "test" })
-  assert.equal(infected.processingState, "quarantined")
+  assert.equal(infected.processingState, "ready") // Configured scanners are not invoked for deal uploads.
+  await updateDocumentScan(actor().workspaceId, infected.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
+  assert.equal((await retryDocumentScan(actor(), infected.id)).processingState, "quarantined")
   await assert.rejects(() => getDocumentContent(actor(), infected.id), (error: { code?: string }) => error.code === "document_not_clean")
+})
+
+test("storage promotion must succeed before a document becomes usable, and can be retried", async () => {
+  setDocumentScannerForTests(scanner("clean"))
+  let unavailable = true
+  let promotions = 0
+  setDocumentStorageForTests({ ...storage, async promoteClean() { promotions++; if (unavailable) throw new Error("storage unavailable") } })
+  try {
+    const input = { dealId: stagingDealId, idempotencyKey: "promotion-recovery", filename: "promotion.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\npromotion\n%%EOF\n")), category: "other_stip" as const, source: "test" }
+    await assert.rejects(() => storeDocument(actor(), input), (error: { code?: string }) => error.code === "storage_completion_failed")
+    const document = (await listDocuments(actor(), stagingDealId)).find(item => item.originalFilename === "promotion.pdf")!
+    assert.equal(document.processingState, "upload_failed")
+    await assert.rejects(() => getDocumentContent(actor(), document.id))
+    unavailable = false
+    assert.equal((await retryDocumentScan(actor(), document.id)).processingState, "ready")
+    assert.equal((await storeDocument(actor(), input)).id, document.id)
+    assert.equal(promotions, 2)
+  } finally { setDocumentStorageForTests(storage) }
 })
 
 test("MIC-169 atomically reserves uploads, recovers lost responses, and preserves version lineage across category correction", async () => {
@@ -117,11 +139,11 @@ test("MIC-169 atomically reserves uploads, recovers lost responses, and preserve
   setDocumentStorageForTests({ name: "interrupt-on-write", async get() { throw new Error("missing") }, async putImmutable() { throw new Error("interrupted") } })
   await assert.rejects(() => storeDocument(actor(), { ...input, idempotencyKey: interruptedKey, filename: "interrupted.pdf" }))
   const reservation = await getDatabase().prepare<{ id: string; state: string }>("SELECT id, processing_state AS state FROM mca_documents WHERE workspace_id = ? AND idempotency_key = ?").get(actor().workspaceId, interruptedKey) as { id: string; state: string }
-  assert.equal(reservation.state, "scan_failed")
+  assert.equal(reservation.state, "upload_failed")
   setDocumentStorageForTests(storage)
   const recovered = await storeDocument(actor(), { ...input, idempotencyKey: interruptedKey, filename: "interrupted.pdf" })
   assert.equal(recovered.id, reservation.id)
-  assert.equal(recovered.processingState, "clean")
+  assert.equal(recovered.processingState, "ready")
 })
 
 test("MIC-169 direct document access requires the exact read or write API scope", async () => {
@@ -381,4 +403,43 @@ test("MIC-182/MIC-177 OpenAI adapter sends file data with strict structured outp
     assert.equal((requestBody.text as { format: { type: string; strict: boolean } }).format.strict, true)
     assert.match(JSON.stringify(requestBody.input), /data:application\/pdf;base64/)
   } finally { globalThis.fetch = originalFetch }
+})
+
+
+test("all deal categories become ready without invoking the configured scanner", async () => {
+  setDocumentScannerForTests({ name: "must-not-run", async scan() { throw new Error("Deal uploads must not invoke scanners") } })
+  for (const category of DOCUMENT_CATEGORIES) {
+    const document = await storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: `no-scan-${category}`, filename: `${category}.pdf`, mimeType: "application/pdf", bytes: minimalPdf, category, source: "test" })
+    assert.equal(document.processingState, "ready")
+    assert.deepEqual((await getDocumentContent(actor(), document.id)).bytes, minimalPdf)
+    const stored = await getDocument(actor(), document.id)
+    assert.equal(stored.scanEvidence?.malwareScanPerformed, false)
+  }
+})
+
+test("recovery verifies existing bytes, skips quarantine, isolates workspaces, and is idempotent", async () => {
+  const upload = (key: string) => storeDocument(actor(), { dealId: stagingDealId, idempotencyKey: `recover-${key}`, filename: `${key}.pdf`, mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+  const [pending, failed, corrupt, missing, blocked] = await Promise.all(["pending", "failed", "corrupt", "missing", "blocked"].map(upload))
+  for (const document of [pending, failed, corrupt, missing]) {
+    await updateDocumentScan(actor().workspaceId, document.id, document.id === failed.id ? "scan_failed" : "pending_scan", "legacy-scanner", {}, new Date().toISOString())
+  }
+  await updateDocumentScan(actor().workspaceId, blocked.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
+  const corruptRecord = await getDocument(actor(), corrupt.id), missingRecord = await getDocument(actor(), missing.id)
+  memory.set(corruptRecord.storageKey, new Uint8Array(Buffer.from("%PDF-corrupt")))
+  memory.delete(missingRecord.storageKey)
+  await assert.rejects(() => retryDocumentScan(actor("workspace-other"), pending.id), (error: { code?: string }) => error.code === "document_not_found")
+  await assert.rejects(() => recoverWorkspaceDocuments({ ...actor(), source: "user" }, true))
+  const preview = await recoverWorkspaceDocuments(actor())
+  assert.equal(preview.candidates, 4)
+  assert.equal(preview.recovered, 0)
+  assert.equal((await getDocument(actor(), pending.id)).processingState, "pending_scan")
+  const result = await recoverWorkspaceDocuments(actor(), true)
+  assert.equal(result.recovered, 2)
+  assert.deepEqual(new Set(result.failed.map(item => item.id)), new Set([corrupt.id, missing.id]))
+  assert.equal((await getDocument(actor(), blocked.id)).processingState, "quarantined")
+  assert.equal((await getDocument(actor(), pending.id)).id, pending.id)
+  assert.deepEqual((await getDocumentContent(actor(), failed.id)).bytes, minimalPdf)
+  await assert.rejects(() => createDocumentDownloadToken(actor(), corrupt.id))
+  await assert.rejects(() => createDocumentDownloadToken(actor(), missing.id))
+  assert.equal((await recoverWorkspaceDocuments(actor(), true)).recovered, 0)
 })

@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
 
@@ -248,7 +248,6 @@ export function FunderAnalyticsView(props: {
       {report && (status === "success" || status === "empty") && (
         <>
           <p className="text-xs text-muted-foreground">{FUNDER_ANALYTICS_COPY.missingTerms}</p>
-          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -267,32 +266,6 @@ export function FunderAnalyticsView(props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.permission.companyTotalsVisible && (
-                  <TableRow>
-                    <TableCell className="font-medium">
-                      <button type="button" className="underline-offset-2 hover:underline" onClick={() => onSelectFunder("all")}>{report.totals.name}</button>
-                    </TableCell>
-                    <TableCell>
-                      <button type="button" onClick={() => { onSelectFunder("all"); onDrilldown("submissions") }}>{report.totals.submissions.count}</button>
-                    </TableCell>
-                    <TableCell>{report.totals.uniqueMerchants.count}</TableCell>
-                    <TableCell>
-                      <div>{report.totals.approvals.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.approvals)}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div>{report.totals.fundings.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.fundings)}</div>
-                    </TableCell>
-                    <TableCell className="text-xs">API {report.totals.channels.api} · Email {report.totals.channels.email}</TableCell>
-                    <TableCell className="text-xs">
-                      {report.totals.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatFunderRate(item.rate)}</div>
-                      ))}
-                    </TableCell>
-                    <TableCell>{formatCommissions(report.totals.commissions)}</TableCell>
-                  </TableRow>
-                )}
                 {rows.map((row) => (
                   <TableRow key={row.funderId ?? "unattributed"}>
                     <TableCell>
@@ -322,8 +295,33 @@ export function FunderAnalyticsView(props: {
                   </TableRow>
                 ))}
               </TableBody>
+              {report.permission.companyTotalsVisible && (<TableFooter>
+                  <TableRow>
+                    <TableCell className="font-medium">
+                      <button type="button" className="underline-offset-2 hover:underline" onClick={() => onSelectFunder("all")}>{report.totals.name}</button>
+                    </TableCell>
+                    <TableCell>
+                      <button type="button" onClick={() => { onSelectFunder("all"); onDrilldown("submissions") }}>{report.totals.submissions.count}</button>
+                    </TableCell>
+                    <TableCell>{report.totals.uniqueMerchants.count}</TableCell>
+                    <TableCell>
+                      <div>{report.totals.approvals.count}</div>
+                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.approvals)}</div>
+                    </TableCell>
+                    <TableCell>
+                      <div>{report.totals.fundings.count}</div>
+                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.fundings)}</div>
+                    </TableCell>
+                    <TableCell className="text-xs">API {report.totals.channels.api} · Email {report.totals.channels.email}</TableCell>
+                    <TableCell className="text-xs">
+                      {report.totals.conversions.map((item) => (
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatFunderRate(item.rate)}</div>
+                      ))}
+                    </TableCell>
+                    <TableCell>{formatCommissions(report.totals.commissions)}</TableCell>
+                  </TableRow>
+                </TableFooter>)}
             </Table>
-          </div>
           <div className="flex flex-wrap gap-2">
             {DRILLDOWN_KINDS.map((kind) => (
               <Button key={kind} type="button" size="sm" variant={drilldownKind === kind ? "default" : "outline"} onClick={() => onDrilldown(kind)}>
@@ -411,7 +409,7 @@ export function FunderAnalyticsView(props: {
               advances.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No advance sources for these filters.</p>
               ) : (
-                <div className="overflow-x-auto">
+
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -435,7 +433,6 @@ export function FunderAnalyticsView(props: {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
               )
             )}
             {drilldownKind === "payments" && (

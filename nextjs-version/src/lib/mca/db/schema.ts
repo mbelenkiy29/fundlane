@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigint, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -952,6 +952,8 @@ export const intake_integrations = pgTable("intake_integrations", {
 	allowed_hosts_json: text().default('[]').notNull(),
 	sender_rules_json: text().default('[]').notNull(),
 	assignment_pool_json: text().default('[]').notNull(),
+	automatic_processing: integer().default(0).notNull(),
+	automatic_since: text(),
 	initial_status: text().default('lead').notNull(),
 	inbound_address: text(),
 	enabled: integer().default(1).notNull(),
@@ -981,6 +983,8 @@ export const intake_events = pgTable("intake_events", {
 	workspace_id: text().notNull(),
 	provider: text().notNull(),
 	provider_event_id: text().notNull(),
+	event_namespace: text().default('').notNull(),
+	legacy_identity: integer().default(0).notNull(),
 	payload_checksum: text().notNull(),
 	application_cipher: text().notNull(),
 	email_source_cipher: text(),
@@ -1007,7 +1011,7 @@ export const intake_events = pgTable("intake_events", {
 			foreignColumns: [workspaces.id],
 			name: "intake_events_workspace_id_fkey"
 		}),
-	unique("intake_events_workspace_id_provider_provider_event_id_key").on(table.provider, table.provider_event_id, table.workspace_id),
+	unique("intake_events_scoped_event_key").on(table.workspace_id, table.event_namespace, table.provider, table.provider_event_id),
 	check("intake_events_state_check", sql`state = ANY (ARRAY['received'::text, 'validated'::text, 'created'::text, 'file_pending'::text, 'error'::text])`),
 ]);
 
@@ -1352,6 +1356,7 @@ export const mca_review_approvals = pgTable("mca_review_approvals", {
 ]);
 
 export const mca_email_senders = pgTable("mca_email_senders", {
+	owner_membership_id: text().references(() => memberships.id),
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	provider: text().notNull(),
@@ -1404,6 +1409,7 @@ export const mca_email_sender_members = pgTable("mca_email_sender_members", {
 ]);
 
 export const mca_email_oauth_states = pgTable("mca_email_oauth_states", {
+	user_id: text().references(() => users.id),
 	state_hash: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	sender_id: text(),
@@ -1463,6 +1469,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 ]);
 
 export const mca_submission_attempts = pgTable("mca_submission_attempts", {
+	sent_at: text(),
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	job_id: text().notNull(),
@@ -1675,3 +1682,80 @@ export const mcaAssistantExecutions = pgTable("mca_assistant_executions", {
   id: text().primaryKey(), run_id: text().notNull().references(()=>mcaAssistantRuns.id,{onDelete:"cascade"}), tool_name: text().notNull(), status: text().notNull(),
   result_cipher: text(), created_at: text().notNull(), completed_at: text(),
 }, t => [index("assistant_run_executions").on(t.run_id)]);
+
+export const intake_processing = pgTable("intake_processing", {
+  intake_id: text().primaryKey().references(() => intake_events.id),
+  workspace_id: text().notNull().references(() => workspaces.id),
+  fingerprint: text(), generation: integer().default(0).notNull(),
+  job_id: text(), progress_json: text().default('{}').notNull(),
+  checked_at: text().notNull(), updated_at: text().notNull(),
+}, table => [index("intake_processing_workspace_idx").on(table.workspace_id)]);
+
+export const mcaCalendarActivities = pgTable("mca_calendar_activities", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(()=>workspaces.id), deal_id: text().notNull().references(()=>deals.id),
+  assignee_id: text().notNull().references(()=>memberships.id), kind: text().notNull(), title: text().notNull(),
+  starts_at: text().notNull(), ends_at: text().notNull(), all_day: integer().default(0).notNull(), timezone: text().notNull(),
+  notes_cipher: text(), status: text().default("scheduled").notNull(), version: integer().default(1).notNull(),
+  created_by: text().notNull(), created_at: text().notNull(), updated_at: text().notNull(),
+},t=>[index("mca_calendar_activities_range_idx").on(t.workspace_id,t.starts_at,t.ends_at),index("mca_calendar_activities_assignee_idx").on(t.workspace_id,t.assignee_id),
+  check("mca_calendar_activities_kind_check",sql`${t.kind} IN ('call','followup','submission_task')`),check("mca_calendar_activities_status_check",sql`${t.status} IN ('scheduled','completed','cancelled')`),check("mca_calendar_activities_all_day_check",sql`${t.all_day} IN (0,1)`),check("mca_calendar_activities_check",sql`${t.ends_at}>${t.starts_at}`)]).enableRLS();
+export const mcaCalendarConnections = pgTable("mca_calendar_connections", {
+  id:text().primaryKey(),workspace_id:text().notNull().references(()=>workspaces.id),user_id:text().notNull().references(()=>users.id),
+  membership_id:text().notNull().references(()=>memberships.id),email:text().notNull(),credential_cipher:text().notNull(),calendar_id:text(),
+  status:text().default("pending").notNull(),last_sync_at:text(),next_sync_at:text().notNull(),failures:integer().default(0).notNull(),error:text(),created_at:text().notNull(),
+},t=>[unique("mca_calendar_connections_workspace_id_user_id_key").on(t.workspace_id,t.user_id),index("mca_calendar_connections_due_idx").on(t.next_sync_at)]).enableRLS();
+export const mcaCalendarOAuthStates = pgTable("mca_calendar_oauth_states", {
+  state_hash:text().primaryKey(),workspace_id:text().notNull(),user_id:text().notNull(),membership_id:text().notNull(),verifier_cipher:text().notNull(),expires_at:text().notNull(),
+}).enableRLS();
+export const mcaCalendarSources = pgTable("mca_calendar_sources", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),calendar_id:text().notNull(),name:text().notNull(),selected:integer().default(0).notNull(),sync_token:text(),
+  channel_id:text(),channel_token_hash:text(),resource_id:text(),channel_expires_at:text(),
+},t=>[primaryKey({columns:[t.connection_id,t.calendar_id]}),uniqueIndex("mca_calendar_sources_channel_idx").on(t.channel_id).where(sql`${t.channel_id} IS NOT NULL`)]).enableRLS();
+export const mcaCalendarExternalEvents = pgTable("mca_calendar_external_events", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),calendar_id:text().notNull(),event_id:text().notNull(),event_cipher:text().notNull(),
+},t=>[primaryKey({columns:[t.connection_id,t.calendar_id,t.event_id]})]).enableRLS();
+export const mcaCalendarEventLinks = pgTable("mca_calendar_event_links", {
+  connection_id:text().notNull().references(()=>mcaCalendarConnections.id,{onDelete:"cascade"}),activity_id:text().notNull().references(()=>mcaCalendarActivities.id),event_id:text().notNull(),etag:text(),local_version:integer().default(0).notNull(),baseline_json:text(),conflict_json:text(),resolution:text(),
+},t=>[primaryKey({columns:[t.connection_id,t.activity_id]}),unique("mca_calendar_event_links_connection_id_event_id_key").on(t.connection_id,t.event_id),check("mca_calendar_event_links_resolution_check",sql`${t.resolution} IN ('local','google')`)]).enableRLS();
+
+// Client invitation attribution remains independent of mutable deal assignments.
+export const applicationInvitations = pgTable("mca_application_invitations", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
+  integration_id: text().notNull().references(() => intake_integrations.id),
+  form_id: text().notNull(),
+  membership_id: text().notNull().references(() => memberships.id),
+  client_name: text().notNull(), email_cipher: text().notNull(), token_hash: text().notNull().unique(), token_cipher: text().notNull(), request_key: text().notNull(),
+  created_at: text().notNull(), expires_at: text().notNull(), revoked_at: text(), copied_at: text(), sent_at: text(), opened_at: text(), started_at: text(), submitted_at: text(),
+  submission_event_id: text(), intake_id: text().references(() => intake_events.id), deal_id: text().references(() => deals.id),
+}, t => [unique().on(t.workspace_id,t.membership_id,t.request_key), unique().on(t.workspace_id,t.integration_id,t.submission_event_id), unique().on(t.workspace_id,t.deal_id),
+  index("application_invitation_cohort_idx").on(t.workspace_id,t.created_at,t.membership_id)]);
+export const applicationInvitationEvents = pgTable("mca_application_invitation_events", {
+  invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  kind: text().notNull(), occurred_at: text().notNull(),
+}, t => [primaryKey({columns:[t.invitation_id,t.kind]}),check("mca_application_invitation_events_kind_check",sql`kind IN ('opened','started')`)]);
+export const applicationInvitationDeliveries = pgTable("mca_application_invitation_deliveries", {
+  id: text().primaryKey(), invitation_id: text().notNull().references(() => applicationInvitations.id), workspace_id: text().notNull().references(() => workspaces.id),
+  request_key: text().notNull(), job_id: text(), delivery: text(), created_at: text().notNull(), accepted_at: text(),
+}, t => [unique().on(t.invitation_id,t.request_key), index("application_invitation_delivery_idx").on(t.workspace_id,t.invitation_id,t.created_at),
+  check("mca_application_invitation_deliveries_delivery_check",sql`delivery IN ('sent','preview')`)]);
+
+
+export const mca_email_conversations = pgTable("mca_email_conversations", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
+  deal_id: text().notNull().references(() => deals.id), sender_id: text().notNull().references(() => mca_email_senders.id),
+  recipient_cipher: text().notNull(), subject_cipher: text().notNull(), provider_thread_id: text(),
+  created_at: text().notNull(), updated_at: text().notNull(), next_sync_at: text().notNull(), last_synced_at: text(), sync_error: text(),
+}, table => [unique().on(table.workspace_id,table.id),index("email_conversations_deal_idx").on(table.workspace_id,table.deal_id,table.updated_at,table.id),index("email_conversations_workspace_idx").on(table.workspace_id,table.updated_at,table.id),index("email_conversations_sync_idx").on(table.next_sync_at)])
+export const mca_email_messages = pgTable("mca_email_messages", {
+  id: text().primaryKey(), workspace_id: text().notNull(), conversation_id: text().notNull(),
+  sequence: bigserial({mode:"bigint"}).notNull().unique(), direction: text().notNull(), body_cipher: text().notNull(), author_cipher: text().notNull(),
+  actor_membership_id: text().references(() => memberships.id),request_key: text(),payload_hash: text(),provider_message_id: text(),
+  internet_message_id: text().notNull(),reply_to_message_id: text(),state: text().notNull(),attempts: integer().notNull().default(0),
+  next_attempt_at: text().notNull(),error: text(),created_at: text().notNull(),updated_at: text().notNull(),
+}, table => [foreignKey({columns:[table.workspace_id,table.conversation_id],foreignColumns:[mca_email_conversations.workspace_id,mca_email_conversations.id]}),unique().on(table.workspace_id,table.request_key),unique().on(table.conversation_id,table.provider_message_id),index("email_messages_queue_idx").on(table.state,table.next_attempt_at),index("email_messages_thread_idx").on(table.conversation_id,table.sequence),check("email_message_direction",sql`${table.direction} IN ('inbound','outbound')`),check("email_message_state",sql`${table.state} IN ('queued','sending','accepted','sent','received','failed','unknown','blocked')`)])
+export const mca_email_reads = pgTable("mca_email_reads", {
+  workspace_id:text().notNull(),conversation_id:text().notNull(),membership_id:text().notNull().references(() => memberships.id),last_sequence:bigint({mode:"bigint"}).notNull().default(BigInt(0)),
+}, table => [primaryKey({columns:[table.conversation_id,table.membership_id]}),foreignKey({columns:[table.workspace_id,table.conversation_id],foreignColumns:[mca_email_conversations.workspace_id,mca_email_conversations.id]})])
+export const mca_email_worker_leases = pgTable("mca_email_worker_leases", {
+  sender_id:text().primaryKey().references(() => mca_email_senders.id),workspace_id:text().notNull().references(() => workspaces.id),token:text().notNull(),expires_at:text().notNull(),
+})

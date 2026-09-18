@@ -14,9 +14,12 @@ import {
   findIntegrationByPublicId,
   reserveIntake,
   resolveAttributionToken,
+  intakeDatabase,
   updateIntake,
 } from "./repository"
 import { ingestApplication, scheduleAttachment } from "./service"
+import { withTransaction } from "../db"
+import { claimInvitationSubmission, completeInvitationSubmission } from "../applications/service"
 
 async function actorForIntegration(workspaceId: string): Promise<DealActor> {
   const context: AuthContext = {
@@ -87,50 +90,69 @@ export async function ingestProviderDelivery(input: {
     throw error
   }
 
-  let membershipId: string | undefined
-  if (normalized.attributionToken) {
-    const attribution = await resolveAttributionToken(hashOpaqueToken(normalized.attributionToken))
-    if (!attribution || attribution.workspaceId !== integration.workspaceId || attribution.integrationId !== integration.id || attribution.formId !== integration.formId) {
-      await rejectToReview(actor, integration.id, input.provider, input.rawBody, new AppError(422, "attribution_quarantined", "Rep attribution is invalid, revoked, or belongs to another form."))
+  const process = async (): Promise<IntakeResult> => {
+    const invitation = normalized.invitationToken !== undefined
+      ? await claimInvitationSubmission(normalized.invitationToken, integration.workspaceId, integration.id, normalized.eventId)
+      : undefined
+    let membershipId: string | undefined = invitation?.membership_id
+    if (normalized.attributionToken && !invitation) {
+      const attribution = await resolveAttributionToken(hashOpaqueToken(normalized.attributionToken))
+      if (!attribution || attribution.workspaceId !== integration.workspaceId || attribution.integrationId !== integration.id || attribution.formId !== integration.formId) {
+        await rejectToReview(actor, integration.id, input.provider, input.rawBody, new AppError(422, "attribution_quarantined", "Rep attribution is invalid, revoked, or belongs to another form."))
+      }
+      membershipId = attribution?.membershipId
     }
-    membershipId = attribution?.membershipId
-  }
-  if (!membershipId && normalized.externalAssignee) {
-    const mapped = integration.mapping[`rep:${normalized.externalAssignee}`]
-    if (mapped && actor.activeMembershipIds.includes(mapped)) membershipId = mapped
-  }
-  if (!membershipId && integration.assignmentPool.length) {
-    const eligible = integration.assignmentPool.filter((id) => actor.activeMembershipIds.includes(id))
-    if (eligible.length) {
-      const digest = createHash("sha256").update(normalized.eventId).digest()
-      membershipId = eligible[digest.readUInt32BE(0) % eligible.length]
+    if (!membershipId && normalized.externalAssignee) {
+      const mapped = integration.mapping[`rep:${normalized.externalAssignee}`]
+      if (mapped && actor.activeMembershipIds.includes(mapped)) membershipId = mapped
     }
-  }
-  const application = membershipId
-    ? { ...normalized.application, assignments: [{ membershipId, kind: "originator" as const, isPrimary: true }] }
-    : normalized.application
-  const result = await ingestApplication(actor, {
-    schemaVersion: 1,
-    provider: input.provider,
-    eventId: normalized.eventId,
-    application,
-    sourceReference: normalized.sourceReference,
-    initialStatus: integration.initialStatus,
-  })
-  await associateIntakeIntegration(integration.workspaceId, result.intakeId, integration.id)
-  if (result.dealId) {
-    for (const file of normalized.attachments) {
-      await scheduleAttachment({
-        actor,
-        intakeId: result.intakeId,
-        attachmentId: file.id,
-        sourceUrl: file.url,
-        filename: file.filename,
-        mimeType: file.mimeType,
-        category: file.category,
-      })
+    if (!membershipId && integration.assignmentPool.length) {
+      const eligible = integration.assignmentPool.filter((id) => actor.activeMembershipIds.includes(id))
+      if (eligible.length) {
+        const digest = createHash("sha256").update(normalized.eventId).digest()
+        membershipId = eligible[digest.readUInt32BE(0) % eligible.length]
+      }
     }
+    const prior = await intakeDatabase().prepare<{ id: string }>("SELECT id FROM intake_events WHERE workspace_id=? AND event_namespace=? AND provider=? AND provider_event_id=?").get(integration.workspaceId, integration.id, input.provider, normalized.eventId)
+    const priorRecord = prior ? await findIntake(integration.workspaceId, prior.id) : undefined
+    const application = membershipId
+      ? { ...normalized.application, assignments: [{ membershipId, kind: "originator" as const, isPrimary: true }] }
+      : normalized.application
+    const result = await ingestApplication(actor, {
+      schemaVersion: 1,
+      provider: input.provider,
+      eventId: normalized.eventId,
+      application: priorRecord?.dealId ? { ...application, assignments: priorRecord.application.assignments } : application,
+      sourceReference: normalized.sourceReference,
+      initialStatus: integration.initialStatus,
+    }, undefined, integration.id)
+    await associateIntakeIntegration(integration.workspaceId, result.intakeId, integration.id)
+    if (invitation) await completeInvitationSubmission(invitation, result.intakeId, result.dealId)
+    if (result.dealId) {
+      for (const file of normalized.attachments) {
+        await scheduleAttachment({
+          actor,
+          intakeId: result.intakeId,
+          attachmentId: file.id,
+          sourceUrl: file.url,
+          filename: file.filename,
+          mimeType: file.mimeType,
+          category: file.category,
+        })
+      }
+    }
+    if (!membershipId && !priorRecord?.dealId) {
+      const saved = await findIntake(integration.workspaceId, result.intakeId)
+      if (saved) await updateIntake({ workspaceId: integration.workspaceId, intakeId: result.intakeId, state: saved.state, warnings: [...saved.warnings, "Assignment needed: no active rep is available. Open the deal to assign a rep."] })
+    }
+    const current = await findIntake(integration.workspaceId, result.intakeId)
+    return current ? { intakeId: current.intakeId, dealId: current.dealId, created: result.created, state: current.state, warnings: current.warnings } : result
   }
-  const current = await findIntake(integration.workspaceId, result.intakeId)
-  return current ? { intakeId: current.intakeId, dealId: current.dealId, created: result.created, state: current.state, warnings: current.warnings } : result
+  if (normalized.invitationToken === undefined) return process()
+  try {
+    return await withTransaction(process)
+  } catch (error) {
+    if (error instanceof AppError && error.code === "invitation_quarantined") await rejectToReview(actor, integration.id, input.provider, input.rawBody, error)
+    throw error
+  }
 }

@@ -1,5 +1,7 @@
 import "server-only"
 
+import { isDocumentReady } from "../documents/contracts"
+
 import { createHash } from "node:crypto"
 import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess } from "../auth"
 import { newId, nowIso, recordAuditEvent } from "../db"
@@ -22,7 +24,7 @@ import {
 } from "./completeness-repository"
 
 const APPLICATION_CATEGORIES = new Set(["application", "api_application"])
-const UNREADABLE_STATES = new Set(["quarantined", "scan_failed"])
+const UNREADABLE_STATES = new Set(["quarantined", "scan_failed", "upload_failed"])
 const PERIOD_PATTERN = /\d{4}-(?:0[1-9]|1[0-2])/g
 
 export type ReadinessEvent = ReadinessEventRecord
@@ -144,16 +146,16 @@ function evaluateFindings(
 ): CompletenessFinding[] {
   const findings: CompletenessFinding[] = []
   const covered = new Set<string>()
-  const hasCleanApplication = documents.some((document) => APPLICATION_CATEGORIES.has(document.category) && document.processingState === "clean")
+  const hasCleanApplication = documents.some((document) => APPLICATION_CATEGORIES.has(document.category) && isDocumentReady(document.processingState))
   if (!hasCleanApplication) {
-    findings.push({ code: "missing_application", message: "Upload a clean merchant application." })
+    findings.push({ code: "missing_application", message: "Upload a merchant application." })
   }
 
   for (const document of documents) {
     if ((APPLICATION_CATEGORIES.has(document.category) || document.category === "statement") && UNREADABLE_STATES.has(document.processingState)) {
       findings.push({
         code: "unreadable_document",
-        message: "This document is quarantined or failed malware scanning and cannot be used for completeness.",
+        message: "This document is blocked or its upload is incomplete and cannot be used for completeness.",
         documentId: document.id,
       })
     }
@@ -171,7 +173,7 @@ function evaluateFindings(
           period: parsed.period ?? checking[0]?.period,
         })
       }
-      if (document.processingState === "clean") {
+      if (isDocumentReady(document.processingState)) {
         for (const row of checking) covered.add(row.period)
       }
       continue
@@ -187,7 +189,7 @@ function evaluateFindings(
       continue
     }
     if (!parsed.period) {
-      if (document.processingState === "clean") {
+      if (isDocumentReady(document.processingState)) {
         findings.push({
           code: "unknown_statement_period",
           message: "The statement period could not be parsed as YYYY-MM from the filename.",
@@ -196,7 +198,7 @@ function evaluateFindings(
       }
       continue
     }
-    if (document.processingState === "clean") covered.add(parsed.period)
+    if (isDocumentReady(document.processingState)) covered.add(parsed.period)
   }
 
   for (const period of lookback) {

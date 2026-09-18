@@ -46,6 +46,10 @@ export function hmacLookup(kind: LookupHashKind, workspaceId: string, normalized
   return createHmac("sha256", encryptionKey()).update(`${kind}:${normalized}`, "utf8").digest("hex");
 }
 
+export function hmacScopedToken(scope: string, workspaceId: string, subject: string): string {
+  return createHmac("sha256", encryptionKey()).update(`${scope}:${workspaceId}:${subject}`, "utf8").digest("base64url");
+}
+
 export function encryptSensitive(value: string, workspaceId: string): string {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(), nonce);

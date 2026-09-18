@@ -5,6 +5,7 @@ import { Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { HomeEmptyState } from "@/components/mca/home/home-empty-state"
+import { HomeActivityCharts } from "@/components/mca/home/activity-charts"
 import { KpiStrip } from "@/components/mca/home/kpi-strip"
 import { NeedsAction } from "@/components/mca/home/needs-action"
 import { RequestError, requestJson } from "@/lib/mca/client"
@@ -63,6 +64,7 @@ export function HomeWorkspace({
       </div>
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
       <KpiStrip kpis={kpis} period={period} onPeriodChange={changePeriod} loading={loading} />
+      {kpis && <HomeActivityCharts kpis={kpis} />}
       {kpis?.empty ? (
         <HomeEmptyState canCreateDeal={canCreateDeal} onCreate={() => newDeal.open()} />
       ) : loading && !kpis ? null : (

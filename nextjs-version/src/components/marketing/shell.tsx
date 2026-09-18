@@ -1,14 +1,14 @@
 import Link from "next/link"
-import { Manrope } from "next/font/google"
-import { Menu, ArrowUpRight } from "lucide-react"
+import localFont from "next/font/local"
+import { ArrowUpRight } from "lucide-react"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import "./marketing.css"
 
-const manrope = Manrope({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-marketing-heading",
-})
+import { MobileNav } from "./mobile-nav"
+
+const heading = localFont({ src: "../../../public/fonts/marketing/InterDisplay-Medium.woff2", weight: "500", display: "swap", variable: "--font-marketing-heading" })
+const mono = localFont({ src: "../../../public/fonts/marketing/GeistMono-Regular.woff2", display: "swap", variable: "--font-marketing-mono" })
+const geist = localFont({ src: "../../../public/fonts/marketing/Geist-Regular.woff2", display: "swap", variable: "--font-marketing-metric" })
 
 export function Brand() {
   return (
@@ -20,10 +20,10 @@ export function Brand() {
         fill="none"
         aria-hidden="true"
       >
-        <rect width="32" height="32" rx="9" fill="currentColor" />
+        <rect width="32" height="32" rx="0" fill="currentColor" />
         <path
           d="M9 9h15l-4 4H9V9Zm0 7h11l-4 4H9v-4Zm0 7h7l-4 4H9v-4Z"
-          fill="white"
+          fill="#000000"
         />
       </svg>
       <span>fundlane</span>
@@ -32,7 +32,7 @@ export function Brand() {
 }
 
 export function DemoLink({
-  children = "Request a demo",
+  children = "Book a demo",
   secondary = false,
 }: {
   children?: React.ReactNode
@@ -49,10 +49,10 @@ export function DemoLink({
   )
 }
 
-export function MarketingShell({ children }: { children: React.ReactNode }) {
+export function MarketingShell({ children, immersive = false }: { children: React.ReactNode; immersive?: boolean }) {
   const { privacyUrl } = getDemoConfiguration()
   return (
-    <div className={`fundlane ${manrope.variable}`}>
+    <div className={`fundlane ${heading.variable} ${mono.variable} ${geist.variable}${immersive ? " fl-immersive" : ""}`}>
       <a className="fl-skip" href="#main">
         Skip to content
       </a>
@@ -60,7 +60,7 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
         <div className="fl-container fl-nav">
           <Brand />
           <nav className="fl-desktop-nav" aria-label="Main navigation">
-            <Link href="/#product">Product</Link>
+            <Link href="/features">Features</Link>
             <Link href="/#workflow">How it works</Link>
             <Link href="/#faq">FAQ</Link>
           </nav>
@@ -70,18 +70,7 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
             </Link>
             <DemoLink />
           </div>
-          <details className="fl-mobile-nav">
-            <summary aria-label="Open navigation">
-              <Menu size={22} />
-            </summary>
-            <nav aria-label="Mobile navigation">
-              <Link href="/#product">Product</Link>
-              <Link href="/#workflow">How it works</Link>
-              <Link href="/#faq">FAQ</Link>
-              <Link href="/sign-in">Sign in</Link>
-              <Link href="/demo">Request a demo</Link>
-            </nav>
-          </details>
+          <MobileNav />
         </div>
       </header>
       {children}
@@ -93,9 +82,9 @@ export function MarketingShell({ children }: { children: React.ReactNode }) {
               <p>A clear path for every deal.</p>
             </div>
             <nav aria-label="Footer navigation">
-              <Link href="/#product">Product</Link>
+              <Link href="/features">Features</Link>
               <Link href="/#workflow">How it works</Link>
-              <Link href="/demo">Request a demo</Link>
+              <Link href="/demo">Book a demo</Link>
               <Link href="/sign-in">Sign in</Link>
               {privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>

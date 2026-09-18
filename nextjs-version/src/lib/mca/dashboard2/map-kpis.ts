@@ -205,6 +205,9 @@ export function emptyHomeKpis(period: KpiPeriod = "mtd"): HomeKpis {
     empty: true,
     series: {
       fundedByMonth: [],
+      pipelineByMonth: [],
+      approvalByMonth: [],
+      collectionsByDay: [],
       revenueBreakdown: [
         { key: "funded", amountCents: 0 },
         { key: "commission", amountCents: 0 },

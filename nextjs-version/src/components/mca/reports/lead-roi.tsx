@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
 
@@ -263,7 +263,6 @@ export function LeadRoiView(props: {
       {report && (status === "success" || status === "empty") && (
         <>
           <p className="text-sm text-muted-foreground">{LEAD_ROI_COPY.attribution}</p>
-          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -290,13 +289,12 @@ export function LeadRoiView(props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.permission.companyTotalsVisible && <MetricRow row={report.totals} paymentsVisible={paymentsVisible} />}
                 {report.sources.map((row) => <MetricRow key={row.key} row={row} paymentsVisible={paymentsVisible} />)}
                 {report.batches.map((row) => <MetricRow key={row.key} row={row} paymentsVisible={paymentsVisible} />)}
                 {report.unassigned && <MetricRow row={report.unassigned} paymentsVisible={paymentsVisible} />}
               </TableBody>
+              {report.permission.companyTotalsVisible && <TableFooter><MetricRow row={report.totals} paymentsVisible={paymentsVisible} /></TableFooter>}
             </Table>
-          </div>
           <div className="flex flex-wrap gap-2">
             {DRILLDOWN_KEYS.map((key) => (
               <Button key={key} type="button" size="sm" variant={drilldownKey === key ? "default" : "outline"} onClick={() => onDrilldown(key)}>
@@ -309,7 +307,6 @@ export function LeadRoiView(props: {
             {drilldown.length === 0 ? (
               <p className="text-sm text-muted-foreground">No {drilldownKey} deals for these filters.</p>
             ) : (
-              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -343,7 +340,6 @@ export function LeadRoiView(props: {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
             )}
           </div>
         </>
