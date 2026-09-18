@@ -350,31 +350,71 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
     )
   }
 
-  const firstSeen = new Map<string, string>()
-  for (const deal of visible.values()) {
-    const current = firstSeen.get(deal.merchantKey)
-    if (!current || deal.createdOn < current) firstSeen.set(deal.merchantKey, deal.createdOn)
+  const firstFundingOn = new Map<string, string>()
+  for (const row of committedFundings) {
+    const deal = visible.get(row.dealId)
+    if (!deal) continue
+    const current = firstFundingOn.get(deal.merchantKey)
+    if (!current || row.fundedOn < current) firstFundingOn.set(deal.merchantKey, row.fundedOn)
   }
-  const growth = new Map(months.map((month) => [month, { new: 0, returning: 0, churn: 0 }]))
-  const countedNew = new Set<string>()
-  for (const [merchantKey, createdOn] of firstSeen) {
-    const month = createdOn.slice(0, 7)
+
+  let newDealCount = 0
+  for (const deal of visible.values()) {
+    if (!dateInInclusiveRange(deal.createdOn, range.from, range.to)) continue
+    const first = firstFundingOn.get(deal.merchantKey)
+    const isRenewalDeal = deal.status === "renewed" || (first != null && first < deal.createdOn)
+    if (!isRenewalDeal) newDealCount += 1
+  }
+
+  const renewedDealIds = new Set<string>()
+  for (const row of committedFundings) {
+    if (!dateInInclusiveRange(row.fundedOn, range.from, range.to)) continue
+    const deal = visible.get(row.dealId)
+    if (!deal) continue
+    const first = firstFundingOn.get(deal.merchantKey)
+    if (first && first < row.fundedOn) renewedDealIds.add(row.dealId)
+  }
+  for (const deal of visible.values()) {
+    if (deal.status !== "renewed") continue
+    const on = calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn
+    if (dateInInclusiveRange(on, range.from, range.to)) renewedDealIds.add(deal.id)
+  }
+
+  const growth = new Map(months.map((month) => [month, { new: 0, renewals: 0, churn: 0 }]))
+  const renewedByMonth = new Map<string, Set<string>>()
+  function addMonthlyRenewal(month: string, dealId: string) {
+    const set = renewedByMonth.get(month) ?? new Set<string>()
+    set.add(dealId)
+    renewedByMonth.set(month, set)
+  }
+  for (const deal of visible.values()) {
+    const month = deal.createdOn.slice(0, 7)
     const bucket = growth.get(month)
-    if (!bucket) continue
-    bucket.new += 1
-    countedNew.add(`${merchantKey}:${month}`)
-  }
-  for (const deal of visible.values()) {
-    if (deal.status === "renewed") {
-      const month = deal.createdOn.slice(0, 7)
-      const bucket = growth.get(month)
-      if (bucket && !countedNew.has(`${deal.merchantKey}:${month}`)) bucket.returning += 1
+    if (bucket) {
+      const first = firstFundingOn.get(deal.merchantKey)
+      const isRenewalDeal = deal.status === "renewed" || (first != null && first < deal.createdOn)
+      if (!isRenewalDeal) bucket.new += 1
     }
     if (deal.status === "closed" || deal.status === "default") {
-      const month = (calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn).slice(0, 7)
-      const bucket = growth.get(month)
-      if (bucket) bucket.churn += 1
+      const churnMonth = (calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn).slice(0, 7)
+      const churnBucket = growth.get(churnMonth)
+      if (churnBucket) churnBucket.churn += 1
     }
+  }
+  for (const row of committedFundings) {
+    const deal = visible.get(row.dealId)
+    if (!deal) continue
+    const first = firstFundingOn.get(deal.merchantKey)
+    if (first && first < row.fundedOn) addMonthlyRenewal(row.fundedOn.slice(0, 7), row.dealId)
+  }
+  for (const deal of visible.values()) {
+    if (deal.status !== "renewed") continue
+    const on = calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn
+    addMonthlyRenewal(on.slice(0, 7), deal.id)
+  }
+  for (const [month, ids] of renewedByMonth) {
+    const bucket = growth.get(month)
+    if (bucket) bucket.renewals = ids.size
   }
 
   const groupMetric = (key: (deal: VisibleDeal) => string) => {
@@ -424,6 +464,8 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
       volumeDollars: companyVisible ? pipelineVolume : null,
       dollarsHidden: !companyVisible,
     },
+    newDeals: { count: newDealCount },
+    renewals: { count: renewedDealIds.size },
     funded: money(fundedCents, fundedCount, companyVisible),
     commission: money(commissionCents, commissionCount, paymentsVisible),
     activeMerchants: { count: activeMerchants.size },
@@ -455,7 +497,7 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
         .map(([name, value]) => ({ name, fundedCents: companyVisible ? value.fundedCents : 0, dealCount: value.deals.size }))
         .sort((a, b) => b.fundedCents - a.fundedCents || b.dealCount - a.dealCount || a.name.localeCompare(b.name))
         .slice(0, 8),
-      merchantGrowth: months.map((month) => ({ month, ...(growth.get(month) ?? { new: 0, returning: 0, churn: 0 }) })),
+      merchantGrowth: months.map((month) => ({ month, ...(growth.get(month) ?? { new: 0, renewals: 0, churn: 0 }) })),
       industries: groupMetric((deal) => deal.industry),
       states: groupMetric((deal) => deal.state),
     },

@@ -21,8 +21,8 @@ const chartConfig = {
     label: "New merchants",
     color: "var(--chart-1)",
   },
-  returning: {
-    label: "Returning",
+  renewals: {
+    label: "Renewals",
     color: "var(--chart-2)",
   },
   churn: {
@@ -47,7 +47,7 @@ export function CustomerInsights({
   const metrics = growthMetrics ?? EMPTY_DASHBOARD2.growthMetrics
   const demographicsData = industries ?? EMPTY_DASHBOARD2.industries
   const regionsData = states ?? EMPTY_DASHBOARD2.states
-  const growthEmpty = customerGrowthData.length === 0 || customerGrowthData.every((row) => row.new === 0 && row.returning === 0 && row.churn === 0)
+  const growthEmpty = customerGrowthData.length === 0 || customerGrowthData.every((row) => row.new === 0 && row.renewals === 0 && row.churn === 0)
 
   return (
     <Card className="h-fit">
@@ -110,7 +110,7 @@ export function CustomerInsights({
                         />
                         <ChartTooltip content={<ChartTooltipContent />} />
                         <Bar dataKey="new" fill="var(--color-new)" radius={[2, 2, 0, 0]} />
-                        <Bar dataKey="returning" fill="var(--color-returning)" radius={[2, 2, 0, 0]} />
+                        <Bar dataKey="renewals" fill="var(--color-renewals)" radius={[2, 2, 0, 0]} />
                         <Bar dataKey="churn" fill="var(--color-churn)" radius={[2, 2, 0, 0]} />
                       </BarChart>
                     </ChartContainer>
