@@ -266,6 +266,6 @@ export function scannerConfiguration(): { configured: boolean; provider: string;
   return {
     configured: scanner.name !== "unconfigured",
     provider: scanner.name,
-    action: scanner.name === "unconfigured" ? "Set MCA_DOCUMENT_SCANNER to clamdscan or clamscan, then retry pending uploads." : "Scanner is configured; pending and failed uploads can be retried.",
+    action: scanner.name === "unconfigured" ? "Set MCA_DOCUMENT_SCANNER to cloudmersive, clamdscan, or clamscan, then retry pending uploads." : "Scanner is configured; pending and failed uploads can be retried.",
   }
 }

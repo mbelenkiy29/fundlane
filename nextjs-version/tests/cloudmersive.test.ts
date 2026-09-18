@@ -1,6 +1,35 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { CloudmersiveScanner } from "../src/lib/mca/documents/cloudmersive"
+import { documentScanner, setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+
+test("documentScanner selects Cloudmersive and keeps unconfigured fail-closed", async () => {
+  const originalMode = process.env.MCA_DOCUMENT_SCANNER
+  const originalKey = process.env.MCA_CLOUDMERSIVE_API_KEY
+  setDocumentScannerForTests()
+  try {
+    delete process.env.MCA_DOCUMENT_SCANNER
+    delete process.env.MCA_CLOUDMERSIVE_API_KEY
+    const unconfigured = documentScanner()
+    assert.equal(unconfigured.name, "unconfigured")
+    assert.equal((await unconfigured.scan(Buffer.from("a"), "a.txt")).status, "unavailable")
+
+    process.env.MCA_DOCUMENT_SCANNER = "cloudmersive"
+    delete process.env.MCA_CLOUDMERSIVE_API_KEY
+    const withoutKey = documentScanner()
+    assert.equal(withoutKey.name, "cloudmersive")
+    assert.equal((await withoutKey.scan(Buffer.from("a"), "a.txt")).status, "unavailable")
+
+    process.env.MCA_CLOUDMERSIVE_API_KEY = "synthetic-key"
+    assert.equal(documentScanner().name, "cloudmersive")
+  } finally {
+    setDocumentScannerForTests()
+    if (originalMode === undefined) delete process.env.MCA_DOCUMENT_SCANNER
+    else process.env.MCA_DOCUMENT_SCANNER = originalMode
+    if (originalKey === undefined) delete process.env.MCA_CLOUDMERSIVE_API_KEY
+    else process.env.MCA_CLOUDMERSIVE_API_KEY = originalKey
+  }
+})
 
 test("Cloudmersive binds clean receipts to exact bytes and fails closed", async () => {
   const originalFetch = globalThis.fetch
