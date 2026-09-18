@@ -35,8 +35,8 @@ export function KpiStrip({
           <ToggleGroupItem value="ytd">{HOME_KPI_COPY.ytd}</ToggleGroupItem>
         </ToggleGroup>
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {loading && !kpis ? Array.from({ length: 6 }, (_, index) => (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {loading && !kpis ? Array.from({ length: 8 }, (_, index) => (
           <Card key={index} className="gap-3 py-4">
             <CardHeader className="px-4">
               <Skeleton className="h-4 w-24" />

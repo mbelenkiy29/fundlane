@@ -18,6 +18,7 @@ import {
   type HomeWorkflowAction,
 } from "./contracts"
 import { allowedTransitions } from "../deals/pipeline"
+import { notificationLabel, suggestedActions } from "./outreach"
 
 const TERMINAL_STATUSES = new Set<DealStatus>(["closed", "default"])
 const FUNDED_LIKE = new Set<DealStatus>(["funded", "renewed", "missed_payments"])
@@ -248,18 +249,30 @@ function dedupeReasons(reasons: HomeActionReason[]): HomeActionReason[] {
 
 export function toHomeQueueItem(facts: HomeDealFacts, reasons: HomeActionReason[]): HomeQueueItem | undefined {
   if (!reasons.length) return undefined
-  const primary = reasons[0]
+  const months = facts.missingStatementMonths
+  const mapped = typeof months === "number"
+    ? reasons.map((item) => (item.code === "missing_doc" ? { ...item, detail: String(months) } : item))
+    : reasons
+  const primary = mapped[0]
   return {
     dealId: facts.dealId,
     displayId: facts.displayId,
     legalName: facts.legalName,
     status: facts.status,
     version: facts.version,
-    reasons,
+    reasons: mapped,
     primaryReason: primary,
     category: primary.category,
     actionSince: primary.since,
     updatedAt: facts.updatedAt,
+    notification: notificationLabel({
+      code: primary.code,
+      fallback: primary.label,
+      missingStatementMonths: months,
+    }),
+    contacts: { name: facts.contactName, email: facts.contactEmail, phone: facts.contactPhone },
+    suggestedActions: suggestedActions({ code: primary.code, phone: facts.contactPhone }),
+    missingStatementMonths: months,
   }
 }
 

@@ -431,20 +431,68 @@ test("dollarsHidden when viewCompanyFinancials is false", async () => {
 
 test("new deals and renewals are separate period counts", async () => {
   const kpis = await getHomeKpis(admin, { period: "mtd", nowIso })
-  // first-time originations created in March 2026 are new deals
-  assert.ok(kpis.newDeals.count >= 1)
-  // a later committed funding on merchant-renewed is a renewal, not a new deal
-  assert.ok("renewals" in kpis)
-  assert.equal(typeof kpis.renewals.count, "number")
-  // a renewed merchant's first deal must not also sit in newDeals
+  const db = getDatabase()
+  const facts = await db.prepare<{
+    id: string
+    status: string
+    merchant_id: string | null
+    created_at: string
+    updated_at: string
+    funded_at: string | null
+  }>(
+    `SELECT d.id, d.status, d.merchant_id, d.created_at, d.updated_at, e.funded_at
+     FROM deals d
+     LEFT JOIN mca_funding_events e ON e.deal_id = d.id AND e.workspace_id = d.workspace_id AND e.state = 'committed'
+     WHERE d.id IN (?, ?, ?, ?, ?)`,
+  ).all(ids.dealA, ids.dealB1, ids.dealB2, ids.dealC, ids.advRenewed)
+  const byId = new Map(facts.map((row) => [row.id, row]))
+  const a = byId.get(ids.dealA)
+  const b1 = byId.get(ids.dealB1)
+  const b2 = byId.get(ids.dealB2)
+  const c = byId.get(ids.dealC)
+  const trap = byId.get(ids.advRenewed)
+  assert.ok(a && b1 && b2 && c && trap)
+
+  // Merchant A: first origination in March, no committed funding → New Deal
+  assert.equal(a.id, ids.dealA)
+  assert.equal(a.merchant_id, ids.merchantA)
+  assert.ok(a.created_at.startsWith("2026-03-02"))
+  assert.equal(a.funded_at, null)
+  assert.notEqual(a.status, "renewed")
+
+  // Merchant B: January committed funding, March committed funding → Renewal in MTD, not a new deal
+  assert.equal(b1.merchant_id, ids.merchantB)
+  assert.ok(b1.funded_at?.startsWith("2026-01-10"))
+  assert.equal(b2.id, ids.dealB2)
+  assert.equal(b2.merchant_id, ids.merchantB)
+  assert.ok(b2.created_at.startsWith("2026-03-07"))
+  assert.ok(b2.funded_at?.startsWith("2026-03-08"))
+
+  // Merchant C: first origination in March, no committed funding → New Deal
+  assert.equal(c.id, ids.dealC)
+  assert.equal(c.merchant_id, ids.merchantC)
+  assert.ok(c.created_at.startsWith("2026-03-04"))
+  assert.equal(c.funded_at, null)
+  assert.notEqual(c.status, "renewed")
+
+  // status=renewed funded in 2025-08; updated_at is now (March) and must not re-enter MTD
+  assert.equal(trap.id, ids.advRenewed)
+  assert.equal(trap.status, "renewed")
+  assert.ok(trap.funded_at?.startsWith("2025-08"))
+  assert.ok(trap.updated_at.startsWith("2026-03"))
+
   const growth = kpis.series.merchantGrowth.find((row) => row.month === "2026-03")
   assert.ok(growth)
   assert.equal("renewals" in growth, true)
   assert.equal("returning" in growth, false)
-  assert.equal(kpis.newDeals.count, 5)
-  assert.equal(kpis.renewals.count, 2)
-  assert.equal(growth.new, 5)
-  assert.equal(growth.renewals, 2)
+  // MTD Renewals is Merchant B's March funding only — not deal-adv-renewed
+  assert.equal(kpis.renewals.count, 1)
+  assert.equal(growth.renewals, 1)
+  const august = kpis.series.merchantGrowth.find((row) => row.month === "2025-08")
+  assert.ok(august)
+  assert.equal(august.renewals, 1)
+  assert.ok(kpis.newDeals.count >= 2)
+  assert.equal(growth.new, kpis.newDeals.count)
 })
 
 test("GET /api/mca/home/kpis requires period mtd|ytd and does not store", async () => {

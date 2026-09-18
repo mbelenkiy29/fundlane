@@ -89,6 +89,22 @@ function dayKeysEnding(today: string, count: number): string[] {
   return keys
 }
 
+/** status=renewed buckets on committed funded_at, else created_at — never updated_at. */
+function homeRenewedStatusOn(committedFundedOn: string | null | undefined, createdOn: string): string {
+  return committedFundedOn || createdOn
+}
+
+function visitRenewedStatusDeals(
+  deals: Iterable<VisibleDeal>,
+  fundedOnByDeal: Map<string, string>,
+  visit: (dealId: string, on: string) => void,
+) {
+  for (const deal of deals) {
+    if (deal.status !== "renewed") continue
+    visit(deal.id, homeRenewedStatusOn(fundedOnByDeal.get(deal.id), deal.createdOn))
+  }
+}
+
 function addressState(raw: string | null): string {
   const parsed = parseJson<{ state?: string }>(raw ?? "", {})
   return parsed.state?.trim() || "Unknown"
@@ -378,11 +394,14 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   }
 
   const firstFundingOn = new Map<string, string>()
+  const committedFundedOnByDeal = new Map<string, string>()
   for (const row of committedFundings) {
     const deal = visible.get(row.dealId)
     if (!deal) continue
-    const current = firstFundingOn.get(deal.merchantKey)
-    if (!current || row.fundedOn < current) firstFundingOn.set(deal.merchantKey, row.fundedOn)
+    const currentMerchant = firstFundingOn.get(deal.merchantKey)
+    if (!currentMerchant || row.fundedOn < currentMerchant) firstFundingOn.set(deal.merchantKey, row.fundedOn)
+    const currentDeal = committedFundedOnByDeal.get(row.dealId)
+    if (!currentDeal || row.fundedOn < currentDeal) committedFundedOnByDeal.set(row.dealId, row.fundedOn)
   }
 
   let newDealCount = 0
@@ -401,11 +420,9 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
     const first = firstFundingOn.get(deal.merchantKey)
     if (first && first < row.fundedOn) renewedDealIds.add(row.dealId)
   }
-  for (const deal of visible.values()) {
-    if (deal.status !== "renewed") continue
-    const on = calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn
-    if (dateInInclusiveRange(on, range.from, range.to)) renewedDealIds.add(deal.id)
-  }
+  visitRenewedStatusDeals(visible.values(), committedFundedOnByDeal, (dealId, on) => {
+    if (dateInInclusiveRange(on, range.from, range.to)) renewedDealIds.add(dealId)
+  })
 
   const growth = new Map(months.map((month) => [month, { new: 0, renewals: 0, churn: 0 }]))
   const renewedByMonth = new Map<string, Set<string>>()
@@ -434,11 +451,9 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
     const first = firstFundingOn.get(deal.merchantKey)
     if (first && first < row.fundedOn) addMonthlyRenewal(row.fundedOn.slice(0, 7), row.dealId)
   }
-  for (const deal of visible.values()) {
-    if (deal.status !== "renewed") continue
-    const on = calendarDateInTimeZone(deal.updatedAt, timezone) || deal.createdOn
-    addMonthlyRenewal(on.slice(0, 7), deal.id)
-  }
+  visitRenewedStatusDeals(visible.values(), committedFundedOnByDeal, (dealId, on) => {
+    addMonthlyRenewal(on.slice(0, 7), dealId)
+  })
   for (const [month, ids] of renewedByMonth) {
     const bucket = growth.get(month)
     if (bucket) bucket.renewals = ids.size

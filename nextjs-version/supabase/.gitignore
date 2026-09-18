@@ -1,0 +1,5 @@
+.temp/
+.branches/
+functions/*/index.js
+functions/*/deno.json
+functions/*/runtime.js
