@@ -1,6 +1,7 @@
 import "server-only"
 
 import { getDatabase, newId, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
+import type { DealActor } from "../deals/schema"
 import type { FunderRoute, FunderRouteKind } from "../funders/contracts"
 import { nowIso } from "./clock"
 import type { AttemptState, JobState, SubmissionAttempt, SubmissionJob } from "./contracts"
@@ -74,6 +75,7 @@ export interface JobInsert {
   preflightErrors: Array<{ field: string; message: string }>
   reason?: string
   createdByUserId: string | null
+  actor?: DealActor
 }
 
 export interface OutboxRecord {
@@ -396,6 +398,7 @@ export async function persistNewDestination(input: JobInsert): Promise<{ job: Su
         funderId: input.funderId,
         confirmationKey: input.confirmationKey,
         attemptKey: input.attemptKey,
+        ...(input.actor ? { actor: input.actor } : {}),
       },
       processedAt,
     }, executor)

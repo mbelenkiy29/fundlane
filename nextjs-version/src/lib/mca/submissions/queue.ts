@@ -9,7 +9,9 @@ import { listDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
+import { backgroundJobsEnabled } from "../jobs/queue"
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
+import { enqueueSubmissionDelivery } from "./delivery-job"
 import { assertDuplicatePolicy } from "./duplicate-policy"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
@@ -188,10 +190,15 @@ async function queueDestination(input: {
     preflightErrors: preflight.errors,
     reason,
     createdByUserId: input.actor.userId,
+    actor: input.actor,
   })
   await audit(input.actor, saved.job, saved.created)
   if (!saved.created) return toQueuedSummary(saved.job)
   if (saved.job.state !== "queued") return toQueuedSummary(saved.job)
+  if (backgroundJobsEnabled()) {
+    await enqueueSubmissionDelivery(saved.job)
+    return toQueuedSummary(saved.job)
+  }
   return toQueuedSummary(await processJobDelivery(saved.job))
 }
 

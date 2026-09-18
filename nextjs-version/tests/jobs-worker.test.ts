@@ -7,11 +7,15 @@ import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getDocument, storeDocument } from "../src/lib/mca/documents/service"
+import { createFunder } from "../src/lib/mca/funders/directory"
 import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
+import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { queueSubmissions } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_EMAIL_WEBHOOK_URL
 const previousJobs = process.env.MCA_BACKGROUND_JOBS
 const previousVercel = process.env.VERCEL
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -90,4 +94,53 @@ test("storeDocument inside the background worker still scans inline without extr
   assert.equal(scanner.count(), 1)
   const job = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'").get(actor().workspaceId, stored.id)
   assert.equal(job?.count, 0)
+})
+
+test("queueSubmissions with jobs enabled enqueues submission_delivery and leaves the job queued", async () => {
+  countingScanner()
+  const sender = await createSender(actor(), {
+    provider: "smtp",
+    purpose: "submission",
+    fromName: "Broker Desk",
+    fromAddress: "broker@example.test",
+    isDefault: true,
+    smtp: { host: "smtp.example.test", port: 587, username: "broker", password: "smtp-jobs-password" },
+  })
+  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  const funderId = (await createFunder(actor(), {
+    idempotencyKey: "jobs-email-funder",
+    legalName: "Jobs Email Capital LLC",
+    routes: [{ kind: "email", label: "Submissions", destination: "subs@jobscap.example.test", documentExceptions: [], active: true }],
+  })).funder.id
+  const submissionDeal = (await createDeal(actor(), { idempotencyKey: "jobs-submission-deal", legalName: "Jobs submission" })).deal
+  const stored = await runAsBackgroundWorker(() => storeDocument(actor(), {
+    dealId: submissionDeal.id,
+    idempotencyKey: "jobs-submission-doc",
+    filename: "package.pdf",
+    mimeType: "application/pdf",
+    bytes: minimalPdf,
+    category: "statement",
+    source: "test",
+  }))
+  assert.equal(stored.processingState, "clean")
+
+  const result = await queueSubmissions({
+    actor: actor(),
+    dealId: submissionDeal.id,
+    funderIds: [funderId],
+    confirmationKey: "jobs-confirm-1",
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.jobs.length, 1)
+  const queued = result.jobs[0]
+  assert.ok(queued)
+  assert.equal(queued.state, "queued")
+  const job = await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE id = ?").get(queued.jobId)
+  assert.equal(job?.state, "queued")
+  const delivery = await getDatabase().prepare<{ kind: string; state: string; resource_id: string }>(
+    "SELECT kind, state, resource_id FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'submission_delivery'",
+  ).get(actor().workspaceId, queued.jobId)
+  assert.equal(delivery?.kind, "submission_delivery")
+  assert.equal(delivery?.resource_id, queued.jobId)
+  assert.equal(delivery?.state, "queued")
 })
