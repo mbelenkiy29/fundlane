@@ -22,6 +22,8 @@ import { GET as getDealCompleteness, POST as rerunDealCompleteness } from "../sr
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_BACKGROUND_JOBS
+delete process.env.VERCEL
 
 const actor = (workspaceId = "workspace-docs"): DealActor => ({
   workspaceId,
@@ -102,6 +104,8 @@ async function upload(dealId: string, input: { key: string; filename: string; ca
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_completeness")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   await addWorkspace("workspace-docs")

@@ -31,7 +31,7 @@ before(async () => {
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
     cwd: root,
     env: testDatabase.env({
-      ...supabaseFixture.env, NODE_ENV: "development", NEXT_DIST_DIR: dist, MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"), MCA_APP_ORIGIN: baseUrl, MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_DOCUMENT_TOKEN_SECRET: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Documents Test", MCA_BOOTSTRAP_ADMIN_EMAIL: "documents@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Documents Password 99!", MCA_DOCUMENT_SCANNER: "", MCA_DOCUMENT_AI_PROVIDER: "", OPENAI_API_KEY: "", MCA_DOCUMENT_AI_MODEL: "" }),
+      ...supabaseFixture.env, NODE_ENV: "development", NEXT_DIST_DIR: dist, MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"), MCA_APP_ORIGIN: baseUrl, MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_DOCUMENT_TOKEN_SECRET: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Documents Test", MCA_BOOTSTRAP_ADMIN_EMAIL: "documents@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Documents Password 99!", MCA_DOCUMENT_SCANNER: "", MCA_BACKGROUND_JOBS: "", VERCEL: "", MCA_DOCUMENT_AI_PROVIDER: "", OPENAI_API_KEY: "", MCA_DOCUMENT_AI_MODEL: "" }),
     stdio: ["ignore", "pipe", "pipe"],
   })
   server.stdout.on("data", (chunk) => { output += chunk }); server.stderr.on("data", (chunk) => { output += chunk })
@@ -69,17 +69,17 @@ test("document routes enforce scopes and expose recoverable unavailable-provider
   assert.equal(deal.response.status, 201, JSON.stringify(deal.payload))
 
   const saved = await upload("/api/mca/documents", cookie, { dealId: deal.payload.id, idempotencyKey: "http-document", category: "statement", source: "http-test" })
-  assert.equal(saved.response.status, 201, JSON.stringify(saved.payload)); assert.equal(saved.payload.processingState, "ready")
+  assert.equal(saved.response.status, 201, JSON.stringify(saved.payload)); assert.equal(saved.payload.processingState, "pending_scan")
   assert.equal((await json(`/api/mca/documents?dealId=${deal.payload.id}`, { bearer: readKey })).response.status, 200)
   assert.equal((await json(`/api/mca/documents?dealId=${deal.payload.id}`, { bearer: writeKey })).response.status, 403)
   assert.equal((await json(`/api/mca/documents?dealId=${deal.payload.id}`, { bearer: intakeKey })).response.status, 403)
   assert.equal((await upload("/api/mca/documents", intakeKey, { dealId: deal.payload.id, idempotencyKey: "denied", category: "application", source: "test" })).response.status, 403)
   const locked = await json(`/api/mca/documents/${saved.payload.id}/download-token`, { method: "POST", cookie, body: {} })
-  assert.equal(locked.response.status, 200); assert.ok(locked.payload.url)
+  assert.equal(locked.response.status, 423); assert.equal(locked.payload.error.code, "document_not_clean")
   const status = await json("/api/mca/documents/status", { cookie })
   assert.equal(status.payload.scanner.configured, false); assert.equal(status.payload.extraction.configured, false)
   const retry = await json(`/api/mca/documents/${saved.payload.id}/scan`, { method: "POST", cookie, body: {} })
-  assert.equal(retry.payload.processingState, "ready")
+  assert.equal(retry.response.status, 200, JSON.stringify(retry.payload)); assert.equal(retry.payload.processingState, "pending_scan")
   const category = await json(`/api/mca/documents/${saved.payload.id}/category`, { method: "POST", cookie, body: { category: "other_stip" } })
   assert.equal(category.payload.category, "other_stip")
 

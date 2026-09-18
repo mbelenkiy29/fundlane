@@ -209,6 +209,8 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_watermarks")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
   await seed()

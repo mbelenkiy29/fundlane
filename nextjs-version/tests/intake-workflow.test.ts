@@ -65,6 +65,8 @@ async function seed() {
 before(async () => {
   testDatabase = await createPostgresTestDatabase("intake_workflow")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   await seed()
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests({ name: "intake-clean-fixture", async scan() { return { status: "clean", provider: "intake-clean-fixture", evidence: { fixture: true } } } })
@@ -259,7 +261,7 @@ test("expired private credentials and quarantined files never produce ready matc
   assert.equal((await intakeProgress(ids.workspace,result.intakeId))?.state,"needs_attention")
   await exec("UPDATE intake_integrations SET credential_expires_at=NULL WHERE id=?",c.status.id)
   await retryIntakeProcessing(adminActor,result.intakeId)
-  // Existing quarantine must still block intake even though new uploads no longer scan.
+  // Existing quarantine must still block intake even after a later clean scanner is configured.
   const blocked = await storeDocument(adminActor, { dealId: result.dealId!, idempotencyKey: "legacy-quarantine", filename: "blocked.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\n%%EOF\n")), category: "statement", source: "test" })
   await updateDocumentScan(ids.workspace, blocked.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
   await drain()

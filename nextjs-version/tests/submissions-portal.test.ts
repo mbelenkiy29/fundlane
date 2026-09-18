@@ -114,6 +114,8 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_portal")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
   setWebhookFetchForTests(async (input, init) => {

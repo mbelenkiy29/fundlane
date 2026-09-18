@@ -9,6 +9,7 @@ import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import type { DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+import { isDocumentReady } from "../src/lib/mca/documents/contracts"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import type { MetricEvidence, StatementAccountKind } from "../src/lib/mca/underwriting/contracts"
@@ -26,6 +27,8 @@ import { POST as analyzeStatements } from "../src/app/api/mca/underwriting/state
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_BACKGROUND_JOBS
+delete process.env.VERCEL
 delete process.env.MCA_DOCUMENT_AI_PROVIDER
 delete process.env.OPENAI_API_KEY
 delete process.env.MCA_DOCUMENT_AI_MODEL
@@ -120,6 +123,8 @@ async function uploadStatement(dealActor: DealActor, dealId: string, filename: s
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_statements")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   setStatementExtractionProviderForTests(provider)
@@ -288,7 +293,8 @@ test("MIC-179 concurrent analysis serializes one semantic position and aggregate
 test("MIC-179 pending and quarantined statements are not analyzed", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "scan-deal", legalName: "Scan Filter LLC" })).deal
   const clean = await uploadStatement(actor(), deal.id, "clean-aug.pdf", "scan-clean", extraction({ deposits: known(9_000, "9000"), positions: [] }))
-  assert.equal(clean.processingState, "ready")
+  assert.equal(isDocumentReady(clean.processingState), true)
+  assert.equal(clean.processingState, "clean")
   setDocumentScannerForTests(undefined)
   const pending = await storeDocument(actor(), { dealId: deal.id, idempotencyKey: "scan-pending", filename: "pending-aug.pdf", mimeType: "application/pdf", bytes: pdf("pending"), category: "statement", source: "test" })
   await updateDocumentScan(actor().workspaceId, pending.id, "pending_scan", "legacy-scanner", {}, new Date().toISOString())

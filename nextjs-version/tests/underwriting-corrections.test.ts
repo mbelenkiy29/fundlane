@@ -30,6 +30,8 @@ import { POST as analyzeCorrections } from "../src/app/api/mca/underwriting/corr
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_BACKGROUND_JOBS
+delete process.env.VERCEL
 delete process.env.MCA_DOCUMENT_AI_PROVIDER
 delete process.env.OPENAI_API_KEY
 delete process.env.MCA_DOCUMENT_AI_MODEL
@@ -143,6 +145,8 @@ async function uploadStatement(dealActor: DealActor, dealId: string, filename: s
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_corrections")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   setStatementExtractionProviderForTests(provider)

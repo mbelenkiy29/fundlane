@@ -45,6 +45,8 @@ const answers = {
 before(async () => {
   fixture = await createPostgresTestDatabase("forms")
   Object.assign(process.env, fixture.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentScannerForTests({ name: "test", scan: async () => ({ status: "clean", provider: "test", evidence: {} }) })
   const db = getDatabase(), at = nowIso()
   await db.prepare(`INSERT INTO workspaces(id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) VALUES (?,?,'America/New_York',10,?,?,?,?,?)`).run(
