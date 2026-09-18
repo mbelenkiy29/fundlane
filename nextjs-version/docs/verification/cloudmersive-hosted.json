@@ -1,0 +1,57 @@
+{
+  "testedAt": "2026-09-14T15:16:07.327Z",
+  "results": [
+    {
+      "fixture": "clean",
+      "httpStatus": 200,
+      "result": {
+        "scenario": "scanner",
+        "wallMs": 523.090962,
+        "result": {
+          "status": "clean",
+          "provider": "cloudmersive",
+          "evidence": {
+            "engineVerified": true,
+            "sha256": "83fb5196c11ba7e3ae9fb0ab21b3fcc17249d58f6c9d72ed81dd96609bc844b4",
+            "bytes": 29,
+            "threatCount": 0
+          }
+        }
+      }
+    },
+    {
+      "fixture": "eicar",
+      "httpStatus": 200,
+      "result": {
+        "scenario": "scanner",
+        "wallMs": 609.8299,
+        "result": {
+          "status": "infected",
+          "provider": "cloudmersive",
+          "evidence": {
+            "engineVerified": true,
+            "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+            "bytes": 68,
+            "threatCount": 1
+          }
+        }
+      }
+    },
+    {
+      "fixture": "maximum",
+      "httpStatus": 200,
+      "result": {
+        "scenario": "scanner",
+        "wallMs": 560.733042,
+        "result": {
+          "status": "unavailable",
+          "provider": "cloudmersive",
+          "evidence": {
+            "reason": "scanner_http_error",
+            "httpStatus": 400
+          }
+        }
+      }
+    }
+  ]
+}

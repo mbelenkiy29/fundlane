@@ -89,9 +89,11 @@ test("maps eight home KPI cards with volume, counts, percent, and collections", 
   assert.equal(JSON.stringify(cards).search(DUMMY), -1)
   assert.deepEqual(cards[0]?.sparkline.map((point) => point.v), [50000, 100000])
   assert.equal(cards[0]?.sparklineHidden, false)
-  assert.deepEqual(cards[1]?.sparkline.map((point) => point.v), [100_000, 200_000])
-  assert.deepEqual(cards[4]?.sparkline.map((point) => point.v), [50])
-  assert.deepEqual(cards[5]?.sparkline.map((point) => point.v), [5_000, 25_000])
+  assert.deepEqual(cards[3]?.sparkline.map((point) => point.v), [100_000, 200_000])
+  assert.deepEqual(cards[4]?.sparkline.map((point) => point.v), [10_000, 20_000])
+  assert.deepEqual(cards[5]?.sparkline.map((point) => point.v), [1, 3])
+  assert.deepEqual(cards[6]?.sparkline.map((point) => point.v), [50])
+  assert.deepEqual(cards[7]?.sparkline.map((point) => point.v), [5_000, 25_000])
 })
 
 test("empty workspace shows zeros and N/A, never dummy copy", () => {
