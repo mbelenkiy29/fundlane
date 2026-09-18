@@ -70,7 +70,7 @@ export const HOME_REASON_LABELS: Record<HomeActionReasonCode, Record<HomeActionC
 
 export const HOME_COPY = {
   title: "Needs Action",
-  description: "Deals where the next move is yours, a wait has gone past normal turnaround, or a past funding is up for renewal. The queue is derived from live deal state — there is no separate task list to mark done.",
+  description: "Notifications for deals that need a call, text, or email. Click a row for company details.",
   loading: "Loading needs-action queue…",
   empty: "You are all caught up. If a deal is on Home, there is a reason.",
   validation: "Review the highlighted filters.",
@@ -80,8 +80,11 @@ export const HOME_COPY = {
   panelEmpty: "No remaining actions on this deal.",
   panelFailed: "This deal panel could not be loaded.",
   caughtUp: "Caught up",
+  deal: "Deal",
+  notification: "Notification",
   action: "Action",
   actionSince: "Action since",
+  noPhone: "No phone on file",
   fullDeal: "Full Deal",
   updateStatus: "Update Status",
   submit: "Submit",

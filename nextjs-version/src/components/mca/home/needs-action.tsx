@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { DealMessages } from "@/components/mca/email/deal-messages"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { DEAL_STATUS_LABELS, type DealStatus } from "@/lib/mca/deals/schema"
 import {
@@ -48,6 +49,7 @@ export function NeedsAction() {
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>()
   const [category, setCategory] = React.useState<HomeActionCategory | "all">("all")
   const [selectedId, setSelectedId] = React.useState<string>()
+  const [focusChannel, setFocusChannel] = React.useState<"sms" | "email">()
   const [panel, setPanel] = React.useState<HomeDealPanel>()
   const [panelLoading, setPanelLoading] = React.useState(false)
   const [panelError, setPanelError] = React.useState<string>()
@@ -94,7 +96,6 @@ export function NeedsAction() {
   }, [selectedId, loadPanel])
 
   const view = homeQueueView({ loading, error, fieldErrors, items: queue?.items })
-  const now = queue?.now ?? new Date().toISOString()
 
   async function refreshAll() {
     await loadQueue()
@@ -194,10 +195,9 @@ export function NeedsAction() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Deal</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>{HOME_COPY.deal}</TableHead>
+                <TableHead>{HOME_COPY.notification}</TableHead>
                 <TableHead>{HOME_COPY.action}</TableHead>
-                <TableHead>{HOME_COPY.actionSince}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -212,19 +212,54 @@ export function NeedsAction() {
                     <div className="font-medium">{item.legalName}</div>
                     <div className="text-xs text-muted-foreground">{item.displayId}</div>
                   </TableCell>
-                  <TableCell>{DEAL_STATUS_LABELS[item.status]}</TableCell>
                   <TableCell>
-                    <Badge className={chipClass(item.category)}>{item.primaryReason.label}</Badge>
+                    {item.notification}
                     {item.reasons.length > 1 ? <span className="ml-2 text-xs text-muted-foreground">+{item.reasons.length - 1}</span> : null}
                   </TableCell>
-                  <TableCell className="tabular-nums">{formatActionSince(item.actionSince, now)}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>
+                      {item.suggestedActions.map((action) =>
+                        action.id === "call" && action.href ? (
+                          <Button key={action.id} size="sm" variant="outline" asChild disabled={!action.enabled}>
+                            <a href={action.href}>{action.label}</a>
+                          </Button>
+                        ) : action.id === "call" ? (
+                          <Button
+                            key={action.id}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            title={HOME_COPY.noPhone}
+                            aria-label={HOME_COPY.noPhone}
+                          >
+                            {action.label}
+                          </Button>
+                        ) : (
+                          <Button
+                            key={action.id}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={!action.enabled}
+                            onClick={() => {
+                              setSelectedId(item.dealId)
+                              setFocusChannel(action.id === "email" ? "email" : "sms")
+                            }}
+                          >
+                            {action.label}
+                          </Button>
+                        ),
+                      )}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </CardContent>
-      <Sheet open={Boolean(selectedId)} onOpenChange={(open) => { if (!open) setSelectedId(undefined) }}>
+      <Sheet open={Boolean(selectedId)} onOpenChange={(open) => { if (!open) { setSelectedId(undefined); setFocusChannel(undefined) } }}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
           <SheetHeader>
             <SheetTitle>{panel?.legalName ?? HOME_COPY.panelLoading}</SheetTitle>
@@ -237,6 +272,12 @@ export function NeedsAction() {
             {panel && !panel.reasons.length ? <p className="text-sm text-muted-foreground" role="status">{HOME_COPY.panelEmpty}</p> : null}
             {panel ? (
               <>
+                {focusChannel ? (
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-medium">Message</h3>
+                    <DealMessages dealId={panel.dealId} channel={focusChannel} />
+                  </section>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/pipeline?deal=${encodeURIComponent(panel.dealId)}`}>{HOME_COPY.fullDeal} <ArrowUpRight className="size-4" /></Link>
