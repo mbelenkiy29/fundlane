@@ -7,7 +7,7 @@ import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent } from "../db"
 import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
-import { DOCUMENT_CATEGORIES, type DocumentCategory, type DocumentSummary, type UploadDocumentInput } from "./contracts"
+import { DOCUMENT_CATEGORIES, type DocumentCategory, type DocumentProcessingState, type DocumentSummary, type UploadDocumentInput } from "./contracts"
 import {
   findDocumentById,
   findDocumentByIdempotencyKey,
@@ -18,7 +18,7 @@ import {
   updateDocumentScan,
   type DocumentRecord,
 } from "./repository"
-import { documentScanner } from "./scanner"
+import { documentScanner, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
@@ -58,7 +58,19 @@ function validateUpload(input: UploadDocumentInput): string {
   return normalizedFilename(input.filename)
 }
 
-/** Complete storage without invoking a malware scanner. Never release quarantine. */
+function scanState(result: ScanResult): DocumentProcessingState {
+  return result.status === "clean" ? "clean"
+    : result.status === "infected" ? "quarantined"
+    : result.status === "error" ? "scan_failed"
+    : "pending_scan"
+}
+
+async function failUploadCompletion(actor: DealActor, record: DocumentRecord, error: unknown): Promise<never> {
+  await updateDocumentScan(actor.workspaceId, record.id, "upload_failed", "storage", { recoverable: true, reason: error instanceof AppError ? error.code : "storage_completion_failed" }, nowIso())
+  throw error instanceof AppError ? error : new AppError(503, "storage_completion_failed", "File storage could not be completed. Retry upload completion.")
+}
+
+/** Scan after integrity checks; promote storage only when clean. Never release quarantine. */
 async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
   if (isDocumentReady(record.processingState) || record.processingState === "quarantined") return record
   try {
@@ -66,14 +78,28 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
       throw new AppError(409, "document_integrity_failed", "Stored file verification failed. Upload a new version of this document.")
     }
     validateUpload({ ...record, filename: record.originalFilename, bytes, idempotencyKey: record.id })
-    await documentStorage().promoteClean?.(record.storageKey, bytes)
   } catch (error) {
-    await updateDocumentScan(actor.workspaceId, record.id, "upload_failed", "storage", { recoverable: true, reason: error instanceof AppError ? error.code : "storage_completion_failed" }, nowIso())
-    throw error instanceof AppError ? error : new AppError(503, "storage_completion_failed", "File storage could not be completed. Retry upload completion.")
+    await failUploadCompletion(actor, record, error)
   }
-  const updated = await updateDocumentScan(actor.workspaceId, record.id, "ready", "upload_validation", { checksumVerified: true, malwareScanPerformed: false }, nowIso())
-  await recordAuditEvent({ context: actor, action: "document.ready", resourceType: "document", resourceId: record.id,
-    metadata: { state: "ready", malwareScanPerformed: false }, correlationId: actor.correlationId })
+  const result = await documentScanner().scan(bytes, record.originalFilename)
+  if (result.status === "clean") {
+    try {
+      await documentStorage().promoteClean?.(record.storageKey, bytes)
+    } catch (error) {
+      await failUploadCompletion(actor, record, error)
+    }
+  }
+  const malwareScanPerformed = result.status === "clean" || result.status === "infected"
+  const state = scanState(result)
+  const updated = await updateDocumentScan(actor.workspaceId, record.id, state, result.provider, { checksumVerified: true, ...result.evidence, malwareScanPerformed }, nowIso())
+  await recordAuditEvent({
+    context: actor,
+    action: result.status === "clean" ? "document.ready" : "document.scanned",
+    resourceType: "document",
+    resourceId: record.id,
+    metadata: { state, malwareScanPerformed, provider: result.provider },
+    correlationId: actor.correlationId,
+  })
   return updated
 }
 
