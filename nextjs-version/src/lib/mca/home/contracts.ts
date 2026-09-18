@@ -1,4 +1,7 @@
 import type { AssignmentKind, DealStatus, DraftState } from "../deals/schema"
+import type { HomeOutreachId, HomeSuggestedAction } from "./outreach"
+
+export type { HomeOutreachId, HomeSuggestedAction }
 
 export const HOME_ACTION_REASONS = [
   "submit",
@@ -117,6 +120,10 @@ export interface HomeQueueItem {
   category: HomeActionCategory
   actionSince: string
   updatedAt: string
+  notification: string
+  contacts: HomePanelContact
+  suggestedActions: HomeSuggestedAction[]
+  missingStatementMonths?: number
 }
 
 export interface HomeQueueCounts {
