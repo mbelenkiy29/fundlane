@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { CalendarDays, Bot, BanknoteArrowDown, BriefcaseBusiness, Building2, ChartNoAxesCombined, CircleGauge, Columns3, FileCheck2, HandCoins, Landmark, LayoutPanelLeft, RefreshCcw, Settings, Mail, MessageSquare, WalletCards } from "lucide-react"
+import { CalendarDays, Bot, BanknoteArrowDown, BriefcaseBusiness, Building2, ChartNoAxesCombined, CircleGauge, Columns3, FileCheck2, HandCoins, Landmark, RefreshCcw, Settings, Mail, MessageSquare, WalletCards } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -28,7 +28,6 @@ const groups = [
     { title: "Funders", url: "/funders", icon: Landmark },
     { title: "Payments", url: "/payments", icon: WalletCards, page: "payments" },
     { title: "Reports", url: "/reports", icon: ChartNoAxesCombined, page: "reports" },
-    { title: "Analytics", url: "/dashboard-2", icon: LayoutPanelLeft, page: "dashboard" },
     { title: "Settings", url: "/settings", icon: Settings, page: "workspace" },
   ]},
 ]

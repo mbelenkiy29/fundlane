@@ -13,7 +13,8 @@ export async function GET(request: Request) {
     const actor = await requireApplicationActor(request)
     const [invitations, forms] = await Promise.all([listApplicationInvitations(actor), availableApplicationForms(actor)])
     const canCreate = Boolean(actor.role && isActionAllowed(actor.role, "createDeal", (await getWorkspaceSettings(actor.workspaceId)).actionVisibility))
-    return NextResponse.json({ invitations, forms, canCreate }, { headers: { "Cache-Control": "private, no-store" } })
+    const canManageForm = actor.role === "admin" || actor.role === "super_admin"
+    return NextResponse.json({ invitations, forms, canCreate, canManageForm }, { headers: { "Cache-Control": "private, no-store" } })
   } catch (error) { return apiError(error) }
 }
 export async function POST(request: Request) {

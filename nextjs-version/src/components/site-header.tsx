@@ -17,11 +17,11 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
       <div className="flex w-full items-center gap-2 px-4 lg:px-6">
         <SidebarTrigger className="-ml-1" />
         <div className="ml-auto flex items-center gap-1">
-          {session?.permissions?.actions.createDeal && newDeal ? (
+          {session?.permissions?.actions.createDeal && newDeal && (
             <Button type="button" size="sm" className="hidden sm:inline-flex" onClick={() => newDeal.open()}>
               <Plus /> New deal
             </Button>
-          ) : null}
+          )}
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
           {session?.platformOwner && <Link href="/admin/status" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform status</Link>}
           <AssistantButton />

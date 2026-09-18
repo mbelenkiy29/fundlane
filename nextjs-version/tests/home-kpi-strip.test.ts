@@ -44,8 +44,8 @@ const sample: HomeKpis = {
     recentActivity: [],
     topFunders: [],
     merchantGrowth: [
-      { month: "2026-01", new: 1, returning: 0, churn: 0 },
-      { month: "2026-02", new: 2, returning: 1, churn: 0 },
+      { month: "2026-01", new: 1, renewals: 0, churn: 0 },
+      { month: "2026-02", new: 2, renewals: 1, churn: 0 },
     ],
     industries: [],
     states: [],
@@ -149,7 +149,7 @@ test("dollarsHidden shows Restricted while counts remain", () => {
   assert.equal(cards[7]?.value, HOME_KPI_RESTRICTED)
   assert.equal(cards[7]?.detail, `Received ${HOME_KPI_RESTRICTED}`)
   assert.equal(cards[0]?.sparklineHidden, false)
-  assert.deepEqual(cards[0]?.sparkline.map((point) => point.v), [50000, 100000])
+  assert.deepEqual(cards[0]?.sparkline.map((point) => point.v), [1, 2])
   assert.equal(cards[3]?.sparklineHidden, true)
   assert.deepEqual(cards[3]?.sparkline, [])
   assert.equal(cards[4]?.sparklineHidden, true)

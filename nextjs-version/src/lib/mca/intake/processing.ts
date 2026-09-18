@@ -23,7 +23,7 @@ interface Checkpoint {
   intake_id: string; workspace_id: string; fingerprint: string | null; generation: number
   job_id: string | null; progress_json: string; checked_at: string; updated_at: string
 }
-const supported = new Set(["jotform", "highlevel", "zoho", "custom"])
+const supported = new Set(["jotform", "highlevel", "zoho", "custom", "fundlane"])
 
 /** Integration authority is re-resolved for every stage; it is never a browser session or fabricated API key. */
 async function authority(workspaceId: string, intakeId: string, integrationId?: string) {
@@ -85,7 +85,7 @@ export async function scheduleIntakeProcessing(limit = 25): Promise<number> {
     JOIN intake_integrations i ON i.id=e.integration_id AND i.workspace_id=e.workspace_id
     LEFT JOIN intake_processing p ON p.intake_id=e.id
     WHERE i.enabled=1 AND i.automatic_processing=1 AND i.approval_state='approved'
-      AND i.provider IN ('jotform','highlevel','zoho','custom') AND e.deal_id IS NOT NULL
+      AND i.provider IN ('jotform','highlevel','zoho','custom','fundlane') AND e.deal_id IS NOT NULL
       AND (e.created_at>=i.automatic_since OR p.intake_id IS NOT NULL)
     ORDER BY p.checked_at ASC NULLS FIRST,e.created_at,e.id LIMIT ?`).all(limit)
   let queued = 0

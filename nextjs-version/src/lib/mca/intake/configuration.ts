@@ -21,7 +21,7 @@ import {
   verifiedUsesendDomain,
 } from "./usesend"
 
-export const INTAKE_PROVIDERS = ["jotform", "highlevel", "fillout", "custom", "zoho", "docuseal", "email"] as const
+export const INTAKE_PROVIDERS = ["fundlane", "jotform", "highlevel", "fillout", "custom", "zoho", "docuseal", "email"] as const
 export type IntakeProvider = (typeof INTAKE_PROVIDERS)[number]
 export const EMAIL_GATEWAYS = ["usesend", "postmark", "custom"] as const
 export type EmailGateway = (typeof EMAIL_GATEWAYS)[number]
@@ -115,7 +115,7 @@ function validateInput(input: IntegrationInput): void {
   const errors: Record<string, string[]> = {}
   if (!INTAKE_PROVIDERS.includes(input.provider)) errors.provider = ["Choose a supported provider."]
   if (!input.displayName?.trim() || input.displayName.length > 120) errors.displayName = ["Enter a name of at most 120 characters."]
-  if (["jotform", "fillout", "custom", "zoho"].includes(input.provider) && !input.formId?.trim()) errors.formId = ["Enter the configured form ID."]
+  if (["jotform", "fillout", "custom", "zoho", "fundlane"].includes(input.provider) && !input.formId?.trim()) errors.formId = ["Enter the configured form ID."]
   if (input.provider === "docuseal" && !input.templateId?.trim()) errors.templateId = ["Enter the DocuSeal template ID."]
   if (input.provider === "highlevel" && !input.locationId?.trim()) errors.locationId = ["Enter the HighLevel location ID."]
   if (input.provider === "email" && !input.inboundAddress?.match(/^[^@\s]+@[^@\s]+$/)) errors.inboundAddress = ["Configure the actual inbound route address."]

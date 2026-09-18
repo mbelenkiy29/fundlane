@@ -76,6 +76,16 @@ const nextConfig: NextConfig = {
         permanent: true,
       },
       {
+        source: '/dashboard-2',
+        destination: '/dashboard',
+        permanent: false,
+      },
+      {
+        source: '/dashboard-2/:path*',
+        destination: '/dashboard',
+        permanent: false,
+      },
+      {
         source: '/deals/new',
         destination: '/pipeline?create=1',
         permanent: false,

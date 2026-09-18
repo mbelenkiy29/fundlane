@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
   Bot,
   FileText,
@@ -77,6 +78,9 @@ export function DealAssistant({
   standalone?: boolean
   onChanged: () => void
 }) {
+  const router = useRouter()
+  const search = useSearchParams()
+  const draftMessage = search.get("draft")
   const [enabled, setEnabled] = useState(false),
     [configured, setConfigured] = useState(false),
     [open, setOpen] = useState(standalone)
@@ -233,7 +237,7 @@ export function DealAssistant({
   useEffect(() => {
     if (standalone) void show()
   }, [standalone, show])
-  async function submit(command: AssistantCommand) {
+  const submit = useCallback(async (command: AssistantCommand) => {
     const controller = new AbortController()
     abort.current = controller
     setBusy(true)
@@ -333,7 +337,23 @@ export function DealAssistant({
       window.dispatchEvent(new Event("mca-credits-changed"))
       abort.current = null
     }
-  }
+  }, [applyView])
+  const sentDraft = useRef(false)
+  useEffect(() => {
+    if (!standalone || !draftMessage || !view || sentDraft.current || !configured || busy) return
+    if (view.messages.length) return
+    if (view.run?.status === "running" || view.run?.status === "awaiting_approval" || view.run?.status === "awaiting_input") return
+    sentDraft.current = true
+    void submit({
+      action: "message",
+      conversationId: view.id,
+      message: draftMessage.trim(),
+      requestId: crypto.randomUUID(),
+    })
+    const params = new URLSearchParams(search.toString())
+    params.delete("draft")
+    router.replace(`/assistant?${params}`, { scroll: false })
+  }, [standalone, draftMessage, view, configured, busy, search, router, submit])
   async function upload(selected: FileList | null) {
     if (!selected || !view) return
     const files = Array.from(selected)
@@ -394,10 +414,14 @@ export function DealAssistant({
   }
   return (
     <section
-      className="overflow-hidden rounded-xl border bg-background"
+      className={
+        standalone
+          ? "flex h-full min-h-0 flex-col bg-background"
+          : "overflow-hidden rounded-xl border bg-background"
+      }
       aria-label="AI assistant"
     >
-      <div className="flex items-center justify-between p-3">
+      <div className={`flex items-center justify-between ${standalone ? "px-4 py-2" : "p-3"}`}>
         <Button
           variant="ghost"
           size="sm"
@@ -455,15 +479,12 @@ export function DealAssistant({
         )}
       </div>
       {open && (
-        <div className={`space-y-4 border-t ${rich ? "p-4 sm:p-5" : "p-3"}`}>
-          <p className="text-xs text-muted-foreground">
-            {rich
-              ? "Chat, research, create files, and work on your deals."
-              : standalone
-                ? "Find deals and work on your company’s business records."
-                : "Works on this deal."}{" "}
-            Messages and submissions need your confirmation.
-          </p>
+        <div className={`flex min-h-0 flex-1 flex-col ${standalone ? "" : "space-y-4 border-t"} ${standalone ? "" : rich ? "p-4 sm:p-5" : "p-3"}`}>
+          {!standalone && (
+            <p className="text-xs text-muted-foreground">
+              Works on this deal. Messages and submissions need your confirmation.
+            </p>
+          )}
           {!standalone && <CreditBalanceBadge />}
           {!configured && (
             <p role="status" className="text-sm">
@@ -478,7 +499,7 @@ export function DealAssistant({
               followOutput.current =
                 el.scrollHeight - el.scrollTop - el.clientHeight < 70
             }}
-            className={`${standalone ? "min-h-[20vh] max-h-[35dvh] sm:max-h-[44dvh]" : "max-h-[45vh]"} space-y-6 overflow-y-auto overscroll-contain pr-1`}
+            className={`${standalone ? "mx-auto min-h-0 w-full max-w-3xl flex-1 px-4 py-6" : "max-h-[45vh] pr-1"} space-y-6 overflow-y-auto overscroll-contain`}
             role="log"
             aria-label="Assistant conversation"
             aria-live="polite"
@@ -536,11 +557,19 @@ export function DealAssistant({
             {view?.messages.map((m) => (
               <div
                 key={m.id}
-                className={`min-w-0 rounded-lg p-3 text-sm ${m.role === "user" ? "ml-6 bg-muted sm:ml-16" : rich ? "mr-2" : "mr-2 border"}`}
+                className={`min-w-0 text-sm ${
+                  standalone
+                    ? m.role === "user"
+                      ? "ml-auto max-w-[80%] rounded-3xl bg-muted px-4 py-3"
+                      : "w-full"
+                    : `rounded-lg p-3 ${m.role === "user" ? "ml-6 bg-muted sm:ml-16" : rich ? "mr-2" : "mr-2 border"}`
+                }`}
               >
-                <p className="mb-1 text-xs font-medium text-muted-foreground">
-                  {m.role === "user" ? "You" : "Assistant"}
-                </p>
+                {!standalone && (
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">
+                    {m.role === "user" ? "You" : "Assistant"}
+                  </p>
+                )}
                 {rich && m.role === "assistant" ? (
                   <>
                     <AgentWorkflow
@@ -645,9 +674,11 @@ export function DealAssistant({
                       }
                     >
                       Confirm{" "}
-                      {a.preview.title.startsWith("Submit")
-                        ? "submission"
-                        : "send"}
+                      {a.preview.title.toLowerCase().includes("calendar")
+                        ? "schedule"
+                        : a.preview.title.startsWith("Submit")
+                          ? "submission"
+                          : "send"}
                     </Button>
                     <Button
                       size="sm"
@@ -721,7 +752,7 @@ export function DealAssistant({
               </div>
             </details>
           )}
-          {!view?.messages.length && (
+          {!view?.messages.length && !standalone && (
             <div className="flex flex-wrap gap-2">
               {(rich && standalone && !dealId
                 ? [
@@ -770,7 +801,7 @@ export function DealAssistant({
               e.preventDefault()
               send(input)
             }}
-            className="space-y-2 rounded-xl border bg-background p-2 focus-within:ring-2 focus-within:ring-ring/30"
+            className={`space-y-2 rounded-3xl border bg-background p-2 focus-within:ring-2 focus-within:ring-ring/30 ${standalone ? "mx-auto mb-4 w-full max-w-3xl" : ""}`}
           >
             {!!attachments.length && (
               <div className="flex flex-wrap gap-2 px-1">

@@ -172,7 +172,7 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
       detail: countLabel(source.activeMerchants.count, "merchant"),
       periodSensitive: false,
       ...sparkline(
-        source.series.merchantGrowth.map((row) => ({ t: row.month, v: row.new + row.returning })),
+        source.series.merchantGrowth.map((row) => ({ t: row.month, v: row.new + row.renewals })),
         false,
       ),
     },

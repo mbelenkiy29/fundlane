@@ -36,9 +36,9 @@ export function DashboardHeader({
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-3xl font-bold">Business Dashboard</CardTitle>
+            <CardTitle className="text-3xl font-bold">Overview</CardTitle>
             <CardDescription className="text-base mt-2">
-              Comprehensive overview of your business performance and key metrics
+              Funded volume, commissions, and pipeline activity for the selected range
             </CardDescription>
           </div>
           <div className="flex items-center space-x-2">

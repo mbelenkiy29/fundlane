@@ -37,7 +37,7 @@ export default async function SharedApplicationPage({ params, searchParams }: Pa
         <p className="mt-2 text-sm text-muted-foreground">Ask your representative for a new personal link. No application data was accepted.</p>
       </div> : <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
-          {invitation && typeof search.mca_invite === "string" ? <PublicApplication token={search.mca_invite} formId={formId} /> : <iframe title="Business funding application" src={formUrl} className="min-h-[820px] w-full" allow="geolocation 'none'; camera 'none'; microphone 'none'" />}
+          {invitation && typeof search.mca_invite === "string" ? <PublicApplication token={search.mca_invite} formId={formId} provider={invitation.provider} /> : <iframe title="Business funding application" src={formUrl} className="min-h-[820px] w-full" allow="geolocation 'none'; camera 'none'; microphone 'none'" />}
         </div>
         <aside className="h-fit rounded-xl border bg-card p-5">
           <div className="flex items-center gap-2 font-medium"><ShieldCheck className="size-4 text-emerald-600" />Before you submit</div>

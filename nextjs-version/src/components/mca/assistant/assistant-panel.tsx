@@ -6,9 +6,18 @@ import { ChatKit, useChatKit } from "@openai/chatkit-react"
 import Script from "next/script"
 import { useTheme } from "@/hooks/use-theme"
 import { MessageSquare, X } from "lucide-react"
+import { NativeChat } from "./native-chat"
 import { Button } from "@/components/ui/button"
 
 type SelectedDeal = { id: string; label: string } | null
+function cssColor(variable: string) {
+  const probe = document.createElement("span")
+  probe.style.color = `var(${variable})`
+  document.body.appendChild(probe)
+  const color = getComputedStyle(probe).color
+  probe.remove()
+  return color
+}
 const AssistantContext = createContext<{ open: () => void; deal: SelectedDeal; setDeal: (deal: SelectedDeal) => void } | null>(null)
 export function useAssistantDeal(dealId?: string, label?: string) {
   const setter = useContext(AssistantContext)?.setDeal
@@ -23,7 +32,7 @@ export function AssistantButton({ onOpen }: { onOpen?: () => void } = {}) {
   return <Button variant="outline" size="sm" onClick={() => { onOpen?.(); assistant.open() }} aria-label="Open assistant"><MessageSquare className="size-4" /><span className="hidden sm:inline">Assistant</span></Button>
 }
 
-export function AssistantProvider({ children, domainKey }: { children: React.ReactNode; domainKey: string }) {
+export function AssistantProvider({ children, domainKey, runtime = "chatkit" }: { children: React.ReactNode; domainKey: string; runtime?: "chatkit" | "supabase" }) {
   const [deal, setDeal] = useState<SelectedDeal>(null)
   const opener = useRef<HTMLElement | null>(null)
   const panel = useRef<HTMLDivElement | null>(null)
@@ -50,7 +59,7 @@ export function AssistantProvider({ children, domainKey }: { children: React.Rea
   return <AssistantContext.Provider value={{ deal, setDeal, open: () => { opener.current = document.activeElement as HTMLElement; setMounted(true); setOpen(true) } }}>
     {children}
     {mounted && <>
-      <Script src="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js" strategy="afterInteractive" onReady={() => setScriptReady(true)} onError={() => setScriptError(true)} />
+      {runtime === "chatkit" && <Script src="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js" strategy="afterInteractive" onReady={() => setScriptReady(true)} onError={() => setScriptError(true)} />}
       <Dialog.Root open={open} onOpenChange={setOpen} modal={mobile}>
         <Dialog.Portal forceMount>
           {mobile && open && <Dialog.Overlay className="fixed inset-0 z-50 bg-black/30" />}
@@ -63,7 +72,7 @@ export function AssistantProvider({ children, domainKey }: { children: React.Rea
                 <Dialog.Description className="text-sm text-muted-foreground">Private to you in this company. Reads deals and underwriting.</Dialog.Description></div>
               <Dialog.Close asChild><Button size="icon" variant="ghost" aria-label="Close assistant"><X /></Button></Dialog.Close>
             </div>
-            {!domainKey ? <p className="p-4 text-sm" role="status">The assistant is awaiting configuration.</p>
+            {runtime === "supabase" ? <NativeChat deal={deal} /> : !domainKey ? <p className="p-4 text-sm" role="status">The assistant is awaiting configuration.</p>
               : scriptError ? <p className="p-4 text-sm" role="alert">The assistant could not load. Reload the page to try again.</p>
               : scriptReady ? <AssistantChat key={chatAttempt} domainKey={domainKey} onRetry={() => setChatAttempt(attempt => attempt + 1)} /> : <p className="p-4 text-sm" role="status">Loading assistant…</p>}
           </Dialog.Content>
@@ -84,6 +93,10 @@ function AssistantChat({ domainKey, onRetry }: { domainKey: string; onRetry: () 
   const selectedDeal = useContext(AssistantContext)?.deal
   const currentDeal = selectedDeal?.id
   const [includedDeal, setIncludedDeal] = useState<string | null>(null)
+  const includedDealRef = useRef<string | null>(null)
+  useEffect(() => {
+    includedDealRef.current = includedDeal
+  }, [includedDeal])
   const [error, setError] = useState<string | null>(null)
   const [responding, setResponding] = useState(false)
   const requests = useRef(new Set<AbortController>())
@@ -101,7 +114,7 @@ function AssistantChat({ domainKey, onRetry }: { domainKey: string; onRetry: () 
         const controller = new AbortController()
         requests.current.add(controller)
         const headers = new Headers(init?.headers)
-        if (currentDeal && includedDeal === currentDeal) headers.set("x-mca-deal-id", currentDeal)
+        if (includedDealRef.current) headers.set("x-mca-deal-id", includedDealRef.current)
         const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
         try {
           const response = await fetch(input, { ...init, credentials: "same-origin", headers, signal })
@@ -123,10 +136,17 @@ function AssistantChat({ domainKey, onRetry }: { domainKey: string; onRetry: () 
         } catch (e) { requests.current.delete(controller); throw e }
       },
     },
-    frameTitle: "MCA workspace assistant",
+    frameTitle: "Fundlane assistant",
     onReady: () => setReady(true),
+    header: { enabled: true, title: { enabled: true, text: "Fundlane assistant" } },
     theme: {
       colorScheme: resolvedTheme === "dark" ? "dark" : "light",
+      radius: "soft",
+      density: "normal",
+      color: {
+        accent: { primary: cssColor("--primary"), level: 1 },
+        surface: { background: cssColor("--background"), foreground: cssColor("--foreground") },
+      },
       typography: {
         baseSize: 14,
         fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
@@ -143,9 +163,28 @@ function AssistantChat({ domainKey, onRetry }: { domainKey: string; onRetry: () 
     history: { enabled: true, showDelete: true, showRename: true },
     composer: { placeholder: "Ask about your deals…", attachments: { enabled: false } },
     threadItemActions: { feedback: false, retry: true },
+    disclaimer: { text: "Reads permitted deals and underwriting. Calendar changes are confirmed on AI Assistant." },
+    entities: {
+      showComposerMenu: true,
+      onTagSearch: async (query) => {
+        const response = await fetch(`/api/mca/deals?q=${encodeURIComponent(query)}`, { credentials: "same-origin" })
+        const data = await response.json().catch(() => ({ deals: [] })) as { deals?: Array<{ id: string; legalName?: string; displayId?: string }> }
+        return (data.deals ?? []).slice(0, 8).map((deal) => ({
+          id: deal.id,
+          title: deal.legalName || deal.displayId || deal.id,
+          icon: "search",
+          interactive: true,
+          group: "Deals",
+          data: { dealId: deal.id },
+        }))
+      },
+      onClick: (entity) => { setIncludedDeal(entity.id) },
+    },
     startScreen: { greeting: "What would you like to know?", prompts: [
-      { label: "Summarize my pipeline", prompt: "Summarize my current pipeline by status." },
-      { label: "Find a deal", prompt: "Help me find a deal by merchant name." },
+      { label: "Summarize my pipeline", prompt: "Summarize my current pipeline by status.", icon: "chart" },
+      { label: "Find a deal", prompt: "Help me find a deal by merchant name.", icon: "search" },
+      { label: "Check this deal", prompt: "What is missing on the selected deal?", icon: "document" },
+      { label: "Plan my calendar", prompt: "What follow-ups should I put on my calendar this week?", icon: "calendar" },
     ] },
     onResponseStart: () => { setError(null); setResponding(true) },
     onResponseEnd: () => setResponding(false),

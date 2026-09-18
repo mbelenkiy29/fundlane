@@ -20,9 +20,11 @@ export interface InvitationRecord {
   sent_at: string | null; opened_at: string | null; started_at: string | null; submitted_at: string | null
   submission_event_id: string | null; intake_id: string | null; deal_id: string | null
   form_id: string; current_form_id: string; form_name: string; employee_name: string; member_status: string; enabled: number
-  intake_error: string | null
+  intake_error: string | null; provider: string; draft_cipher: string | null; requested_amount_cents: number | null
+  last_step: string | null; last_activity_at: string | null; reminder_count: number; reminded_at: string | null
+  business_name: string | null
 }
-const selection = `SELECT a.*, i.form_id AS current_form_id, i.display_name AS form_name, i.enabled, u.name AS employee_name,
+const selection = `SELECT a.*, i.form_id AS current_form_id, i.display_name AS form_name, i.enabled, i.provider, u.name AS employee_name,
   m.status AS member_status, e.error_message AS intake_error FROM mca_application_invitations a
   JOIN intake_integrations i ON i.id=a.integration_id AND i.workspace_id=a.workspace_id
   JOIN memberships m ON m.id=a.membership_id AND m.workspace_id=a.workspace_id
@@ -47,7 +49,13 @@ export async function requireApplicationActor(request: Request, write = false): 
 }
 export async function availableApplicationForms(actor: DealActor) {
   await assertApplicationAccess(actor)
-  return getDatabase().prepare<{ id: string; name: string; formId: string }>("SELECT id,display_name AS name,form_id AS \"formId\" FROM intake_integrations WHERE workspace_id=? AND provider='jotform' AND enabled=1 AND form_id IS NOT NULL ORDER BY display_name").all(actor.workspaceId)
+  const { ensureFundlaneForm } = await import("./provision")
+  await ensureFundlaneForm(actor)
+  return getDatabase().prepare<{ id: string; name: string; formId: string; provider: string }>(
+    `SELECT id,display_name AS name,form_id AS "formId",provider FROM intake_integrations
+     WHERE workspace_id=? AND enabled=1 AND form_id IS NOT NULL AND provider IN ('fundlane','jotform')
+     ORDER BY CASE provider WHEN 'fundlane' THEN 0 ELSE 1 END, display_name`,
+  ).all(actor.workspaceId)
 }
 export function invitationActive(row: InvitationRecord): boolean {
   return !row.revoked_at && row.member_status === "active" && row.enabled === 1 && row.form_id === row.current_form_id && row.expires_at > nowIso() && !row.submitted_at
@@ -67,9 +75,11 @@ export async function listApplicationInvitations(actor: DealActor): Promise<Appl
     WHERE a.workspace_id=?${admin(actor) ? "" : " AND a.membership_id=?"} ORDER BY d.created_at DESC,d.id DESC`).all(actor.workspaceId, ...(admin(actor) ? [] : [actor.membershipId]))
   return rows.map(row => ({
     id: row.id, membershipId: row.membership_id, employeeName: row.employee_name, clientName: row.client_name,
-    email: decryptSensitive(row.email_cipher, row.workspace_id), formName: row.form_name, createdAt: row.created_at,
-    expiresAt: row.expires_at, revokedAt: row.revoked_at, copiedAt: row.copied_at, sentAt: row.sent_at,
+    businessName: row.business_name || row.client_name,
+    email: decryptSensitive(row.email_cipher, row.workspace_id), formName: row.form_name, provider: row.provider,
+    createdAt: row.created_at, expiresAt: row.expires_at, revokedAt: row.revoked_at, copiedAt: row.copied_at, sentAt: row.sent_at,
     openedAt: row.opened_at, startedAt: row.started_at, submittedAt: row.submitted_at, active: invitationActive(row),
+    requestedAmountCents: row.requested_amount_cents, lastStep: row.last_step, reminderCount: Number(row.reminder_count ?? 0),
     intakeId: row.intake_id, intakeError: row.intake_error, dealId: row.deal_id,
     deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code })),
   }))
@@ -91,7 +101,7 @@ export async function createApplicationInvitation(actor: DealActor, input: unkno
   if (row.client_name !== value.clientName || row.integration_id !== value.integrationId || decryptSensitive(row.email_cipher, row.workspace_id) !== value.email) throw new AppError(409, "invitation_conflict", "This request was already used for another invitation.")
   return { id: row.id }
 }
-function invitationUrl(row: InvitationRecord, origin: string): string {
+export function invitationUrl(row: InvitationRecord, origin: string): string {
   const url = new URL(`/apply/${encodeURIComponent(row.form_id)}`, origin)
   url.searchParams.set("mca_invite", decryptSensitive(row.token_cipher, row.workspace_id))
   return url.toString()
@@ -158,7 +168,7 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
     const same = await getDatabase().prepare<{ job_id: string }>("SELECT job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND request_key=?").get(id, requestKey)
     if (same) return { jobId: same.job_id }
     const deliveryId = newId()
-    await getDatabase().prepare("INSERT INTO mca_application_invitation_deliveries(id,invitation_id,workspace_id,request_key,created_at) VALUES (?,?,?,?,?)").run(deliveryId, id, actor.workspaceId, requestKey, nowIso())
+    await getDatabase().prepare("INSERT INTO mca_application_invitation_deliveries(id,invitation_id,workspace_id,request_key,purpose,created_at) VALUES (?,?,?,?,?,?)").run(deliveryId, id, actor.workspaceId, requestKey, "invite", nowIso())
     const job = await enqueueBackgroundJob({ actor, kind: "application_invitation_email", resourceId: deliveryId, idempotencyKey: deliveryId, payload: { origin } })
     await getDatabase().prepare("UPDATE mca_application_invitation_deliveries SET job_id=? WHERE id=?").run(job.id, deliveryId)
     return { jobId: job.id }

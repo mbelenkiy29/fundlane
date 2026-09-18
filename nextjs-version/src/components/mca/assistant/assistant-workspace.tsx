@@ -10,6 +10,8 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { DealAssistant } from "./deal-assistant"
 import { assistantJson, CreditBalanceBadge } from "./credit-balance"
 import type { ConversationView } from "@/lib/mca/assistant/contracts"
@@ -19,6 +21,12 @@ type History = {
   createdAt: string
   title?: string
 }
+const starters = [
+  "Summarize my pipeline",
+  "Find deals with missing documents",
+  "Plan my calendar from needs-action work",
+  "Help me create a deal draft",
+]
 export function AssistantWorkspace() {
   const router = useRouter(),
     search = useSearchParams(),
@@ -34,6 +42,7 @@ export function AssistantWorkspace() {
   const [editing, setEditing] = useState<History | null>(null),
     [title, setTitle] = useState(""),
     [saving, setSaving] = useState(false)
+  const [draft, setDraft] = useState("")
   useEffect(() => {
     const abort = new AbortController()
     const timer = setTimeout(() => {
@@ -90,7 +99,7 @@ export function AssistantWorkspace() {
       setSaving(false)
     }
   }
-  async function create() {
+  async function create(firstMessage?: string) {
     setCreating(true)
     setError("")
     try {
@@ -103,35 +112,136 @@ export function AssistantWorkspace() {
         }
       )
       refresh()
-      router.push(`/assistant?conversation=${c.id}`)
+      const params = new URLSearchParams()
+      params.set("conversation", c.id)
+      if (firstMessage?.trim()) params.set("draft", firstMessage.trim())
+      router.push(`/assistant?${params}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create a chat.")
     } finally {
       setCreating(false)
     }
   }
-  return (
-    <div className="space-y-6">
-      <header>
-        <div className="flex items-center gap-3">
-          <Bot className="size-7 text-primary" />
-          <h1 className="text-2xl font-semibold tracking-tight">
-            AI Assistant
-          </h1>
-        </div>
-        <p className="mt-2 text-sm text-muted-foreground">
-          A place to think, create, and get work done.
-        </p>
-        <div className="mt-4">
+  const rail = (
+    <aside className="flex h-full min-h-0 w-full flex-col gap-3 bg-sidebar p-3 text-sidebar-foreground lg:w-[272px] lg:border-r lg:border-sidebar-border">
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Chats</p>
+        <div className="text-[11px] leading-snug [&_a]:text-[11px]">
           <CreditBalanceBadge />
         </div>
-      </header>
+      </div>
+      <Button
+        className="w-full justify-start"
+        disabled={creating}
+        onClick={() => void create()}
+      >
+        <Plus className="size-4" />
+        New chat
+      </Button>
+      <div className="space-y-1.5">
+        <label htmlFor="assistant-deal-search" className="block text-xs font-medium">
+          Find a deal
+        </label>
+        <Input
+          id="assistant-deal-search"
+          placeholder="Search business name"
+          value={dealQuery}
+          onChange={(e) => {
+            setDealQuery(e.target.value)
+            setSelectedDeal("")
+          }}
+        />
+        <label htmlFor="assistant-deal-context" className="block text-xs font-medium">
+          Conversation context
+        </label>
+        <select
+          id="assistant-deal-context"
+          className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+          value={selectedDeal}
+          onChange={(e) => setSelectedDeal(e.target.value)}
+        >
+          <option value="">Company workspace</option>
+          {deals.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.legalName || d.displayId}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+        <Input
+          aria-label="Search conversations"
+          value={historyQuery}
+          onChange={(e) => setHistoryQuery(e.target.value)}
+          maxLength={200}
+          placeholder="Search conversations"
+          className="pl-8"
+        />
+      </div>
+      <nav aria-label="Assistant chat history" className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+        {history.map((c) => (
+          <div key={c.id} className="group flex items-center rounded-lg hover:bg-sidebar-accent">
+            <Button
+              variant={c.id === conversationId ? "secondary" : "ghost"}
+              className="min-w-0 flex-1 justify-start text-left font-normal"
+              onClick={() => router.push(`/assistant?conversation=${c.id}`)}
+            >
+              <MessageSquare className="size-4 shrink-0" />
+              <span className="truncate">
+                {c.title ??
+                  `${c.dealId ? "Deal chat" : "Workspace chat"} · ${new Date(c.createdAt).toLocaleDateString()}`}
+              </span>
+            </Button>
+            {c.title && (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0 opacity-0 group-hover:opacity-100"
+                aria-label={`Manage ${c.title}`}
+                onClick={() => {
+                  setEditing(c)
+                  setTitle(c.title ?? "")
+                }}
+              >
+                <Pencil className="size-3" />
+              </Button>
+            )}
+          </div>
+        ))}
+        {nextBefore && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            onClick={() =>
+              void assistantJson<{
+                conversations: History[]
+                nextBefore: string | null
+              }>(
+                `/api/mca/assistant/conversations?before=${encodeURIComponent(nextBefore)}&q=${encodeURIComponent(historyQuery)}`
+              )
+                .then((d) => {
+                  setHistory((h) => [...h, ...d.conversations])
+                  setNextBefore(d.nextBefore)
+                })
+                .catch((e) => setError(e.message))
+            }
+          >
+            Load more conversations
+          </Button>
+        )}
+      </nav>
+    </aside>
+  )
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="border-b px-4 py-2 text-sm text-destructive">
           {error}
         </p>
       )}
-      <div className="flex gap-2 lg:hidden">
+      <div className="flex gap-2 border-b p-2 lg:hidden">
         <Button
           variant="outline"
           className="flex-1"
@@ -141,132 +251,15 @@ export function AssistantWorkspace() {
           <MessageSquare className="size-4" />
           Chats and deal context
         </Button>
-        <Button
-          aria-label="New chat"
-          disabled={creating}
-          onClick={() => void create()}
-        >
+        <Button aria-label="New chat" disabled={creating} onClick={() => void create()}>
           <Plus className="size-4" />
         </Button>
       </div>
-      <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside
-          className={`${showNavigation ? "block" : "hidden"} min-w-0 space-y-3 lg:block`}
-        >
-          <label
-            htmlFor="assistant-deal-search"
-            className="block text-xs font-medium"
-          >
-            Find a deal (optional)
-          </label>
-          <input
-            id="assistant-deal-search"
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            placeholder="Search business name"
-            value={dealQuery}
-            onChange={(e) => {
-              setDealQuery(e.target.value)
-              setSelectedDeal("")
-            }}
-          />
-          <label
-            htmlFor="assistant-deal-context"
-            className="block text-xs font-medium"
-          >
-            Conversation context
-          </label>
-          <select
-            id="assistant-deal-context"
-            className="w-full rounded-md border bg-background p-2 text-sm"
-            value={selectedDeal}
-            onChange={(e) => setSelectedDeal(e.target.value)}
-          >
-            <option value="">Company workspace</option>
-            {deals.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.legalName || d.displayId}
-              </option>
-            ))}
-          </select>
-          <Button
-            className="w-full"
-            onClick={() => void create()}
-            disabled={creating}
-          >
-            <Plus className="size-4" />
-            New conversation
-          </Button>
-          <nav
-            aria-label="Assistant chat history"
-            className="flex gap-2 overflow-x-auto lg:max-h-[65vh] lg:flex-col lg:overflow-y-auto"
-          >
-            <div className="relative min-w-48 lg:min-w-0">
-              <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
-              <input
-                aria-label="Search conversations"
-                value={historyQuery}
-                onChange={(e) => setHistoryQuery(e.target.value)}
-                maxLength={200}
-                placeholder="Search conversations"
-                className="w-full rounded-md border bg-background py-2 pl-8 pr-2 text-xs"
-              />
-            </div>
-            {history.map((c) => (
-              <div
-                key={c.id}
-                className="group flex shrink-0 items-center rounded-md hover:bg-muted/50"
-              >
-                <Button
-                  variant={c.id === conversationId ? "secondary" : "ghost"}
-                  className="min-w-0 flex-1 justify-start text-left"
-                  onClick={() => router.push(`/assistant?conversation=${c.id}`)}
-                >
-                  <MessageSquare className="size-4" />
-                  <span className="truncate">
-                    {c.title ??
-                      `${c.dealId ? "Deal chat" : "Workspace chat"} · ${new Date(c.createdAt).toLocaleDateString()}`}
-                  </span>
-                </Button>
-                {c.title && (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="size-7 shrink-0"
-                    aria-label={`Manage ${c.title}`}
-                    onClick={() => {
-                      setEditing(c)
-                      setTitle(c.title ?? "")
-                    }}
-                  >
-                    <Pencil className="size-3" />
-                  </Button>
-                )}
-              </div>
-            ))}
-            {nextBefore && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  void assistantJson<{
-                    conversations: History[]
-                    nextBefore: string | null
-                  }>(
-                    `/api/mca/assistant/conversations?before=${encodeURIComponent(nextBefore)}&q=${encodeURIComponent(historyQuery)}`
-                  )
-                    .then((d) => {
-                      setHistory((h) => [...h, ...d.conversations])
-                      setNextBefore(d.nextBefore)
-                    })
-                    .catch((e) => setError(e.message))
-                }
-              >
-                Load more conversations
-              </Button>
-            )}
-          </nav>
-        </aside>
-        <main className="min-w-0">
+      <div className="flex min-h-0 flex-1">
+        <div className={`${showNavigation ? "block" : "hidden"} min-h-0 w-full lg:block lg:w-auto`}>
+          {rail}
+        </div>
+        <main className="min-h-0 min-w-0 flex-1">
           {conversationId ? (
             <DealAssistant
               key={conversationId}
@@ -275,18 +268,54 @@ export function AssistantWorkspace() {
               onChanged={refresh}
             />
           ) : (
-            <div className="flex min-h-[45vh] flex-col items-center justify-center rounded-xl border bg-muted/20 p-6 text-center">
+            <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-4 text-center">
               <Bot className="mb-4 size-10 text-primary" />
-              <h2 className="text-lg font-medium">
-                What would you like to work on?
-              </h2>
-              <p className="my-3 max-w-md text-sm text-muted-foreground">
-                Ask a question, work through an idea, or get help with a deal.
+              <h1 className="text-2xl font-semibold tracking-tight">What would you like to work on?</h1>
+              <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                Ask a question, work through a deal, or plan follow-ups onto your calendar.
                 Choose an optional deal on the left, then start chatting.
               </p>
-              <Button onClick={() => void create()} disabled={creating}>
-                Start a conversation
-              </Button>
+              <div className="mt-6 flex w-full flex-wrap justify-center gap-2">
+                {starters.map((prompt) => (
+                  <Button
+                    key={prompt}
+                    variant="outline"
+                    size="sm"
+                    disabled={creating}
+                    onClick={() => void create(prompt)}
+                  >
+                    {prompt}
+                  </Button>
+                ))}
+              </div>
+              <form
+                className="mt-6 w-full rounded-3xl border bg-background p-2 shadow-sm"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  void create(draft)
+                }}
+              >
+                <Textarea
+                  aria-label="Ask the assistant"
+                  placeholder="Ask anything, or tell me what to work on…"
+                  value={draft}
+                  maxLength={8000}
+                  rows={3}
+                  className="min-h-16 resize-none border-0 shadow-none focus-visible:ring-0"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      void create(draft)
+                    }
+                  }}
+                />
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={creating || !draft.trim()}>
+                    Start chatting
+                  </Button>
+                </div>
+              </form>
             </div>
           )}
         </main>
@@ -315,9 +344,8 @@ export function AssistantWorkspace() {
             <label htmlFor="chat-title" className="text-sm">
               Conversation name
             </label>
-            <input
+            <Input
               id="chat-title"
-              className="w-full rounded-md border bg-background p-2"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               maxLength={100}

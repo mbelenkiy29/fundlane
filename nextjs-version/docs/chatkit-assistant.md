@@ -6,7 +6,7 @@ The global assistant reads accessible deals, pipeline counts and existing underw
 
 ## Architecture
 
-The dashboard mounts the ChatKit React panel once per user/workspace. The header opens it alongside the page; mobile uses a full-screen dialog. Selected-deal context is opt-in; the deal dialog also offers an Assistant button. Source links use the existing `/deals?deal=…` route. History is private to the user and company, with rename and deletion through ChatKit.
+The dashboard mounts the ChatKit React panel once per user/workspace. The header opens it alongside the page; mobile uses a full-screen dialog. The iframe is themed to Fundlane (accent/surface from CSS tokens, Inter, soft radius). Selected-deal context is opt-in via the include-deal control or `@` deal tags; the deal dialog also offers an Assistant button. Start prompts cover pipeline, deal search, and calendar advice. Source links use the existing `/deals?deal=…` route. History is private to the user and company, with rename and deletion through ChatKit. Calendar writes are not performed here; they are confirmed on `/assistant`.
 
 `POST /api/mca/chatkit` requires a Clerk session, validates browser origin, checks deal-page access, and proxies the protocol to the private Python service without buffering. Turn requests have a shared Neon limit of 10/minute/user/workspace and one in-flight turn; metadata requests allow 120/minute. Cancellation, completion, and a 120-second timeout invalidate the request capability.
 

@@ -52,6 +52,11 @@ import {
 } from "../db"
 import { canonical, type ActionKind, type ApprovalPreview } from "./contracts"
 import {
+  applyCalendarPlan,
+  draftCalendarPlan,
+  listPerformanceActions,
+} from "./calendar-plan-service"
+import {
   approvalForRun,
   assertRunning,
   saveApproval,
@@ -77,6 +82,9 @@ export const reminderInput = z
   .strict()
 export const submissionInput = z
   .object({ funderIds: z.array(z.string().min(1)).min(1).max(10) })
+  .strict()
+export const calendarPlanInput = z
+  .object({ dealId: z.string().min(1).max(128).nullable() })
   .strict()
 export interface OperationContext {
   conversation: Conversation
@@ -435,6 +443,39 @@ export async function buildPreview(
   return { payload, preview, fingerprint: hashOpaqueToken(canonical(evidence)) }
 }
 
+async function calendarPlanPreview(
+  actor: DealActor,
+  dealId: string | null
+): Promise<{
+  payload: { dealId: string | null; items: Awaited<ReturnType<typeof draftCalendarPlan>>["items"] }
+  preview: ApprovalPreview
+  fingerprint: string
+}> {
+  const draft = await draftCalendarPlan(actor, { dealId })
+  const preview: ApprovalPreview = {
+    title: draft.items.length
+      ? `Add ${draft.items.length} follow-up${draft.items.length === 1 ? "" : "s"} to your calendar`
+      : "Add follow-ups to your calendar",
+    details: draft.items.length
+      ? draft.items.map((item) => ({
+          label: item.title,
+          value: `${item.start} · ${item.kind}`
+        }))
+      : [{ label: "Items", value: "None" }],
+    blocked: draft.items.length
+      ? undefined
+      : "There are no new follow-ups to add. Existing calendar items already cover these deals."
+  }
+  const payload = { dealId, items: draft.items }
+  return {
+    payload,
+    preview,
+    fingerprint: hashOpaqueToken(
+      canonical({ markers: draft.items.map((item) => item.marker).sort() })
+    )
+  }
+}
+
 export async function prepareAction(
   ctx: OperationContext,
   kind: ActionKind,
@@ -473,18 +514,77 @@ export async function prepareAction(
     }
   })
 }
+
+export async function assistantPerformanceActions(
+  ctx: OperationContext,
+  dealId?: string | null
+) {
+  return recorded(ctx, "list_performance_actions", async (actor) => {
+    const scoped = dealId ?? ctx.activeDealId ?? ctx.conversation.deal_id ?? null
+    return listPerformanceActions(actor, scoped)
+  })
+}
+
+export async function prepareCalendarPlan(
+  ctx: OperationContext,
+  input: { dealId?: string | null }
+) {
+  return recorded(ctx, "prepare_calendar_plan", async (actor) => {
+    if (!actor.membershipId)
+      throw new AppError(
+        403,
+        "assignee_forbidden",
+        "Choose an authorized active assignee."
+      )
+    const scoped =
+      input.dealId ?? ctx.activeDealId ?? ctx.conversation.deal_id ?? null
+    await claimMutation(ctx, scoped ?? "$calendar_plan")
+    const result = await calendarPlanPreview(actor, scoped)
+    if (result.preview.blocked)
+      return { blocked: result.preview.blocked, draft: result.preview }
+    const attempted = await getDatabase()
+      .prepare(
+        `SELECT a.id FROM mca_assistant_approvals a JOIN mca_assistant_runs r ON r.id=a.run_id
+      WHERE r.conversation_id=? AND a.fingerprint=? AND a.status IN ('executing','uncertain','executed') LIMIT 1`
+      )
+      .get(ctx.conversation.id, result.fingerprint)
+    if (attempted)
+      return {
+        blocked:
+          "An identical calendar plan was already attempted. Review the calendar before preparing another."
+      }
+    const approvalId = await saveApproval(
+      ctx.conversation,
+      ctx.runId,
+      "calendar_plan",
+      result.payload,
+      result.preview,
+      result.fingerprint
+    )
+    return {
+      approvalId,
+      preview: result.preview,
+      next: "Call execute_approved_action to request user confirmation. Nothing has been added to the calendar."
+    }
+  })
+}
 export async function executeAction(ctx: OperationContext, approvalId: string) {
   return recorded(ctx, "execute_approved_action", async (actor) => {
     const stored = await approvalForRun(ctx.runId, approvalId)
     const run = await getRun(ctx.runId)
-    if (run.mutation_deal_id) {
+    if (run.mutation_deal_id && !run.mutation_deal_id.startsWith("$")) {
       ctx.activeDealId = run.mutation_deal_id
       await getDeal(actor, ctx.activeDealId)
       await getDatabase()
         .prepare("UPDATE mca_assistant_runs SET selected_deal_id=? WHERE id=?")
         .run(ctx.activeDealId, ctx.runId)
     }
-    await claimMutation(ctx, currentDealId(ctx))
+    await claimMutation(
+      ctx,
+      stored.kind === "calendar_plan"
+        ? run.mutation_deal_id ?? "$calendar_plan"
+        : currentDealId(ctx)
+    )
     if (stored.status !== "approved")
       throw new AppError(
         409,
@@ -503,12 +603,20 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
       stored.kind === "reminder"
         ? { jobId: original.jobId, body: original.body }
         : original
-    const fresh = await buildPreview(
-      actor,
-      currentDealId(ctx),
-      stored.kind,
-      input
-    )
+    const fresh =
+      stored.kind === "calendar_plan"
+        ? await calendarPlanPreview(
+            actor,
+            typeof original.dealId === "string" || original.dealId === null
+              ? (original.dealId as string | null)
+              : null
+          )
+        : await buildPreview(
+            actor,
+            currentDealId(ctx),
+            stored.kind,
+            input
+          )
     if (fresh.preview.blocked || fresh.fingerprint !== stored.fingerprint) {
       await getDatabase()
         .prepare(
@@ -565,6 +673,15 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
           body: args.body ?? undefined,
           reminderId: String(original.reminderId)
         })
+      } else if (stored.kind === "calendar_plan") {
+        const payload = original as {
+          dealId: string | null
+          items: Parameters<typeof applyCalendarPlan>[1]
+        }
+        result = await applyCalendarPlan(actor, payload.items ?? [])
+        for (const event of (result as Awaited<ReturnType<typeof applyCalendarPlan>>).events) {
+          await trackDeal(ctx.conversation, event.dealId)
+        }
       } else
         result = await confirmSubmissions(actor, currentDealId(ctx), {
           ...submissionInput.parse(original),
@@ -578,8 +695,11 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
       await recordAuditEvent({
         context: actor,
         action: "assistant.action_executed",
-        resourceType: "deal",
-        resourceId: currentDealId(ctx),
+        resourceType: stored.kind === "calendar_plan" ? "calendar_activity" : "deal",
+        resourceId:
+          stored.kind === "calendar_plan"
+            ? (typeof original.dealId === "string" && original.dealId) || ctx.runId
+            : currentDealId(ctx),
         metadata: { runId: ctx.runId, approvalId, kind: stored.kind },
         correlationId: ctx.runId
       })
@@ -630,7 +750,7 @@ export async function claimMutation(ctx: OperationContext, dealId: string) {
     await db
       .prepare("UPDATE mca_assistant_runs SET mutation_deal_id=? WHERE id=?")
       .run(dealId, ctx.runId)
-    if (dealId !== "$create") await trackDeal(ctx.conversation, dealId)
+    if (!dealId.startsWith("$")) await trackDeal(ctx.conversation, dealId)
   })
 }
 export async function selectAssistantDeal(ctx: OperationContext, id: string) {

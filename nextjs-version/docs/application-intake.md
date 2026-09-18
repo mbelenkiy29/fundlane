@@ -1,6 +1,6 @@
 # Application Intake
 
-`/intake` tracks applications from Jotform, GoHighLevel, Zoho, and custom webhooks through deal creation, document retrieval/scanning, statement analysis, and funder matching. Reps only see applications accessible under the existing deal policy. Administrators also have guided connection setup; existing rotation, personal-link, and advanced settings remain available.
+`/intake` tracks applications from Fundlane Forms, Jotform, GoHighLevel, Zoho, and custom webhooks through deal creation, document retrieval/scanning, statement analysis, and funder matching. New companies get a Fundlane form automatically; connecting Jotform is optional. Reps only see applications accessible under the existing deal policy. Administrators also have guided connection setup; existing rotation, personal-link, and advanced settings remain available.
 
 ## Configuration and routing
 

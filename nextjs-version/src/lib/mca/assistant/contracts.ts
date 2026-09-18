@@ -43,7 +43,7 @@ export type RunStatus =
   | "completed"
   | "cancelled"
   | "failed"
-export type ActionKind = "sms" | "reminder" | "submissions"
+export type ActionKind = "sms" | "reminder" | "submissions" | "calendar_plan"
 export interface ApprovalPreview {
   title: string
   details: Array<{ label: string; value: string }>
@@ -75,6 +75,12 @@ export type AssistantEvent =
 export function deliveryLabel(result: unknown): string {
   if (!result || typeof result !== "object")
     return "Review delivery status in the deal."
+  const calendar = result as { created?: number; calendarUrl?: string }
+  if (typeof calendar.created === "number" && calendar.calendarUrl) {
+    return calendar.created
+      ? `Scheduled ${calendar.created} calendar follow-up${calendar.created === 1 ? "" : "s"}.`
+      : "No new calendar follow-ups were added."
+  }
   const value = result as {
     delivery?: string
     state?: string

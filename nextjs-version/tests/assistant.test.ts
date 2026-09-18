@@ -581,6 +581,8 @@ test("tool surface excludes arbitrary execution and source content is explicitly
     "create_deal_draft",
     "update_deal_fields",
     "read_deal_section",
+    "list_performance_actions",
+    "prepare_calendar_plan",
     "internal_deal_action",
     "prepare_merchant_sms",
     "prepare_funder_reminder",
