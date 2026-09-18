@@ -356,6 +356,8 @@ export interface HomeDealFacts {
   renewals: HomeRenewalFact[]
   advances: HomeAdvanceFact[]
   notes: HomeNoteFact[]
+  completenessReady?: boolean
+  missingStatementMonths?: number
 }
 
 export function isHomeActionReason(value: string): value is HomeActionReasonCode {

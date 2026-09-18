@@ -1,7 +1,7 @@
 import "server-only"
 
 import { decryptSensitive } from "../crypto"
-import { getDatabase } from "../db"
+import { getDatabase, parseJson } from "../db"
 import type { AssignmentKind, DealStatus, DraftState } from "../deals/schema"
 import type {
   HomeAdvanceFact,
@@ -30,6 +30,11 @@ function optional(row: Row, key: string): string | undefined {
 
 function decrypt(value: unknown, workspaceId: string): string | undefined {
   return typeof value === "string" && value ? decryptSensitive(value, workspaceId) : undefined
+}
+
+function countMissingStatementMonths(value: unknown): number {
+  const findings = Array.isArray(value) ? value as Array<{ code?: string }> : parseJson<Array<{ code?: string }>>(value, [])
+  return findings.filter((item) => typeof item?.code === "string" && item.code.startsWith("missing_statement_")).length
 }
 
 function group<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
@@ -65,6 +70,7 @@ export async function loadHomeWorkspace(workspaceId: string): Promise<HomeWorksp
     renewalRows,
     advanceRows,
     noteRows,
+    completenessRows,
   ] = await Promise.all([
     database.prepare<Row>(`SELECT id, display_id, legal_name, dba_name, status, draft_state, version, created_at, updated_at,
       contact_name, contact_email_cipher, contact_phone_cipher
@@ -97,6 +103,10 @@ export async function loadHomeWorkspace(workspaceId: string): Promise<HomeWorksp
       JOIN mca_offers o ON o.workspace_id=a.workspace_id AND o.id=a.offer_id
       WHERE a.workspace_id=?`).all(workspaceId),
     database.prepare<Row>("SELECT id, deal_id, body, actor_user_id, created_at FROM deal_notes WHERE workspace_id=? ORDER BY created_at, id").all(workspaceId),
+    database.prepare<Row>(`SELECT DISTINCT ON (deal_id) deal_id, findings_json, ready
+      FROM mca_completeness_results
+      WHERE workspace_id = ?
+      ORDER BY deal_id, version DESC`).all(workspaceId),
   ])
 
   const assignmentsByDeal = group(assignmentRows, (row) => text(row, "deal_id"))
@@ -119,6 +129,13 @@ export async function loadHomeWorkspace(workspaceId: string): Promise<HomeWorksp
   const renewalsByDeal = group(renewalRows, (row) => text(row, "deal_id"))
   const advancesByDeal = group(advanceRows, (row) => text(row, "deal_id"))
   const notesByDeal = group(noteRows, (row) => text(row, "deal_id"))
+  const completenessByDeal = new Map<string, { completenessReady: boolean; missingStatementMonths: number }>()
+  for (const row of completenessRows) {
+    completenessByDeal.set(text(row, "deal_id"), {
+      completenessReady: Number(row.ready) === 1,
+      missingStatementMonths: countMissingStatementMonths(row.findings_json),
+    })
+  }
   const offerBySubmission = new Map<string, string>()
   for (const row of offerRows) {
     const submissionId = optional(row, "submission_id")
@@ -267,6 +284,8 @@ export async function loadHomeWorkspace(workspaceId: string): Promise<HomeWorksp
       renewals,
       advances,
       notes,
+      completenessReady: completenessByDeal.get(dealId)?.completenessReady,
+      missingStatementMonths: completenessByDeal.get(dealId)?.missingStatementMonths,
     })
   }
   return { facts }

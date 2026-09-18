@@ -280,7 +280,7 @@ async function seed() {
   await acceptOfferForClosing(admin, { dealId: funding.dealId, offerId: funding.offerId, revisionId: funding.revisionId, idempotencyKey: "home-accept-fund" })
   await db.prepare("UPDATE mca_contract_workflows SET state='signed', signed_at=? WHERE deal_id=?").run(now, seeded.fundingId)
 
-  const missing = await createDeal(admin, { idempotencyKey: "home-missing", ...application("Missing Docs LLC"), assignments: [{ membershipId: ids.adminMember, kind: "originator", isPrimary: true }] })
+  const missing = await createDeal(admin, { idempotencyKey: "home-missing", ...application("Missing Docs LLC", { ein: "12-3456789" }), assignments: [{ membershipId: ids.adminMember, kind: "originator", isPrimary: true }] })
   seeded.missingId = missing.deal.id
   await setStatus(seeded.missingId, "missing_documents")
 
@@ -409,14 +409,20 @@ test("MIC-102 queue and panel obey deal visibility and live source state", async
   assert.equal(byName.get("Reprice Follow LLC")?.primaryReason.code, "repricing")
   assert.equal(byName.get("Funding Final LLC")?.primaryReason.code, "funding")
   assert.equal(byName.get("Missing Docs LLC")?.primaryReason.code, "missing_doc")
+  assert.equal(byName.get("Missing Docs LLC")?.notification, "Missing documents")
   assert.equal(byName.get("Renewal Bakery LLC")?.primaryReason.code, "renewal")
+  assert.equal(byName.get("Renewal Bakery LLC")?.notification, "Eligible for Renewal")
+  assert.deepEqual(byName.get("Renewal Bakery LLC")?.suggestedActions.map((item) => item.label), ["Call Immediately"])
   assert.equal(byName.get("Hidden Admin LLC")?.primaryReason.code, "submit")
   assert.equal(byName.has("Fresh Send LLC"), false)
   assert.equal(byName.has("Closed LLC"), false)
   assert.equal(byName.has("Other Workspace LLC"), false)
 
   const payload = JSON.stringify(queue)
+  assert.equal(payload.includes("2125550100"), true)
+  assert.equal(payload.includes("mira@harbor.test"), true)
   assert.equal(payload.includes("12-3456789"), false)
+  assert.equal(payload.includes('"ein"'), false)
   assert.equal(payload.includes("commission"), false)
   assert.equal(payload.includes("password"), false)
 
@@ -473,6 +479,43 @@ test("MIC-102 queue and panel obey deal visibility and live source state", async
   }, async () => ({ recordIds: [] }))
   const afterFund = await getHomeNeedsActionQueue(admin, { nowIso: now })
   assert.equal(afterFund.items.some((item) => item.dealId === seeded.fundingId), false)
+})
+
+test("MIC-102 completeness statement gaps become missing-months notifications", async () => {
+  const created = await createDeal(admin, {
+    idempotencyKey: "home-statements",
+    ...application("Statement Gap LLC"),
+    assignments: [{ membershipId: ids.adminMember, kind: "originator", isPrimary: true }],
+  })
+  await setStatus(created.deal.id, "missing_documents")
+  const db = getDatabase()
+  await db.prepare(`INSERT INTO mca_completeness_results
+    (id, workspace_id, deal_id, ready, version, rule_snapshot, findings_json, findings_fingerprint, checked_at)
+    VALUES (?, ?, ?, 0, 1, '{"requiredStatementMonths":3}', ?, 'gap-v1', ?)`).run(
+    newId(), ids.workspace, created.deal.id,
+    JSON.stringify([{ code: "missing_statement_2025-10", message: "Missing checking statement for 2025-10.", period: "2025-10" }]),
+    now,
+  )
+  await db.prepare(`INSERT INTO mca_completeness_results
+    (id, workspace_id, deal_id, ready, version, rule_snapshot, findings_json, findings_fingerprint, checked_at)
+    VALUES (?, ?, ?, 0, 2, '{"requiredStatementMonths":3}', ?, 'gap-v2', ?)`).run(
+    newId(), ids.workspace, created.deal.id,
+    JSON.stringify([
+      { code: "period_mismatch", message: "The statement display filename period does not match the original filename period." },
+      { code: "missing_statement_2025-10", message: "Missing checking statement for 2025-10.", period: "2025-10" },
+      { code: "missing_statement_2025-11", message: "Missing checking statement for 2025-11.", period: "2025-11" },
+      { code: "missing_statement_2025-12", message: "Missing checking statement for 2025-12.", period: "2025-12" },
+    ]),
+    now,
+  )
+  const queue = await getHomeNeedsActionQueue(admin, { nowIso: now })
+  const item = queue.items.find((row) => row.legalName === "Statement Gap LLC")
+  assert.ok(item)
+  assert.equal(item.notification, "Missing 3 months of Statements")
+  assert.equal(item.missingStatementMonths, 3)
+  assert.equal(item.primaryReason.detail, "3")
+  assert.deepEqual(item.suggestedActions.map((action) => action.label), ["SMS", "Email"])
+  assert.equal(JSON.stringify(queue).includes("12-3456789"), false)
 })
 
 test("MIC-102 API matches UI permissions, validation, and retry identity", async () => {
@@ -536,6 +579,9 @@ test("MIC-102 loading, empty, validation, success and failure states stay usable
       dealId: "d1", displayId: "MCA-1", legalName: "Harbor", status: "offer", version: 1, category: "own_action", actionSince: now, updatedAt: now,
       reasons: [{ id: "d1:pitch", code: "pitch", category: "own_action", label: "Pitch offer", since: now, sourceIds: [] }],
       primaryReason: { id: "d1:pitch", code: "pitch", category: "own_action", label: "Pitch offer", since: now, sourceIds: [] },
+      notification: "Pitch offer",
+      contacts: { name: "Mira Harbor", email: "mira@harbor.test", phone: "2125550100" },
+      suggestedActions: [{ id: "sms", label: "SMS", enabled: true }, { id: "email", label: "Email", enabled: true }],
     }],
   })
   assert.equal(success.status, "success")
