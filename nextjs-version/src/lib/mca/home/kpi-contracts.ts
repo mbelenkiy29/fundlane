@@ -32,6 +32,8 @@ export interface HomeKpis {
   asOf: string
   period: KpiPeriod
   pipeline: { count: number; volumeDollars: number | null; dollarsHidden: boolean }
+  newDeals: { count: number }
+  renewals: { count: number }
   funded: MoneyCount
   commission: MoneyCount
   activeMerchants: { count: number }
@@ -59,7 +61,7 @@ export interface HomeKpis {
       at: string
     }>
     topFunders: Array<{ name: string; fundedCents: number; dealCount: number }>
-    merchantGrowth: Array<{ month: string; new: number; returning: number; churn: number }>
+    merchantGrowth: Array<{ month: string; new: number; renewals: number; churn: number }>
     industries: Array<{ label: string; count: number; fundedCents: number | null }>
     states: Array<{ label: string; count: number; fundedCents: number | null }>
   }

@@ -22,6 +22,8 @@ const sample: HomeKpis = {
   asOf: "2026-03-15T17:00:00.000Z",
   period: "mtd",
   pipeline: { count: 2, volumeDollars: 150000, dollarsHidden: false },
+  newDeals: { count: 4 },
+  renewals: { count: 1 },
   funded: { amountCents: 1_000_000, count: 1, dollarsHidden: false },
   commission: { amountCents: 50_000, count: 1, dollarsHidden: false },
   activeMerchants: { count: 3 },
@@ -66,9 +68,9 @@ const sample: HomeKpis = {
       { day: "2026-03-15", expectedCents: 50_000, receivedCents: 25_000 },
     ],
     merchantGrowth: [
-      { month: "2026-01", new: 1, returning: 0, churn: 0 },
-      { month: "2026-02", new: 0, returning: 1, churn: 0 },
-      { month: "2026-03", new: 2, returning: 0, churn: 1 },
+      { month: "2026-01", new: 1, renewals: 0, churn: 0 },
+      { month: "2026-02", new: 0, renewals: 1, churn: 0 },
+      { month: "2026-03", new: 2, renewals: 0, churn: 1 },
     ],
     industries: [{ label: "Retail", count: 3, fundedCents: 1_000_000 }],
     states: [{ label: "NY", count: 2, fundedCents: 800_000 }],
@@ -118,6 +120,9 @@ test("live KPIs map onto dashboard 2 widgets", () => {
   assert.equal(view.funders[0]?.revenue, "$10,000")
   assert.equal(view.funders[0]?.sales, 2)
   assert.equal(view.growth.length, 3)
+  assert.equal(view.growth[1]?.renewals, 1)
+  assert.equal("renewals" in (view.growth[0] ?? {}), true)
+  assert.equal("returning" in (view.growth[0] ?? {}), false)
   assert.equal(view.industries[0]?.label, "Retail")
   assert.equal(view.industries[0]?.revenue, "$10,000")
   assert.equal(view.states[0]?.label, "NY")

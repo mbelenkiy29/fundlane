@@ -5,6 +5,8 @@ export const HOME_KPI_NA = "N/A"
 
 export const HOME_KPI_COPY = {
   pipeline: "Deals in Pipeline",
+  newDeals: "New Deals",
+  renewals: "Renewals",
   funded: "Funded",
   commission: "Commission",
   activeMerchants: "Active merchants",
@@ -19,6 +21,8 @@ export const HOME_KPI_COPY = {
 
 export type HomeKpiCardKey =
   | "pipeline"
+  | "newDeals"
+  | "renewals"
   | "funded"
   | "commission"
   | "activeMerchants"
@@ -76,6 +80,8 @@ function emptyKpis(period: KpiPeriod = "mtd"): HomeKpis {
     asOf: "",
     period,
     pipeline: { count: 0, volumeDollars: 0, dollarsHidden: false },
+    newDeals: { count: 0 },
+    renewals: { count: 0 },
     funded: { amountCents: 0, count: 0, dollarsHidden: false },
     commission: { amountCents: 0, count: 0, dollarsHidden: false },
     activeMerchants: { count: 0 },
@@ -120,6 +126,20 @@ export function mapHomeKpiStrip(kpis: HomeKpis | null, period: KpiPeriod = kpis?
         })),
         false,
       ),
+    },
+    {
+      key: "newDeals",
+      title: HOME_KPI_COPY.newDeals,
+      value: String(source.newDeals.count),
+      detail: `${countLabel(source.newDeals.count, "deal")} · ${label}`,
+      periodSensitive: true,
+    },
+    {
+      key: "renewals",
+      title: HOME_KPI_COPY.renewals,
+      value: String(source.renewals.count),
+      detail: `${countLabel(source.renewals.count, "renewal")} · ${label}`,
+      periodSensitive: true,
     },
     {
       key: "funded",

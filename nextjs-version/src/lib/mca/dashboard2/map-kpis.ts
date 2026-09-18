@@ -56,7 +56,7 @@ export interface Dashboard2FunderRow {
 export interface Dashboard2GrowthPoint {
   month: string
   new: number
-  returning: number
+  renewals: number
   churn: number
 }
 
@@ -195,6 +195,8 @@ export function emptyHomeKpis(period: KpiPeriod = "mtd"): HomeKpis {
     asOf: "",
     period,
     pipeline: { count: 0, volumeDollars: 0, dollarsHidden: false },
+    newDeals: { count: 0 },
+    renewals: { count: 0 },
     funded: { amountCents: 0, count: 0, dollarsHidden: false },
     commission: { amountCents: 0, count: 0, dollarsHidden: false },
     activeMerchants: { count: 0 },
@@ -368,15 +370,15 @@ export function mapDashboard2(
   const growth = sliceLast(source.series.merchantGrowth, growthWindow).map((row) => ({
     month: formatMonthLabel(row.month),
     new: row.new,
-    returning: row.returning,
+    renewals: row.renewals,
     churn: row.churn,
   }))
   const growthTotals = growth.reduce(
-    (sum, row) => ({ new: sum.new + row.new, returning: sum.returning + row.returning, churn: sum.churn + row.churn }),
-    { new: 0, returning: 0, churn: 0 },
+    (sum, row) => ({ new: sum.new + row.new, renewals: sum.renewals + row.renewals, churn: sum.churn + row.churn }),
+    { new: 0, renewals: 0, churn: 0 },
   )
-  const retentionBase = growthTotals.returning + growthTotals.churn
-  const retention = retentionBase === 0 ? null : growthTotals.returning / retentionBase
+  const retentionBase = growthTotals.renewals + growthTotals.churn
+  const retention = retentionBase === 0 ? null : growthTotals.renewals / retentionBase
   const collectionsDisplay = empty
     ? formatUsd(0)
     : paymentsHidden || source.collectionsToday.receivedCents == null || source.collectionsToday.expectedCents == null
@@ -424,7 +426,7 @@ export function mapDashboard2(
       totalCustomers: String(source.activeMerchants.count),
       totalCustomersHint: empty ? NO_ACTIVITY_YET : "Active advances on track or missed payment",
       retention: empty ? NA_LABEL : formatPercent(retention),
-      retentionHint: empty ? NO_ACTIVITY_YET : "Returning vs churned in range",
+      retentionHint: empty ? NO_ACTIVITY_YET : "Renewals vs churned in range",
       collections: collectionsDisplay,
       collectionsHint: empty ? NO_ACTIVITY_YET : "Received / expected today",
     },

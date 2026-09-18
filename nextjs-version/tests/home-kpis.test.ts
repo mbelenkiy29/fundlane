@@ -32,6 +32,9 @@ const ids = {
   merchantDefault: "merchant-default",
   merchantClosed: "merchant-closed",
   merchantRenewed: "merchant-renewed",
+  merchantA: "merchant-a-new",
+  merchantB: "merchant-b-renew",
+  merchantC: "merchant-c-later",
   openA: "deal-open-a",
   openB: "deal-open-b",
   fundedMtd: "deal-funded-mtd",
@@ -44,6 +47,10 @@ const ids = {
   advDefault: "deal-adv-default",
   advClosed: "deal-adv-closed",
   advRenewed: "deal-adv-renewed",
+  dealA: "deal-merchant-a",
+  dealB1: "deal-merchant-b-first",
+  dealB2: "deal-merchant-b-second",
+  dealC: "deal-merchant-c",
   noneDeal: "deal-none",
   hiddenDeal: "deal-hidden",
 }
@@ -243,6 +250,9 @@ async function seed() {
   await insertMerchant(ids.merchantDefault, "Default Merchant LLC")
   await insertMerchant(ids.merchantClosed, "Closed Merchant LLC")
   await insertMerchant(ids.merchantRenewed, "Renewed Merchant LLC")
+  await insertMerchant(ids.merchantA, "New Deal Alpha LLC")
+  await insertMerchant(ids.merchantB, "Renewal Bravo LLC")
+  await insertMerchant(ids.merchantC, "New Deal Charlie LLC")
   await insertFunder("funder-north", "North Capital")
   await insertFunder("funder-south", "South Advance")
 
@@ -258,10 +268,14 @@ async function seed() {
   await insertDeal({ id: ids.advDefault, name: "Default Advance LLC", status: "default", requested: 8000, merchantId: ids.merchantDefault })
   await insertDeal({ id: ids.advClosed, name: "Closed Advance LLC", status: "closed", requested: 8000, merchantId: ids.merchantClosed })
   await insertDeal({ id: ids.advRenewed, name: "Renewed Advance LLC", status: "renewed", requested: 8000, merchantId: ids.merchantRenewed })
+  await insertDeal({ id: ids.dealA, name: "New Deal Alpha LLC", status: "funded", requested: 12000, merchantId: ids.merchantA, createdAt: "2026-03-02T15:00:00.000Z" })
+  await insertDeal({ id: ids.dealB1, name: "Renewal Bravo First LLC", status: "funded", requested: 15000, merchantId: ids.merchantB, createdAt: "2026-01-05T15:00:00.000Z" })
+  await insertDeal({ id: ids.dealB2, name: "Renewal Bravo Second LLC", status: "funded", requested: 18000, merchantId: ids.merchantB, createdAt: "2026-03-07T15:00:00.000Z" })
+  await insertDeal({ id: ids.dealC, name: "New Deal Charlie LLC", status: "funded", requested: 9000, merchantId: ids.merchantC, createdAt: "2026-03-04T15:00:00.000Z" })
   await insertDeal({ id: ids.noneDeal, workspace: ids.none, name: "Empty Funnel LLC", status: "lead", requested: 10000 })
   await insertDeal({ id: ids.hiddenDeal, workspace: ids.hidden, name: "Hidden Dollars LLC", status: "funded", requested: 20000 })
 
-  for (const dealId of [ids.openA, ids.openB, ids.fundedMtd, ids.fundedYtd, ids.fundedLy, ids.closed, ids.advShared1, ids.advShared2, ids.advOrphan, ids.advDefault, ids.advClosed, ids.advRenewed]) {
+  for (const dealId of [ids.openA, ids.openB, ids.fundedMtd, ids.fundedYtd, ids.fundedLy, ids.closed, ids.advShared1, ids.advShared2, ids.advOrphan, ids.advDefault, ids.advClosed, ids.advRenewed, ids.dealA, ids.dealB1, ids.dealB2, ids.dealC]) {
     await assign(dealId, ids.adminMember)
   }
   await assign(ids.openA, ids.repMember)
@@ -280,12 +294,16 @@ async function seed() {
   const def = await fundDeal({ dealId: ids.advDefault, suffix: "default", fundedAt: "2025-08-01T15:00:00.000Z", amountCents: 500_000 })
   const closedAdv = await fundDeal({ dealId: ids.advClosed, suffix: "closed-perf", fundedAt: "2025-08-01T15:00:00.000Z", amountCents: 500_000 })
   const renewed = await fundDeal({ dealId: ids.advRenewed, suffix: "renewed-perf", fundedAt: "2025-08-01T15:00:00.000Z", amountCents: 500_000 })
+  const merchantBFirst = await fundDeal({ dealId: ids.dealB1, suffix: "merchant-b-first", fundedAt: "2026-01-10T15:00:00.000Z", amountCents: 100_000 })
+  const merchantBSecond = await fundDeal({ dealId: ids.dealB2, suffix: "merchant-b-second", fundedAt: "2026-03-08T15:00:00.000Z", amountCents: 200_000 })
 
   await insertPerformance(shared1.advanceId, "on_track")
   await insertPerformance(shared2.advanceId, "missed_payment")
   await insertPerformance(def.advanceId, "default")
   await insertPerformance(closedAdv.advanceId, "closed")
   await insertPerformance(renewed.advanceId, "renewed")
+  await insertPerformance(merchantBFirst.advanceId, "closed")
+  await insertPerformance(merchantBSecond.advanceId, "closed")
   await insertPerformance(mtd.advanceId, "closed")
   await insertPerformance(ytd.advanceId, "closed")
   await insertPerformance(ly.advanceId, "closed")
@@ -347,14 +365,14 @@ test("pipeline volume sums requestedAmount for open deals only", async () => {
 
 test("funded MTD ignores last year and YTD includes it", async () => {
   const mtd = await getHomeKpis(admin, { period: "mtd", nowIso })
-  assert.equal(mtd.funded.count, 1)
-  assert.equal(mtd.funded.amountCents, 4_000_000)
+  assert.equal(mtd.funded.count, 2)
+  assert.equal(mtd.funded.amountCents, 4_200_000)
   assert.equal(mtd.commission.count, 1)
   assert.equal(mtd.commission.amountCents, 320_000)
 
   const ytd = await getHomeKpis(admin, { period: "ytd", nowIso })
-  assert.equal(ytd.funded.count, 2)
-  assert.equal(ytd.funded.amountCents, 5_000_000)
+  assert.equal(ytd.funded.count, 4)
+  assert.equal(ytd.funded.amountCents, 5_300_000)
   assert.equal(ytd.commission.count, 2)
   assert.equal(ytd.commission.amountCents, 400_000)
   const june = ytd.series.fundedByMonth.find((row) => row.month === "2025-06")
@@ -409,6 +427,24 @@ test("dollarsHidden when viewCompanyFinancials is false", async () => {
   assert.equal(kpis.pipeline.volumeDollars, null)
   assert.equal(kpis.pipeline.count, 0)
   assert.equal(kpis.pipeline.dollarsHidden, true)
+})
+
+test("new deals and renewals are separate period counts", async () => {
+  const kpis = await getHomeKpis(admin, { period: "mtd", nowIso })
+  // first-time originations created in March 2026 are new deals
+  assert.ok(kpis.newDeals.count >= 1)
+  // a later committed funding on merchant-renewed is a renewal, not a new deal
+  assert.ok("renewals" in kpis)
+  assert.equal(typeof kpis.renewals.count, "number")
+  // a renewed merchant's first deal must not also sit in newDeals
+  const growth = kpis.series.merchantGrowth.find((row) => row.month === "2026-03")
+  assert.ok(growth)
+  assert.equal("renewals" in growth, true)
+  assert.equal("returning" in growth, false)
+  assert.equal(kpis.newDeals.count, 5)
+  assert.equal(kpis.renewals.count, 2)
+  assert.equal(growth.new, 5)
+  assert.equal(growth.renewals, 2)
 })
 
 test("GET /api/mca/home/kpis requires period mtd|ytd and does not store", async () => {
