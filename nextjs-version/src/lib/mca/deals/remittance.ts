@@ -1,11 +1,13 @@
 import "server-only"
 
 import { AppError } from "../errors"
-import { getDatabase, newId, nowIso, withImmediateTransaction, type DbExecutor } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealActor } from "./schema"
 import { getDealForDocument } from "./service"
 import { generateExpectedInstallments } from "../advances/performance"
 import { calendarDateInZone } from "./book-math"
+
+export { collectedTowardInstallment, installmentSatisfied } from "./book-math"
 
 type InstallmentRow = {
   id: string
@@ -15,7 +17,7 @@ type InstallmentRow = {
   amount_cents: number
 }
 
-type ReceiptRow = {
+export type ReceiptRow = {
   id: string
   advance_id: string
   installment_id: string | null
@@ -126,7 +128,12 @@ export async function recordReceipt(actor: DealActor, advanceId: string, input: 
       WHERE workspace_id=? AND advance_id=? AND occurrence_date=?`).get(actor.workspaceId, advanceId, receivedDate)
     const existing = await database.prepare<ReceiptRow>(`SELECT ${RECEIPT_COLUMNS}
       FROM mca_merchant_receipts WHERE workspace_id=? AND advance_id=? AND idempotency_key=?`).get(actor.workspaceId, advanceId, key)
-    if (existing) return existing
+    if (existing) {
+      if (existing.amount_cents !== input.amountCents) {
+        throw new AppError(409, "idempotency_conflict", "That retry key already identifies a different receipt.")
+      }
+      return existing
+    }
     const id = newId(); const createdAt = nowIso()
     const row = await database.prepare<ReceiptRow>(`INSERT INTO mca_merchant_receipts
       (id, workspace_id, advance_id, installment_id, amount_cents, received_at, received_on, origin, status, idempotency_key, created_by_user_id, created_at)
@@ -135,6 +142,42 @@ export async function recordReceipt(actor: DealActor, advanceId: string, input: 
       id, actor.workspaceId, advanceId, installment?.id ?? null, input.amountCents, input.receivedAt, receivedDate, origin, key, actor.userId, createdAt,
     )
     if (!row) throw new Error("Receipt was not persisted.")
+    return row
+  })
+}
+
+export async function voidReceipt(
+  actor: DealActor,
+  advanceId: string,
+  receiptId: string,
+  input: { reason: string; idempotencyKey: string },
+): Promise<ReceiptRow> {
+  if (!canRecordReceipt(actor)) throw new AppError(403, "permission_denied", "Only managers and administrators can void merchant receipts.")
+  const reason = input.reason.trim()
+  if (!reason || reason.length > 500) throw new AppError(422, "validation_failed", "A void reason is required.", { reason: ["Explain the void."] })
+  const key = input.idempotencyKey.trim()
+  if (!key || key.length > 160) throw new AppError(422, "validation_failed", "Idempotency key is required.", { idempotencyKey: ["Provide a stable key."] })
+  return withImmediateTransaction(async (database) => {
+    const advance = await database.prepare<{ deal_id: string }>("SELECT deal_id FROM mca_advances WHERE workspace_id=? AND id=? AND reversed_at IS NULL").get(actor.workspaceId, advanceId)
+    if (!advance) throw new AppError(404, "advance_not_found", "The requested advance was not found.")
+    await getDealForDocument(actor, advance.deal_id)
+    const existing = await database.prepare<ReceiptRow>(`SELECT ${RECEIPT_COLUMNS}
+      FROM mca_merchant_receipts WHERE workspace_id=? AND advance_id=? AND id=? FOR UPDATE`).get(actor.workspaceId, advanceId, receiptId)
+    if (!existing) throw new AppError(404, "receipt_not_found", "The requested receipt was not found.")
+    if (existing.status === "void") return existing
+    const row = await database.prepare<ReceiptRow>(`UPDATE mca_merchant_receipts SET status='void'
+      WHERE workspace_id=? AND advance_id=? AND id=? AND status='received'
+      RETURNING ${RECEIPT_COLUMNS}`).get(actor.workspaceId, advanceId, receiptId)
+    if (!row) {
+      const raced = await database.prepare<ReceiptRow>(`SELECT ${RECEIPT_COLUMNS}
+        FROM mca_merchant_receipts WHERE workspace_id=? AND advance_id=? AND id=?`).get(actor.workspaceId, advanceId, receiptId)
+      if (raced?.status === "void") return raced
+      throw new Error("Receipt was not voided.")
+    }
+    await recordAuditEvent({
+      context: actor, action: "merchant_receipt.voided", resourceType: "merchant_receipt", resourceId: receiptId,
+      correlationId: actor.correlationId, metadata: { advanceId, reason, idempotencyKey: key }, executor: database,
+    })
     return row
   })
 }
@@ -151,11 +194,12 @@ export async function runMissedPaymentAlerts(actor: DealActor, asOf = nowIso()):
       FROM mca_merchant_installments i
       JOIN mca_advances a ON a.workspace_id=i.workspace_id AND a.id=i.advance_id AND a.reversed_at IS NULL
       WHERE i.workspace_id=? AND i.occurrence_date<=?
-        AND NOT EXISTS (
-          SELECT 1 FROM mca_merchant_receipts r
+        AND i.amount_cents > 0
+        AND coalesce((
+          SELECT sum(r.amount_cents)::int FROM mca_merchant_receipts r
           WHERE r.workspace_id=i.workspace_id AND r.advance_id=i.advance_id AND r.status='received'
             AND (r.installment_id=i.id OR r.received_on=i.occurrence_date)
-        )`).all(actor.workspaceId, asOfDate)
+        ), 0) < i.amount_cents`).all(actor.workspaceId, asOfDate)
     let created = 0
     const createdAt = nowIso()
     for (const item of overdue) {

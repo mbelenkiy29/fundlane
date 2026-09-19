@@ -5,7 +5,9 @@ import {
   assignAdvanceNumbers,
   calendarDateInZone,
   calendarWindow,
+  collectedTowardInstallment,
   completedReceipts,
+  installmentSatisfied,
   merchantIdentity,
   missedInstallments,
   nextPaymentDate,
@@ -84,6 +86,33 @@ test("missed installments are due in-window without a matching receipt", () => {
     "2026-09-13",
   )
   assert.deepEqual(missed.map((item) => item.occurrenceDate), ["2026-09-12"])
+})
+
+test("$1 does not satisfy a $1,000 installment and voided receipts do not collect", () => {
+  const installment = { id: "inst-1", occurrenceDate: "2026-09-12" }
+  assert.equal(collectedTowardInstallment(installment, [
+    { amountCents: 100, receivedOn: "2026-09-12", installmentId: "inst-1", status: "received" },
+  ]), 100)
+  assert.equal(installmentSatisfied(100_000, 100), false)
+  assert.equal(installmentSatisfied(100_000, 100_000), true)
+  assert.equal(collectedTowardInstallment(installment, [
+    { amountCents: 100_000, receivedOn: "2026-09-12", installmentId: "inst-1", status: "void" },
+  ]), 0)
+  const paid = installmentSatisfied(100_000, 100) ? new Set(["2026-09-12"]) : new Set<string>()
+  assert.deepEqual(
+    missedInstallments([{ occurrenceDate: "2026-09-12", amountCents: 100_000 }], paid, { from: "2026-09-07", to: "2026-09-13" }, "2026-09-13")
+      .map((item) => item.occurrenceDate),
+    ["2026-09-12"],
+  )
+})
+
+test("$0 last installment is satisfied with nothing collected and is never missed", () => {
+  assert.equal(installmentSatisfied(0, 0), true)
+  assert.equal(collectedTowardInstallment({ occurrenceDate: "2026-09-18" }, []), 0)
+  assert.deepEqual(
+    missedInstallments([{ occurrenceDate: "2026-09-18", amountCents: 0 }], new Set(), { from: "2026-09-07", to: "2026-09-18" }, "2026-09-18"),
+    [],
+  )
 })
 
 test("completed receipts count by received date in the window", () => {
