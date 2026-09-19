@@ -267,6 +267,13 @@
       "when": 1789550000040,
       "tag": "0040_document_worker_heartbeat",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1789550000045,
+      "tag": "0045_tenancy_ein_hmac",
+      "breakpoints": true
     }
   ]
 }

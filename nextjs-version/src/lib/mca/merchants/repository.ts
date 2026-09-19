@@ -251,14 +251,11 @@ async function replaceMerchantOwners(database: DbExecutor, record: MerchantDealI
 export async function upsertMerchantFromDeal(
   record: MerchantDealIdentity,
   executor?: DbExecutor,
-  options?: { forceNew?: boolean },
 ): Promise<string> {
   const database = db(executor)
   const einHash = einLookupHash(record.workspaceId, record.ein)
   let merchantId: string | undefined
-  if (options?.forceNew) {
-    merchantId = newId()
-  } else if (record.merchantId) {
+  if (record.merchantId) {
     merchantId = record.merchantId
   } else if (einHash) {
     merchantId = (await database.prepare<{ id: string }>(

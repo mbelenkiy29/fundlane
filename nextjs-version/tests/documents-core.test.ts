@@ -36,6 +36,12 @@ delete process.env.VERCEL
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
 const actor = (workspaceId = "workspace-docs"): DealActor => ({ workspaceId, userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId: `corr-${workspaceId}` })
+const adminSession = (workspaceId = "workspace-docs"): DealActor => ({
+  ...actor(workspaceId),
+  userId: "fixture-user",
+  source: "user",
+  correlationId: `corr-admin-${workspaceId}`,
+})
 const memory = new Map<string, Uint8Array>()
 const storage: DocumentStorage = {
   name: "test-memory",
@@ -310,12 +316,12 @@ test("application-scan confirm create blocks duplicate EIN unless attach or forc
   assert.equal(attachedFull.contactName, "Scan Contact")
 
   const forceReview = await scanApplicationDocument(actor(), uploaded.id)
-  const forced = await confirmApplicationScan(actor(), {
+  const forced = await confirmApplicationScan(adminSession(), {
     extractionId: forceReview.id, confirmationId: "dup-scan-force", mode: "create",
     forceDuplicate: true,
     manualFields: { ein: "88-1112223", legalName: "Dup Scan Forced LLC" },
   })
-  assert.notEqual(forced.deal.merchantId, seed.deal.merchantId)
+  assert.equal(forced.deal.merchantId, seed.deal.merchantId)
 })
 
 test("application-draft confirm create hits the same EIN duplicate gate", async () => {
@@ -334,10 +340,14 @@ test("application-draft confirm create hits the same EIN duplicate gate", async 
     bytes: new Uint8Array(Buffer.from("%PDF-1.4\ndup-draft-force\n%%EOF\n")),
   })
   await extractApplicationDraft(actor(), forcedDraft.id, { legalName: "Dup Draft Forced LLC", ein: "88-1112233" })
-  const forced = await confirmApplicationDraft(actor(), {
+  const forced = await confirmApplicationDraft(adminSession(), {
     draftId: forcedDraft.id, confirmationId: "dup-draft-force", mode: "create", forceDuplicate: true,
   })
   assert.equal(forced.deal.legalName, "Dup Draft Forced LLC")
+  const seedMerchant = await getDatabase().prepare<{ merchant_id: string | null }>(
+    "SELECT merchant_id FROM deals WHERE workspace_id = ? AND legal_name = ? ORDER BY created_at LIMIT 1",
+  ).get(actor().workspaceId, "Dup Draft Existing LLC")
+  assert.equal(forced.deal.merchantId, seedMerchant?.merchant_id)
 })
 
 test("supporting files can be stored onto a deal after application-draft confirm", async () => {

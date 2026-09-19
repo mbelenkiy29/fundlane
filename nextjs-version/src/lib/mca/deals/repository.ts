@@ -204,10 +204,9 @@ export async function findDealByIdempotencyKey(workspaceId: string, key: string)
 export async function insertDeal(
   record: DealRecord,
   transactionCheckpoint?: DealTransactionCheckpoint,
-  options?: { forceNewMerchant?: boolean },
 ): Promise<{ record: DealRecord; inserted: boolean }> {
   return withImmediateTransaction(async (database) => {
-    const einHash = !options?.forceNewMerchant && !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
+    const einHash = !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
     if (einHash && await workspaceEinExists(record.workspaceId, einHash, database)) {
       const replay = record.idempotencyKey
         ? await database.prepare<{ id: string }>("SELECT id FROM deals WHERE workspace_id = ? AND idempotency_key = ?").get(record.workspaceId, record.idempotencyKey)
@@ -238,7 +237,6 @@ export async function insertDeal(
     persisted.merchantId = await upsertMerchantFromDeal(
       { ...persisted, merchantId: record.merchantId ?? persisted.merchantId },
       database,
-      { forceNew: options?.forceNewMerchant },
     )
     await transactionCheckpoint?.(database, persisted, "created")
     return { record: persisted, inserted: true }
