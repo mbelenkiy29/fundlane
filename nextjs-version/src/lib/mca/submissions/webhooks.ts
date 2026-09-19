@@ -171,12 +171,15 @@ export async function ingestAdapterWebhook(input: IngestAdapterWebhookInput): Pr
     externalRef: asText(body.externalRef) ?? asText(body.external_ref),
   })
   const status = redactAdapterSecrets(parsed, resolved.secrets)
-  const eventId = status.eventId || asText(body.eventId) || asText(body.event_id) || asText(body.reference)
+  const eventId = status.eventId || asText(body.eventId) || asText(body.event_id)
+  if (!eventId) {
+    throw new AppError(422, "webhook_event_id_required", "Webhook eventId is required.")
+  }
   const result = await reconcileProviderStatus({
     job,
-    status: { ...status, eventId: eventId ?? status.eventId },
+    status: { ...status, eventId },
     source: "webhook",
-    eventKey: eventId ? `webhook:${slug}:${eventId}` : undefined,
+    eventKey: `webhook:${slug}:${eventId}`,
     actor: systemActor(job, status.correlationId),
   })
   return redactAdapterSecrets(result, resolved.secrets)

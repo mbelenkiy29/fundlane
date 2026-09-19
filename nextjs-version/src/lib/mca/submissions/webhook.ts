@@ -1,18 +1,33 @@
 import "server-only"
 
+import { lookup as dnsLookup } from "node:dns/promises"
 import { isIP } from "node:net"
 import { newId } from "../db"
 import type { DeliverResult, SubmissionJob } from "./contracts"
 
 type WebhookFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+export type WebhookLookup = (
+  hostname: string,
+  options: { all: true; verbatim: true },
+) => Promise<Array<{ address: string; family: number }>>
+
 let fetchOverride: WebhookFetch | undefined
+let lookupOverride: WebhookLookup | undefined
 
 export function setWebhookFetchForTests(fetchImpl?: WebhookFetch): void {
   fetchOverride = fetchImpl
 }
 
+export function setWebhookLookupForTests(lookupImpl?: WebhookLookup): void {
+  lookupOverride = lookupImpl
+}
+
 function http(): WebhookFetch {
   return fetchOverride ?? globalThis.fetch
+}
+
+function resolver(): WebhookLookup {
+  return lookupOverride ?? dnsLookup
 }
 
 export const WEBHOOK_RESPONSE_SYNC = false as const
@@ -44,20 +59,54 @@ export interface WebhookTarget {
   host: string
 }
 
-function isPrivateIp(address: string): boolean {
-  if (address === "::1" || address === "0:0:0:0:0:0:0:1" || address.startsWith("fe80:") || address.startsWith("fc") || address.startsWith("fd")) return true
-  const mapped = address.startsWith("::ffff:") ? address.slice(7) : address
-  if (isIP(mapped) !== 4) return false
-  const [a, b] = mapped.split(".").map(Number)
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+function isBlockedIp(address: string): boolean {
+  const value = address.toLowerCase().replace(/^\[|\]$/g, "")
+  if (value.startsWith("::ffff:")) return isBlockedIp(value.slice(7))
+  const family = isIP(value)
+  if (family === 6) {
+    if (value === "::" || value === "::1" || value === "0:0:0:0:0:0:0:0" || value === "0:0:0:0:0:0:0:1") return true
+    const head = Number.parseInt((value.split(":")[0] ?? "").padEnd(4, "0").slice(0, 4), 16)
+    if (!Number.isFinite(head)) return true
+    if ((head & 0xffc0) === 0xfe80) return true
+    if ((head & 0xff00) === 0xff00) return true
+    if ((head & 0xfe00) === 0xfc00) return true
+    return false
+  }
+  if (family !== 4) return false
+  const [a, b] = value.split(".").map(Number)
+  return a === 0 || a === 10 || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
 }
 
 function isBlockedHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "")
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "")
+  if (!host) return true
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true
-  if (host === "metadata.google.internal") return true
-  if (isIP(host)) return isPrivateIp(host)
+  if (host === "metadata.google.internal" || host.endsWith(".internal") || host.endsWith(".arpa")) return true
+  if (isIP(host)) return isBlockedIp(host)
   return false
+}
+
+async function assertSafeWebhookHost(hostname: string, lookupImpl: WebhookLookup): Promise<{ ok: true } | { ok: false; message: string }> {
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "")
+  if (isBlockedHostname(host)) {
+    return { ok: false, message: "Private-network webhook destinations are not allowed." }
+  }
+  if (isIP(host)) return { ok: true }
+  let addresses: Array<{ address: string; family: number }>
+  try {
+    addresses = await lookupImpl(host, { all: true, verbatim: true })
+  } catch {
+    return { ok: false, message: "The webhook destination host could not be resolved." }
+  }
+  if (!addresses.length || addresses.some((entry) => isBlockedIp(entry.address))) {
+    return { ok: false, message: "Private-network webhook destinations are not allowed." }
+  }
+  return { ok: true }
 }
 
 function decodeUserinfo(value: string): string {
@@ -163,6 +212,9 @@ export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult>
   const correlationId = newId()
   const resolved = resolveWebhookTarget(job.route.destination)
   if (!resolved.ok) return failed(correlationId, "provider_unavailable", resolved.message)
+
+  const hostSafe = await assertSafeWebhookHost(new URL(resolved.target.url).hostname, resolver())
+  if (!hostSafe.ok) return failed(correlationId, "provider_unavailable", hostSafe.message)
 
   try {
     const response = await http()(resolved.target.url, {
