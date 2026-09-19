@@ -75,6 +75,7 @@ export interface ScoringInputs {
   tibMonths?: number
   fico?: number
   requestedAmount?: number
+  termMonths?: number
   monthlyRevenue?: number
   revenueUnknown: boolean
   averageDailyBalance?: number
@@ -83,7 +84,11 @@ export interface ScoringInputs {
   nsfUnknown: boolean
   negativeDays?: number
   negativeUnknown: boolean
+  depositCount?: number
+  depositUnknown: boolean
+  worstMonthNsf?: number
   positionCount: number
+  proposedPositionCount: number
   availableMonthlyRevenue?: number
   availableUnknown: boolean
   dataAge?: string
@@ -682,12 +687,14 @@ async function loadCompletenessVersion(actor: DealActor, dealId: string): Promis
   }
 }
 
-function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null, months: StatementMonthRecord[], positions: ExistingPositionCandidate[]): ScoringInputs {
+export function buildScoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null, months: StatementMonthRecord[], positions: ExistingPositionCandidate[]): ScoringInputs {
   const asOf = aggregate?.computedAt ?? deal.updatedAt
   const revenue = metricNumber(aggregate?.monthlyRevenue)
   const adb = metricNumber(aggregate?.averageDailyBalance)
   const nsf = metricNumber(aggregate?.nsfCount)
   const negative = metricNumber(aggregate?.negativeDays)
+  const deposit = metricNumber(aggregate?.depositCount)
+  const worstMonthNsf = metricNumber(aggregate?.worstMonthNsf)
   const payments = positions
     .filter((position) => position.status !== "dismissed")
     .reduce((sum, position) => sum + (typeof position.estimatedPayment === "number" && Number.isFinite(position.estimatedPayment) ? position.estimatedPayment : 0), 0)
@@ -705,6 +712,7 @@ function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null
     ...(deal.startDate ? { tibMonths: monthsBetween(deal.startDate, asOf) } : {}),
     ...(deal.ficoScore != null ? { fico: deal.ficoScore } : {}),
     ...(deal.requestedAmount != null ? { requestedAmount: deal.requestedAmount } : {}),
+    ...(deal.requestedTermMonths != null ? { termMonths: deal.requestedTermMonths } : {}),
     ...(revenue.value != null ? { monthlyRevenue: revenue.value } : {}),
     revenueUnknown: !aggregate || revenue.unknown,
     ...(adb.value != null ? { averageDailyBalance: adb.value } : {}),
@@ -713,7 +721,11 @@ function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null
     nsfUnknown: !aggregate || nsf.unknown,
     ...(negative.value != null ? { negativeDays: negative.value } : {}),
     negativeUnknown: !aggregate || negative.unknown,
-    positionCount: aggregate?.positionCount ?? positions.length,
+    ...(deposit.value != null ? { depositCount: deposit.value } : {}),
+    depositUnknown: !aggregate || deposit.unknown,
+    ...(worstMonthNsf.value != null ? { worstMonthNsf: worstMonthNsf.value } : {}),
+    positionCount: aggregate?.positionCount ?? positions.filter((position) => position.status === "confirmed").length,
+    proposedPositionCount: positions.filter((position) => position.status === "proposed").length,
     ...(revenue.value != null ? { availableMonthlyRevenue: Math.max(0, revenue.value - payments) } : {}),
     availableUnknown: !aggregate || availableUnknown,
     ...(latestPeriod || aggregate?.computedAt ? { dataAge: latestPeriod ?? aggregate?.computedAt } : {}),
@@ -769,7 +781,7 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
   const aggregate = await loadAggregate(actor, deal.id)
   const months = await loadMonths(actor, deal.id)
   const positions = await loadPositions(actor, deal.id)
-  const inputs = scoringInputs(deal, aggregate, months, positions)
+  const inputs = buildScoringInputs(deal, aggregate, months, positions)
   const versions = await currentVersions(actor, deal, funders, aggregate)
   const previous = await findLatestScoreSnapshot(actor.workspaceId, deal.id)
   const reasons = staleReasonsFor(previous, versions)

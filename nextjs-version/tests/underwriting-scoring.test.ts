@@ -2,14 +2,15 @@ import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { createDeal } from "../src/lib/mca/deals/service"
-import type { DealActor } from "../src/lib/mca/deals/schema"
+import { createDeal, getDealForDocument, updateDealRecord } from "../src/lib/mca/deals/service"
+import type { DealActor, DealRecord } from "../src/lib/mca/deals/schema"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import type { EligibilityRule } from "../src/lib/mca/funders/contracts"
 import {
   POLICY_VERSION,
   SCORE_FIT_DISCLAIMER,
   autoSelectableFunderIds,
+  buildScoringInputs,
   evaluateFunderScore,
   getDealScores,
   rankScores,
@@ -17,6 +18,7 @@ import {
   scoreDeal,
 } from "../src/lib/mca/underwriting/scoring"
 import type { ScoringInputs } from "../src/lib/mca/underwriting/scoring"
+import type { ExistingPositionCandidate, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
 import { GET as getScores, POST as postScores } from "../src/app/api/mca/underwriting/scores/[dealId]/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -60,6 +62,7 @@ const harborInputs: ScoringInputs = {
   tibMonths: 80,
   fico: 680,
   requestedAmount: 50_000,
+  termMonths: 12,
   monthlyRevenue: 20_000,
   revenueUnknown: false,
   averageDailyBalance: 8_000,
@@ -68,7 +71,11 @@ const harborInputs: ScoringInputs = {
   nsfUnknown: false,
   negativeDays: 0,
   negativeUnknown: false,
+  depositCount: 12,
+  depositUnknown: false,
+  worstMonthNsf: 1,
   positionCount: 0,
+  proposedPositionCount: 0,
   availableMonthlyRevenue: 20_000,
   availableUnknown: false,
   dataAge: "2026-08",
@@ -339,4 +346,81 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
     () => getDealScores(actor(otherId), deal.id),
     (error: { status?: number; code?: string }) => error.status === 404 && error.code === "deal_not_found",
   )
+})
+
+test("requestedTermMonths persists and scoring inputs expose term, deposits, worst-month NSF, proposed positions", async () => {
+  const workspaceId = `ws-term-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  const created = await createDeal(actor(workspaceId), {
+    idempotencyKey: `term-${workspaceId}`,
+    legalName: "Term Merchant LLC",
+    entityType: "llc",
+    address: { line1: "1 Harbor St", city: "Brooklyn", state: "NY", postalCode: "11201" },
+    startDate: "2020-01-01",
+    industry: "restaurants",
+    naicsCode: "722511",
+    monthlyRevenue: 20_000,
+    ficoScore: 680,
+    requestedAmount: 50_000,
+    requestedTermMonths: 18,
+    fundingPurpose: "working capital",
+  })
+  assert.equal(created.deal.requestedTermMonths, 18)
+  const loaded = await getDealForDocument(actor(workspaceId), created.deal.id)
+  assert.equal(loaded.requestedTermMonths, 18)
+
+  const updated = await updateDealRecord(actor(workspaceId), created.deal.id, {
+    expectedVersion: created.deal.version,
+    requestedTermMonths: 24,
+  })
+  assert.equal(updated.requestedTermMonths, 24)
+
+  const aggregate: UnderwritingAggregate = {
+    dealId: created.deal.id,
+    version: 1,
+    monthlyRevenue: { value: 20_000, unknown: false, confidence: 1 },
+    averageDailyBalance: { value: 8_000, unknown: false, confidence: 1 },
+    nsfCount: { value: 3, unknown: false, confidence: 1 },
+    negativeDays: { value: 0, unknown: false, confidence: 1 },
+    depositCount: { value: 9, unknown: false, confidence: 1 },
+    worstMonthNsf: { value: 2, unknown: false, confidence: 1 },
+    warnings: [],
+    positionCount: 1,
+    stale: false,
+    computedAt: "2026-09-08T00:00:00.000Z",
+  }
+  const positions: ExistingPositionCandidate[] = [
+    {
+      id: "pos-proposed",
+      dealId: created.deal.id,
+      label: "MCA ACH",
+      status: "proposed",
+      estimatedPayment: 500,
+      evidence: "fixture",
+    },
+    {
+      id: "pos-confirmed",
+      dealId: created.deal.id,
+      label: "Confirmed advance",
+      status: "confirmed",
+      estimatedPayment: 400,
+      evidence: "fixture",
+    },
+    {
+      id: "pos-dismissed",
+      dealId: created.deal.id,
+      label: "Noise",
+      status: "dismissed",
+      estimatedPayment: 100,
+      evidence: "fixture",
+    },
+  ]
+  const deal: DealRecord = { ...loaded, requestedTermMonths: 24, version: updated.version }
+  const inputs = buildScoringInputs(deal, aggregate, [], positions)
+  assert.equal(inputs.termMonths, 24)
+  assert.equal(inputs.depositCount, 9)
+  assert.equal(inputs.depositUnknown, false)
+  assert.equal(inputs.worstMonthNsf, 2)
+  assert.equal(inputs.proposedPositionCount, 1)
+  assert.equal(inputs.positionCount, 1)
 })

@@ -172,7 +172,7 @@ function changedFieldNames(input: CreateDealInput | UpdateDealInput): string[] {
   const allowed = new Set([
     "legalName", "dbaName", "ein", "entityType", "address", "contactName", "contactEmail", "contactPhone",
     "startDate", "industry", "naicsCode", "monthlyRevenue", "ficoScore", "fundingPurpose", "requestedAmount",
-    "owners", "assignments",
+    "requestedTermMonths", "owners", "assignments",
   ])
   return Object.keys(input).filter((key) => allowed.has(key))
 }
@@ -215,6 +215,7 @@ function mergeOmittedWriteFields(input: CreateDealInput, fields: DealWriteInput)
     ficoScore: input.ficoScore ?? fields.ficoScore,
     fundingPurpose: input.fundingPurpose ?? fields.fundingPurpose,
     requestedAmount: input.requestedAmount ?? fields.requestedAmount,
+    requestedTermMonths: input.requestedTermMonths ?? fields.requestedTermMonths,
     owners: input.owners ?? fields.owners,
   }
 }
@@ -299,6 +300,7 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
     address: input.address, contactName: input.contactName, contactEmail: input.contactEmail, contactPhone: input.contactPhone,
     startDate: input.startDate, industry: input.industry, naicsCode: input.naicsCode, monthlyRevenue: input.monthlyRevenue,
     ficoScore: input.ficoScore, fundingPurpose: input.fundingPurpose, requestedAmount: input.requestedAmount,
+    requestedTermMonths: input.requestedTermMonths,
   }
   const id = newId()
   const record: DealRecord = {

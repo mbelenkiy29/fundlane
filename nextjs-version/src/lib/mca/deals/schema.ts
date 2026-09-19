@@ -172,6 +172,7 @@ export interface DealRecord {
   ficoScore?: number
   fundingPurpose?: string
   requestedAmount?: number
+  requestedTermMonths?: number
   status: DealStatus
   pipelineVersion: 1
   draftState: DraftState
@@ -227,6 +228,7 @@ export interface DealWriteInput {
   ficoScore?: number
   fundingPurpose?: string
   requestedAmount?: number
+  requestedTermMonths?: number
   owners?: DealOwnerInput[]
   assignments?: Array<{ membershipId: string; kind: AssignmentKind; isPrimary?: boolean }>
   fieldSource?: DealSource
