@@ -40,13 +40,15 @@ function fitRules(): EligibilityRule[] {
     { id: "r-tib", funderId: "", field: "time_in_business", operator: "min", unit: "months", value: 12, unspecified: false },
     { id: "r-pos", funderId: "", field: "positions", operator: "max", unit: "count", value: 3, unspecified: false },
     { id: "r-amt", funderId: "", field: "requested_amount", operator: "max", unit: "usd", value: 250_000, unspecified: false },
+    { id: "r-term", funderId: "", field: "term", operator: "max", unit: "months", value: 12, unspecified: false },
     { id: "r-adb", funderId: "", field: "average_daily_balance", operator: "min", unit: "usd", value: 5_000, unspecified: false },
+    { id: "r-dep", funderId: "", field: "deposit_count", operator: "min", unit: "count", value: 6, unspecified: false },
     { id: "r-nsf", funderId: "", field: "nsf", operator: "max", unit: "count", value: 4, unspecified: false },
     { id: "r-neg", funderId: "", field: "negative_days", operator: "max", unit: "days", value: 4, unspecified: false },
     { id: "r-def", funderId: "", field: "default_status", operator: "eq", unit: "boolean", value: false, unspecified: false },
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
-    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["713210"], unspecified: false },
+    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
   ]
 }
 
@@ -118,10 +120,12 @@ async function seedAggregate(workspaceId: string, dealId: string) {
   const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 0.95, text: String(value) })
   await exec(
     `INSERT INTO mca_underwriting_aggregates
-      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at)
-     VALUES (?, ?, 1, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
-     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET version = excluded.version, monthly_revenue = excluded.monthly_revenue, stale = excluded.stale`,
-    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0),
+      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, deposit_count, worst_month_nsf, position_count, stale, source_fingerprint, computed_at)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
+     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET
+      version = excluded.version, monthly_revenue = excluded.monthly_revenue,
+      deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, stale = excluded.stale`,
+    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0), metric(12), metric(1),
   )
 }
 
@@ -153,6 +157,7 @@ async function merchantDeal(workspaceId: string, key: string) {
     monthlyRevenue: 20_000,
     ficoScore: 680,
     requestedAmount: 50_000,
+    requestedTermMonths: 12,
     fundingPurpose: "working capital",
   })
   await seedAggregate(workspaceId, created.deal.id)
