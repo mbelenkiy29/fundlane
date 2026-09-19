@@ -12,7 +12,7 @@ import { requestCorrelationId } from "../http"
 import { backgroundJobsEnabled } from "../jobs/queue"
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
 import { enqueueSubmissionDelivery } from "./delivery-job"
-import { assertDuplicatePolicy } from "./duplicate-policy"
+import { assertDuplicatePolicy, privilegedOverrideAllowed } from "./duplicate-policy"
 import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
@@ -217,6 +217,9 @@ async function queueDestination(input: {
 }
 
 export async function queueSubmissions(input: QueueSubmissionsInput): Promise<QueueSubmissionsResult> {
+  if (input.privilegedRetry === true && !privilegedOverrideAllowed(input.actor)) {
+    throw new AppError(403, "privileged_retry_forbidden", "Privileged retry requires a workspace administrator session.")
+  }
   const deal = await getDealForDocument(input.actor, input.dealId)
   const documents = await listDocuments(input.actor, input.dealId)
   const sender = await probeSubmissionSender(input.actor)

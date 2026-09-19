@@ -2,6 +2,8 @@ import "server-only"
 
 import { parseJson, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealActor } from "../deals/schema"
+import { AppError } from "../errors"
+import { canManageWorkspace } from "../policy"
 import { nowIso } from "./clock"
 import type { DuplicateDecision, JobState } from "./contracts"
 
@@ -215,6 +217,16 @@ async function allow(database: DbExecutor, input: {
   return input.decision
 }
 
+export function privilegedOverrideAllowed(actor: DealActor): boolean {
+  return actor.source === "user" && Boolean(actor.role && canManageWorkspace(actor.role))
+}
+
+function assertPrivilegedRetryAllowed(actor: DealActor, privilegedRetry?: boolean): void {
+  if (privilegedRetry !== true) return
+  if (privilegedOverrideAllowed(actor)) return
+  throw new AppError(403, "privileged_retry_forbidden", "Privileged retry requires a workspace administrator session.")
+}
+
 /** Atomic merchant+funder duplicate lock until decline/funded or a new package fingerprint. */
 export async function assertDuplicatePolicy(input: {
   actor: DealActor
@@ -225,6 +237,7 @@ export async function assertDuplicatePolicy(input: {
   privilegedRetry?: boolean
   privilegedReason?: string
 }): Promise<DuplicateDecision> {
+  assertPrivilegedRetryAllowed(input.actor, input.privilegedRetry)
   return withImmediateTransaction(async (database) => {
     await database.execute(
       "SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))",

@@ -33,17 +33,37 @@ const ids = {
   otherWorkspace: "workspace-duplicates-other",
   adminUser: "duplicates-admin-user",
   adminMember: "duplicates-admin-member",
+  repUser: "duplicates-rep-user",
+  repMember: "duplicates-rep-member",
   otherUser: "duplicates-other-user",
   otherMember: "duplicates-other-member",
 }
 
 const actor = (workspaceId = ids.workspace, role: Role | null = "admin"): DealActor => ({
   workspaceId,
-  userId: workspaceId === ids.otherWorkspace ? ids.otherUser : ids.adminUser,
-  membershipId: workspaceId === ids.otherWorkspace ? ids.otherMember : ids.adminMember,
+  userId: workspaceId === ids.otherWorkspace
+    ? ids.otherUser
+    : role === "rep"
+      ? ids.repUser
+      : role
+        ? ids.adminUser
+        : ids.adminUser,
+  membershipId: workspaceId === ids.otherWorkspace
+    ? ids.otherMember
+    : role === "rep"
+      ? ids.repMember
+      : role
+        ? ids.adminMember
+        : ids.adminMember,
   role,
   managedMembershipIds: [],
-  activeMembershipIds: [workspaceId === ids.otherWorkspace ? ids.otherMember : ids.adminMember],
+  activeMembershipIds: [
+    workspaceId === ids.otherWorkspace
+      ? ids.otherMember
+      : role === "rep"
+        ? ids.repMember
+        : ids.adminMember,
+  ],
   source: role ? "user" : "api_key",
   correlationId: `corr-${workspaceId}-${role ?? "key"}`,
 })
@@ -101,6 +121,7 @@ async function seed() {
   }
   for (const [userId, memberId, email, workspaceId, role] of [
     [ids.adminUser, ids.adminMember, "duplicates-admin@example.test", ids.workspace, "admin"],
+    [ids.repUser, ids.repMember, "duplicates-rep@example.test", ids.workspace, "rep"],
     [ids.otherUser, ids.otherMember, "duplicates-other@example.test", ids.otherWorkspace, "admin"],
   ] as const) {
     await database.prepare(`INSERT INTO users (id,email,password_hash,name,phone,application_identifier,created_at,updated_at)
@@ -110,6 +131,8 @@ async function seed() {
   }
   await database.prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
     VALUES (?, ?, ?, ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run("duplicates-admin-session", ids.adminUser, ids.adminMember, hashOpaqueToken("admin-session-token"), now, now)
+  await database.prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
+    VALUES (?, ?, ?, ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run("duplicates-rep-session", ids.repUser, ids.repMember, hashOpaqueToken("rep-session-token"), now, now)
   await database.prepare(`INSERT INTO api_keys
     (id,workspace_id,name,prefix,secret_hash,scopes,expires_at,last_used_at,revoked_at,rate_limit_per_minute,created_by,created_at)
     VALUES (?, ?, ?, 'mca_test', ?, ?, NULL, NULL, NULL, 60, ?, ?)`).run(
@@ -218,9 +241,10 @@ function policyInput(dealId: string, funderId: string, extra: {
   checksums?: string[]
   privilegedRetry?: boolean
   privilegedReason?: string
+  actor?: DealActor
 } = {}) {
   return {
-    actor: actor(),
+    actor: extra.actor ?? actor(),
     dealId,
     funderId,
     merchantIdentityKey: submissionMerchantIdentityKey({
@@ -259,15 +283,24 @@ async function enqueue(dealId: string, funderIds: string[], extra: {
   confirmationKey?: string
   privilegedRetry?: boolean
   privilegedReason?: string
+  actor?: DealActor
 } = {}) {
   return queueSubmissions({
-    actor: actor(),
+    actor: extra.actor ?? actor(),
     dealId,
     funderIds,
     confirmationKey: extra.confirmationKey ?? confirmationKey("dup"),
     privilegedRetry: extra.privilegedRetry,
     privilegedReason: extra.privilegedReason,
   })
+}
+
+async function privilegedAuditCount(dealId: string) {
+  const row = await getDatabase().prepare<{ count: number }>(
+    `SELECT COUNT(*)::int AS count FROM audit_events
+     WHERE resource_id = ? AND action = 'submission.privileged_retry'`,
+  ).get(dealId)
+  return Number(row?.count ?? 0)
 }
 
 async function jobRows(dealId: string) {
@@ -400,6 +433,7 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   const originalId = first.jobs[0]?.jobId
   assert.ok(originalId)
   assert.equal(first.jobs[0]?.state, "pending_portal")
+  assert.equal(await privilegedAuditCount(deal.id), 0)
 
   const missingReason = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
     merchantId: deal.merchantId,
@@ -414,6 +448,7 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
     privilegedReason: "   ",
   })
   assert.equal(blankReason.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(await privilegedAuditCount(deal.id), 0)
 
   const override = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
     merchantId: deal.merchantId,
@@ -422,6 +457,7 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   }))
   assert.equal(override.allowed, true)
   assert.equal(override.code, "privileged_retry")
+  assert.equal(await privilegedAuditCount(deal.id), 1)
 
   const retried = await enqueue(deal.id, [portalFunderId], {
     privilegedRetry: true,
@@ -429,11 +465,77 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   })
   assert.equal(retried.jobs[0]?.state, "pending_portal")
   assert.notEqual(retried.jobs[0]?.jobId, originalId)
+  assert.equal(await privilegedAuditCount(deal.id), 2)
 
   const rows = await jobRows(deal.id)
   assert.equal(rows.some((row) => row.id === originalId && row.state === "pending_portal"), true)
   assert.equal(rows.some((row) => row.id === retried.jobs[0]?.jobId && row.state === "pending_portal"), true)
   assert.equal(rows.filter((row) => row.state === "pending_portal").length, 2)
+})
+
+test("privilegedRetry is forbidden for rep sessions and API keys", async () => {
+  setClock(() => T0)
+  const deal = await seedDeal()
+  const first = await enqueue(deal.id, [portalFunderId])
+  assert.equal(first.jobs[0]?.state, "pending_portal")
+
+  await assert.rejects(
+    () => assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
+      merchantId: deal.merchantId,
+      actor: actor(ids.workspace, "rep"),
+      privilegedRetry: true,
+      privilegedReason: "Rep override attempt",
+    })),
+    (error: unknown) => {
+      assert.equal((error as { status?: number; code?: string }).status, 403)
+      assert.equal((error as { code?: string }).code, "privileged_retry_forbidden")
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => enqueue(deal.id, [portalFunderId], {
+      actor: actor(ids.workspace, null),
+      privilegedRetry: true,
+      privilegedReason: "API key override attempt",
+    }),
+    (error: unknown) => {
+      assert.equal((error as { status?: number; code?: string }).status, 403)
+      assert.equal((error as { code?: string }).code, "privileged_retry_forbidden")
+      return true
+    },
+  )
+
+  const repHttp = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "rep-session-token", {
+    method: "POST",
+    body: JSON.stringify({
+      funderIds: [portalFunderId],
+      confirmationKey: confirmationKey("http-rep"),
+      privilegedRetry: true,
+      privilegedReason: "Rep HTTP override",
+    }),
+  }), params(deal.id))
+  assert.equal(repHttp.status, 403)
+  const repBody = await repHttp.json() as { error: { code: string } }
+  assert.equal(repBody.error.code, "privileged_retry_forbidden")
+  assertNoSecret(repBody)
+
+  const apiHttp = await submissionsPost(bearerRequest(`/api/mca/submissions/${deal.id}`, "write-secret", {
+    method: "POST",
+    body: JSON.stringify({
+      funderIds: [portalFunderId],
+      confirmationKey: confirmationKey("http-api"),
+      privilegedRetry: true,
+      privilegedReason: "API key HTTP override",
+    }),
+  }), params(deal.id))
+  assert.equal(apiHttp.status, 403)
+  const apiBody = await apiHttp.json() as { error: { code: string } }
+  assert.equal(apiBody.error.code, "privileged_retry_forbidden")
+  assertNoSecret(apiBody)
+
+  assert.equal(await privilegedAuditCount(deal.id), 0)
+  assert.equal((await jobRows(deal.id)).filter((row) => row.state === "pending_portal").length, 1)
 })
 
 test("MIC-174 other funders stay independent and HTTP uses the same policy", async () => {
@@ -471,4 +573,18 @@ test("MIC-174 other funders stay independent and HTTP uses the same policy", asy
   assert.equal((body.jobs[0]?.reason ?? "").includes("2026-09-09T12:00:00.000Z"), false)
   assert.match(body.jobs[0]?.reason ?? "", /active/i)
   assert.equal(body.jobs[0]?.reason?.includes(pdfChecksum), false)
+
+  const adminOverride = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({
+      funderIds: [portalFunderId],
+      confirmationKey: confirmationKey("http-admin-privileged"),
+      privilegedRetry: true,
+      privilegedReason: "Admin HTTP privileged retry",
+    }),
+  }), params(deal.id))
+  assert.equal(adminOverride.status, 200)
+  const overrideBody = await adminOverride.json() as { ok: true; jobs: Array<{ state: string }> }
+  assert.equal(overrideBody.jobs[0]?.state, "pending_portal")
+  assert.equal(await privilegedAuditCount(deal.id), 1)
 })
