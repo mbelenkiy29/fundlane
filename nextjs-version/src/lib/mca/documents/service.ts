@@ -20,7 +20,8 @@ import {
 } from "./repository"
 import { documentScanner, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
-import { backgroundJobsEnabled, enqueueBackgroundJob, inBackgroundWorker } from "../jobs/queue"
+import { backgroundJobsEnabled, inBackgroundWorker } from "../jobs/queue"
+import { enqueueDocumentScan } from "./scan-job"
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 const ALLOWED_MIME_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"])
@@ -86,7 +87,7 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
     const pending = record.processingState === "pending_scan"
       ? record
       : await updateDocumentScan(actor.workspaceId, record.id, "pending_scan", "queued", { queued: true }, nowIso())
-    await enqueueBackgroundJob({ actor, kind: "document_scan", resourceId: record.id, idempotencyKey: `document_scan:${record.id}`, payload: { documentId: record.id } })
+    await enqueueDocumentScan(pending)
     return pending
   }
   const result = await documentScanner().scan(bytes, record.originalFilename)

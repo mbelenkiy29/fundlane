@@ -6,7 +6,7 @@ import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
-import { getDocument, storeDocument } from "../src/lib/mca/documents/service"
+import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
@@ -218,4 +218,84 @@ test("heartbeat is written even when the queue is empty", async () => {
     "SELECT document_worker_heartbeat_at FROM mca_private.ops_control WHERE id",
   ).get()
   assert.ok(heartbeat?.document_worker_heartbeat_at)
+})
+
+test("unconfigured scan completion requeues on retry so a later worker actually scans", async () => {
+  setDocumentScannerForTests(undefined)
+  const stored = await storeDocument(actor(), {
+    dealId,
+    idempotencyKey: "jobs-retry-unconfigured",
+    filename: "retry-scan.pdf",
+    mimeType: "application/pdf",
+    bytes: minimalPdf,
+    category: "other_stip",
+    source: "test",
+  })
+  assert.equal(stored.processingState, "pending_scan")
+  assert.equal(await runNextBackgroundJob(), true)
+  assert.equal((await getDocument(actor(), stored.id)).processingState, "pending_scan")
+  const completed = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
+  ).get(actor().workspaceId, stored.id)
+  assert.equal(completed?.state, "complete")
+
+  const scanner = countingScanner()
+  const retried = await retryDocumentScan(actor(), stored.id)
+  assert.equal(retried.processingState, "pending_scan")
+  assert.equal(scanner.count(), 0)
+  const requeued = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan' AND state IN ('queued','running')",
+  ).get(actor().workspaceId, stored.id)
+  assert.equal(requeued?.state, "queued")
+  assert.equal(await runNextBackgroundJob(), true)
+  assert.equal(scanner.count(), 1)
+  assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
+})
+
+test("document_scan enqueue uses a durable system actor so expired user sessions still scan", async () => {
+  const userActor: DealActor = {
+    workspaceId: actor().workspaceId,
+    userId: "user-jobs-session",
+    membershipId: "member-jobs-session",
+    role: "admin",
+    managedMembershipIds: [],
+    activeMembershipIds: [],
+    source: "user",
+    correlationId: "corr-jobs-user",
+    sessionId: "session-jobs-expired",
+  }
+  setDocumentScannerForTests(undefined)
+  const stored = await storeDocument(userActor, {
+    dealId,
+    idempotencyKey: "jobs-expired-session",
+    filename: "session-scan.pdf",
+    mimeType: "application/pdf",
+    bytes: minimalPdf,
+    category: "other_stip",
+    source: "test",
+  })
+  assert.equal(stored.processingState, "pending_scan")
+  const enqueued = await getDatabase().prepare<{ state: string; actor_json: string }>(
+    "SELECT state, actor_json FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
+  ).get(actor().workspaceId, stored.id)
+  const storedActor = JSON.parse(enqueued?.actor_json ?? "{}") as DealActor
+  assert.equal(enqueued?.state, "queued")
+  assert.equal(storedActor.source, "system")
+  assert.equal(storedActor.userId, null)
+  assert.equal(storedActor.intakeDealId, dealId)
+  assert.equal(await runNextBackgroundJob(), true)
+  assert.equal((await getDocument(actor(), stored.id)).processingState, "pending_scan")
+
+  const scanner = countingScanner()
+  const retried = await retryDocumentScan(userActor, stored.id)
+  assert.equal(retried.processingState, "pending_scan")
+  assert.equal(scanner.count(), 0)
+  const requeued = await getDatabase().prepare<{ state: string; actor_json: string }>(
+    "SELECT state, actor_json FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan' AND state IN ('queued','running')",
+  ).get(actor().workspaceId, stored.id)
+  assert.equal(requeued?.state, "queued")
+  assert.equal(JSON.parse(requeued?.actor_json ?? "{}").source, "system")
+  assert.equal(await runNextBackgroundJob(), true)
+  assert.equal(scanner.count(), 1)
+  assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
 })

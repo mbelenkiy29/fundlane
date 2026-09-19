@@ -6,6 +6,8 @@ import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { getDealForDocument } from "../deals/service"
 import { processDirectUpload } from "../documents/direct-uploads"
+import { findDocumentById } from "../documents/repository"
+import { documentScanActor } from "../documents/scan-job"
 import { retryDocumentScan } from "../documents/service"
 import { extractApplicationDraft, retryApplicationDraftScan } from "../documents/application-drafts"
 import { findJobById } from "../submissions/repository"
@@ -24,6 +26,11 @@ import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-servi
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   if (job.kind === "application_invitation_reminder") return (await import("../applications/reminders")).processInvitationReminder(job)
+  if (job.kind === "document_scan") {
+    const record = await findDocumentById(job.workspace_id, job.resource_id)
+    if (!record) throw new AppError(404, "document_not_found", "The requested document was not found.")
+    return retryDocumentScan(documentScanActor(record), job.resource_id)
+  }
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {
@@ -44,7 +51,6 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
     }
     case "multipart_task": return processMultipartTask(actor, payload)
     case "document_upload": return processDirectUpload(job.workspace_id, job.resource_id)
-    case "document_scan": return retryDocumentScan(actor, job.resource_id)
     case "draft_scan": return retryApplicationDraftScan(actor, job.resource_id)
     case "draft_extract": return extractApplicationDraft(actor, job.resource_id, payload.approvedFields)
     case "export_create": return createExportJob(actor, payload as CreateExportInput)
