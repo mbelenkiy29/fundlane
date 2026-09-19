@@ -1,6 +1,7 @@
 import "server-only"
 
-import { getDatabase } from "../db"
+import { getDatabase, nowIso, parseJson } from "../db"
+import { enqueueSubmissionDelivery } from "../submissions/delivery-job"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { getDealForDocument } from "../deals/service"
@@ -65,15 +66,31 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
 
 const reportedLegacySubmissions = new Set<string>()
 /** New outbox/job inserts are atomic. Older rows lack durable session/key provenance and require review. */
-export async function recoverSubmissionOutbox(): Promise<void> {
-  const rows = await getDatabase().prepare<{ id: string }>(`SELECT j.id FROM mca_submission_jobs j
+export async function recoverSubmissionOutbox(): Promise<number> {
+  const rows = await getDatabase().prepare<{ id: string; workspace_id: string; deal_id: string; payload_json: string }>(`SELECT j.id, j.workspace_id, j.deal_id, o.payload_json FROM mca_submission_jobs j
     JOIN mca_submission_outbox o ON o.job_id=j.id WHERE o.processed_at IS NULL AND j.state IN ('queued','sending')
     AND NOT EXISTS (SELECT 1 FROM mca_background_jobs b WHERE b.kind='submission_delivery' AND b.resource_id=j.id) ORDER BY o.created_at LIMIT 20`).all()
+  let enqueued = 0
   for (const row of rows) {
-    if (reportedLegacySubmissions.has(row.id)) continue
-    reportedLegacySubmissions.add(row.id)
-    console.error(JSON.stringify({ event: "legacy_submission_requires_review", jobId: row.id, code: "original_authority_unavailable" }))
+    const payload = parseJson<Record<string, unknown>>(row.payload_json, {})
+    const actor = payload.actor
+    const actorWorkspaceId = actor && typeof actor === "object" && !Array.isArray(actor)
+      ? (actor as { workspaceId?: unknown }).workspaceId
+      : undefined
+    if (typeof actorWorkspaceId !== "string" || actorWorkspaceId !== row.workspace_id) {
+      if (reportedLegacySubmissions.has(row.id)) continue
+      reportedLegacySubmissions.add(row.id)
+      console.error(JSON.stringify({ event: "legacy_submission_requires_review", jobId: row.id, code: "original_authority_unavailable" }))
+      continue
+    }
+    await enqueueSubmissionDelivery({ workspaceId: row.workspace_id, dealId: row.deal_id, id: row.id })
+    enqueued += 1
   }
+  return enqueued
+}
+
+export async function touchDocumentWorkerHeartbeat(): Promise<void> {
+  await getDatabase().prepare("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=? WHERE id").run(nowIso())
 }
 
 export async function runNextBackgroundJob(): Promise<boolean> {

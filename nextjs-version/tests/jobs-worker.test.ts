@@ -9,8 +9,9 @@ import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getDocument, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
-import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
+import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { persistNewDestination } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
@@ -143,4 +144,78 @@ test("queueSubmissions with jobs enabled enqueues submission_delivery and leaves
   assert.equal(delivery?.kind, "submission_delivery")
   assert.equal(delivery?.resource_id, queued.jobId)
   assert.equal(delivery?.state, "queued")
+})
+
+test("recover enqueues missing delivery jobs and skips actorless legacy rows; second recover is 0", async () => {
+  const recoverableFunder = (await createFunder(actor(), {
+    idempotencyKey: "jobs-recover-funder",
+    legalName: "Recover Capital LLC",
+    routes: [{ kind: "email", label: "Submissions", destination: "subs@recover.example.test", documentExceptions: [], active: true }],
+  })).funder
+  const legacyFunder = (await createFunder(actor(), {
+    idempotencyKey: "jobs-recover-legacy-funder",
+    legalName: "Legacy Capital LLC",
+    routes: [{ kind: "email", label: "Submissions", destination: "subs@legacy.example.test", documentExceptions: [], active: true }],
+  })).funder
+  const route = { id: "recover-route", kind: "email" as const, label: "Submissions", destination: "subs@recover.example.test", documentExceptions: [], active: true }
+  const recoverable = (await persistNewDestination({
+    workspaceId: actor().workspaceId,
+    dealId,
+    funderId: recoverableFunder.id,
+    displayFunderName: recoverableFunder.legalName,
+    routeKind: "email",
+    route,
+    state: "queued",
+    confirmationKey: "jobs-recover-actor",
+    attemptKey: "jobs-recover-actor",
+    dealVersion: 1,
+    documentVersions: [],
+    packageDocumentIds: [],
+    preflightErrors: [],
+    createdByUserId: null,
+    actor: actor(),
+  })).job
+  const legacy = (await persistNewDestination({
+    workspaceId: actor().workspaceId,
+    dealId,
+    funderId: legacyFunder.id,
+    displayFunderName: legacyFunder.legalName,
+    routeKind: "email",
+    route,
+    state: "queued",
+    confirmationKey: "jobs-recover-legacy",
+    attemptKey: "jobs-recover-legacy",
+    dealVersion: 1,
+    documentVersions: [],
+    packageDocumentIds: [],
+    preflightErrors: [],
+    createdByUserId: null,
+  })).job
+
+  assert.equal(await recoverSubmissionOutbox(), 1)
+  const delivery = await getDatabase().prepare<{ kind: string; state: string; actor_json: string }>(
+    "SELECT kind, state, actor_json FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'submission_delivery'",
+  ).get(actor().workspaceId, recoverable.id)
+  assert.equal(delivery?.kind, "submission_delivery")
+  assert.equal(delivery?.state, "queued")
+  assert.equal(JSON.parse(delivery?.actor_json ?? "{}").source, "system")
+  assert.equal(JSON.parse(delivery?.actor_json ?? "{}").userId, null)
+  const skipped = await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'submission_delivery'",
+  ).get(actor().workspaceId, legacy.id)
+  assert.equal(skipped?.count, 0)
+  assert.equal(await recoverSubmissionOutbox(), 0)
+})
+
+test("heartbeat is written even when the queue is empty", async () => {
+  const now = new Date().toISOString()
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed', error_code='test_drain', updated_at=? WHERE state IN ('queued','running')").run(now)
+  await getDatabase().prepare("UPDATE mca_submission_outbox SET processed_at=? WHERE processed_at IS NULL").run(now)
+  assert.equal(await runNextBackgroundJob(), false)
+  await touchDocumentWorkerHeartbeat()
+  assert.equal(await runNextBackgroundJob(), false)
+  const heartbeat = await getDatabase().prepare<{ document_worker_heartbeat_at: Date | string | null }>(
+    "SELECT document_worker_heartbeat_at FROM mca_private.ops_control WHERE id",
+  ).get()
+  assert.ok(heartbeat?.document_worker_heartbeat_at)
 })

@@ -1,6 +1,6 @@
 import { setTimeout } from "node:timers/promises"
 import { closeDatabaseForTests } from "../../src/lib/mca/db"
-import { runNextBackgroundJob } from "../../src/lib/mca/jobs/worker"
+import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../../src/lib/mca/jobs/worker"
 import { scheduleIntakeProcessing } from "../../src/lib/mca/intake/processing"
 import { scheduleDueInvitationReminders } from "../../src/lib/mca/applications/reminders"
 import { runDueAttachmentJobs } from "../../src/lib/mca/intake/service"
@@ -20,6 +20,8 @@ async function main() {
           await scheduleDueInvitationReminders(process.env.MCA_APP_ORIGIN ?? "")
           intakeAt = Date.now() + 5000
         }
+        await touchDocumentWorkerHeartbeat()
+        await recoverSubmissionOutbox()
         const worked = await runNextBackgroundJob()
         if (Date.now() >= maintenanceAt) {
           await cleanupWorkerStorage()
