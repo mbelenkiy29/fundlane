@@ -382,9 +382,12 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           : evaluateNumeric(rule, inputs.fico, "FICO", String(inputs.fico)))
         continue
       }
-      reasons.push(inputs.revenueUnknown || inputs.monthlyRevenue == null
-        ? compareUnknown(rule, "Monthly revenue is unknown, so the funder's minimum cannot pass.")
-        : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
+      if (field === "revenue") {
+        reasons.push(inputs.revenueUnknown || inputs.monthlyRevenue == null
+          ? compareUnknown(rule, "Monthly revenue is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
+        continue
+      }
     }
   }
   return reasons

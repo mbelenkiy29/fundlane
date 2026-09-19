@@ -183,7 +183,7 @@ test("MIC-163 hard DQ runs before score and cannot be auto-selected", async () =
   assert.equal(fitScore.rank < blockedScore.rank, true)
 })
 
-test("MIC-163 same inputs and policyVersion 1 produce identical scores and retry identity", async () => {
+test("MIC-163 same inputs and policyVersion 2 produce identical scores and retry identity", async () => {
   const workspaceId = `ws-score-repro-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)
   const deal = await merchantDeal(workspaceId, "repro")
@@ -191,7 +191,7 @@ test("MIC-163 same inputs and policyVersion 1 produce identical scores and retry
   const first = await scoreDeal(actor(workspaceId), deal.id)
   const second = await scoreDeal(actor(workspaceId), deal.id)
   assert.equal(first.snapshot.policyVersion, POLICY_VERSION)
-  assert.equal(first.snapshot.policyVersion, 1)
+  assert.equal(first.snapshot.policyVersion, 2)
   assert.equal(second.snapshot.id, first.snapshot.id)
   assert.deepEqual(second.snapshot.scores, first.snapshot.scores)
   const listed = await getDealScores(actor(workspaceId), deal.id)
@@ -329,7 +329,7 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
   const posted = await postScores(request("score-write", "POST", "{}"), params)
   assert.equal(posted.status, 200)
   const postedBody = await posted.json() as { snapshot: { scores: Array<{ grade: string; eligible: boolean }>; policyVersion: number }; autoSelectableFunderIds: string[] }
-  assert.equal(postedBody.snapshot.policyVersion, 1)
+  assert.equal(postedBody.snapshot.policyVersion, 2)
   assert.equal(postedBody.snapshot.scores.length > 0, true)
   assert.equal(postedBody.autoSelectableFunderIds.length, 1)
 

@@ -11,6 +11,7 @@ import { listDocuments } from "../documents/service"
 import type { DocumentSummary } from "../documents/contracts"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
+import { getWorkspaceSettings } from "../workspaces"
 import type { CompletenessFinding, CompletenessResult } from "./contracts"
 import {
   DEFAULT_REQUIRED_STATEMENT_MONTHS,
@@ -22,6 +23,7 @@ import {
   upsertRequiredStatementMonths,
   type ReadinessEventRecord,
 } from "./completeness-repository"
+import { closedLookbackMonths } from "./lookback"
 
 const APPLICATION_CATEGORIES = new Set(["application", "api_application"])
 const UNREADABLE_STATES = new Set(["quarantined", "scan_failed", "upload_failed"])
@@ -81,7 +83,9 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
   const deal = await getDealForDocument(actor, dealId)
   const documents = await listDocuments(actor, deal.id)
   const requiredStatementMonths = await readRequiredStatementMonths(actor.workspaceId)
-  const lookback = lookbackMonths(requiredStatementMonths)
+  const settings = await getWorkspaceSettings(actor.workspaceId)
+  const timeZone = settings.timezone || "America/New_York"
+  const lookback = closedLookbackMonths(requiredStatementMonths, timeZone)
   const statementMonths = await listCheckingStatementMonths(deal.workspaceId, deal.id)
   const findings = evaluateFindings(documents, lookback, statementMonths)
   const findingsFingerprint = fingerprint(findings)
@@ -98,6 +102,7 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
     ruleSnapshot: JSON.stringify({
       requiredStatementMonths,
       lookbackMonths: lookback,
+      timeZone,
       requireCleanApplication: true,
       statementSource: statementMonths ? "mca_statement_months" : "filename",
       defaultRequiredStatementMonths: DEFAULT_REQUIRED_STATEMENT_MONTHS,
@@ -115,17 +120,6 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
     correlationId: actor.correlationId,
   })
   return result
-}
-
-function lookbackMonths(count: number, now = new Date()): string[] {
-  const year = now.getUTCFullYear()
-  const month = now.getUTCMonth()
-  const periods: string[] = []
-  for (let offset = count - 1; offset >= 0; offset -= 1) {
-    const date = new Date(Date.UTC(year, month - offset, 1))
-    periods.push(`${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`)
-  }
-  return periods
 }
 
 function parsePeriods(filename: string): string[] {

@@ -18,7 +18,11 @@ import {
   requireCompletenessActor,
   setRequiredStatementMonths,
 } from "../src/lib/mca/underwriting/completeness"
+import { closedLookbackMonths, setUnderwritingNowForTests } from "../src/lib/mca/underwriting/lookback"
 import { GET as getDealCompleteness, POST as rerunDealCompleteness } from "../src/app/api/mca/underwriting/completeness/[dealId]/route"
+
+const FROZEN_NOW = new Date("2026-09-18T16:00:00.000Z")
+const WORKSPACE_TZ = "America/New_York"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
@@ -74,15 +78,8 @@ async function addWorkspace(id: string) {
     VALUES (?, ?, NULL, ?, NULL, ?, ?, ?)`).run(`fixture-user-${id}`, `${id}@example.test`, id, `APP-${id}`, now, now)
 }
 
-function lookbackMonths(count: number, now = new Date()): string[] {
-  const year = now.getUTCFullYear()
-  const month = now.getUTCMonth()
-  const periods: string[] = []
-  for (let offset = count - 1; offset >= 0; offset -= 1) {
-    const date = new Date(Date.UTC(year, month - offset, 1))
-    periods.push(`${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`)
-  }
-  return periods
+function lookbackMonths(count = 3): string[] {
+  return closedLookbackMonths(count, WORKSPACE_TZ)
 }
 
 function pdf(tag: string): Uint8Array {
@@ -108,25 +105,44 @@ before(async () => {
   delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
   await addWorkspace("workspace-docs")
   await addWorkspace("workspace-other")
 })
 
 beforeEach(async () => {
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
   await setRequiredStatementMonths(actor(), 3)
 })
 
 after(async () => {
+  setUnderwritingNowForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
 })
 
+test("closed-month lookback excludes current month in workspace timezone", async () => {
+  assert.deepEqual(closedLookbackMonths(3, WORKSPACE_TZ, FROZEN_NOW), ["2026-06", "2026-07", "2026-08"])
+
+  const deal = (await createDeal(actor(), { idempotencyKey: "closed-lookback-deal", legalName: "Closed Lookback LLC" })).deal
+  await upload(deal.id, { key: "closed-app", filename: "application.pdf", category: "application" })
+
+  const result = await checkCompleteness(actor(), deal.id)
+  assert.equal(result.ready, false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-06"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-07"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-08"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-09"), false)
+  assert.deepEqual(JSON.parse(result.ruleSnapshot).lookbackMonths, ["2026-06", "2026-07", "2026-08"])
+})
+
 test("MIC-164: application with only 2 of 3 statement months is not ready and names the gap", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "gap-deal", legalName: "Gap Merchant LLC" })).deal
   const months = lookbackMonths(3)
+  assert.deepEqual(months, ["2026-06", "2026-07", "2026-08"])
   await upload(deal.id, { key: "gap-app", filename: "application.pdf", category: "application" })
   await upload(deal.id, { key: "gap-m0", filename: `Bank-${months[0]}-stmt.pdf`, category: "statement" })
   await upload(deal.id, { key: "gap-m1", filename: `Bank-${months[1]}-stmt.pdf`, category: "statement" })
@@ -138,6 +154,7 @@ test("MIC-164: application with only 2 of 3 statement months is not ready and na
   assert.equal(result.findings.find((finding) => finding.code === missingCode)?.period, months[2])
   assert.equal(result.findings.some((finding) => finding.code === `missing_statement_${months[0]}`), false)
   assert.equal(result.findings.some((finding) => finding.code === `missing_statement_${months[1]}`), false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-09"), false)
   assert.equal(JSON.parse(result.ruleSnapshot).requiredStatementMonths, 3)
 })
 
