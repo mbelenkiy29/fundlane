@@ -2,6 +2,8 @@ import "./helpers/business-auth"
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase, newId, nowIso } from "../src/lib/mca/db"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
@@ -10,7 +12,7 @@ import type { MembershipContext } from "../src/lib/mca/types"
 import { getDeal } from "../src/lib/mca/deals/service"
 import { configureIntegration, createJotformRepLink } from "../src/lib/mca/intake/configuration"
 import { ingestProviderDelivery } from "../src/lib/mca/intake/ingress"
-import { createApplicationInvitation, copyApplicationLink, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
+import { createApplicationInvitation, copyApplicationLink, invitationEmailEnabled, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
 import { getApplicationOutreachReport } from "../src/lib/mca/applications/report"
 import { OUTREACH_METRICS } from "../src/lib/mca/applications/contracts"
 import { completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
@@ -283,4 +285,55 @@ test("legacy shared rep links continue to create deals without invented outreach
   const result = await ingestProviderDelivery({ provider: "jotform", integrationId: connection.status.id, rawBody, request: new Request(`${origin}/hook`, { method: "POST", headers: { authorization: `Bearer ${connection.admissionSecret}` }, body: rawBody }) })
   assert.ok(result.dealId)
   assert.equal((await listApplicationInvitations(admin)).length, beforeCount)
+})
+
+test("production without invitation email enabled disables Send and tells users to copy the link", async () => {
+  const listed = await listRoute(request("/api/mca/applications", ada))
+  assert.equal(listed.status, 200)
+  const body = await listed.json()
+  assert.equal(body.invitationEmailEnabled, invitationEmailEnabled())
+  assert.equal(typeof body.invitationEmailEnabled, "boolean")
+
+  const originalNodeEnv = process.env.NODE_ENV
+  const originalFlag = process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
+  const originalWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  try {
+    process.env.NODE_ENV = "production"
+    process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+    delete process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
+    assert.equal(invitationEmailEnabled(), false)
+
+    process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
+    assert.equal(invitationEmailEnabled(), true)
+
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    assert.equal(invitationEmailEnabled(), false)
+  } finally {
+    process.env.NODE_ENV = originalNodeEnv
+    if (originalFlag === undefined) delete process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
+    else process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = originalFlag
+    if (originalWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = originalWebhook
+  }
+
+  const routeSource = readFileSync(resolve(process.cwd(), "src/app/api/mca/applications/route.ts"), "utf8")
+  const workspaceUi = readFileSync(resolve(process.cwd(), "src/components/mca/applications/applications-workspace.tsx"), "utf8")
+  const tableUi = readFileSync(resolve(process.cwd(), "src/components/mca/applications/invitations-table.tsx"), "utf8")
+  assert.match(routeSource, /invitationEmailEnabled/)
+  assert.match(workspaceUi, /invitationEmailEnabled/)
+  assert.match(tableUi, /invitationEmailEnabled/)
+  assert.match(tableUi, /!invitationEmailEnabled/)
+  assert.match(`${workspaceUi}\n${tableUi}`, /copy the link/i)
+})
+
+test("calendar and credit UI stay honest when sync and purchases are unavailable", () => {
+  const calendar = readFileSync(resolve(process.cwd(), "src/components/mca/calendar/calendar-workspace.tsx"), "utf8")
+  assert.match(calendar, /Google Calendar sync is not running in this environment\./)
+  assert.doesNotMatch(calendar, /Google Calendar setup is awaiting administrator activation/)
+
+  const credits = readFileSync(resolve(process.cwd(), "src/components/mca/assistant/credit-balance.tsx"), "utf8")
+  assert.match(credits, /purchasesAvailable/)
+  assert.match(credits, /Buy a credit pack/)
+  const buyPackBranch = credits.match(/purchasesAvailable[\s\S]{0,200}Buy a credit pack|Buy a credit pack[\s\S]{0,200}purchasesAvailable/)
+  assert.ok(buyPackBranch, "Buy a credit pack must be gated on purchasesAvailable")
 })

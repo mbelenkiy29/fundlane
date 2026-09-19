@@ -10,7 +10,7 @@ import type { ApplicationInvitation, FormBranding } from "@/lib/mca/applications
 import { InvitationsTable } from "./invitations-table"
 import { DEFAULT_OPTIONAL_FIELDS, type OptionalFieldKey } from "@/lib/mca/applications/form-schema"
 
-interface ApplicationsData { invitations: ApplicationInvitation[]; forms: { id: string; name: string; provider?: string }[]; canCreate: boolean; canManageForm?: boolean }
+interface ApplicationsData { invitations: ApplicationInvitation[]; forms: { id: string; name: string; provider?: string }[]; canCreate: boolean; canManageForm?: boolean; invitationEmailEnabled: boolean }
 
 export function ApplicationsWorkspace() {
   const [data, setData] = React.useState<ApplicationsData | null>(null)
@@ -43,7 +43,9 @@ export function ApplicationsWorkspace() {
     try {
       await requestJson("/api/mca/applications", { method: "POST", body: JSON.stringify({ clientName: fields.get("clientName"), email: fields.get("email"), integrationId: fields.get("integrationId"), requestKey: createKey.current }) })
       createKey.current = null; form.reset()
-      setNotice("Invitation created. Send the email or copy the client’s link below.")
+      setNotice(data?.invitationEmailEnabled
+        ? "Invitation created. Send the email or copy the client’s link below."
+        : "Invitation created. Copy the link to share with your client.")
       await refresh()
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create the invitation. Try again.") }
     finally { setBusy(null) }
@@ -111,8 +113,9 @@ export function ApplicationsWorkspace() {
       </section>
       <section aria-labelledby="invitation-list-title">
         <div className="mb-4 flex items-baseline justify-between gap-3"><h2 id="invitation-list-title" className="text-lg font-semibold">Client invitations</h2><span className="text-sm tabular-nums text-muted-foreground">{data.invitations.length} total</span></div>
-        {!data.invitations.length ? <div className="rounded-xl border border-dashed px-6 py-12 text-center"><Mail className="mx-auto mb-3 size-7 text-muted-foreground" /><p className="font-medium">Your next application starts here</p><p className="mt-1 text-sm text-muted-foreground">Create an invitation above, then send your client their personal link.</p></div> : <InvitationsTable invitations={data.invitations} canCreate={data.canCreate} busy={busy} onCopy={row => void copy(row)} onSend={row => void send(row)} manualLink={manualLink} />}
-        <p className="mt-4 max-w-3xl text-xs leading-relaxed text-muted-foreground">Opens are observed visits and may include automated link scanners. Started means the client clicked “Start application”; it does not measure completed fields. Copied links do not count as emails sent. Incomplete applications keep their progress and receive reminder emails.</p>
+        {!data.invitationEmailEnabled && <p role="status" className="mb-4 rounded-lg border bg-muted/40 p-3 text-sm">Application emails are not enabled yet. Copy the link to share with your client.</p>}
+        {!data.invitations.length ? <div className="rounded-xl border border-dashed px-6 py-12 text-center"><Mail className="mx-auto mb-3 size-7 text-muted-foreground" /><p className="font-medium">Your next application starts here</p><p className="mt-1 text-sm text-muted-foreground">Create an invitation above, then {data.invitationEmailEnabled ? "send your client their personal link." : "copy the link for your client."}</p></div> : <InvitationsTable invitations={data.invitations} canCreate={data.canCreate} invitationEmailEnabled={data.invitationEmailEnabled} busy={busy} onCopy={row => void copy(row)} onSend={row => void send(row)} manualLink={manualLink} />}
+        <p className="mt-4 max-w-3xl text-xs leading-relaxed text-muted-foreground">Opens are observed visits and may include automated link scanners. Started means the client clicked “Start application”; it does not measure completed fields. Copied links do not count as emails sent. Incomplete applications keep their progress{data.invitationEmailEnabled ? " and receive reminder emails." : "."}</p>
       </section>
       {data.canManageForm && branding && <section className="rounded-xl border bg-card p-5" aria-labelledby="form-branding-title">
         <h2 id="form-branding-title" className="font-semibold">Fundlane application form</h2>

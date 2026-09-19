@@ -31,10 +31,11 @@ export function invitationStatus(row: ApplicationInvitation): string {
 type SortKey = "businessName" | "requestedAmountCents" | "sentAt" | "openedAt" | "startedAt" | "submittedAt" | "createdAt"
 
 export function InvitationsTable({
-  invitations, canCreate, busy, onCopy, onSend, manualLink,
+  invitations, canCreate, invitationEmailEnabled = true, busy, onCopy, onSend, manualLink,
 }: {
   invitations: ApplicationInvitation[]
   canCreate: boolean
+  invitationEmailEnabled?: boolean
   busy: string | null
   onCopy: (row: ApplicationInvitation) => void
   onSend: (row: ApplicationInvitation) => void
@@ -105,7 +106,7 @@ export function InvitationsTable({
               <td className="px-3 py-3 text-right" onClick={event => event.stopPropagation()}>
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="outline" disabled={busy !== null || !row.active || !canCreate} onClick={() => onCopy(row)}><Copy className="size-3.5" />Copy</Button>
-                  <Button size="sm" disabled={busy !== null || pending || !row.active || !canCreate} onClick={() => onSend(row)}><Send className="size-3.5" />{pending ? "Sending…" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
+                  <Button size="sm" disabled={busy !== null || pending || !row.active || !canCreate || !invitationEmailEnabled} title={!invitationEmailEnabled ? "Application emails are not enabled yet. Copy the link instead." : undefined} onClick={() => onSend(row)}><Send className="size-3.5" />{pending ? "Sending…" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
                 </div>
               </td>
             </tr>
