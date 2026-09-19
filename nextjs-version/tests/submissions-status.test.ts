@@ -19,7 +19,7 @@ import {
   setAdapterEnvironmentForTests,
   upsertAdapterCredential,
 } from "../src/lib/mca/submissions/adapters/credentials"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { WEBHOOK_SECRET_HEADER } from "../src/lib/mca/submissions/webhooks"
 import { POST as webhookPost } from "../src/app/api/mca/submissions/webhooks/[slug]/route"
 import { GET as refreshGet, POST as refreshPost } from "../src/app/api/mca/submissions/webhooks/refresh/route"
@@ -180,8 +180,11 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_status")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   registerAdapter(statusAdapter)
   registerAdapter(submitOnly)
   await seed()
@@ -218,6 +221,7 @@ beforeEach(() => {
 
 after(async () => {
   setAdapterEnvironmentForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
@@ -395,6 +399,27 @@ test("MIC-113: out-of-order pending does not regress funded or duplicate offers"
   assert.equal(rows[0]?.raw_status, "funded")
   const cache = await submissionRow(job.jobId)
   assert.equal(cache?.status, "approved")
+  const fundedJob = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(job.jobId)
+  assert.equal(fundedJob?.state, "funded")
+})
+
+test("reconciliation declined maps the submission job to declined", async () => {
+  const { job } = await submitJob(statusFunderId)
+  const webhook = await postWebhook(job.jobId, {
+    eventId: "evt-declined-job",
+    status: "declined",
+  })
+  assert.equal(webhook.status, 200)
+  const body = await webhook.json() as { ignored: boolean; normalized: string }
+  assert.equal(body.ignored, false)
+  assert.equal(body.normalized, "declined")
+  const declinedJob = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(job.jobId)
+  assert.equal(declinedJob?.state, "declined")
+  assert.equal((await submissionRow(job.jobId))?.status, "declined")
 })
 
 test("MIC-113: unknown status remains visible with the original value and does not invent terms", async () => {

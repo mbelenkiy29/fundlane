@@ -158,11 +158,28 @@ export async function getAttachPayload(actor: DealActor, merchantId: string): Pr
   }
 }
 
+function assertAdminSessionForForceAttach(actor: DealActor): void {
+  if (actor.source !== "user" || !["admin", "super_admin"].includes(actor.role ?? "")) {
+    throw new AppError(403, "force_attach_permission_required", "Forcing an EIN attach requires a workspace administrator session.")
+  }
+}
+
+/** Admin-only: resolve forceDuplicate to an existing merchant id (caller audits after success). */
+export async function resolveForceDuplicateAttach(
+  actor: DealActor,
+  input: { ein?: string; forceDuplicate?: boolean; attachMerchantId?: string },
+): Promise<string | undefined> {
+  if (!input.forceDuplicate || input.attachMerchantId?.trim()) return undefined
+  assertAdminSessionForForceAttach(actor)
+  const visible = await lookupMerchants(actor, { ein: input.ein })
+  return visible.matches.find((item) => item.match === "ein")?.merchantId
+}
+
 export async function merchantCreateWarnings(
   actor: DealActor,
-  input: { ein?: string; owners?: Array<{ identityLast4?: string }>; attachMerchantId?: string; forceDuplicate?: boolean },
+  input: { ein?: string; owners?: Array<{ identityLast4?: string }>; attachMerchantId?: string },
 ): Promise<string[]> {
-  if (input.attachMerchantId || input.forceDuplicate) return []
+  if (input.attachMerchantId) return []
   const einHash = einLookupHash(actor.workspaceId, input.ein)
   if (einHash && await workspaceEinExists(actor.workspaceId, einHash)) {
     const visible = await lookupMerchants(actor, { ein: input.ein })

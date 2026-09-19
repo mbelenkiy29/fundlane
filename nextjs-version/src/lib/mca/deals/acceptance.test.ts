@@ -32,6 +32,33 @@ test("SEN-32: validation returns actionable owner and underwriting field errors"
   assert.deepEqual(Object.keys(errors).sort(), ["ein", "ficoScore", "naicsCode", "owners", "owners.0.identityLast4", "owners.0.ownershipPercent"].sort())
 })
 
+test("optional requestedTermMonths accepts 1–60 integers and rejects out-of-range values", () => {
+  assert.equal(validateDealInput({ requestedTermMonths: 1 }).requestedTermMonths, undefined)
+  assert.equal(validateDealInput({ requestedTermMonths: 60 }).requestedTermMonths, undefined)
+  assert.equal(validateDealInput({ requestedTermMonths: 12 }).requestedTermMonths, undefined)
+  assert.ok(validateDealInput({ requestedTermMonths: 0 }).requestedTermMonths?.length)
+  assert.ok(validateDealInput({ requestedTermMonths: 61 }).requestedTermMonths?.length)
+  assert.ok(validateDealInput({ requestedTermMonths: 12.5 }).requestedTermMonths?.length)
+  assert.ok(validateDealInput({ requestedTermMonths: -3 }).requestedTermMonths?.length)
+})
+
+test("optional requestedTermMonths is not a submission-required field", () => {
+  const missing = submissionMissingFields({
+    legalName: "Harbor Coffee LLC",
+    entityType: "llc",
+    address: { line1: "1 Main", city: "Brooklyn", state: "NY", postalCode: "11201" },
+    contactPhone: "555-0100",
+    startDate: "2020-01-01",
+    industry: "restaurants",
+    monthlyRevenue: 20_000,
+    requestedAmount: 50_000,
+    fundingPurpose: "working capital",
+    owners: [{ id: "o1", firstName: "Ari", lastName: "Lee", ownershipPercent: 100 }],
+  })
+  assert.equal(missing.includes("requestedTermMonths"), false)
+  assert.deepEqual(missing, [])
+})
+
 test("SEN-28/SEN-32: manager visibility follows originator hierarchy and excludes managed closer-only deals", () => {
   const manager = actor()
   assert.equal(canActorAccessDeal(manager, record([{ membershipId: "rep-a", kind: "originator", id: "a", isPrimary: true, assignedAt: "now", assignedByUserId: null }])), true)

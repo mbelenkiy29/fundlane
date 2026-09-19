@@ -1,10 +1,10 @@
 import "server-only"
 
-import { recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
+import { nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
-import type { OfferRecord, OfferRevision, OfferRevisionForClosing, OfferSource, OfferTermsInput } from "./contracts"
+import { isSplitFundProduct, offerRevisionValidity, type OfferRecord, type OfferRevision, type OfferRevisionForClosing, type OfferSource, type OfferTermsInput } from "./contracts"
 import { findOffer, findOfferByExternal, insertOffer, insertOfferRevision, listOffers, OfferRevisionConflictError, setSelection } from "./repository"
 
 const requiredTerms: Array<keyof OfferTermsInput> = ["amountCents", "factorRate", "termMonths", "paymentAmountCents", "paymentFrequency"]
@@ -115,12 +115,20 @@ export async function reviseOffer(actor: DealActor, offerId: string, input: { ex
 export async function selectOfferRevision(actor: DealActor, input: { dealId: string; offerId: string; revisionId: string; selected: boolean; reason?: string }): Promise<OfferRecord> {
   await getDealForDocument(actor, input.dealId)
   return withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:offer-select:${input.dealId}`)
     await database.prepare("SELECT id FROM mca_offers WHERE workspace_id = ? AND deal_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, input.dealId, input.offerId)
     const offer = await findOffer(actor.workspaceId, input.offerId, database)
     if (!offer || offer.dealId !== input.dealId) throw new AppError(404, "offer_not_found", "The requested offer was not found.")
     const revision = offer.revisions.find((item) => item.id === input.revisionId)
     if (!revision) throw new AppError(404, "offer_revision_not_found", "The requested offer revision was not found.")
-    if (input.selected && revision.state !== "active") throw new AppError(409, "offer_revision_ineligible", "Only the current active revision can be newly selected.")
+    if (input.selected) {
+      if (revision.state !== "active") throw new AppError(409, "offer_revision_ineligible", "Only the current active revision can be newly selected.")
+      assertOfferRevisionValidity(revision)
+      await assertLinkedSubmissionNotFunded(database, actor.workspaceId, offer.submissionId)
+      if (!offer.selectedRevisionIds.includes(revision.id)) {
+        await assertAdditionalOfferSelectionAllowed(database, actor.workspaceId, input.dealId, input.offerId, revision.product)
+      }
+    }
     await setSelection({ workspaceId: actor.workspaceId, dealId: input.dealId, offerId: input.offerId, revisionId: input.revisionId, selected: input.selected, actorUserId: actor.userId, reason: input.reason?.trim() || undefined }, database)
     if (input.selected) await syncDealToOffer(database, actor, input.dealId)
     await audit(database, actor, input.selected ? "offer.selected" : "offer.deselected", offer.id, { dealId: offer.dealId, revisionId: revision.id, reason: input.reason?.trim() || undefined })
@@ -144,7 +152,7 @@ export async function getOfferRevisionForClosing(actor: DealActor, input: { deal
   if (matches.length !== 1) throw new AppError(matches.length ? 409 : 404, matches.length ? "offer_revision_ambiguous" : "offer_revision_not_found", matches.length ? "Specify the exact offer revision." : "The requested offer revision was not found.")
   const { offer, revision } = matches[0]
   if (revision.amountCents === undefined) throw new AppError(409, "offer_terms_incomplete", "The offer revision has no funding amount.", { amountCents: ["Add an amount before continuing."] })
-  return { offerId: offer.id, revisionId: revision.id, revisionNumber: revision.revisionNumber, state: revision.state, selected: offer.selectedRevisionIds.includes(revision.id), funderId: offer.funderId, funderName: offer.funderName, amountCents: revision.amountCents, factorRate: revision.factorRate, termMonths: revision.termMonths, paymentAmountCents: revision.paymentAmountCents, paymentFrequency: revision.paymentFrequency, commissionCents: revision.commissionCents }
+  return closingSnapshot(offer, revision)
 }
 
 export async function listOfferRevisionsForClosing(actor: DealActor, input: { dealId: string }): Promise<OfferRevisionForClosing[]> {
@@ -152,25 +160,72 @@ export async function listOfferRevisionsForClosing(actor: DealActor, input: { de
   const offers = await listOffers(actor.workspaceId, input.dealId)
   return offers.flatMap((offer) => {
     const included = new Set([offer.currentRevisionId, ...offer.selectedRevisionIds])
-    return offer.revisions.filter((revision) => included.has(revision.id) && revision.amountCents !== undefined).map((revision) => ({
-      offerId: offer.id,
-      revisionId: revision.id,
-      revisionNumber: revision.revisionNumber,
-      state: revision.state,
-      selected: offer.selectedRevisionIds.includes(revision.id),
-      funderId: offer.funderId,
-      funderName: offer.funderName,
-      amountCents: revision.amountCents!,
-      factorRate: revision.factorRate,
-      termMonths: revision.termMonths,
-      paymentAmountCents: revision.paymentAmountCents,
-      paymentFrequency: revision.paymentFrequency,
-      commissionCents: revision.commissionCents,
-    }))
+    return offer.revisions.filter((revision) => included.has(revision.id) && revision.amountCents !== undefined).map((revision) => closingSnapshot(offer, revision))
   })
+}
+
+function closingSnapshot(offer: OfferRecord, revision: OfferRevision): OfferRevisionForClosing {
+  return {
+    offerId: offer.id,
+    revisionId: revision.id,
+    revisionNumber: revision.revisionNumber,
+    state: revision.state,
+    selected: offer.selectedRevisionIds.includes(revision.id),
+    funderId: offer.funderId,
+    funderName: offer.funderName,
+    amountCents: revision.amountCents!,
+    factorRate: revision.factorRate,
+    termMonths: revision.termMonths,
+    paymentAmountCents: revision.paymentAmountCents,
+    paymentFrequency: revision.paymentFrequency,
+    commissionCents: revision.commissionCents,
+    effectiveAt: revision.effectiveAt ?? revision.createdAt,
+    expiresAt: revision.expiresAt,
+  }
+}
+
+async function assertAdditionalOfferSelectionAllowed(
+  database: DbExecutor,
+  workspaceId: string,
+  dealId: string,
+  offerId: string,
+  incomingProduct: string | undefined,
+): Promise<void> {
+  const selected = await database.prepare<{ product: string | null }>(
+    `SELECT r.product FROM mca_offer_selections s
+     JOIN mca_offer_revisions r ON r.workspace_id = s.workspace_id AND r.id = s.offer_revision_id
+     WHERE s.workspace_id = ? AND s.deal_id = ? AND s.active = 1 AND s.offer_id != ?`,
+  ).all(workspaceId, dealId, offerId)
+  const committed = await database.prepare<{ product: string | null }>(
+    `SELECT r.product FROM mca_funding_events e
+     JOIN mca_offer_revisions r ON r.workspace_id = e.workspace_id AND r.id = e.offer_revision_id
+     WHERE e.workspace_id = ? AND e.deal_id = ? AND e.state = 'committed'`,
+  ).all(workspaceId, dealId)
+  if (selected.length === 0) return
+  const incomingSplit = isSplitFundProduct(incomingProduct)
+  const allSelectedSplit = selected.every((row) => isSplitFundProduct(row.product))
+  const hasCommittedSplit = committed.some((row) => isSplitFundProduct(row.product))
+  if (incomingSplit && allSelectedSplit) return
+  if (incomingSplit && hasCommittedSplit && allSelectedSplit) return
+  throw new AppError(409, "offer_selection_conflict", "This deal already has a selected offer revision.")
+}
+
+export function assertOfferRevisionValidity(revision: { effectiveAt?: string; expiresAt: string }, at = nowIso()): void {
+  const validity = offerRevisionValidity(revision, at)
+  if (validity === "expired") throw new AppError(409, "offer_revision_expired", "This offer revision has expired.")
+  if (validity === "not_yet_effective") throw new AppError(409, "offer_revision_not_yet_effective", "This offer revision is not yet effective.")
+}
+
+export async function assertLinkedSubmissionNotFunded(database: DbExecutor, workspaceId: string, submissionId: string | undefined): Promise<void> {
+  if (!submissionId) return
+  const job = await database.prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE workspace_id = ? AND id = ?").get(workspaceId, submissionId)
+  if (job?.state === "funded") throw new AppError(409, "offer_revision_ineligible", "The linked submission is already funded.")
 }
 
 export function assertOfferRevisionEligibleForClosing(snapshot: OfferRevisionForClosing): void {
   if (!snapshot.selected) throw new AppError(409, "offer_revision_not_selected", "Select this exact offer revision before continuing.")
   if (snapshot.state === "withdrawn" || snapshot.state === "funded") throw new AppError(409, "offer_revision_ineligible", `This offer revision is ${snapshot.state}.`)
+  assertOfferRevisionValidity(snapshot)
 }
+
+export { offerRevisionValidity }

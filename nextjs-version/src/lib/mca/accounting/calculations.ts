@@ -1,4 +1,4 @@
-import { allocateCents, assertCents, multiplyCentsByDecimal, percentageOfCents, type AllocatedAmount, type BasisPointAllocation } from "./money"
+import { allocateCents, assertCents, multiplyCentsByDecimal, multiplyCentsByRatio, percentageOfCents, ratioFromMillionths, type AllocatedAmount, type BasisPointAllocation } from "./money"
 
 export const CALCULATION_RULE_VERSION = 1 as const
 export const ROUNDING_POLICY = "nearest_cent_half_away_from_zero" as const
@@ -8,7 +8,8 @@ export type PaymentCalendar = "calendar_days" | "business_days" | "fixed_count"
 
 export interface OfferCalculationInput {
   principalCents: number
-  factorRate: string
+  factorRate?: string
+  factorRateMillionths?: number
   commissionBasis: "principal"
   commissionPointsBasisPoints: number
   feesCents?: number
@@ -32,12 +33,20 @@ export interface CalculationSnapshot {
   warnings: string[]
 }
 
+function paybackFromFactor(input: OfferCalculationInput): number {
+  if (input.factorRateMillionths !== undefined) {
+    return multiplyCentsByRatio(input.principalCents, ratioFromMillionths(input.factorRateMillionths))
+  }
+  if (input.factorRate === undefined) throw new TypeError("factorRate or factorRateMillionths is required.")
+  return multiplyCentsByDecimal(input.principalCents, input.factorRate, "factorRate")
+}
+
 export function calculateOffer(input: OfferCalculationInput): CalculationSnapshot {
   assertCents(input.principalCents, "principalCents")
   assertCents(input.feesCents ?? 0, "feesCents")
   if (input.commissionBasis !== "principal") throw new TypeError("commissionBasis must be principal.")
   const paybackCents = input.paybackOverrideCents === undefined
-    ? multiplyCentsByDecimal(input.principalCents, input.factorRate, "factorRate")
+    ? paybackFromFactor(input)
     : assertCents(input.paybackOverrideCents, "paybackOverrideCents")
   const commissionCents = input.commissionOverrideCents === undefined
     ? percentageOfCents(input.principalCents, input.commissionPointsBasisPoints)

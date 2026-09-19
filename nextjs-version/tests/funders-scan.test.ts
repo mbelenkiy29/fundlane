@@ -36,6 +36,8 @@ import { POST as scanRollback } from "../src/app/api/mca/funders/scan/[id]/rollb
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_BACKGROUND_JOBS
+delete process.env.VERCEL
 delete process.env.MCA_DOCUMENT_AI_PROVIDER
 delete process.env.OPENAI_API_KEY
 delete process.env.MCA_DOCUMENT_AI_MODEL
@@ -244,6 +246,8 @@ function findRule(rules: EligibilityRule[], field: string, operator?: CriteriaOp
 before(async () => {
   testDatabase = await createPostgresTestDatabase("funders_scan")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   setCriteriaScanProviderForTests(provider)

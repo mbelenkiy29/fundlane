@@ -257,6 +257,9 @@ export const mca_merchants = pgTable("mca_merchants", {
 	index("mca_merchants_workspace_ein_lookup_hash_idx")
 		.on(table.workspace_id, table.ein_lookup_hash)
 		.where(sql`${table.ein_lookup_hash} IS NOT NULL`),
+	uniqueIndex("merchants_workspace_ein_hash_uidx")
+		.on(table.workspace_id, table.ein_lookup_hash)
+		.where(sql`${table.ein_lookup_hash} IS NOT NULL`),
 	foreignKey({
 		columns: [table.workspace_id],
 		foreignColumns: [workspaces.id],
@@ -316,6 +319,7 @@ export const deals = pgTable("deals", {
 	fico_score: integer(),
 	funding_purpose: text(),
 	requested_amount: doublePrecision(),
+	requested_term_months: integer(),
 	status: text().notNull(),
 	pipeline_version: integer().default(1).notNull(),
 	draft_state: text().notNull(),
@@ -1157,6 +1161,8 @@ export const mca_statement_months = pgTable("mca_statement_months", {
 	average_daily_balance: text().notNull(),
 	nsf_count: text().notNull(),
 	negative_days: text().notNull(),
+	nsf_dates: text().default('[]').notNull(),
+	negative_dates: text().default('[]').notNull(),
 	ending_balance: text().notNull(),
 	duplicate_of_id: text(),
 	extraction_version: integer().notNull(),
@@ -1229,6 +1235,9 @@ export const mca_underwriting_aggregates = pgTable("mca_underwriting_aggregates"
 	average_daily_balance: text().notNull(),
 	nsf_count: text().notNull(),
 	negative_days: text().notNull(),
+	deposit_count: text().default('{"value":null,"unknown":true,"confidence":0}').notNull(),
+	worst_month_nsf: text().default('{"value":null,"unknown":true,"confidence":0}').notNull(),
+	warnings_json: text().default('[]').notNull(),
 	position_count: integer().notNull(),
 	stale: integer().notNull(),
 	source_fingerprint: text().notNull(),
@@ -1441,6 +1450,8 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 	document_versions_json: text().notNull(),
 	package_json: text().notNull(),
 	preflight_errors_json: text().notNull(),
+	merchant_identity_key: text().default('').notNull(),
+	package_fingerprint: text().default('').notNull(),
 	reason: text(),
 	created_by_user_id: text(),
 	created_at: text().notNull(),
@@ -1448,6 +1459,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 }, (table) => [
 	index("mca_submission_jobs_deal_idx").using("btree", table.workspace_id.asc().nullsLast(), table.deal_id.asc().nullsLast(), table.created_at.desc().nullsFirst()),
 	index("mca_submission_jobs_funder_idx").using("btree", table.workspace_id.asc().nullsLast(), table.deal_id.asc().nullsLast(), table.funder_id.asc().nullsLast()),
+	index("mca_submission_jobs_identity_funder_idx").using("btree", table.workspace_id.asc().nullsLast(), table.merchant_identity_key.asc().nullsLast(), table.funder_id.asc().nullsLast(), table.created_at.asc().nullsLast()),
 	unique("mca_submission_jobs_confirmation_key").on(table.workspace_id, table.confirmation_key, table.funder_id),
 	foreignKey({
 		columns: [table.workspace_id],
@@ -1465,7 +1477,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 		name: "mca_submission_jobs_funder_id_fkey",
 	}),
 	check("mca_submission_jobs_route_kind_check", sql`route_kind = ANY (ARRAY['email'::text, 'api'::text, 'manual_portal'::text, 'custom_webhook'::text])`),
-	check("mca_submission_jobs_state_check", sql`state = ANY (ARRAY['preflight_failed'::text, 'queued'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'skipped'::text, 'pending_portal'::text, 'blocked_duplicate'::text])`),
+	check("mca_submission_jobs_state_check", sql`state = ANY (ARRAY['preflight_failed'::text, 'queued'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'skipped'::text, 'pending_portal'::text, 'blocked_duplicate'::text, 'declined'::text, 'funded'::text])`),
 ]);
 
 export const mca_submission_attempts = pgTable("mca_submission_attempts", {

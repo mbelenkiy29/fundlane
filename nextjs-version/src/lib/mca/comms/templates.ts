@@ -14,7 +14,8 @@ import { requestCorrelationId } from "../http"
 import { listMemberships } from "../memberships"
 import type { MembershipSummary } from "../types"
 import { listOfferRevisionsForClosing } from "../offers/service"
-import type { OfferRevisionForClosing } from "../offers/contracts"
+import { isOfferRevisionOpenForMerchantPreview, type OfferRevisionForClosing } from "../offers/contracts"
+import { pickHighestMerchantOffer } from "../offers/rank"
 import { canManageWorkspace } from "../policy"
 import { MESSAGE_CHANNELS, type MessageChannel } from "./contracts"
 
@@ -497,15 +498,22 @@ function dealUrl(origin: string, dealId: string): string {
 }
 
 function eligibleOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClosing[] {
-  return offers.filter((offer) => offer.state === "active" || (offer.state === "superseded" && offer.selected))
+  const at = nowIso()
+  return offers.filter((offer) => isOfferRevisionOpenForMerchantPreview(offer, at))
 }
 
 function sortOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClosing[] {
-  return [...offers].sort((left, right) => right.amountCents - left.amountCents || left.funderName.localeCompare(right.funderName) || left.offerId.localeCompare(right.offerId))
+  return [...offers].sort((left, right) => {
+    if (right.amountCents !== left.amountCents) return right.amountCents - left.amountCents
+    const leftFactor = left.factorRate ?? Number.POSITIVE_INFINITY
+    const rightFactor = right.factorRate ?? Number.POSITIVE_INFINITY
+    if (leftFactor !== rightFactor) return leftFactor - rightFactor
+    return left.revisionId.localeCompare(right.revisionId) || left.funderName.localeCompare(right.funderName) || left.offerId.localeCompare(right.offerId)
+  })
 }
 
 function highestOffer(offers: OfferRevisionForClosing[]): OfferRevisionForClosing | undefined {
-  return sortOffers(offers)[0]
+  return offers.length ? pickHighestMerchantOffer(offers) : undefined
 }
 
 function resolveAlias(name: string): string {
@@ -516,9 +524,9 @@ export function buildSyntheticTemplateValues(input: { origin: string; workspaceI
   const origin = input.origin.replace(/\/$/, "") || "https://app.example.test"
   const dealId = SYNTHETIC_TEMPLATE_DEAL_ID
   const offers: OfferRevisionForClosing[] = [
-    { offerId: "syn-1", revisionId: "syn-1r", revisionNumber: 1, state: "active", selected: true, funderName: "Northstar Capital", amountCents: 5_000_000, termMonths: 24, paymentAmountCents: 220_000, paymentFrequency: "monthly", commissionCents: 999_999 },
-    { offerId: "syn-2", revisionId: "syn-2r", revisionNumber: 1, state: "active", selected: true, funderName: "Harbor Funding", amountCents: 7_500_000, termMonths: 36, paymentAmountCents: 208_333, paymentFrequency: "monthly", commissionCents: 888_888 },
-    { offerId: "syn-3", revisionId: "syn-3r", revisionNumber: 1, state: "active", selected: false, funderName: "Summit Advance", amountCents: 10_000_000, termMonths: 12, paymentAmountCents: 520_000, paymentFrequency: "weekly", commissionCents: 777_777 },
+    { offerId: "syn-1", revisionId: "syn-1r", revisionNumber: 1, state: "active", selected: true, funderName: "Northstar Capital", amountCents: 5_000_000, termMonths: 24, paymentAmountCents: 220_000, paymentFrequency: "monthly", commissionCents: 999_999, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
+    { offerId: "syn-2", revisionId: "syn-2r", revisionNumber: 1, state: "active", selected: true, funderName: "Harbor Funding", amountCents: 7_500_000, termMonths: 36, paymentAmountCents: 208_333, paymentFrequency: "monthly", commissionCents: 888_888, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
+    { offerId: "syn-3", revisionId: "syn-3r", revisionNumber: 1, state: "active", selected: false, funderName: "Summit Advance", amountCents: 10_000_000, termMonths: 12, paymentAmountCents: 520_000, paymentFrequency: "weekly", commissionCents: 777_777, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
   ]
   const all = sortOffers(eligibleOffers(offers))
   const selected = sortOffers(all.filter((item) => item.selected))

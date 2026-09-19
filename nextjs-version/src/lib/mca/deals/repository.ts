@@ -119,6 +119,9 @@ async function hydrate(database: DbExecutor, row: Row): Promise<DealRecord> {
     ficoScore: row.fico_score === null ? undefined : Number(row.fico_score),
     fundingPurpose: row.funding_purpose ? String(row.funding_purpose) : undefined,
     requestedAmount: row.requested_amount === null ? undefined : Number(row.requested_amount),
+    requestedTermMonths: row.requested_term_months === null || row.requested_term_months === undefined
+      ? undefined
+      : Number(row.requested_term_months),
     status: row.status as DealStatus,
     pipelineVersion: 1,
     draftState: row.draft_state as DealRecord["draftState"],
@@ -143,7 +146,7 @@ function dealValues(record: DealRecord): Array<string | number | null> {
     encrypt(record.ein, record.workspaceId), einLookupHash(record.workspaceId, record.ein) ?? null, record.entityType ?? null, JSON.stringify(record.address ?? {}), record.contactName ?? null,
     encrypt(record.contactEmail, record.workspaceId), encrypt(record.contactPhone, record.workspaceId), record.startDate ?? null,
     record.industry ?? null, record.naicsCode ?? null, record.monthlyRevenue ?? null, record.ficoScore ?? null,
-    record.fundingPurpose ?? null, record.requestedAmount ?? null, record.status, record.pipelineVersion, record.draftState,
+    record.fundingPurpose ?? null, record.requestedAmount ?? null, record.requestedTermMonths ?? null, record.status, record.pipelineVersion, record.draftState,
     JSON.stringify(record.missingRequiredFields), JSON.stringify(record.fieldSources), record.idempotencyKey ?? null,
     record.version, record.createdAt, record.updatedAt,
   ]
@@ -204,10 +207,9 @@ export async function findDealByIdempotencyKey(workspaceId: string, key: string)
 export async function insertDeal(
   record: DealRecord,
   transactionCheckpoint?: DealTransactionCheckpoint,
-  options?: { forceNewMerchant?: boolean },
 ): Promise<{ record: DealRecord; inserted: boolean }> {
   return withImmediateTransaction(async (database) => {
-    const einHash = !options?.forceNewMerchant && !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
+    const einHash = !record.merchantId ? einLookupHash(record.workspaceId, record.ein) : undefined
     if (einHash && await workspaceEinExists(record.workspaceId, einHash, database)) {
       const replay = record.idempotencyKey
         ? await database.prepare<{ id: string }>("SELECT id FROM deals WHERE workspace_id = ? AND idempotency_key = ?").get(record.workspaceId, record.idempotencyKey)
@@ -217,9 +219,9 @@ export async function insertDeal(
     const result = await database.prepare(`INSERT INTO deals
       (id, workspace_id, display_id, legal_name, dba_name, ein_cipher, ein_lookup_hash, entity_type, address_json, contact_name,
        contact_email_cipher, contact_phone_cipher, start_date, industry, naics_code, monthly_revenue, fico_score,
-       funding_purpose, requested_amount, status, pipeline_version, draft_state, missing_required_json, field_sources_json,
+       funding_purpose, requested_amount, requested_term_months, status, pipeline_version, draft_state, missing_required_json, field_sources_json,
        idempotency_key, version, created_at, updated_at)
-      VALUES (${Array.from({ length: 28 }, () => "?").join(",")})
+      VALUES (${Array.from({ length: 29 }, () => "?").join(",")})
       ON CONFLICT (workspace_id, idempotency_key) DO NOTHING`).run(...dealValues(record))
     if (result.changes === 0) {
       if (!record.idempotencyKey) throw new Error("Deal insert conflicted without an idempotency key")
@@ -238,7 +240,6 @@ export async function insertDeal(
     persisted.merchantId = await upsertMerchantFromDeal(
       { ...persisted, merchantId: record.merchantId ?? persisted.merchantId },
       database,
-      { forceNew: options?.forceNewMerchant },
     )
     await transactionCheckpoint?.(database, persisted, "created")
     return { record: persisted, inserted: true }
@@ -254,7 +255,7 @@ export async function updateDeal(record: DealRecord, expectedVersion: number, ne
     const result = await database.prepare(`UPDATE deals SET
       legal_name=?, dba_name=?, ein_cipher=?, ein_lookup_hash=?, entity_type=?, address_json=?, contact_name=?, contact_email_cipher=?,
       contact_phone_cipher=?, start_date=?, industry=?, naics_code=?, monthly_revenue=?, fico_score=?, funding_purpose=?,
-      requested_amount=?, status=?, pipeline_version=?, draft_state=?, missing_required_json=?, field_sources_json=?,
+      requested_amount=?, requested_term_months=?, status=?, pipeline_version=?, draft_state=?, missing_required_json=?, field_sources_json=?,
       idempotency_key=?, version=?, created_at=?, updated_at=?
       WHERE workspace_id=? AND id=? AND version=?`).run(...values, record.workspaceId, record.id, expectedVersion)
     if (result.changes !== 1) {

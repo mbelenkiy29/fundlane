@@ -16,6 +16,7 @@ import {
   runAnalysisIfReady,
   updateAnalysisSettings,
 } from "../src/lib/mca/underwriting/analysis"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { GET as getSettings, POST as postSettings } from "../src/app/api/mca/underwriting/analysis/route"
 import { GET as getDealAnalysisRoute, POST as postDealAnalysisRoute } from "../src/app/api/mca/underwriting/analysis/[dealId]/route"
 
@@ -39,13 +40,15 @@ function fitRules(): EligibilityRule[] {
     { id: "r-tib", funderId: "", field: "time_in_business", operator: "min", unit: "months", value: 12, unspecified: false },
     { id: "r-pos", funderId: "", field: "positions", operator: "max", unit: "count", value: 3, unspecified: false },
     { id: "r-amt", funderId: "", field: "requested_amount", operator: "max", unit: "usd", value: 250_000, unspecified: false },
+    { id: "r-term", funderId: "", field: "term", operator: "max", unit: "months", value: 12, unspecified: false },
     { id: "r-adb", funderId: "", field: "average_daily_balance", operator: "min", unit: "usd", value: 5_000, unspecified: false },
+    { id: "r-dep", funderId: "", field: "deposit_count", operator: "min", unit: "count", value: 6, unspecified: false },
     { id: "r-nsf", funderId: "", field: "nsf", operator: "max", unit: "count", value: 4, unspecified: false },
     { id: "r-neg", funderId: "", field: "negative_days", operator: "max", unit: "days", value: 4, unspecified: false },
     { id: "r-def", funderId: "", field: "default_status", operator: "eq", unit: "boolean", value: false, unspecified: false },
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
-    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["713210"], unspecified: false },
+    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
   ]
 }
 
@@ -90,10 +93,12 @@ async function seedAggregate(workspaceId: string, dealId: string) {
   const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 0.95, text: String(value) })
   await exec(
     `INSERT INTO mca_underwriting_aggregates
-      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at)
-     VALUES (?, ?, 1, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
-     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET version = excluded.version, monthly_revenue = excluded.monthly_revenue, stale = excluded.stale`,
-    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0),
+      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, deposit_count, worst_month_nsf, position_count, stale, source_fingerprint, computed_at)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
+     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET
+      version = excluded.version, monthly_revenue = excluded.monthly_revenue,
+      deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, stale = excluded.stale`,
+    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0), metric(12), metric(1),
   )
 }
 
@@ -125,6 +130,7 @@ async function merchantDeal(workspaceId: string, key: string) {
     monthlyRevenue: 20_000,
     ficoScore: 680,
     requestedAmount: 50_000,
+    requestedTermMonths: 12,
     fundingPurpose: "working capital",
   })
   await seedAggregate(workspaceId, created.deal.id)
@@ -142,9 +148,11 @@ function dqStateRules(): EligibilityRule[] {
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_analysis")
   Object.assign(process.env, testDatabase.env())
+  setSubmissionCompletenessForTests(true)
 })
 
 after(async () => {
+  setSubmissionCompletenessForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
 })
@@ -243,6 +251,44 @@ test("MIC-148 automatic_send requires admin enablement, snapshots settings, and 
   assert.deepEqual(analysisQueueCallsForTests()[0]?.funderIds, [fitId])
   assert.equal(analysisQueueCallsForTests()[0]?.analysisRunId, sent.run.id)
   assert.equal(analysisQueueCallsForTests()[0]?.dealId, deal.id)
+})
+
+test("automatic_send is blocked with completeness_not_ready or positions_unconfirmed", async () => {
+  const workspaceId = `ws-analysis-gates-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  resetAnalysisQueueCallsForTests()
+  await updateAnalysisSettings(actor(workspaceId), { automaticSendEnabled: true, mode: "automatic_send" })
+  await seedFunder(workspaceId, "gate-fit", fitRules())
+
+  const incomplete = await merchantDeal(workspaceId, "send-incomplete")
+  await exec(`UPDATE mca_completeness_results SET ready = 0 WHERE workspace_id = ? AND deal_id = ?`, workspaceId, incomplete.id)
+  const blockedIncomplete = await runAnalysis(actor(workspaceId), incomplete.id)
+  assert.equal(blockedIncomplete.run.mode, "automatic_send")
+  assert.equal(blockedIncomplete.run.state, "blocked")
+  assert.equal(blockedIncomplete.run.reason, "completeness_not_ready")
+  assert.deepEqual(blockedIncomplete.run.selectedFunderIds, [])
+  assert.equal(blockedIncomplete.run.queued, false)
+
+  const proposed = await merchantDeal(workspaceId, "send-proposed")
+  const now = new Date().toISOString()
+  await exec(
+    `INSERT INTO mca_existing_positions
+      (id, workspace_id, deal_id, document_id, label, estimated_payment, evidence, status, corrected, correction_reason, corrected_by_user_id, corrected_at, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 'OCR MCA', NULL, 'fixture', 'proposed', 0, NULL, NULL, NULL, ?, ?)`,
+    newId(), workspaceId, proposed.id, now, now,
+  )
+  const blockedProposed = await runAnalysis(actor(workspaceId), proposed.id)
+  assert.equal(blockedProposed.run.state, "blocked")
+  assert.equal(blockedProposed.run.reason, "positions_unconfirmed")
+  assert.deepEqual(blockedProposed.run.selectedFunderIds, [])
+  assert.equal(blockedProposed.run.queued, false)
+  assert.equal(analysisQueueCallsForTests().length, 0)
+
+  const reviewable = await merchantDeal(workspaceId, "send-review")
+  await exec(`UPDATE mca_completeness_results SET ready = 0 WHERE workspace_id = ? AND deal_id = ?`, workspaceId, reviewable.id)
+  const reviewed = await runAnalysis(actor(workspaceId), reviewable.id, { mode: "review_first" })
+  assert.equal(reviewed.run.state, "review_pending")
+  assert.equal(reviewed.run.reason, "review_pending")
 })
 
 test("MIC-148 run override leaves workspace defaults and retries keep identity without duplicate sends", async () => {

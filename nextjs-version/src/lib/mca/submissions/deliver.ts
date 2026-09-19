@@ -2,15 +2,15 @@ import "server-only"
 
 import { newId } from "../db"
 import { submitViaAdapter } from "./adapters/framework"
-import type { DeliverResult, SubmissionJob } from "./contracts"
+import type { DeliverResult, OutgoingDocument, SubmissionJob } from "./contracts"
 import { sendSubmissionEmail } from "./email-templates"
 import { createPortalTask } from "./portal"
 import { deliverWebhook } from "./webhook"
 
-export async function deliverSubmission(job: SubmissionJob): Promise<DeliverResult> {
+export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
   switch (job.routeKind) {
     case "email":
-      return sendSubmissionEmail(job)
+      return sendSubmissionEmail(job, packaged)
     case "api": {
       const result = await submitViaAdapter(job)
       return {

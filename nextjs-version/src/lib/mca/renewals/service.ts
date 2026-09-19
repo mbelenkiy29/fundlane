@@ -5,6 +5,7 @@ import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction 
 import type { DealActor } from "../deals/schema"
 import { estimateScheduledPaidIn } from "../advances/performance"
 import { listAdvanceRows } from "../advances/repository"
+import { getWorkspaceSettings } from "../workspaces"
 import type { RenewalAction } from "../accounting/contracts"
 import { getDealForDocument } from "../deals/service"
 import { findAdvanceRow } from "../advances/repository"
@@ -65,7 +66,8 @@ export async function saveRenewalPolicy(actor: DealActor, input: { paidInThresho
 export async function runRenewalEligibility(actor: DealActor, asOf = nowIso()): Promise<{ created: number; eligible: RenewalAction[] }> {
   const policy = await getRenewalPolicy(actor)
   if (!policy) throw new AppError(409, "renewal_policy_required", "Configure a renewal eligibility policy first.")
-  const advances = await listAdvanceRows(actor.workspaceId)
+  const [advances, settings] = await Promise.all([listAdvanceRows(actor.workspaceId), getWorkspaceSettings(actor.workspaceId)])
+  const timeZone = settings.timezone || "America/New_York"
   return withImmediateTransaction(async (database) => {
     const eligible: RenewalAction[] = []; let created = 0
     for (const advance of advances) {
@@ -73,7 +75,7 @@ export async function runRenewalEligibility(actor: DealActor, asOf = nowIso()): 
       const estimate = estimateScheduledPaidIn({ fundedAt: advance.funded_at, asOf,
         paybackCents: advance.payback_cents, periodicPaymentCents: advance.periodic_payment_cents,
         paymentCount: advance.payment_count, paymentFrequency: advance.payment_frequency,
-        calendarConvention: advance.calendar_convention })
+        calendarConvention: advance.calendar_convention, timeZone })
       if (ageDays < policy.minimumDaysSinceFunding || estimate.paidInBasisPoints === null
         || estimate.paidInBasisPoints < policy.paidInThresholdBasisPoints) continue
       const id = newId(); const timestamp = nowIso()

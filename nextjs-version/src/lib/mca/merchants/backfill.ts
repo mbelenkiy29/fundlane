@@ -6,9 +6,13 @@ import { einLookupHash, identityLookupHash } from "./lookup-hash"
 import {
   countMerchants,
   listDealOwnerRows,
+  listMerchantOwnerRows,
   listWorkspaceDealRows,
+  listWorkspaceMerchantRows,
   loadDealIdentity,
   persistDealEinLookupHash,
+  persistMerchantEinLookupHash,
+  persistMerchantOwnerIdentityLookupHash,
   persistOwnerIdentityLookupHash,
   upsertMerchantFromDeal,
 } from "./repository"
@@ -37,5 +41,25 @@ export async function backfillMerchantHashes(options: { workspaceId?: string } =
     }
     await upsertMerchantFromDeal(identity)
   }
+
+  const merchants = await listWorkspaceMerchantRows(options.workspaceId)
+  for (const merchant of merchants) {
+    const workspaceId = String(merchant.workspace_id)
+    const merchantId = String(merchant.id)
+    await persistMerchantEinLookupHash(
+      workspaceId,
+      merchantId,
+      einLookupHash(workspaceId, decrypt(merchant.ein_cipher, workspaceId)) ?? null,
+    )
+    const merchantOwners = await listMerchantOwnerRows(workspaceId, merchantId)
+    for (const owner of merchantOwners) {
+      await persistMerchantOwnerIdentityLookupHash(
+        workspaceId,
+        String(owner.id),
+        identityLookupHash(workspaceId, decrypt(owner.identity_last4_cipher, workspaceId)) ?? null,
+      )
+    }
+  }
+
   return { dealCount: rows.length, merchantCount: await countMerchants(options.workspaceId) }
 }

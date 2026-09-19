@@ -4,6 +4,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { isIP } from "node:net"
 import { lookup } from "node:dns/promises"
 import { AppError } from "../errors"
+import { assertUsAbaRoutingNumber } from "./aba"
 
 export const DOCUSEAL_SIGNATURE_HEADER = "x-docuseal-signature"
 
@@ -242,9 +243,9 @@ function validateSubmissionInput(input: DocuSealPsfSubmissionInput): DocuSealPsf
   const signerEmail = cleanRequired(input.signerEmail, "signer email", 320).toLowerCase()
   const contactEmail = cleanRequired(input.contactEmail, "contact email", 320).toLowerCase()
   if (!EMAIL_PATTERN.test(signerEmail) || !EMAIL_PATTERN.test(contactEmail)) throw new AppError(422, "docuseal_submission_invalid", "PSF signer and contact emails must be valid.")
-  const routingNumber = String(input.routingNumber).replace(/\D/g, "")
+  const routingNumber = assertUsAbaRoutingNumber(String(input.routingNumber))
   const accountNumber = String(input.accountNumber).replace(/\s/g, "")
-  if (!/^\d{9}$/.test(routingNumber) || !/^\d{4,17}$/.test(accountNumber)) {
+  if (!/^\d{4,17}$/.test(accountNumber)) {
     throw new AppError(422, "docuseal_submission_invalid", "PSF bank account details are invalid.")
   }
   return {

@@ -20,6 +20,9 @@ export function validateDealInput(input: DealWriteInput): Record<string, string[
   if (input.contactEmail && !/^\S+@\S+\.\S+$/.test(input.contactEmail)) add("contactEmail", "Enter a valid email address.")
   if (input.monthlyRevenue !== undefined && input.monthlyRevenue < 0) add("monthlyRevenue", "Monthly revenue cannot be negative.")
   if (input.requestedAmount !== undefined && input.requestedAmount <= 0) add("requestedAmount", "Requested amount must be greater than zero.")
+  if (input.requestedTermMonths !== undefined && (!Number.isInteger(input.requestedTermMonths) || input.requestedTermMonths < 1 || input.requestedTermMonths > 60)) {
+    add("requestedTermMonths", "Requested term must be a whole number between 1 and 60 months.")
+  }
   if (input.ficoScore !== undefined && (input.ficoScore < 300 || input.ficoScore > 850)) add("ficoScore", "FICO score must be between 300 and 850.")
 
   input.owners?.forEach((owner, index) => {

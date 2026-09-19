@@ -39,6 +39,7 @@ export const mca_offer_revisions = pgTable("mca_offer_revisions", {
   stipulations_json: text().default("[]").notNull(),
   incomplete_fields_json: text().default("[]").notNull(),
   effective_at: text().notNull(),
+  expires_at: text().notNull(),
   created_by_user_id: text(),
   created_at: text().notNull(),
 }, (table) => [

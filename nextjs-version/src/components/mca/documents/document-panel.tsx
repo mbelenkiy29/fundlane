@@ -22,6 +22,20 @@ const labels: Record<DocumentCategory, string> = {
   driver_license: "Driver license", voided_check: "Voided check", closing_document: "Closing document", other_stip: "Other stipulation",
 }
 
+function processingBadgeLabel(state: string): string {
+  if (isDocumentReady(state)) return "Ready"
+  if (state === "quarantined") return "Blocked"
+  if (state === "pending_scan") return "Scanning"
+  if (state === "scan_failed") return "Scan failed"
+  return "Upload incomplete"
+}
+
+function uploadStatusMessage(state: string): string {
+  if (isDocumentReady(state)) return "Upload complete."
+  if (state === "pending_scan") return "Upload saved. Malware scan is pending."
+  return "Upload saved. Retry the malware scan to make this file available."
+}
+
 export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh?: () => void }) {
   const [documents, setDocuments] = React.useState<DocumentSummary[]>([])
   const [category, setCategory] = React.useState<DocumentCategory>("statement")
@@ -69,15 +83,15 @@ export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh
       form.set("dealId", dealId); form.set("idempotencyKey", upload.key); form.set("category", category); form.set("source", "user_upload"); form.set("file", file)
       const document = await uploadMultipart<DocumentSummary>("/api/mca/documents", form, setUploadProgress)
       uploadKeys.current.delete(upload.fingerprint)
-      setMessage(isDocumentReady(document.processingState) ? "Upload complete." : "Upload saved. Retry upload completion to make this file available.")
+      setMessage(uploadStatusMessage(document.processingState))
       setFile(undefined); await load(); onRefresh?.()
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Upload failed.") } finally { setBusy(undefined); setUploadProgress(undefined) }
   }
 
   async function retryCompletion(id: string) {
     setBusy(id); setError(undefined)
-    try { await requestJson(`/api/mca/documents/${id}/scan`, { method: "POST", body: "{}" }); setMessage("Upload completion retried."); await load() }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Upload completion failed.") } finally { setBusy(undefined) }
+    try { await requestJson(`/api/mca/documents/${id}/scan`, { method: "POST", body: "{}" }); setMessage("Malware scan retried."); await load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Malware scan retry failed.") } finally { setBusy(undefined) }
   }
 
   async function uploadNewVersion(document: DocumentSummary, replacement?: File) {
@@ -160,7 +174,7 @@ export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh
 
   return <div className="space-y-4">
     <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="size-5" />Document vault</CardTitle><CardDescription>Originals are preserved. Completed uploads are available for download and AI processing.</CardDescription></CardHeader>
+      <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="size-5" />Document vault</CardTitle><CardDescription>Originals stay in quarantine until the scanner returns clean.</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
           <Select value={category} onValueChange={(value) => setCategory(value as DocumentCategory)}><SelectTrigger aria-label="Document category"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(labels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
@@ -171,8 +185,8 @@ export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {message && <p role="status" className="text-sm text-emerald-700">{message}</p>}
         {!documents.length && !error ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No documents yet. Upload the first application, statement, or stipulation.</div> : <div className="space-y-2">{documents.map((document) => <div key={document.id} className="rounded-lg border p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">{document.displayFilename}</p><p className="text-xs text-muted-foreground">{labels[document.category]} · v{document.version} · {(document.byteLength / 1024).toFixed(1)} KB</p></div><Badge variant={isDocumentReady(document.processingState) ? "default" : "secondary"}>{isDocumentReady(document.processingState) ? "Ready" : document.processingState === "quarantined" ? "Blocked" : "Upload incomplete"}</Badge></div>
-          <div className="mt-3 flex flex-wrap gap-2"><Select value={document.category} onValueChange={(value) => changeCategory(document.id, value as DocumentCategory)}><SelectTrigger className="w-48" aria-label={`Category for ${document.displayFilename}`}><SelectValue /></SelectTrigger><SelectContent>{Object.entries(labels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Input className="w-64" aria-label={`Display filename for ${document.displayFilename}`} value={displayNames[document.id] ?? document.displayFilename} onChange={(event) => setDisplayNames((current) => ({ ...current, [document.id]: event.target.value }))} /><Button size="sm" variant="outline" onClick={() => applyDisplayName(document)} disabled={busy === document.id}>Save filename</Button>{isDocumentReady(document.processingState) ? <><Button size="sm" variant="outline" onClick={() => preview(document.id)} disabled={busy === document.id}>Preview</Button><Button size="sm" variant="outline" onClick={() => download(document.id)} disabled={busy === document.id}><Download className="size-4" />Download</Button></> : document.processingState !== "quarantined" ? <Button size="sm" variant="outline" onClick={() => retryCompletion(document.id)} disabled={busy === document.id}><RefreshCw className="size-4" />Retry upload completion</Button> : <span className="text-sm text-destructive">This file is quarantined. Upload a new version.</span>}{document.category === "statement" && <Button size="sm" variant="outline" onClick={() => previewFilename(document.id)} disabled={!isDocumentReady(document.processingState) || busy === document.id}><Sparkles className="size-4" />Suggest filename</Button>}<label className="inline-flex cursor-pointer items-center justify-center rounded-md border px-3 text-sm font-medium hover:bg-muted">Upload new version<input className="sr-only" type="file" accept="application/pdf,image/png,image/jpeg" onChange={(event) => void uploadNewVersion(document, event.target.files?.[0])} /></label></div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">{document.displayFilename}</p><p className="text-xs text-muted-foreground">{labels[document.category]} · v{document.version} · {(document.byteLength / 1024).toFixed(1)} KB</p></div><Badge variant={isDocumentReady(document.processingState) ? "default" : "secondary"}>{processingBadgeLabel(document.processingState)}</Badge></div>
+          <div className="mt-3 flex flex-wrap gap-2"><Select value={document.category} onValueChange={(value) => changeCategory(document.id, value as DocumentCategory)}><SelectTrigger className="w-48" aria-label={`Category for ${document.displayFilename}`}><SelectValue /></SelectTrigger><SelectContent>{Object.entries(labels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Input className="w-64" aria-label={`Display filename for ${document.displayFilename}`} value={displayNames[document.id] ?? document.displayFilename} onChange={(event) => setDisplayNames((current) => ({ ...current, [document.id]: event.target.value }))} /><Button size="sm" variant="outline" onClick={() => applyDisplayName(document)} disabled={busy === document.id}>Save filename</Button>{isDocumentReady(document.processingState) ? <><Button size="sm" variant="outline" onClick={() => preview(document.id)} disabled={busy === document.id}>Preview</Button><Button size="sm" variant="outline" onClick={() => download(document.id)} disabled={busy === document.id}><Download className="size-4" />Download</Button></> : document.processingState !== "quarantined" ? <Button size="sm" variant="outline" onClick={() => retryCompletion(document.id)} disabled={busy === document.id}><RefreshCw className="size-4" />Retry malware scan</Button> : <span className="text-sm text-destructive">This file is quarantined. Upload a new version.</span>}{document.category === "statement" && <Button size="sm" variant="outline" onClick={() => previewFilename(document.id)} disabled={!isDocumentReady(document.processingState) || busy === document.id}><Sparkles className="size-4" />Suggest filename</Button>}<label className="inline-flex cursor-pointer items-center justify-center rounded-md border px-3 text-sm font-medium hover:bg-muted">Upload new version<input className="sr-only" type="file" accept="application/pdf,image/png,image/jpeg" onChange={(event) => void uploadNewVersion(document, event.target.files?.[0])} /></label></div>
           {previews[document.id] && corrections[document.id] && <div className="mt-3 space-y-2 rounded-md bg-muted p-3 text-sm"><p className="font-medium">Suggested: {previews[document.id].suggestedFilename}</p>{previews[document.id].uncertain && <p className="text-amber-700">Review uncertain bank or statement period values before applying.</p>}<div className="grid gap-2 sm:grid-cols-3"><Input aria-label="Bank label" value={corrections[document.id].bankLabel} onChange={(event) => setCorrections((current) => ({ ...current, [document.id]: { ...current[document.id], bankLabel: event.target.value } }))} /><Input aria-label="Statement month" placeholder="YYYY-MM" value={corrections[document.id].statementMonth} onChange={(event) => setCorrections((current) => ({ ...current, [document.id]: { ...current[document.id], statementMonth: event.target.value } }))} /><Input aria-label="Account last four" maxLength={4} value={corrections[document.id].accountSuffix} onChange={(event) => setCorrections((current) => ({ ...current, [document.id]: { ...current[document.id], accountSuffix: event.target.value.replace(/\D/g, "") } }))} /></div><Button size="sm" onClick={() => applyFilename(document.id)}>Apply corrected name</Button></div>}
         </div>)}</div>}
       </CardContent>

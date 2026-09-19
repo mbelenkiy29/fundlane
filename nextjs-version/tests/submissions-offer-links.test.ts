@@ -13,7 +13,7 @@ import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   setReplyMailboxForTests,
   type MailboxMessage,
@@ -233,6 +233,8 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_offer_links")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   delete process.env.MCA_DOCUMENT_AI_PROVIDER
   delete process.env.OPENAI_API_KEY
@@ -243,6 +245,7 @@ before(async () => {
   }) as typeof fetch
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setReplyOutcomeClassifierForTests(fixtureClassifier)
   await seed()
   const sender = await createSender(actor(), {
@@ -280,6 +283,7 @@ after(async () => {
   setOfferLinkNetworkForTests()
   setReplyOutcomeClassifierForTests()
   setReplyMailboxForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

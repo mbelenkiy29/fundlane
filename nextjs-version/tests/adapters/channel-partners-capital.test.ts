@@ -49,6 +49,8 @@ function job(overrides: Partial<SubmissionJob> & { destination?: string } = {}):
     documentVersions: rest.documentVersions ?? [],
     packageDocumentIds: rest.packageDocumentIds ?? [],
     preflightErrors: rest.preflightErrors ?? [],
+    merchantIdentityKey: rest.merchantIdentityKey ?? `deal:${rest.dealId ?? "deal-fixture"}`,
+    packageFingerprint: rest.packageFingerprint ?? "",
     createdAt: rest.createdAt ?? "2026-09-08T00:00:00.000Z",
     updatedAt: rest.updatedAt ?? "2026-09-08T00:00:00.000Z",
     ...rest,

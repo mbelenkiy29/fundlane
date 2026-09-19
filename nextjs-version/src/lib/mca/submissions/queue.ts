@@ -1,6 +1,7 @@
 import "server-only"
 
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
+import { listChecks } from "../datamerch/repository"
 import { newId, recordAuditEvent } from "../db"
 import type { DealActor } from "../deals/schema"
 import { actorForDeals, getDealForDocument } from "../deals/service"
@@ -9,12 +10,36 @@ import { listDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
+import { backgroundJobsEnabled } from "../jobs/queue"
+import { checkCompleteness } from "../underwriting/completeness"
+import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../underwriting/send-gates"
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
-import { assertDuplicatePolicy } from "./duplicate-policy"
+import { enqueueSubmissionDelivery } from "./delivery-job"
+import { assertDuplicatePolicy, privilegedOverrideAllowed } from "./duplicate-policy"
+import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
 import { loadFunderForDestination, preflightDestination, probeSubmissionSender, type SenderProbe } from "./preflight"
 import { listJobsForDeal, persistNewDestination } from "./repository"
+
+let completenessReadyForTests: boolean | undefined
+
+export function setSubmissionCompletenessForTests(ready?: boolean): void {
+  completenessReadyForTests = ready
+}
+
+async function assertSubmissionSendGates(actor: DealActor, dealId: string): Promise<void> {
+  if (completenessReadyForTests === true) return
+  await checkCompleteness(actor, dealId)
+  const gate = await evaluateUnderwritingSendGates(actor, dealId)
+  if (!gate.ok) throw underwritingSendGateError(gate)
+}
+
+async function latestDataMerch(workspaceId: string, dealId: string) {
+  const check = (await listChecks(workspaceId, dealId))[0]
+  if (!check) return null
+  return { status: check.status, resultSummary: check.resultSummary }
+}
 
 export interface SubmissionSelectionFunder {
   id: string
@@ -23,6 +48,7 @@ export interface SubmissionSelectionFunder {
   active: boolean
   route: SubmissionJob["route"] | null
   preflightErrors: Array<{ field: string; message: string }>
+  preflightWarnings: Array<{ field: string; message: string; severity: "warning" }>
   checklist: Array<{ documentId: string; filename: string; category: string; checksum: string; excluded: boolean }>
 }
 
@@ -139,11 +165,19 @@ async function queueDestination(input: {
   privilegedRetry?: boolean
   privilegedReason?: string
   dealVersion: number
+  dealEin?: string | null
+  merchantId?: string | null
   documents: DocumentSummary[]
   sender: SenderProbe
+  dataMerch?: { status?: string; resultSummary?: string } | null
 }): Promise<QueuedJobSummary> {
   const funder = await loadFunderForDestination(input.actor, input.funderId)
-  const preflight = preflightDestination({ funder, documents: input.documents, sender: input.sender })
+  const preflight = preflightDestination({
+    funder,
+    documents: input.documents,
+    sender: input.sender,
+    dataMerch: input.dataMerch,
+  })
   if (!funder) {
     return {
       jobId: newId(),
@@ -153,10 +187,19 @@ async function queueDestination(input: {
     }
   }
 
+  const merchantIdentityKey = submissionMerchantIdentityKey({
+    workspaceId: input.actor.workspaceId,
+    ein: input.dealEin,
+    merchantId: input.merchantId,
+    dealId: input.dealId,
+  })
+  const fingerprint = packageFingerprint(preflight.originals.map((document) => document.checksum))
   const duplicate = await assertDuplicatePolicy({
     actor: input.actor,
     dealId: input.dealId,
     funderId: input.funderId,
+    merchantIdentityKey,
+    packageFingerprint: fingerprint,
     privilegedRetry: input.privilegedRetry,
     privilegedReason: input.privilegedReason,
   })
@@ -186,19 +229,31 @@ async function queueDestination(input: {
     documentVersions: freezeDocumentVersions(input.documents),
     packageDocumentIds: preflight.originals.map((document) => document.documentId),
     preflightErrors: preflight.errors,
+    merchantIdentityKey,
+    packageFingerprint: fingerprint,
     reason,
     createdByUserId: input.actor.userId,
+    actor: input.actor,
   })
   await audit(input.actor, saved.job, saved.created)
   if (!saved.created) return toQueuedSummary(saved.job)
   if (saved.job.state !== "queued") return toQueuedSummary(saved.job)
+  if (backgroundJobsEnabled()) {
+    await enqueueSubmissionDelivery(saved.job)
+    return toQueuedSummary(saved.job)
+  }
   return toQueuedSummary(await processJobDelivery(saved.job))
 }
 
 export async function queueSubmissions(input: QueueSubmissionsInput): Promise<QueueSubmissionsResult> {
+  if (input.privilegedRetry === true && !privilegedOverrideAllowed(input.actor)) {
+    throw new AppError(403, "privileged_retry_forbidden", "Privileged retry requires a workspace administrator session.")
+  }
   const deal = await getDealForDocument(input.actor, input.dealId)
+  await assertSubmissionSendGates(input.actor, deal.id)
   const documents = await listDocuments(input.actor, input.dealId)
   const sender = await probeSubmissionSender(input.actor)
+  const dataMerch = await latestDataMerch(input.actor.workspaceId, deal.id)
   const jobs: QueuedJobSummary[] = []
   for (const funderId of uniqueIds(input.funderIds)) {
     try {
@@ -211,8 +266,11 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
         privilegedRetry: input.privilegedRetry,
         privilegedReason: input.privilegedReason,
         dealVersion: deal.version,
+        dealEin: deal.ein,
+        merchantId: deal.merchantId,
         documents,
         sender,
+        dataMerch,
       }))
     } catch (error) {
       jobs.push({
@@ -231,6 +289,7 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
   const documents = await listDocuments(actor, dealId)
   const funders = await listFunders(actor)
   const sender = await probeSubmissionSender(actor)
+  const dataMerch = await latestDataMerch(actor.workspaceId, deal.id)
   const jobs = await listJobsForDeal(actor.workspaceId, deal.id)
   return {
     dealId: deal.id,
@@ -243,7 +302,7 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
       byteLength: document.byteLength,
     })),
     funders: funders.map((funder) => {
-      const preflight = preflightDestination({ funder, documents, sender })
+      const preflight = preflightDestination({ funder, documents, sender, dataMerch })
       const route = funder.routes.find((item) => item.active) ?? null
       return {
         id: funder.id,
@@ -252,6 +311,7 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
         active: funder.active,
         route,
         preflightErrors: preflight.errors,
+        preflightWarnings: preflight.warnings,
         checklist: checklistForRoute(documents, route ?? preflight.route),
       }
     }),

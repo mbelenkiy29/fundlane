@@ -146,6 +146,10 @@ export async function completeInvitationSubmission(row: InvitationRecord, intake
     .run(intakeId, dealId, nowIso(), row.workspace_id, row.id)
 }
 
+export function invitationEmailEnabled(): boolean {
+  if (process.env.NODE_ENV !== "production") return true
+  return Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) && process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED === "true"
+}
 function assertInvitationEmailEnabled(): void {
   assertEmailDeliveryConfigured()
   if (process.env.NODE_ENV === "production" && process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED !== "true") throw new AppError(503, "invitation_email_disabled", "Application emails are not enabled yet. Ask an administrator to complete email setup, or copy the link.")

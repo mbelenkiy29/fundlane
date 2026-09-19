@@ -21,6 +21,7 @@ import { setStatementExtractionProviderForTests, listStatementMonths } from "../
 import { correctStatementMonth } from "../src/lib/mca/underwriting/corrections"
 import { updateAnalysisSettings, analysisQueueCallsForTests } from "../src/lib/mca/underwriting/analysis"
 import { getCompleteness } from "../src/lib/mca/underwriting/completeness"
+import { closedLookbackMonths } from "../src/lib/mca/underwriting/lookback"
 import type { EligibilityRule } from "../src/lib/mca/funders/contracts"
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
@@ -65,6 +66,8 @@ async function seed() {
 before(async () => {
   testDatabase = await createPostgresTestDatabase("intake_workflow")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   await seed()
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests({ name: "intake-clean-fixture", async scan() { return { status: "clean", provider: "intake-clean-fixture", evidence: { fixture: true } } } })
@@ -78,13 +81,15 @@ function fitRules(): EligibilityRule[] {
     { id: "r-tib", funderId: "", field: "time_in_business", operator: "min", unit: "months", value: 12, unspecified: false },
     { id: "r-pos", funderId: "", field: "positions", operator: "max", unit: "count", value: 3, unspecified: false },
     { id: "r-amt", funderId: "", field: "requested_amount", operator: "max", unit: "usd", value: 250_000, unspecified: false },
+    { id: "r-term", funderId: "", field: "term", operator: "max", unit: "months", value: 12, unspecified: false },
     { id: "r-adb", funderId: "", field: "average_daily_balance", operator: "min", unit: "usd", value: 5_000, unspecified: false },
+    { id: "r-dep", funderId: "", field: "deposit_count", operator: "min", unit: "count", value: 6, unspecified: false },
     { id: "r-nsf", funderId: "", field: "nsf", operator: "max", unit: "count", value: 4, unspecified: false },
     { id: "r-neg", funderId: "", field: "negative_days", operator: "max", unit: "days", value: 4, unspecified: false },
     { id: "r-def", funderId: "", field: "default_status", operator: "eq", unit: "boolean", value: false, unspecified: false },
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
-    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["713210"], unspecified: false },
+    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
   ]
 }
 
@@ -108,17 +113,27 @@ async function seedFunder(workspaceId: string, key: string, rules: EligibilityRu
   return id
 }
 
-const periods = Array.from({ length: 3 }, (_, index) => {
-  const now = new Date(); return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - index, 1)).toISOString().slice(0, 7)
-})
+const periods = closedLookbackMonths(3, "America/New_York")
+const identityPdf = new Uint8Array(Buffer.from("%PDF-1.4\nidentity\n%%EOF\n"))
 let extractionCalls = 0
 function extraction() {
   setStatementExtractionProviderForTests({ name: "intake-fixture", async extractStatement(_actor, input) {
     extractionCalls++
     const period = Buffer.from(input.bytes).toString().match(/PERIOD:(\d{4}-\d{2})/)?.[1] ?? periods[0]
     const metric = (value: number) => ({ value, unknown: false, confidence: 0.99 })
-    return { provider: "intake-fixture", period, accountKind: "checking", accountSuffix: "0123", deposits: metric(142000), depositCount: metric(50), averageDailyBalance: metric(30000), nsfCount: metric(0), negativeDays: metric(0), endingBalance: metric(35000), positions: [], warnings: [] }
+    return { provider: "intake-fixture", period, accountKind: "checking", accountSuffix: "0123", deposits: metric(142000), depositCount: metric(50), averageDailyBalance: metric(30000), nsfCount: metric(0), negativeDays: metric(0), endingBalance: metric(35000), nsfDates: [], negativeDates: [], positions: [], warnings: [] }
   } })
+}
+async function seedReadyIdentity(dealId: string) {
+  await storeDocument(adminActor, {
+    dealId, idempotencyKey: `${dealId}-dl`, filename: "driver-license.pdf", mimeType: "application/pdf",
+    bytes: identityPdf, category: "driver_license", source: "test",
+  })
+  await storeDocument(adminActor, {
+    dealId, idempotencyKey: `${dealId}-vc`, filename: "voided-check.pdf", mimeType: "application/pdf",
+    bytes: identityPdf, category: "voided_check", source: "test",
+  })
+  await exec(`UPDATE deals SET requested_term_months = 12 WHERE id = ?`, dealId)
 }
 const attachmentOptions = {
   lookupImpl: async () => [{ address: "203.0.113.26", family: 4 }],
@@ -173,6 +188,7 @@ test("all four providers run durable intake through ready statements and review-
     const c = await connection(provider)
     const result = await deliver(c, "same-provider-event")
     assert.equal((await getDeal(adminActor,result.dealId!)).assignments[0].membershipId,ids.repAMember)
+    await seedReadyIdentity(result.dealId!)
     assert.equal(await scheduleIntakeProcessing(100),1)
     assert.equal(await drain(),1)
     const progress = await intakeProgress(ids.workspace,result.intakeId)
@@ -204,6 +220,7 @@ test("late files resume the same deal and financial corrections refresh matches 
   assert.equal((await intakeProgress(ids.workspace,first.intakeId))?.state,"needs_attention")
   const later=await deliver(c,"late",true)
   assert.equal(first.dealId,later.dealId)
+  await seedReadyIdentity(later.dealId!)
   await scheduleIntakeProcessing(100); await drain()
   const original=await intakeProgress(ids.workspace,first.intakeId)
   const completeness=await getCompleteness(adminActor,first.dealId!)
@@ -259,7 +276,7 @@ test("expired private credentials and quarantined files never produce ready matc
   assert.equal((await intakeProgress(ids.workspace,result.intakeId))?.state,"needs_attention")
   await exec("UPDATE intake_integrations SET credential_expires_at=NULL WHERE id=?",c.status.id)
   await retryIntakeProcessing(adminActor,result.intakeId)
-  // Existing quarantine must still block intake even though new uploads no longer scan.
+  // Existing quarantine must still block intake even after a later clean scanner is configured.
   const blocked = await storeDocument(adminActor, { dealId: result.dealId!, idempotencyKey: "legacy-quarantine", filename: "blocked.pdf", mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from("%PDF-1.4\n%%EOF\n")), category: "statement", source: "test" })
   await updateDocumentScan(ids.workspace, blocked.id, "quarantined", "legacy-scanner", { signatureDetected: true }, new Date().toISOString())
   await drain()

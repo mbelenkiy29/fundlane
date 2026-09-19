@@ -792,7 +792,9 @@ export async function applyWatermark(documents: OutgoingDocument[], funderId: st
   const settings = await settingsForWorkspace(workspaceId)
   if (!settings.enabled || settings.excludedFunderIds.includes(funderId)) return documents
   const logo = await resolveLogo(workspaceId, settings)
-  if (!logo) return documents
+  if (!logo) {
+    throw new AppError(409, "watermark_logo_required", "Upload a broker logo before sending watermarked packages.")
+  }
   const next: OutgoingDocument[] = []
   for (const document of documents) {
     const original = await loadOriginal(document.originalDocumentId)

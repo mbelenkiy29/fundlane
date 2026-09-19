@@ -128,6 +128,10 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
         setMessage("No qualified funders. Disqualified funders were not selected.")
       } else if (next.run?.state === "blocked" && next.run.reason === "automatic_send_disabled") {
         setError("Automatic send is disabled until an administrator enables it.")
+      } else if (next.run?.state === "blocked" && next.run.reason === "completeness_not_ready") {
+        setError("Document completeness is not ready.")
+      } else if (next.run?.state === "blocked" && next.run.reason === "positions_unconfirmed") {
+        setError("Proposed positions must be confirmed or dismissed before sending.")
       } else if (next.run?.state === "queued") {
         setMessage("Analysis queued independent submission jobs. Open the Submissions tab to review destinations.")
       } else if (next.run?.state === "submission_unavailable") {

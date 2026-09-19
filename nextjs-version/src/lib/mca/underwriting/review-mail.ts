@@ -14,6 +14,7 @@ import type { AnalysisDestination } from "./analysis-repository"
 import { getCompleteness } from "./completeness"
 import type { AnalysisSnapshot, FunderScore } from "./contracts"
 import { autoSelectableFunderIds, getDealScores } from "./scoring"
+import { evaluateUnderwritingSendGates, underwritingSendGateMessage } from "./send-gates"
 
 export const REVIEW_TOKEN_TTL_MS = 5 * 60_000
 export const DEFAULT_REVIEW_ROLES: Role[] = ["admin", "manager", "super_admin"]
@@ -293,11 +294,17 @@ function candidatesFor(run: AnalysisRunView, snapshot: AnalysisSnapshot, funders
         : run.destinations.filter((row) => row.outcome === "selected").map((row) => row.funderId),
   )
   const destinations = new Map(run.destinations.map((row) => [row.funderId, row]))
+  // Same C+ allowlist as confirmAnalysisReview / auto-select — D and F stay visible but not selectable.
+  const selectable = new Set(autoSelectableFunderIds(snapshot.scores))
   return [...snapshot.scores]
     .sort((left, right) => left.rank - right.rank || left.funderId.localeCompare(right.funderId))
     .map((score) => {
       const destination = destinations.get(score.funderId)
-      const eligible = score.eligible && score.grade !== "DQ"
+      const eligible = selectable.has(score.funderId)
+      const gradeBlocked = score.eligible && score.grade !== "DQ" && !eligible
+      const reason = gradeBlocked
+        ? "Grade below C is not selectable"
+        : destination?.reason
       return {
         funderId: score.funderId,
         name: funderName(funders, score.funderId),
@@ -307,7 +314,8 @@ function candidatesFor(run: AnalysisRunView, snapshot: AnalysisSnapshot, funders
         selected: selected.has(score.funderId),
         blocked: !eligible,
         reasons: score.reasons,
-        ...(destination ? { outcome: destination.outcome, reason: destination.reason } : {}),
+        ...(destination ? { outcome: destination.outcome } : gradeBlocked ? { outcome: "excluded" as const } : {}),
+        ...(reason ? { reason } : {}),
       }
     })
 }
@@ -650,9 +658,12 @@ export async function confirmAnalysisReview(actor: DealActor, input: {
     })
     return { ...view, run: view.run!, snapshot: view.snapshot!, approval: existing }
   }
-  const completeness = await getCompleteness(actor, run.dealId)
-  if (!completeness?.ready) {
-    throw new AppError(409, "deal_not_ready", "Document completeness is not ready.")
+  const gate = await evaluateUnderwritingSendGates(actor, run.dealId)
+  if (!gate.completenessReady) {
+    throw new AppError(409, "deal_not_ready", underwritingSendGateMessage("completeness_not_ready"))
+  }
+  if (gate.proposedPositionCount > 0) {
+    throw new AppError(409, "positions_unconfirmed", underwritingSendGateMessage("positions_unconfirmed"))
   }
   const scores = await getDealScores(actor, run.dealId)
   if (scores.stale || !scores.snapshot || scores.snapshot.id !== run.snapshotId) {

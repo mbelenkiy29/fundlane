@@ -305,15 +305,24 @@ export async function resolveSmsRoute(actor: DealActor, input: { dealId: string;
   return { accountId: String(row.id), provider, senderKind: String(row.sender_kind) as SmsSenderKind, senderIdentity, providerConfigured: await isAccountConfigured(actor.workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady) }
 }
 
-async function assertRecipient(actor: DealActor, dealId: string, recipient: string): Promise<string> {
+function canBypassDealContact(actor: DealActor): boolean {
+  return actor.source === "user" && (actor.role === "admin" || actor.role === "super_admin")
+}
+
+async function assertRecipient(actor: DealActor, dealId: string, recipient: string, options?: { matchDealContact?: boolean }): Promise<string> {
   const deal = await getDealForDocument(actor, dealId)
   const normalized = normalizeSmsRecipient(recipient)
+  if (options?.matchDealContact === false) return normalized
   if (!deal.contactPhone || normalizeSmsRecipient(deal.contactPhone) !== normalized) throw new AppError(422, "recipient_deal_mismatch", "The mobile recipient must match the merchant phone saved on this deal.")
   return normalized
 }
 
-export async function recordSmsConsent(actor: DealActor, input: { dealId: string; recipient: string; state: "opted_in" | "opted_out"; evidence: string; effectiveAt?: string; idempotencyKey: string }) {
-  const recipient = await assertRecipient(actor, input.dealId, input.recipient), evidence = required(input.evidence, "evidence", 500), key = stableKey(input.idempotencyKey)
+export async function recordSmsConsent(actor: DealActor, input: { dealId: string; recipient: string; state: "opted_in" | "opted_out"; evidence: string; effectiveAt?: string; idempotencyKey: string; matchDealContact?: boolean }) {
+  const matchDealContact = input.matchDealContact !== false
+  if (!matchDealContact && !canBypassDealContact(actor)) {
+    throw new AppError(403, "recipient_override_denied", "Only a workspace administrator session can record consent for a mobile number that differs from the deal contact.")
+  }
+  const recipient = await assertRecipient(actor, input.dealId, input.recipient, { matchDealContact }), evidence = required(input.evidence, "evidence", 500), key = stableKey(input.idempotencyKey)
   const effectiveAt = input.effectiveAt ?? nowIso()
   if (!Number.isFinite(Date.parse(effectiveAt))) throw new AppError(422, "consent_date_invalid", "Enter a valid consent date and time.")
   const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient)
@@ -322,12 +331,13 @@ export async function recordSmsConsent(actor: DealActor, input: { dealId: string
     VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, effectiveAt, createdAt)
   const row = inserted ?? await getDatabase().prepare<Row>("SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
   if (!row || row.deal_id !== input.dealId || row.recipient_hash !== hash || row.state !== input.state || row.evidence !== evidence) throw new AppError(409, "idempotency_conflict", "That retry key already identifies different SMS consent evidence.")
-  if (inserted) await recordAuditEvent({ context: actor, action: `sms.consent_${input.state}`, resourceType: "deal", resourceId: input.dealId, metadata: { source: "manual", recipientMasked: maskPhone(recipient), effectiveAt }, correlationId: actor.correlationId })
+  if (inserted) await recordAuditEvent({ context: actor, action: `sms.consent_${input.state}`, resourceType: "deal", resourceId: input.dealId, metadata: { source: "manual", recipientMasked: maskPhone(recipient), effectiveAt, matchDealContact }, correlationId: actor.correlationId })
   return { id: String(row.id), dealId: input.dealId, state: String(row.state), recipientMasked: maskPhone(recipient), evidence: String(row.evidence), effectiveAt: String(row.effective_at), created: Boolean(inserted) }
 }
 
-export async function getSmsConsent(actor: DealActor, dealId: string, recipient: string) {
-  const normalized = await assertRecipient(actor, dealId, recipient)
+export async function getSmsConsent(actor: DealActor, dealId: string, recipient: string, options?: { matchDealContact?: boolean }) {
+  const matchDealContact = options?.matchDealContact !== false
+  const normalized = await assertRecipient(actor, dealId, recipient, { matchDealContact })
   const suppression = await getDatabase().prepare<{state:string}>("SELECT state FROM sms_suppressions WHERE workspace_id=? AND recipient_hash=?").get(actor.workspaceId, smsRecipientHash(actor.workspaceId, normalizeSmsRecipient(recipient)))
   if (suppression?.state === "opted_out") return { state: "opted_out", source: "provider_webhook" }
   const row = await getDatabase().prepare<Row>(`SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND deal_id=? AND recipient_hash=?
@@ -342,8 +352,9 @@ function storedResult(row: Row): SmsDeliveryResult {
   return { state: "unknown", messageId: String(row.id), errorCode: row.error_code ? String(row.error_code) : "provider_outcome_unknown", errorMessage: row.error_message ? String(row.error_message) : "The provider outcome is unknown. Check provider activity before retrying." }
 }
 
-export async function deliverClosingSms(actor: DealActor, input: { dealId: string; recipient: string; body: string; senderAccountId?: string; idempotencyKey: string; correlationId: string; payloadHash: string; deliveryMode: "never_attempted" | "reconcile_only" }, transport?: TwilioSmsTransport): Promise<SmsDeliveryResult> {
-  const recipient = await assertRecipient(actor, input.dealId, input.recipient), body = required(input.body, "body", 1600), key = stableKey(input.idempotencyKey)
+export async function deliverClosingSms(actor: DealActor, input: { dealId: string; recipient: string; body: string; senderAccountId?: string; idempotencyKey: string; correlationId: string; payloadHash: string; deliveryMode: "never_attempted" | "reconcile_only"; matchDealContact?: boolean }, transport?: TwilioSmsTransport): Promise<SmsDeliveryResult> {
+  const matchDealContact = input.matchDealContact !== false
+  const recipient = await assertRecipient(actor, input.dealId, input.recipient, { matchDealContact }), body = required(input.body, "body", 1600), key = stableKey(input.idempotencyKey)
   if (input.deliveryMode === "reconcile_only") {
     const existing = await getDatabase().prepare<Row>("SELECT * FROM mca_sms_messages WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
     if (!existing) return { state: "unknown", errorCode: "provider_outcome_unknown", errorMessage: "No provider attempt is recorded. Review the closing delivery before retrying." }
@@ -351,7 +362,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
     if (existing.content_hash !== hash) throw new AppError(409, "idempotency_conflict", "That retry key already identifies a different text message.")
     return storedResult(existing)
   }
-  const consent = await getSmsConsent(actor, input.dealId, recipient)
+  const consent = await getSmsConsent(actor, input.dealId, recipient, { matchDealContact })
   if (consent.state !== "opted_in") throw new AppError(409, consent.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", consent.state === "opted_out" ? "This merchant opted out of text messages." : "Record merchant SMS consent before sending.")
   const route = await resolveSmsRoute(actor, { dealId: input.dealId, senderAccountId: input.senderAccountId })
   const hash = contentHash({ dealId: input.dealId, accountId: route.accountId, recipient, body, payloadHash: input.payloadHash })

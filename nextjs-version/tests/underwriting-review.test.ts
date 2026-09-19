@@ -40,13 +40,15 @@ function fitRules(): EligibilityRule[] {
     { id: "r-tib", funderId: "", field: "time_in_business", operator: "min", unit: "months", value: 12, unspecified: false },
     { id: "r-pos", funderId: "", field: "positions", operator: "max", unit: "count", value: 3, unspecified: false },
     { id: "r-amt", funderId: "", field: "requested_amount", operator: "max", unit: "usd", value: 250_000, unspecified: false },
+    { id: "r-term", funderId: "", field: "term", operator: "max", unit: "months", value: 12, unspecified: false },
     { id: "r-adb", funderId: "", field: "average_daily_balance", operator: "min", unit: "usd", value: 5_000, unspecified: false },
+    { id: "r-dep", funderId: "", field: "deposit_count", operator: "min", unit: "count", value: 6, unspecified: false },
     { id: "r-nsf", funderId: "", field: "nsf", operator: "max", unit: "count", value: 4, unspecified: false },
     { id: "r-neg", funderId: "", field: "negative_days", operator: "max", unit: "days", value: 4, unspecified: false },
     { id: "r-def", funderId: "", field: "default_status", operator: "eq", unit: "boolean", value: false, unspecified: false },
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
-    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["713210"], unspecified: false },
+    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
   ]
 }
 
@@ -118,10 +120,12 @@ async function seedAggregate(workspaceId: string, dealId: string) {
   const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 0.95, text: String(value) })
   await exec(
     `INSERT INTO mca_underwriting_aggregates
-      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at)
-     VALUES (?, ?, 1, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
-     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET version = excluded.version, monthly_revenue = excluded.monthly_revenue, stale = excluded.stale`,
-    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0),
+      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, deposit_count, worst_month_nsf, position_count, stale, source_fingerprint, computed_at)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 0, 0, 'fixture', '2026-09-08T00:00:00.000Z')
+     ON CONFLICT (workspace_id, deal_id) DO UPDATE SET
+      version = excluded.version, monthly_revenue = excluded.monthly_revenue,
+      deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, stale = excluded.stale`,
+    workspaceId, dealId, metric(20_000), metric(8_000), metric(1), metric(0), metric(12), metric(1),
   )
 }
 
@@ -153,6 +157,7 @@ async function merchantDeal(workspaceId: string, key: string) {
     monthlyRevenue: 20_000,
     ficoScore: 680,
     requestedAmount: 50_000,
+    requestedTermMonths: 12,
     fundingPurpose: "working capital",
   })
   await seedAggregate(workspaceId, created.deal.id)
@@ -295,6 +300,24 @@ test("MIC-150 confirm revalidates completeness ready and score freshness", async
   )
 })
 
+test("MIC-150 confirm is 409 positions_unconfirmed when proposed positions remain", async () => {
+  const workspaceId = `ws-review-proposed-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  await seedMember(workspaceId, "admin")
+  const { deal, fitId } = await reviewedDeal(workspaceId, "proposed")
+  const now = new Date().toISOString()
+  await exec(
+    `INSERT INTO mca_existing_positions
+      (id, workspace_id, deal_id, document_id, label, estimated_payment, evidence, status, corrected, correction_reason, corrected_by_user_id, corrected_at, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 'OCR MCA', NULL, 'fixture', 'proposed', 0, NULL, NULL, NULL, ?, ?)`,
+    newId(), workspaceId, deal.id, now, now,
+  )
+  await assert.rejects(
+    () => confirmAnalysisReview(actor(workspaceId), { dealId: deal.id, selectedFunderIds: [fitId] }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "positions_unconfirmed",
+  )
+})
+
 test("MIC-150 approval binds to that snapshot only and retries keep identity", async () => {
   const workspaceId = `ws-review-bind-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)
@@ -361,6 +384,42 @@ test("MIC-150 disqualified funders cannot be confirmed and empty selection is re
   const ok = await confirmAnalysisReview(actor(workspaceId), { dealId: deal.id, selectedFunderIds: [fitId] })
   assert.equal(ok.run.state, "approved")
   assert.deepEqual(ok.approval.selectedFunderIds, [fitId])
+})
+
+test("review candidates mark grade D/F as not selectable, matching auto-select allowlist", async () => {
+  const workspaceId = `ws-review-grade-df-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  await seedMember(workspaceId, "admin")
+  const { deal, fitId, run } = await reviewedDeal(workspaceId, "grade-df")
+  const row = await getDatabase().prepare<{ scores_json: string }>(
+    `SELECT scores_json FROM mca_score_snapshots WHERE workspace_id = ? AND id = ?`,
+  ).get(workspaceId, run.snapshotId)
+  assert.ok(row)
+  const scores = JSON.parse(row.scores_json) as Array<{ funderId: string; grade: string; eligible: boolean; score: number }>
+  const next = scores.map((score) => score.funderId === fitId
+    ? { ...score, grade: "D", score: 65, eligible: true }
+    : score)
+  await exec(`UPDATE mca_score_snapshots SET scores_json = ? WHERE workspace_id = ? AND id = ?`, JSON.stringify(next), workspaceId, run.snapshotId)
+  await exec(
+    `UPDATE mca_analysis_runs SET selected_funder_ids = '[]', destinations_json = ? WHERE workspace_id = ? AND id = ?`,
+    JSON.stringify([{ funderId: fitId, outcome: "excluded", reason: "outside top N" }]),
+    workspaceId,
+    run.id,
+  )
+
+  const loaded = await getDealReview(actor(workspaceId), deal.id)
+  const candidate = loaded.candidates.find((row) => row.funderId === fitId)
+  assert.ok(candidate)
+  assert.equal(candidate.grade, "D")
+  assert.equal(candidate.eligible, false)
+  assert.equal(candidate.blocked, true)
+  assert.equal(candidate.reason, "Grade below C is not selectable")
+
+  await assert.rejects(
+    () => confirmAnalysisReview(actor(workspaceId), { dealId: deal.id, selectedFunderIds: [fitId] }),
+    (error: { status?: number; code?: string; fieldErrors?: Record<string, string[]> }) =>
+      error.status === 422 && error.code === "validation_failed" && Boolean(error.fieldErrors?.selectedFunderIds?.[0]),
+  )
 })
 
 test("MIC-150 deals:read loads, deals:write confirms, intake:write is 403, foreign workspace is 404", async () => {

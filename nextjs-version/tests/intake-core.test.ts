@@ -64,6 +64,8 @@ async function seed() {
 before(async () => {
   testDatabase = await createPostgresTestDatabase("intake")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   await seed()
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests({ name: "intake-clean-fixture", async scan() { return { status: "clean", provider: "intake-clean-fixture", evidence: { fixture: true } } } })

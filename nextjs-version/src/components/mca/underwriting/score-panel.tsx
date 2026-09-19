@@ -79,7 +79,10 @@ export function ScorePanel({ dealId }: { dealId: string }) {
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle className="flex items-center gap-2"><Gauge className="size-5" />Funder fit scores</CardTitle>
-          <CardDescription>{payload?.disclaimer ?? "Scores describe funder fit, not approval odds."}</CardDescription>
+          <CardDescription>
+            {payload?.disclaimer ?? "Scores describe funder fit, not approval odds."}
+            {" "}Hard NSF uses unique calendar days in the lookback; soft NSF uses worst-month NSF. Position rules use confirmed positions only. Deposit count is a hard DQ field. Only grades A–C are eligible for automatic selection.
+          </CardDescription>
         </div>
         <Button onClick={() => void reanalyze()} disabled={loading || busy} aria-label="Reanalyze funder scores">
           <RefreshCw className="size-4" />{busy ? "Scoring…" : payload?.snapshot ? "Reanalyze" : "Score funders"}

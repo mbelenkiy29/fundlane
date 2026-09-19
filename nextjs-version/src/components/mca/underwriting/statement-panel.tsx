@@ -18,7 +18,16 @@ function formatMetric(metric?: MetricEvidence | null): string {
 
 function kindLabel(kind: StatementMonthRecord["accountKind"]): string {
   if (kind === "checking") return "Checking"
+  if (kind === "savings") return "Savings"
+  if (kind === "credit_card") return "Credit card"
+  if (kind === "loan") return "Loan"
   return "Unsupported"
+}
+
+function warningLabel(warning: string): string {
+  if (warning.startsWith("transfer:")) return `Transfer: ${warning.slice("transfer:".length).trim() || warning}`
+  if (warning.startsWith("mca_credit:")) return `MCA credit: ${warning.slice("mca_credit:".length).trim() || warning}`
+  return warning
 }
 
 export function StatementPanel({ dealId }: { dealId: string }) {
@@ -60,7 +69,9 @@ export function StatementPanel({ dealId }: { dealId: string }) {
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle>Bank statement underwriting</CardTitle>
-          <CardDescription>Checking-account deposits, balances, NSF, and likely existing positions. Unknown values stay Unknown and are never shown as 0.</CardDescription>
+          <CardDescription>
+            Checking-account deposits, unique-day NSF, deposit counts, and confirmed positions. Savings, credit card, and loan statements keep their real account kinds and stay out of checking aggregates. Unknown values stay Unknown and are never shown as 0.
+          </CardDescription>
         </div>
         <Button onClick={analyze} disabled={busy || loading}><RefreshCw className="size-4" />{aggregate ? "Rerun analysis" : "Analyze statements"}</Button>
       </CardHeader>
@@ -83,9 +94,11 @@ export function StatementPanel({ dealId }: { dealId: string }) {
                 <TableRow>
                   <TableHead>Monthly revenue</TableHead>
                   <TableHead>Average daily balance</TableHead>
-                  <TableHead>NSF count</TableHead>
+                  <TableHead>Unique-day NSF</TableHead>
+                  <TableHead>Worst-month NSF</TableHead>
+                  <TableHead>Deposit count</TableHead>
                   <TableHead>Negative days</TableHead>
-                  <TableHead>Positions</TableHead>
+                  <TableHead>Confirmed positions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -93,12 +106,24 @@ export function StatementPanel({ dealId }: { dealId: string }) {
                   <TableCell>{formatMetric(aggregate.monthlyRevenue)}</TableCell>
                   <TableCell>{formatMetric(aggregate.averageDailyBalance)}</TableCell>
                   <TableCell>{formatMetric(aggregate.nsfCount)}</TableCell>
+                  <TableCell>{formatMetric(aggregate.worstMonthNsf)}</TableCell>
+                  <TableCell>{formatMetric(aggregate.depositCount)}</TableCell>
                   <TableCell>{formatMetric(aggregate.negativeDays)}</TableCell>
                   <TableCell>{aggregate.positionCount}</TableCell>
                 </TableRow>
               </TableBody>
             </Table>
-            <p className="text-xs text-muted-foreground">{aggregate.monthlyRevenue.text}</p>
+            <p className="text-xs text-muted-foreground">{aggregate.nsfCount.text ?? aggregate.monthlyRevenue.text}</p>
+            {aggregate.warnings.length > 0 && (
+              <div className="space-y-1">
+                <h4 className="text-sm font-medium">Deposit warnings</h4>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-amber-900">
+                  {aggregate.warnings.map((warning) => (
+                    <li key={warning}>{warningLabel(warning)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
         {months.length > 0 && (
@@ -132,9 +157,15 @@ export function StatementPanel({ dealId }: { dealId: string }) {
                     <TableCell>{formatMetric(month.negativeDays)}</TableCell>
                     <TableCell>{formatMetric(month.endingBalance)}</TableCell>
                     <TableCell className="space-x-1">
-                      {month.accountKind !== "checking" && <Badge variant="secondary">Unsupported</Badge>}
+                      {month.accountKind === "unsupported" && <Badge variant="secondary">Unsupported</Badge>}
+                      {month.accountKind !== "checking" && month.accountKind !== "unsupported" && (
+                        <Badge variant="outline">Excluded from checking aggregates</Badge>
+                      )}
                       {month.duplicateOfId && <Badge variant="outline">Duplicate</Badge>}
                       {month.deposits.unknown && <Badge variant="outline">Unknown deposits</Badge>}
+                      {month.warnings.map((warning) => (
+                        <Badge key={`${month.id}:${warning}`} variant="outline">{warningLabel(warning)}</Badge>
+                      ))}
                     </TableCell>
                   </TableRow>
                 ))}

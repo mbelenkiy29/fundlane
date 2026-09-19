@@ -21,6 +21,8 @@ export interface StatementExtraction {
   averageDailyBalance: MetricEvidence
   nsfCount: MetricEvidence
   negativeDays: MetricEvidence
+  nsfDates: string[]
+  negativeDates: string[]
   endingBalance: MetricEvidence
   positions: StatementPositionCandidate[]
   warnings: string[]
@@ -56,6 +58,8 @@ const extractionSchema = z.object({
   averageDailyBalance: metricSchema,
   nsfCount: metricSchema,
   negativeDays: metricSchema,
+  nsfDates: z.array(z.string()),
+  negativeDates: z.array(z.string()),
   endingBalance: metricSchema,
   positions: z.array(positionSchema),
   warnings: z.array(z.string()),
@@ -73,13 +77,15 @@ const metricJson = {
 }
 const statementJsonSchema = {
   type: "object", additionalProperties: false,
-  required: ["accountKind", "period", "accountSuffix", "deposits", "depositCount", "averageDailyBalance", "nsfCount", "negativeDays", "endingBalance", "positions", "warnings"],
+  required: ["accountKind", "period", "accountSuffix", "deposits", "depositCount", "averageDailyBalance", "nsfCount", "negativeDays", "nsfDates", "negativeDates", "endingBalance", "positions", "warnings"],
   properties: {
     accountKind: { type: "string", enum: [...STATEMENT_ACCOUNT_KINDS] },
     period: stringOrNull,
     accountSuffix: stringOrNull,
     deposits: metricJson, depositCount: metricJson, averageDailyBalance: metricJson,
     nsfCount: metricJson, negativeDays: metricJson, endingBalance: metricJson,
+    nsfDates: { type: "array", items: { type: "string" } },
+    negativeDates: { type: "array", items: { type: "string" } },
     positions: {
       type: "array",
       items: {
@@ -90,6 +96,24 @@ const statementJsonSchema = {
     warnings: { type: "array", items: { type: "string" } },
   },
 } as const
+
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
+
+export function normalizeIsoDates(values: string[] | undefined | null): string[] {
+  return [...new Set((values ?? []).filter((value) => ISO_DAY.test(value)))].sort()
+}
+
+export function normalizeWarnings(values: string[] | undefined | null): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values ?? []) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
 
 function fileData(input: ExtractionFileInput): string {
   return `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString("base64")}`
@@ -147,9 +171,12 @@ export class OpenAiStatementExtractionProvider implements StatementExtractionPro
   async extractStatement(_actor: DealActor, input: ExtractionFileInput): Promise<StatementExtraction> {
     const prompt = [
       "Extract MCA bank-statement underwriting metrics from this document.",
-      "Classify accountKind as checking, savings, credit_card, loan, or unsupported.",
+      "Classify accountKind as checking, savings, credit_card, loan, or unsupported. Keep savings/credit_card/loan as those kinds; do not collapse them to unsupported.",
       "period must be YYYY-MM. accountSuffix is only the final four digits, never a full account number.",
       "Return deposits, depositCount, averageDailyBalance, nsfCount, negativeDays, and endingBalance.",
+      "Also return nsfDates and negativeDates as YYYY-MM-DD calendar days for each NSF and negative-balance day when visible.",
+      "Deposits stay the printed deposit total. Do not subtract transfers or MCA credits from deposits.",
+      "When you see internal transfers or MCA/funding credits, add warnings prefixed with transfer: or mca_credit: and leave deposits unchanged.",
       "If a metric is missing, illegible, or uncertain: unknown=true and value=null. Never invent 0 as a substitute for missing data.",
       "A true zero (for example NSF count 0 on a clear statement) is allowed only when the statement actually shows zero.",
       "Identify likely existing MCA/funding ACH withdrawals as positions for human review; do not treat them as confirmed debts.",
@@ -168,11 +195,13 @@ export class OpenAiStatementExtractionProvider implements StatementExtractionPro
       averageDailyBalance: fromSchemaMetric(parsed.data.averageDailyBalance),
       nsfCount: fromSchemaMetric(parsed.data.nsfCount),
       negativeDays: fromSchemaMetric(parsed.data.negativeDays),
+      nsfDates: normalizeIsoDates(parsed.data.nsfDates),
+      negativeDates: normalizeIsoDates(parsed.data.negativeDates),
       endingBalance: fromSchemaMetric(parsed.data.endingBalance),
       positions: parsed.data.positions
         .filter((item) => item.label.trim())
         .map((item) => ({ label: item.label.trim(), ...(item.estimatedPayment != null ? { estimatedPayment: item.estimatedPayment } : {}), evidence: item.evidence })),
-      warnings: parsed.data.warnings,
+      warnings: normalizeWarnings(parsed.data.warnings),
       provider: this.name,
       requestId: result.requestId,
     }

@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto"
 import * as nodeGcm from "../src/lib/mca/gcm-runtime"
 import * as portableGcm from "../src/lib/mca/gcm-portable"
 import { requireWorkerCredential } from "../src/lib/mca/jobs/edge-auth"
+import { edgeWorkerHandler } from "../src/lib/mca/jobs/edge-handler"
 import { executionShouldStop, executionSignal, withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { decodeSse, messageText, nativeChatRequest } from "../src/lib/mca/assistant/native-contract"
 
@@ -32,6 +33,22 @@ test("worker endpoints reject public keys, missing configuration and incorrect m
   for (const value of ["", "sb_publishable_example", secret.slice(1), "x".repeat(secret.length)]) assert.throws(() => requireWorkerCredential(request(value), secret))
   assert.throws(() => requireWorkerCredential(request(secret, "GET"), secret))
   assert.throws(() => requireWorkerCredential(request(secret), ""))
+})
+test("Edge documents handler stays fail-closed with document_migration_incomplete", async () => {
+  const secret = randomBytes(32).toString("hex")
+  const previous = process.env.MCA_EDGE_WORKER_TOKEN
+  process.env.MCA_EDGE_WORKER_TOKEN = secret
+  try {
+    const response = await edgeWorkerHandler("documents")(new Request("https://example.test/worker", {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+    }))
+    assert.equal(response.status, 503)
+    assert.equal((await response.json() as { error: { code: string } }).error.code, "document_migration_incomplete")
+  } finally {
+    if (previous === undefined) delete process.env.MCA_EDGE_WORKER_TOKEN
+    else process.env.MCA_EDGE_WORKER_TOKEN = previous
+  }
 })
 test("expired executions signal cancellation and cannot report success", async () => {
   assert.equal(executionShouldStop(), false)

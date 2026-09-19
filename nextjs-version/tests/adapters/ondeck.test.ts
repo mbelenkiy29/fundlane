@@ -88,6 +88,8 @@ function job(overrides: Partial<SubmissionJob> = {}): SubmissionJob {
     documentVersions: overrides.documentVersions ?? [],
     packageDocumentIds: overrides.packageDocumentIds ?? [],
     preflightErrors: overrides.preflightErrors ?? [],
+    merchantIdentityKey: overrides.merchantIdentityKey ?? `deal:${overrides.dealId ?? "deal-fixture"}`,
+    packageFingerprint: overrides.packageFingerprint ?? "",
     createdAt: overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
     updatedAt: overrides.updatedAt ?? "2026-01-01T00:00:00.000Z",
     ...overrides,

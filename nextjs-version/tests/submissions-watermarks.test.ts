@@ -5,6 +5,7 @@ import { createHash } from "node:crypto"
 import { crc32, deflateSync, inflateSync } from "node:zlib"
 import { PDFDocument, StandardFonts, degrees } from "pdf-lib"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { AppError } from "../src/lib/mca/errors"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal } from "../src/lib/mca/deals/service"
@@ -209,6 +210,8 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_watermarks")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
   await seed()
@@ -338,6 +341,33 @@ function assertCornerPlacement(page: WatermarkPreviewResult["pages"][number]) {
   assert.ok(page.watermarkWidth <= page.width * 0.25 + 0.001)
   assert.ok(page.watermarkX > 48)
 }
+
+test("applyWatermark fails closed without a logo while preview still reports skipped", async () => {
+  const { document } = await seedDeal()
+  await updateWatermarkSettings(actor(), { enabled: true, logoDocumentId: null, excludedFunderIds: [] })
+
+  await assert.rejects(
+    () => applyWatermark(asOriginal(document), harborId),
+    (error: unknown) => {
+      assert.equal(error instanceof AppError, true)
+      const blocked = error as AppError
+      assert.equal(blocked.status, 409)
+      assert.equal(blocked.code, "watermark_logo_required")
+      return true
+    },
+  )
+
+  const preview = await watermarksPreview(bearerRequest("/api/mca/submissions/watermarks/preview", "read-secret", {
+    method: "POST",
+    body: JSON.stringify({ documentId: document.id, funderId: harborId }),
+  }))
+  assert.equal(preview.status, 200)
+  const body = await preview.json() as WatermarkPreviewResult
+  assert.equal(body.skipped, true)
+  assert.equal(body.reason, "no_logo")
+  assert.equal(body.derivative, undefined)
+  assertNoDocumentBody(body)
+})
 
 test("MIC-162: funder exclusion sends original or allowed prior derivative", async () => {
   const { document } = await seedDeal()

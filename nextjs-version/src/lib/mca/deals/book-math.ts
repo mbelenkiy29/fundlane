@@ -90,21 +90,40 @@ export function paidDown(input: {
   }
 }
 
-export function nextPaymentDate(installments: Array<{ occurrenceDate: string }>, receiptsByDate: Set<string>, asOfDate: string): string | null {
+export function collectedTowardInstallment(
+  installment: { id?: string | null; occurrenceDate: string },
+  receipts: Array<{ amountCents: number; receivedOn?: string | null; installmentId?: string | null; status?: string | null }>,
+): number {
+  let collected = 0
+  for (const receipt of receipts) {
+    if (receipt.status && receipt.status !== "received") continue
+    const byId = Boolean(installment.id) && receipt.installmentId === installment.id
+    const byDate = receipt.receivedOn === installment.occurrenceDate
+    if (byId || byDate) collected += receipt.amountCents
+  }
+  return collected
+}
+
+export function installmentSatisfied(amountCents: number, collectedCents: number): boolean {
+  return amountCents <= 0 || collectedCents >= amountCents
+}
+
+export function nextPaymentDate(installments: Array<{ occurrenceDate: string; amountCents?: number }>, receiptsByDate: Set<string>, asOfDate: string): string | null {
   const upcoming = installments
+    .filter((item) => item.occurrenceDate >= asOfDate && item.amountCents !== 0 && !receiptsByDate.has(item.occurrenceDate))
     .map((item) => item.occurrenceDate)
-    .filter((date) => date >= asOfDate && !receiptsByDate.has(date))
     .sort()
   return upcoming[0] ?? null
 }
 
 export function missedInstallments(
-  installments: Array<{ occurrenceDate: string }>,
+  installments: Array<{ occurrenceDate: string; amountCents?: number }>,
   receiptsByDate: Set<string>,
   window: { from: string; to: string },
   asOfDate: string,
 ): Array<{ occurrenceDate: string }> {
   return installments.filter((item) => {
+    if (item.amountCents === 0) return false
     if (!inInclusiveDateRange(item.occurrenceDate, window.from, window.to)) return false
     if (item.occurrenceDate > asOfDate) return false
     return !receiptsByDate.has(item.occurrenceDate)

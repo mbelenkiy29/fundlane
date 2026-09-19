@@ -5,7 +5,7 @@ import { readJson } from "@/lib/mca/http"
 import { getWorkspaceSettings } from "@/lib/mca/workspaces"
 import { isActionAllowed } from "@/lib/mca/policy"
 import { invitationInput } from "@/lib/mca/applications/contracts"
-import { availableApplicationForms, createApplicationInvitation, listApplicationInvitations, requireApplicationActor } from "@/lib/mca/applications/service"
+import { availableApplicationForms, createApplicationInvitation, invitationEmailEnabled, listApplicationInvitations, requireApplicationActor } from "@/lib/mca/applications/service"
 
 export const runtime = "nodejs"
 export async function GET(request: Request) {
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     const [invitations, forms] = await Promise.all([listApplicationInvitations(actor), availableApplicationForms(actor)])
     const canCreate = Boolean(actor.role && isActionAllowed(actor.role, "createDeal", (await getWorkspaceSettings(actor.workspaceId)).actionVisibility))
     const canManageForm = actor.role === "admin" || actor.role === "super_admin"
-    return NextResponse.json({ invitations, forms, canCreate, canManageForm }, { headers: { "Cache-Control": "private, no-store" } })
+    return NextResponse.json({ invitations, forms, canCreate, canManageForm, invitationEmailEnabled: invitationEmailEnabled() }, { headers: { "Cache-Control": "private, no-store" } })
   } catch (error) { return apiError(error) }
 }
 export async function POST(request: Request) {

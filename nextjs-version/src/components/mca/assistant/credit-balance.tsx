@@ -71,12 +71,15 @@ export function CreditBalanceBadge() {
         <p className="w-full text-amber-700 dark:text-amber-400">
           No credits remain.{" "}
           {state.canManage
-            ? "Buy a credit pack or upgrade your company plan."
+            ? state.purchasesAvailable
+              ? "Buy a credit pack or upgrade your company plan."
+              : "Upgrade your company plan."
             : "Ask your company admin to buy more credits."}{" "}
           Included credits reset{" "}
           {new Date(state.balance.resetAt).toLocaleDateString()}.
         </p>
       )}
+
     </div>
   )
 }

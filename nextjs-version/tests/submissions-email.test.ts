@@ -2,6 +2,8 @@ import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { crc32, deflateSync } from "node:zlib"
+import { PDFDocument, StandardFonts } from "pdf-lib"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
@@ -13,12 +15,16 @@ import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend, updateSender } from "../src/lib/mca/senders/service"
+import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
 import {
   parseEmailAttemptRef,
   setEmailDeliveryFetchForTests,
+  setSubmissionEmailProductionForTests,
   upsertSubmissionEmailTemplate,
 } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
 
@@ -120,9 +126,12 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_email")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setEmailDeliveryFetchForTests(async (_input, init) => {
     captured.push({
       body: typeof init?.body === "string" ? init.body : "",
@@ -181,6 +190,8 @@ before(async () => {
 
 after(async () => {
   setEmailDeliveryFetchForTests()
+  setSubmissionEmailProductionForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
@@ -468,4 +479,170 @@ test("MIC-153: unauthorized sender is 403, preview is deals:read, templates are 
   const listed = await templatesGet(cookieRequest("/api/mca/submissions/email", "admin-session-token"))
   assert.equal(listed.status, 200)
   assertNoSecret(await listed.json())
+})
+
+function pngChunk(type: string, data: Buffer) {
+  const length = Buffer.alloc(4)
+  length.writeUInt32BE(data.length)
+  const typeBuf = Buffer.from(type, "ascii")
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0)
+  return Buffer.concat([length, typeBuf, data, crc])
+}
+
+function makePng(width: number, height: number) {
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  const raw = Buffer.alloc((width * 4 + 1) * height)
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (width * 4 + 1)
+    raw[row] = 0
+    for (let x = 0; x < width; x += 1) {
+      const i = row + 1 + x * 4
+      raw[i] = 16
+      raw[i + 1] = 72
+      raw[i + 2] = 160
+      raw[i + 3] = 255
+    }
+  }
+  return new Uint8Array(Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]))
+}
+
+async function statementPdf() {
+  const pdf = await PDFDocument.create()
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const page = pdf.addPage([612, 792])
+  page.drawText("Merchant statement", { x: 48, y: 720, size: 14, font })
+  return new Uint8Array(await pdf.save({ useObjectStreams: false }))
+}
+
+test("email webhook attaches packaged document bytes, not vault originals", async () => {
+  dealCounter += 1
+  const pdfBytes = await statementPdf()
+  const originalChecksum = createHash("sha256").update(pdfBytes).digest("hex")
+  const deal = (await createDeal(actor(), {
+    idempotencyKey: `email-packaged-deal-${dealCounter}`,
+    legalName: `Packaged Merchant ${dealCounter} LLC`,
+    requestedAmount: 75_000,
+  })).deal
+  const document = await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `email-packaged-doc-${dealCounter}`,
+    filename: "statement.pdf",
+    mimeType: "application/pdf",
+    bytes: pdfBytes,
+    category: "statement",
+    source: "test",
+  })
+  const branding = (await createDeal(actor(), {
+    idempotencyKey: `email-logo-deal-${dealCounter}`,
+    legalName: `Packaged Branding ${dealCounter} LLC`,
+  })).deal
+  const logo = await storeDocument(actor(), {
+    dealId: branding.id,
+    idempotencyKey: `email-logo-${dealCounter}`,
+    filename: "broker-logo.png",
+    mimeType: "image/png",
+    bytes: makePng(64, 64),
+    category: "other_stip",
+    source: "test",
+  })
+  await updateWatermarkSettings(actor(), { enabled: true, logoDocumentId: logo.id, excludedFunderIds: [] })
+  const previousWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://email-packaged.example.test/send"
+  const beforeCapture = captured.length
+  try {
+    const queued = await queueSubmissions({
+      actor: actor(),
+      dealId: deal.id,
+      funderIds: [alphaFunderId],
+      confirmationKey: `email-packaged-${dealCounter}`,
+    })
+    assert.equal(queued.ok, true)
+    assert.equal(queued.jobs[0]?.state, "sent")
+    assert.equal(captured.length, beforeCapture + 1)
+    const payload = JSON.parse(captured[beforeCapture]?.body ?? "{}") as {
+      attachments?: Array<{ documentId: string; checksum: string; filename: string; byteLength: number; bytesBase64?: string }>
+    }
+    const attachment = payload.attachments?.find((item) => item.filename === "statement.pdf")
+    assert.ok(attachment?.bytesBase64)
+    const sentBytes = Buffer.from(attachment.bytesBase64, "base64")
+    assert.notEqual(createHash("sha256").update(sentBytes).digest("hex"), originalChecksum)
+    assert.notEqual(attachment.documentId, document.id)
+    assert.notEqual(attachment.checksum, originalChecksum)
+
+    const packaged = await prepareOutgoingPackage({
+      originals: [{
+        documentId: document.id,
+        originalDocumentId: document.id,
+        checksum: document.checksum,
+        byteLength: document.byteLength,
+        stage: "original",
+      }],
+      funderId: alphaFunderId,
+    })
+    const packagedBytes = await getOutgoingDocumentBytes(packaged.documents[0])
+    assert.equal(createHash("sha256").update(sentBytes).digest("hex"), createHash("sha256").update(packagedBytes).digest("hex"))
+    assert.equal(attachment.documentId, packaged.documents[0]?.documentId)
+    assert.equal(attachment.checksum, packaged.documents[0]?.checksum)
+    assert.equal(createHash("sha256").update(memory.get(`${ids.workspace}/${document.dealId}/${document.id}`) ?? new Uint8Array()).digest("hex"), originalChecksum)
+  } finally {
+    await updateWatermarkSettings(actor(), { enabled: false, logoDocumentId: null, excludedFunderIds: [] })
+    if (previousWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
+  }
+})
+
+test("queue fails closed when watermark is enabled without a logo", async () => {
+  const { deal } = await seedDeal()
+  await updateWatermarkSettings(actor(), { enabled: true, logoDocumentId: null, excludedFunderIds: [] })
+  try {
+    const queued = await queueSubmissions({
+      actor: actor(),
+      dealId: deal.id,
+      funderIds: [alphaFunderId],
+      confirmationKey: `email-watermark-nologo-${dealCounter}`,
+    })
+    assert.equal(queued.ok, true)
+    assert.equal(queued.jobs[0]?.state, "failed")
+    const attempt = await attemptRow(queued.jobs[0]!.jobId)
+    assert.equal(attempt?.state, "failed")
+    assert.equal(attempt?.error_code, "watermark_logo_required")
+  } finally {
+    await updateWatermarkSettings(actor(), { enabled: false, logoDocumentId: null, excludedFunderIds: [] })
+  }
+})
+
+test("production missing webhook or preview delivery fails the job", async () => {
+  const { deal } = await seedDeal()
+  const previousWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  delete process.env.MCA_EMAIL_WEBHOOK_URL
+  setSubmissionEmailProductionForTests(true)
+  try {
+    const queued = await queueSubmissions({
+      actor: actor(),
+      dealId: deal.id,
+      funderIds: [alphaFunderId],
+      confirmationKey: `email-prod-preview-${dealCounter}`,
+    })
+    assert.equal(queued.ok, true)
+    assert.equal(queued.jobs[0]?.state, "failed")
+    assert.notEqual(queued.jobs[0]?.state, "sent")
+    const attempt = await attemptRow(queued.jobs[0]!.jobId)
+    assert.equal(attempt?.state, "failed")
+    assert.ok(attempt?.error_code === "email_delivery_unconfigured" || attempt?.error_code === "preview_not_sent")
+    assert.equal(parseEmailAttemptRef(attempt?.external_ref)?.delivery === "sent", false)
+  } finally {
+    setSubmissionEmailProductionForTests()
+    if (previousWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
+  }
 })

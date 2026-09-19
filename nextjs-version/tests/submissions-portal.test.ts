@@ -12,8 +12,8 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
-import { setWebhookFetchForTests } from "../src/lib/mca/submissions/webhook"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setWebhookFetchForTests, setWebhookLookupForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as portalGet, POST as portalPost } from "../src/app/api/mca/submissions/portal/[dealId]/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -114,8 +114,12 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("submissions_portal")
   Object.assign(process.env, testDatabase.env())
   delete process.env.MCA_DOCUMENT_SCANNER
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
+  setWebhookLookupForTests(async () => [{ address: "203.0.113.10", family: 4 }])
   setWebhookFetchForTests(async (input, init) => {
     const headers = new Headers(init?.headers)
     captured.push({
@@ -149,6 +153,8 @@ before(async () => {
 
 after(async () => {
   setWebhookFetchForTests()
+  setWebhookLookupForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

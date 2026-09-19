@@ -45,6 +45,8 @@ function job(overrides: Partial<SubmissionJob> = {}): SubmissionJob {
     ],
     packageDocumentIds: ["doc-app", "doc-stmt"],
     preflightErrors: [],
+    merchantIdentityKey: "deal:fixture",
+    packageFingerprint: "",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

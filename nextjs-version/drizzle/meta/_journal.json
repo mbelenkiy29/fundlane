@@ -260,6 +260,48 @@
       "when": 1789435555039,
       "tag": "0039_fundlane_forms",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789550000040,
+      "tag": "0040_document_worker_heartbeat",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789550000041,
+      "tag": "0041_underwriting_policy_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789550000042,
+      "tag": "0042_submission_duplicate_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1789550000043,
+      "tag": "0043_closing_upload_and_offer_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789550000044,
+      "tag": "0044_money_remittance",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1789550000045,
+      "tag": "0045_tenancy_ein_hmac",
+      "breakpoints": true
     }
   ]
 }

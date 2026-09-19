@@ -42,7 +42,7 @@ import type {
 } from "./schema"
 import { submissionMissingFields, validateDealInput } from "./validation"
 import { DEAL_STATUS_LABELS } from "./schema"
-import { getAttachPayload, merchantCreateWarnings } from "../merchants/service"
+import { getAttachPayload, merchantCreateWarnings, resolveForceDuplicateAttach } from "../merchants/service"
 
 function maskEmail(value?: string): string | undefined {
   if (!value) return undefined
@@ -172,7 +172,7 @@ function changedFieldNames(input: CreateDealInput | UpdateDealInput): string[] {
   const allowed = new Set([
     "legalName", "dbaName", "ein", "entityType", "address", "contactName", "contactEmail", "contactPhone",
     "startDate", "industry", "naicsCode", "monthlyRevenue", "ficoScore", "fundingPurpose", "requestedAmount",
-    "owners", "assignments",
+    "requestedTermMonths", "owners", "assignments",
   ])
   return Object.keys(input).filter((key) => allowed.has(key))
 }
@@ -215,6 +215,7 @@ function mergeOmittedWriteFields(input: CreateDealInput, fields: DealWriteInput)
     ficoScore: input.ficoScore ?? fields.ficoScore,
     fundingPurpose: input.fundingPurpose ?? fields.fundingPurpose,
     requestedAmount: input.requestedAmount ?? fields.requestedAmount,
+    requestedTermMonths: input.requestedTermMonths ?? fields.requestedTermMonths,
     owners: input.owners ?? fields.owners,
   }
 }
@@ -271,8 +272,13 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
     const retried = await findDealByIdempotencyKey(actor.workspaceId, input.idempotencyKey)
     if (retried) return { deal: toDealDetail(assertVisible(actor, retried)), created: false, warnings: [] }
   }
-  const attachMerchantId = input.attachMerchantId?.trim() || undefined
-  const forceDuplicate = Boolean(input.forceDuplicate) && !attachMerchantId
+  let attachMerchantId = input.attachMerchantId?.trim() || undefined
+  const forcedAttachId = await resolveForceDuplicateAttach(actor, {
+    ein: input.ein,
+    forceDuplicate: input.forceDuplicate,
+    attachMerchantId,
+  })
+  if (forcedAttachId) attachMerchantId = forcedAttachId
   if (attachMerchantId) {
     const attached = await getAttachPayload(actor, attachMerchantId)
     input = mergeOmittedWriteFields(input, attached.fields)
@@ -282,7 +288,6 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
     ein: input.ein,
     owners: input.owners,
     attachMerchantId,
-    forceDuplicate,
   })
   const now = nowIso()
   const owners = mergeOwners([], input.owners)
@@ -295,6 +300,7 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
     address: input.address, contactName: input.contactName, contactEmail: input.contactEmail, contactPhone: input.contactPhone,
     startDate: input.startDate, industry: input.industry, naicsCode: input.naicsCode, monthlyRevenue: input.monthlyRevenue,
     ficoScore: input.ficoScore, fundingPurpose: input.fundingPurpose, requestedAmount: input.requestedAmount,
+    requestedTermMonths: input.requestedTermMonths,
   }
   const id = newId()
   const record: DealRecord = {
@@ -307,9 +313,21 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
   record.missingRequiredFields = submissionMissingFields(record)
   record.draftState = record.missingRequiredFields.length ? "partial" : "submission_ready"
   record.activity = [activity(actor, "created", "Deal draft created", 1, now)]
-  const saved = await insertDeal(record, transactionCheckpoint, { forceNewMerchant: forceDuplicate })
+  const saved = await insertDeal(record, transactionCheckpoint)
   const visible = assertVisible(actor, saved.record)
-  if (saved.inserted) await recordAuditEvent({ context: actor, action: "deal.created", resourceType: "deal", resourceId: visible.id, metadata: { version: 1, draftState: visible.draftState }, correlationId: actor.correlationId })
+  if (saved.inserted) {
+    await recordAuditEvent({ context: actor, action: "deal.created", resourceType: "deal", resourceId: visible.id, metadata: { version: 1, draftState: visible.draftState }, correlationId: actor.correlationId })
+    if (forcedAttachId) {
+      await recordAuditEvent({
+        context: actor,
+        action: "merchant.force_attach",
+        resourceType: "merchant",
+        resourceId: forcedAttachId,
+        metadata: { dealId: visible.id, idempotencyKey: input.idempotencyKey },
+        correlationId: actor.correlationId,
+      })
+    }
+  }
   return { deal: toDealDetail(visible), created: saved.inserted, warnings }
 }
 

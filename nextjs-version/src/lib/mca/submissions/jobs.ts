@@ -1,6 +1,6 @@
 import "server-only"
 
-import type { DocumentSummary } from "../documents/contracts"
+import { isDocumentReady, type DocumentSummary } from "../documents/contracts"
 import type { FunderRoute } from "../funders/contracts"
 import type { AttemptState, JobState, OutgoingDocument, QueuedJobSummary, SubmissionJob } from "./contracts"
 
@@ -32,7 +32,7 @@ export function freezeDocumentVersions(documents: DocumentSummary[]): Submission
 export function originalsForRoute(documents: DocumentSummary[], route: FunderRoute): OutgoingDocument[] {
   const excluded = new Set(route.documentExceptions.map((item) => item.toLowerCase()))
   return documents
-    .filter((document) => !excluded.has(document.category.toLowerCase()))
+    .filter((document) => isDocumentReady(document.processingState) && !excluded.has(document.category.toLowerCase()))
     .map((document) => ({
       documentId: document.id,
       originalDocumentId: document.id,

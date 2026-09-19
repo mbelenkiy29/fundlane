@@ -65,8 +65,8 @@ export async function seedMarketingPreview(
         [offerId, workspaceId, id, revisionId, now]
       )
       await db.query(
-        "INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,factor_rate_millionths,payment_frequency,effective_at,created_at) VALUES ($1,$2,$3,1,'funded',$4,1300000,'daily',$5,$5)",
-        [revisionId, workspaceId, offerId, amount * 100, fundedAt]
+        "INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,factor_rate_millionths,payment_frequency,effective_at,expires_at,created_at) VALUES ($1,$2,$3,1,'funded',$4,1300000,'daily',$5,$6,$5)",
+        [revisionId, workspaceId, offerId, amount * 100, fundedAt, new Date(Date.parse(fundedAt) + 14 * 86_400_000).toISOString()]
       )
       await db.query(
         "INSERT INTO mca_funding_events (id,workspace_id,deal_id,offer_id,offer_revision_id,advance_id,idempotency_key,funded_at,amount_cents,source,created_at) VALUES ($1,$2,$3,$4,$5,$6,$1,$7,$8,'historical',$9)",

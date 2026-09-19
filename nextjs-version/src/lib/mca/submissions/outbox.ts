@@ -1,7 +1,9 @@
 import "server-only"
 
 import { newId } from "../db"
-import type { JobState, SubmissionJob } from "./contracts"
+import { AppError } from "../errors"
+import type { AttemptState, DeliverResult, JobState, SubmissionJob } from "./contracts"
+import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
 import {
@@ -18,6 +20,18 @@ import {
 function clip(value: string | undefined, max = 2_000): string | undefined {
   if (!value) return undefined
   return value.length > max ? value.slice(0, max) : value
+}
+
+function isCompletedAttempt(state: AttemptState): boolean {
+  return state === "sent" || state === "failed" || state === "skipped"
+}
+
+export function assertProductionDeliveryNotPreview(delivered: DeliverResult): void {
+  if (!isSubmissionEmailProduction()) return
+  const ref = parseEmailAttemptRef(delivered.externalRef)
+  if (ref?.delivery === "preview") {
+    throw new AppError(409, "preview_not_sent", "Preview deliveries cannot be recorded as sent in production.")
+  }
 }
 
 async function refreshCache(job: SubmissionJob): Promise<void> {
@@ -39,25 +53,27 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  if (existing) {
+  if (existing && isCompletedAttempt(existing.state)) {
     const current = await findJobById(job.workspaceId, job.id)
     await markOutboxProcessed(job.id)
     return current ?? job
   }
 
-  await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
-  const reserved = await insertAttempt({
-    workspaceId: job.workspaceId,
-    jobId: job.id,
-    attemptKey: job.attemptKey,
-    transport: job.routeKind,
-    state: "sending",
-    correlationId: newId(),
-  })
-  if (!reserved.created) {
-    const current = await findJobById(job.workspaceId, job.id)
-    await markOutboxProcessed(job.id)
-    return current ?? job
+  if (!existing) {
+    await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
+    const reserved = await insertAttempt({
+      workspaceId: job.workspaceId,
+      jobId: job.id,
+      attemptKey: job.attemptKey,
+      transport: job.routeKind,
+      state: "sending",
+      correlationId: newId(),
+    })
+    if (!reserved.created && isCompletedAttempt(reserved.attempt.state)) {
+      const current = await findJobById(job.workspaceId, job.id)
+      await markOutboxProcessed(job.id)
+      return current ?? job
+    }
   }
 
   try {
@@ -76,7 +92,8 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       state: "sending",
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     }
-    const delivered = await deliverSubmission(sending)
+    const delivered = await deliverSubmission(sending, packaged.documents)
+    assertProductionDeliveryNotPreview(delivered)
     const nextState: JobState = delivered.state
     const reason = clip(delivered.errorMessage) ?? (delivered.ok ? undefined : "Delivery failed.")
     await updateAttempt(job.id, job.attemptKey, {
@@ -96,9 +113,10 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
     return saved
   } catch (error) {
     const message = error instanceof Error ? clip(error.message) : "Delivery failed."
+    const errorCode = error instanceof AppError ? error.code : "delivery_failed"
     await updateAttempt(job.id, job.attemptKey, {
       state: "failed",
-      errorCode: "delivery_failed",
+      errorCode,
       errorMessage: message ?? null,
     })
     const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason: message ?? "Delivery failed." })

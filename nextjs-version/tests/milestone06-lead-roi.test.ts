@@ -118,8 +118,8 @@ async function fundDeal(input: {
   const paymentId = `pay-${input.dealId}-${input.suffix}`
   await db.prepare(`INSERT INTO mca_offers (id,workspace_id,deal_id,funder_id,funder_name,source,current_revision_id,created_at,updated_at)
     VALUES (?,?,?,?, 'Northstar Capital','manual',?,?,?)`).run(offerId, ids.workspace, input.dealId, ids.funder, revisionId, input.fundedAt, input.fundedAt)
-  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,commission_cents,effective_at,created_at)
-    VALUES (?,?,?,1,'funded',?,?,?,?)`).run(revisionId, ids.workspace, offerId, input.amountCents, input.commissionCents, input.fundedAt, input.fundedAt)
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,commission_cents,effective_at,expires_at,created_at)
+    VALUES (?,?,?,1,'funded',?,?,?,?,?)`).run(revisionId, ids.workspace, offerId, input.amountCents, input.commissionCents, input.fundedAt, new Date(Date.parse(input.fundedAt) + 14 * 86_400_000).toISOString(), input.fundedAt)
   await db.prepare(`INSERT INTO mca_advances (id,workspace_id,funding_event_id,deal_id,offer_id,offer_revision_id,funded_at,principal_cents,commission_cents,source,status,created_at,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,'live','active',?,?)`).run(
     advanceId, ids.workspace, eventId, input.dealId, offerId, revisionId, input.fundedAt, input.amountCents, input.commissionCents, now, now,

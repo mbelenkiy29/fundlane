@@ -14,6 +14,15 @@ export type Metrics = {
   reconnect: number
   recentEmailFailures: number
   recentErrors: number
+  documentWorkerHeartbeatAgeSeconds: number | null
+}
+export function documentWorkerReady(metrics: {
+  documentWorkerHeartbeatAgeSeconds: number | null
+}): boolean {
+  return (
+    metrics.documentWorkerHeartbeatAgeSeconds != null &&
+    metrics.documentWorkerHeartbeatAgeSeconds <= 90
+  )
 }
 export type Health = {
   checked_at: string

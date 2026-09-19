@@ -1,6 +1,6 @@
 import "server-only"
 
-export const POLICY_VERSION = 1
+export const POLICY_VERSION = 2
 
 export const SCORE_FIT_DISCLAIMER = "Scores describe funder fit, not approval odds."
 
@@ -15,9 +15,18 @@ export const HARD_DQ_FIELDS = [
   "time_in_business",
   "fico",
   "revenue",
+  "average_daily_balance",
+  "requested_amount",
+  "term",
+  "deposit_count",
 ] as const
 
 export type HardDqField = (typeof HARD_DQ_FIELDS)[number]
+
+/** Grades eligible for auto-select (C+). D and F never auto-select. */
+export const AUTO_SELECT_GRADES = ["A", "B", "C"] as const
+
+export type AutoSelectGrade = (typeof AUTO_SELECT_GRADES)[number]
 
 export const SOFT_WEIGHT_REVENUE_FIT = 30
 export const SOFT_WEIGHT_ADB = 15

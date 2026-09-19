@@ -77,7 +77,7 @@ export function buildSeed(target: Target, asOf: string) {
     add("deal_assignments", { id: key(`assignment-${i}`), deal_id: dealId, membership_id: target.membership_id, kind: "originator", is_primary: 1, assigned_at: createdAt, assigned_by_user_id: target.user_id })
     if (hasOffer) {
       add("mca_offers", { id: offerId, deal_id: dealId, funder_name: funder, source: "historical", external_id: `${BATCH}:offer:${i}`, current_revision_id: revisionId, created_by_user_id: target.user_id, created_at: createdAt, updated_at: now })
-      add("mca_offer_revisions", { id: revisionId, offer_id: offerId, revision_number: 1, state: funded ? "funded" : "active", product: "mca", amount_cents: principalCents, factor_rate_millionths: Math.round(Number(factor) * 1000000), term_months: 5, payment_amount_cents: calc.periodicPaymentEstimateCents, payment_frequency: frequency, fee_cents: 0, commission_cents: calc.commissionCents, effective_at: fundedAt, created_by_user_id: target.user_id, created_at: createdAt })
+      add("mca_offer_revisions", { id: revisionId, offer_id: offerId, revision_number: 1, state: funded ? "funded" : "active", product: "mca", amount_cents: principalCents, factor_rate_millionths: Math.round(Number(factor) * 1000000), term_months: 5, payment_amount_cents: calc.periodicPaymentEstimateCents, payment_frequency: frequency, fee_cents: 0, commission_cents: calc.commissionCents, effective_at: fundedAt, expires_at: new Date(Date.parse(createdAt) + 14 * 86_400_000).toISOString(), created_by_user_id: target.user_id, created_at: createdAt })
       add("mca_offer_selections", { id: key(`selection-${i}`), deal_id: dealId, offer_id: offerId, offer_revision_id: revisionId, active: 1, selected_by_user_id: target.user_id, selected_at: fundedAt, reason: "TEST historical selection" })
     }
     // 80 funded deals × 2 funders + 20 submitted/offer/contract deals × 1 = 180.
@@ -95,7 +95,7 @@ export function buildSeed(target: Target, asOf: string) {
     for (const installment of installments) {
       const installmentId = key(`installment-${i}-${installment.sequence}`)
       add("mca_merchant_installments", { id: installmentId, advance_id: advanceId, sequence: installment.sequence, occurrence_date: installment.occurrenceDate, amount_cents: installment.amountCents, created_at: now })
-      if (installment.sequence <= paidCount) add("mca_merchant_receipts", { id: key(`receipt-${i}-${installment.sequence}`), advance_id: advanceId, installment_id: installmentId, amount_cents: installment.amountCents, received_at: timestamp(installment.occurrenceDate), origin: "system", status: "received", idempotency_key: `${BATCH}:receipt:${i}:${installment.sequence}`, created_by_user_id: target.user_id, created_at: now })
+      if (installment.sequence <= paidCount) add("mca_merchant_receipts", { id: key(`receipt-${i}-${installment.sequence}`), advance_id: advanceId, installment_id: installmentId, amount_cents: installment.amountCents, received_at: timestamp(installment.occurrenceDate), received_on: installment.occurrenceDate, origin: "system", status: "received", idempotency_key: `${BATCH}:receipt:${i}:${installment.sequence}`, created_by_user_id: target.user_id, created_at: now })
     }
     assert.equal(installments.slice(0, paidCount).reduce((sum, r) => sum + r.amountCents, 0), calc.paybackCents * percent / 100)
   }
@@ -127,7 +127,7 @@ export async function verifySeed(client: pg.Client, manifest: Manifest) {
   const commissions = await client.query(`SELECT status,count(*)::int count FROM mca_accounting_payments WHERE workspace_id=$1 AND id=ANY($2::text[]) GROUP BY status`, [manifest.target.workspace_id, manifest.ids.mca_accounting_payments])
   assert.deepEqual(Object.fromEntries(commissions.rows.map(r => [r.status,r.count])), { received: 30, partial: 30, expected: 20 })
   const invalid = await client.query(`SELECT count(*)::int count FROM mca_merchant_receipts r JOIN mca_merchant_installments i ON i.id=r.installment_id
-    WHERE r.id=ANY($1::text[]) AND (r.advance_id<>i.advance_id OR r.workspace_id<>i.workspace_id OR left(r.received_at,10)<>i.occurrence_date OR left(r.received_at,10)>$2)`, [manifest.ids.mca_merchant_receipts, manifest.asOf])
+    WHERE r.id=ANY($1::text[]) AND (r.advance_id<>i.advance_id OR r.workspace_id<>i.workspace_id OR r.received_on<>i.occurrence_date OR r.received_on>$2)`, [manifest.ids.mca_merchant_receipts, manifest.asOf])
   assert.equal(invalid.rows[0].count, 0, "Receipt dates and relationships")
   return { funded: 80, fullyRepaid: 20, halfRepaid: 20, partiallyRepaid: 30, newlyFunded: 10, commissions: Object.fromEntries(commissions.rows.map(r => [r.status,r.count])) }
 }

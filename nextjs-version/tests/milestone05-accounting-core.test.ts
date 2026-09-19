@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { allocateCents, multiplyCentsByDecimal, parseDecimal } from "../src/lib/mca/accounting/money"
+import { allocateCents, multiplyCentsByDecimal, multiplyCentsByRatio, parseDecimal, ratioFromMillionths } from "../src/lib/mca/accounting/money"
 import { calculateOffer } from "../src/lib/mca/accounting/calculations"
 import { estimateScheduledPaidIn } from "../src/lib/mca/advances/performance"
 
@@ -25,6 +25,30 @@ test("MIC-161 rejects float-prone decimal forms and a runtime commission base ch
   assert.throws(() => parseDecimal("1e-3"), /base-10 decimal/)
   assert.throws(() => parseDecimal("1.1234567"), /at most 6/)
   assert.throws(() => calculateOffer({ principalCents: 100, factorRate: "1.2", commissionBasis: "payback", commissionPointsBasisPoints: 100 } as never), /principal/)
+})
+
+test("factorRateMillionths 1_350_000 on 4_000_000 yields payback 5_400_000", () => {
+  const ratio = ratioFromMillionths(1_350_000)
+  assert.equal(ratio.numerator, BigInt(1_350_000))
+  assert.equal(ratio.denominator, BigInt(1_000_000))
+  assert.equal(multiplyCentsByRatio(4_000_000, ratio), 5_400_000)
+  const result = calculateOffer({
+    principalCents: 4_000_000,
+    factorRateMillionths: 1_350_000,
+    commissionBasis: "principal",
+    commissionPointsBasisPoints: 0,
+  })
+  assert.equal(result.paybackCents, 5_400_000)
+})
+
+test("string factorRate 1.25 still works", () => {
+  const result = calculateOffer({
+    principalCents: 4_000_000,
+    factorRate: "1.25",
+    commissionBasis: "principal",
+    commissionPointsBasisPoints: 0,
+  })
+  assert.equal(result.paybackCents, 5_000_000)
 })
 
 test("MIC-103 33.33/33.33/33.34 split reconciles exactly", () => {
@@ -60,4 +84,13 @@ test("MIC-107 arbitrary and missing calendars remain unknown", () => {
     paymentCount: 10, paymentFrequency: "daily" }
   assert.equal(estimateScheduledPaidIn({ ...base, calendarConvention: "merchant_guess" }).label, "unknown")
   assert.equal(estimateScheduledPaidIn({ ...base, calendarConvention: null }).paidInCents, null)
+})
+
+test("scheduled paid-in uses workspace timezone for as-of timestamps", () => {
+  const base = {
+    fundedAt: "2026-09-08", paybackCents: 10_000, periodicPaymentCents: 1000, paymentCount: 10,
+    paymentFrequency: "daily", calendarConvention: "calendar_days", asOf: "2026-09-13T02:00:00.000Z",
+  }
+  assert.equal(estimateScheduledPaidIn({ ...base, timeZone: "UTC" }).elapsedPayments, 5)
+  assert.equal(estimateScheduledPaidIn({ ...base, timeZone: "America/New_York" }).elapsedPayments, 4)
 })

@@ -25,7 +25,10 @@ export interface StatementMonthRecord {
   averageDailyBalance: MetricEvidence
   nsfCount: MetricEvidence
   negativeDays: MetricEvidence
+  nsfDates: string[]
+  negativeDates: string[]
   endingBalance: MetricEvidence
+  warnings: string[]
   duplicateOfId?: string
   extractionVersion: number
   corrected: boolean
@@ -50,6 +53,9 @@ export interface UnderwritingAggregate {
   averageDailyBalance: MetricEvidence
   nsfCount: MetricEvidence
   negativeDays: MetricEvidence
+  depositCount: MetricEvidence
+  worstMonthNsf: MetricEvidence
+  warnings: string[]
   positionCount: number
   stale: boolean
   computedAt: string

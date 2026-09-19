@@ -12,6 +12,7 @@ import type { ApiKeyScope, AuthContext } from "../types"
 import { ANALYSIS_MODES, type AnalysisMode, type AnalysisSnapshot, type FunderScore } from "./contracts"
 import { checkCompleteness, getCompleteness } from "./completeness"
 import { autoSelectableFunderIds, getDealScores, scoreDeal } from "./scoring"
+import { evaluateUnderwritingSendGates } from "./send-gates"
 import { queueSubmissions } from "./submission-port"
 import {
   DEFAULT_ANALYSIS_SETTINGS,
@@ -312,6 +313,9 @@ export async function runAnalysis(actor: DealActor, dealId: string, override: An
   let selectedFunderIds = decided.selectedFunderIds
   let queued = false
   const runId = newId()
+  const sendGate = effective.mode === "automatic_send" && effective.automaticSendEnabled
+    ? await evaluateUnderwritingSendGates(actor, deal.id)
+    : undefined
 
   if (effective.mode === "analyze_only") {
     selectedFunderIds = []
@@ -321,6 +325,10 @@ export async function runAnalysis(actor: DealActor, dealId: string, override: An
     selectedFunderIds = []
     state = "blocked"
     reason = "automatic_send_disabled"
+  } else if (sendGate && !sendGate.ok) {
+    selectedFunderIds = []
+    state = "blocked"
+    reason = sendGate.reasons[0] ?? "completeness_not_ready"
   } else if (decided.qualifiedIds.length === 0) {
     selectedFunderIds = []
     state = "blocked"

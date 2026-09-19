@@ -251,14 +251,11 @@ async function replaceMerchantOwners(database: DbExecutor, record: MerchantDealI
 export async function upsertMerchantFromDeal(
   record: MerchantDealIdentity,
   executor?: DbExecutor,
-  options?: { forceNew?: boolean },
 ): Promise<string> {
   const database = db(executor)
   const einHash = einLookupHash(record.workspaceId, record.ein)
   let merchantId: string | undefined
-  if (options?.forceNew) {
-    merchantId = newId()
-  } else if (record.merchantId) {
+  if (record.merchantId) {
     merchantId = record.merchantId
   } else if (einHash) {
     merchantId = (await database.prepare<{ id: string }>(
@@ -302,6 +299,35 @@ export async function persistDealEinLookupHash(workspaceId: string, dealId: stri
 
 export async function persistOwnerIdentityLookupHash(workspaceId: string, ownerId: string, hash: string | null, executor?: DbExecutor): Promise<void> {
   await db(executor).prepare("UPDATE deal_owners SET identity_last4_lookup_hash = ? WHERE workspace_id = ? AND id = ?").run(hash, workspaceId, ownerId)
+}
+
+export async function listWorkspaceMerchantRows(workspaceId?: string, executor?: DbExecutor): Promise<Row[]> {
+  const database = db(executor)
+  if (workspaceId) {
+    return database.prepare<Row>("SELECT * FROM mca_merchants WHERE workspace_id = ? ORDER BY created_at, id").all(workspaceId)
+  }
+  return database.prepare<Row>("SELECT * FROM mca_merchants ORDER BY workspace_id, created_at, id").all()
+}
+
+export async function listMerchantOwnerRows(workspaceId: string, merchantId: string, executor?: DbExecutor): Promise<Row[]> {
+  return db(executor).prepare<Row>(
+    "SELECT * FROM mca_merchant_owners WHERE workspace_id = ? AND merchant_id = ? ORDER BY id",
+  ).all(workspaceId, merchantId)
+}
+
+export async function persistMerchantEinLookupHash(workspaceId: string, merchantId: string, hash: string | null, executor?: DbExecutor): Promise<void> {
+  await db(executor).prepare("UPDATE mca_merchants SET ein_lookup_hash = ? WHERE workspace_id = ? AND id = ?").run(hash, workspaceId, merchantId)
+}
+
+export async function persistMerchantOwnerIdentityLookupHash(
+  workspaceId: string,
+  ownerId: string,
+  hash: string | null,
+  executor?: DbExecutor,
+): Promise<void> {
+  await db(executor).prepare(
+    "UPDATE mca_merchant_owners SET identity_last4_lookup_hash = ? WHERE workspace_id = ? AND id = ?",
+  ).run(hash, workspaceId, ownerId)
 }
 
 export async function loadDealIdentity(workspaceId: string, dealId: string, executor?: DbExecutor): Promise<MerchantDealIdentity | undefined> {

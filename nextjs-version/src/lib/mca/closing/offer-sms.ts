@@ -52,6 +52,8 @@ export function createMerchantOfferSmsTransport(
         correlationId: request.correlationId,
         payloadHash: request.payloadHash,
         deliveryMode,
+        // Preview already bound via bindMerchantSms (deal contact or audited admin override).
+        matchDealContact: false,
       }, transport)
       return mapClosingSmsResult(request, result)
     } catch (error) {

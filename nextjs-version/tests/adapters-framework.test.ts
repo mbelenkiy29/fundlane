@@ -150,6 +150,8 @@ function jobFor(funderId: string, destination: string, extra: Partial<Submission
     documentVersions: extra.documentVersions ?? [],
     packageDocumentIds: extra.packageDocumentIds ?? [],
     preflightErrors: extra.preflightErrors ?? [],
+    merchantIdentityKey: extra.merchantIdentityKey ?? `deal:${extra.dealId ?? "deal-adapter-1"}`,
+    packageFingerprint: extra.packageFingerprint ?? "",
     createdAt: extra.createdAt ?? "2026-01-01T00:00:00.000Z",
     updatedAt: extra.updatedAt ?? "2026-01-01T00:00:00.000Z",
     ...extra,

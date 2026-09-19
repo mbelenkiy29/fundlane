@@ -51,10 +51,31 @@ function safeNumber(value: bigint, field: string): number {
   return parsed
 }
 
+/** Integer millionths over 1_000_000, avoiding IEEE float factor strings. */
+export function ratioFromMillionths(millionths: number): DecimalRatio {
+  if (!Number.isSafeInteger(millionths) || millionths < 0) {
+    throw new TypeError("factorRateMillionths must be a non-negative safe integer.")
+  }
+  const numerator = BigInt(millionths)
+  const denominator = BigInt(1_000_000)
+  const whole = numerator / denominator
+  const fraction = numerator % denominator
+  const canonical = fraction === BigInt(0)
+    ? whole.toString()
+    : `${whole}.${fraction.toString().padStart(6, "0").replace(/0+$/, "")}`
+  return { numerator, denominator, canonical }
+}
+
+export function multiplyCentsByRatio(cents: number, ratio: DecimalRatio): number {
+  assertCents(cents)
+  if (ratio.denominator <= BigInt(0)) throw new TypeError("denominator must be positive")
+  if (ratio.numerator < BigInt(0)) throw new TypeError("numerator must be non-negative")
+  return safeNumber(divideRounded(BigInt(cents) * ratio.numerator, ratio.denominator), "calculated amount")
+}
+
 export function multiplyCentsByDecimal(cents: number, decimal: string, field = "decimal"): number {
   assertCents(cents)
-  const ratio = parseDecimal(decimal, { field, allowZero: true })
-  return safeNumber(divideRounded(BigInt(cents) * ratio.numerator, ratio.denominator), "calculated amount")
+  return multiplyCentsByRatio(cents, parseDecimal(decimal, { field, allowZero: true }))
 }
 
 export function percentageOfCents(cents: number, basisPoints: number): number {

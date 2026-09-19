@@ -14,6 +14,7 @@ import type { EligibilityRule, FunderRecord } from "../funders/contracts"
 import type { CompletenessResult, ExistingPositionCandidate, FunderScore, MetricEvidence, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { getCompleteness } from "./completeness"
 import {
+  AUTO_SELECT_GRADES,
   DEFAULT_ADB_SCALE,
   DEFAULT_FICO_FLOOR,
   DEFAULT_NSF_SCALE,
@@ -36,6 +37,8 @@ import {
   SOFT_WEIGHT_REQUESTED_AMOUNT,
   SOFT_WEIGHT_REVENUE_FIT,
 } from "./policy"
+import { listChecks } from "../datamerch/repository"
+import { evaluateUnderwritingSendGates } from "./send-gates"
 import { getUnderwritingAggregate, listExistingPositions, listStatementMonths } from "./statements"
 import {
   findLatestScoreSnapshot,
@@ -45,6 +48,14 @@ import {
 } from "./snapshot-repository"
 
 export { POLICY_VERSION, SCORE_FIT_DISCLAIMER }
+
+/** Confirmed position labels and DataMerch categories that set defaultFlag. */
+export const DEFAULT_FLAG_PATTERN = /\bdefaults?\b|\bdefaulted\b|\bslow[\s_-]?pay\b/i
+
+export type DefaultFlagDataMerchCheck = {
+  status: string
+  merchants?: Array<{ records?: Array<{ category?: string | null } | null> | null } | null> | null
+}
 
 export interface ScoreDealResult {
   snapshot: ReturnType<typeof toAnalysisSnapshot>
@@ -75,6 +86,7 @@ export interface ScoringInputs {
   tibMonths?: number
   fico?: number
   requestedAmount?: number
+  termMonths?: number
   monthlyRevenue?: number
   revenueUnknown: boolean
   averageDailyBalance?: number
@@ -83,7 +95,11 @@ export interface ScoringInputs {
   nsfUnknown: boolean
   negativeDays?: number
   negativeUnknown: boolean
+  depositCount?: number
+  depositUnknown: boolean
+  worstMonthNsf?: number
   positionCount: number
+  proposedPositionCount: number
   availableMonthlyRevenue?: number
   availableUnknown: boolean
   dataAge?: string
@@ -151,10 +167,18 @@ export async function requireScoreActor(request: Request, mode: "read" | "write"
 }
 
 export function autoSelectableFunderIds(scores: FunderScore[]): string[] {
+  const allowed = new Set<string>(AUTO_SELECT_GRADES)
   return [...scores]
-    .filter((score) => score.eligible && score.grade !== "DQ")
+    .filter((score) => score.eligible && allowed.has(score.grade))
     .sort((left, right) => left.rank - right.rank || left.funderId.localeCompare(right.funderId))
     .map((score) => score.funderId)
+}
+
+async function gatedAutoSelectableFunderIds(actor: DealActor, dealId: string, scores: FunderScore[]): Promise<string[]> {
+  const ids = autoSelectableFunderIds(scores)
+  if (ids.length === 0) return []
+  const gate = await evaluateUnderwritingSendGates(actor, dealId)
+  return gate.ok ? ids : []
 }
 
 export function gradeFromScore(score: number, eligible: boolean): Grade {
@@ -274,6 +298,24 @@ function membership(actual: string, items: string[], contains: boolean): boolean
   return contains ? present : !present
 }
 
+function asNaics(value: string | undefined): string | undefined {
+  const digits = text(value)
+  return /^\d{2,6}$/.test(digits) ? digits : undefined
+}
+
+/** Digit-prefix NAICS match: `7132` matches `713210`. */
+export function naicsPrefixMatch(left?: string, right?: string): boolean {
+  const a = asNaics(left)
+  const b = asNaics(right)
+  if (!a || !b) return false
+  return a.startsWith(b) || b.startsWith(a)
+}
+
+function industryNaicsCodes(item: { name: string; naics?: string }, extra?: string): string[] {
+  const codes = [asNaics(item.naics), asNaics(item.name), asNaics(extra)].filter((code): code is string => Boolean(code))
+  return [...new Set(codes)]
+}
+
 async function normalizeIndustryValue(actor: DealActor, raw: string): Promise<{ name: string; naics?: string }> {
   const input = text(raw)
   if (!input) return { name: "" }
@@ -309,8 +351,10 @@ async function evaluateListRule(actor: DealActor, rule: EligibilityRule, actual:
   const dealIndustry = await normalizeIndustryValue(actor, actual.industry ?? actual.naics ?? "")
   const funderItems = await Promise.all(items.map((item) => normalizeIndustryValue(actor, item)))
   const names = new Set(funderItems.map((item) => item.name.toLowerCase()).filter(Boolean))
-  const codes = new Set(funderItems.map((item) => item.naics).filter((code): code is string => Boolean(code)))
-  const matched = names.has(dealIndustry.name.toLowerCase()) || Boolean(dealIndustry.naics && codes.has(dealIndustry.naics)) || Boolean(actual.naics && codes.has(actual.naics))
+  const dealCodes = industryNaicsCodes(dealIndustry, actual.naics)
+  const funderCodes = funderItems.flatMap((item) => industryNaicsCodes(item))
+  const codeMatched = dealCodes.some((deal) => funderCodes.some((code) => naicsPrefixMatch(deal, code)))
+  const matched = names.has(dealIndustry.name.toLowerCase()) || codeMatched
   const ok = contains ? matched : !matched
   return ok
     ? comparePass(rule, `Industry ${dealIndustry.name || actual.naics || "unknown"} ${contains ? "is allowed" : "is not restricted"}.`)
@@ -356,8 +400,8 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
       }
       if (field === "nsf") {
         reasons.push(inputs.nsfUnknown || inputs.nsfCount == null
-          ? compareUnknown(rule, "NSF count is unknown, so the funder's NSF maximum cannot pass.")
-          : evaluateNumeric(rule, inputs.nsfCount, "NSF count", String(inputs.nsfCount)))
+          ? compareUnknown(rule, "Unique-day NSF is unknown, so the funder's NSF maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.nsfCount, "Unique-day NSF", String(inputs.nsfCount)))
         continue
       }
       if (field === "negative_days") {
@@ -367,7 +411,7 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
         continue
       }
       if (field === "positions") {
-        reasons.push(evaluateNumeric(rule, inputs.positionCount, "Existing positions", String(inputs.positionCount)))
+        reasons.push(evaluateNumeric(rule, inputs.positionCount, "Confirmed positions", String(inputs.positionCount)))
         continue
       }
       if (field === "time_in_business") {
@@ -382,9 +426,36 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           : evaluateNumeric(rule, inputs.fico, "FICO", String(inputs.fico)))
         continue
       }
-      reasons.push(inputs.revenueUnknown || inputs.monthlyRevenue == null
-        ? compareUnknown(rule, "Monthly revenue is unknown, so the funder's minimum cannot pass.")
-        : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
+      if (field === "revenue") {
+        reasons.push(inputs.revenueUnknown || inputs.monthlyRevenue == null
+          ? compareUnknown(rule, "Monthly revenue is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
+        continue
+      }
+      if (field === "average_daily_balance") {
+        reasons.push(inputs.adbUnknown || inputs.averageDailyBalance == null
+          ? compareUnknown(rule, "Average daily balance is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.averageDailyBalance, "Average daily balance", String(inputs.averageDailyBalance)))
+        continue
+      }
+      if (field === "requested_amount") {
+        reasons.push(inputs.requestedAmount == null
+          ? compareUnknown(rule, "Requested amount is unknown, so the funder's maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.requestedAmount, "Requested amount", String(inputs.requestedAmount)))
+        continue
+      }
+      if (field === "term") {
+        reasons.push(inputs.termMonths == null
+          ? compareUnknown(rule, "Term is unknown, so the funder's maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
+        continue
+      }
+      if (field === "deposit_count") {
+        reasons.push(inputs.depositUnknown || inputs.depositCount == null
+          ? compareUnknown(rule, "Deposit count is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.depositCount, "Deposit count", String(inputs.depositCount)))
+        continue
+      }
     }
   }
   return reasons
@@ -426,19 +497,19 @@ function softReasonsAndScore(inputs: ScoringInputs, rules: EligibilityRule[]): {
   }
 
   let nsf = 0
-  if (inputs.nsfUnknown || inputs.nsfCount == null) {
-    reasons.push({ ruleId: "soft.nsf", result: "unknown", detail: "NSF count is unknown, so NSF fit contributes 0." })
+  if (inputs.worstMonthNsf == null) {
+    reasons.push({ ruleId: "soft.nsf", result: "unknown", detail: "Worst-month NSF is unknown, so NSF fit contributes 0." })
   } else {
     const scale = maxNsf && maxNsf > 0 ? maxNsf : DEFAULT_NSF_SCALE
-    nsf = intScore(Math.max(0, scale - inputs.nsfCount), scale)
-    reasons.push({ ruleId: "soft.nsf", result: "pass", detail: `NSF count ${inputs.nsfCount} scores ${nsf} against maximum ${scale}.` })
+    nsf = intScore(Math.max(0, scale - inputs.worstMonthNsf), scale)
+    reasons.push({ ruleId: "soft.nsf", result: "pass", detail: `Worst-month NSF ${inputs.worstMonthNsf} scores ${nsf} against maximum ${scale}.` })
   }
 
   let positions = 0
   {
     const scale = maxPositions && maxPositions > 0 ? maxPositions : DEFAULT_POSITION_SCALE
     positions = intScore(Math.max(0, scale - inputs.positionCount), scale)
-    reasons.push({ ruleId: "soft.positions", result: "pass", detail: `Position count ${inputs.positionCount} scores ${positions} against maximum ${scale}.` })
+    reasons.push({ ruleId: "soft.positions", result: "pass", detail: `Confirmed positions ${inputs.positionCount} scores ${positions} against maximum ${scale}.` })
   }
 
   let requested = 0
@@ -624,7 +695,8 @@ async function loadAggregate(actor: DealActor, dealId: string): Promise<Underwri
   try {
     const row = await getDatabase().prepare<{
       deal_id: string; version: number; monthly_revenue: string; average_daily_balance: string
-      nsf_count: string; negative_days: string; position_count: number; stale: number | boolean; computed_at: string
+      nsf_count: string; negative_days: string; deposit_count: string; worst_month_nsf: string; warnings_json: string
+      position_count: number; stale: number | boolean; computed_at: string
     }>(`SELECT * FROM mca_underwriting_aggregates WHERE workspace_id = ? AND deal_id = ?`).get(actor.workspaceId, dealId)
     if (!row) return null
     const metric = (raw: string): MetricEvidence => parseJson<MetricEvidence>(raw, { value: null, unknown: true, confidence: 0 })
@@ -635,6 +707,9 @@ async function loadAggregate(actor: DealActor, dealId: string): Promise<Underwri
       averageDailyBalance: metric(row.average_daily_balance),
       nsfCount: metric(row.nsf_count),
       negativeDays: metric(row.negative_days),
+      depositCount: metric(row.deposit_count ?? '{"value":null,"unknown":true,"confidence":0}'),
+      worstMonthNsf: metric(row.worst_month_nsf ?? '{"value":null,"unknown":true,"confidence":0}'),
+      warnings: parseJson<string[]>(row.warnings_json ?? "[]", []),
       positionCount: Number(row.position_count),
       stale: Boolean(row.stale),
       computedAt: String(row.computed_at),
@@ -675,12 +750,45 @@ async function loadCompletenessVersion(actor: DealActor, dealId: string): Promis
   }
 }
 
-function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null, months: StatementMonthRecord[], positions: ExistingPositionCandidate[]): ScoringInputs {
+export function resolveDefaultFlag(
+  positions: Array<Pick<ExistingPositionCandidate, "status" | "label">>,
+  latestDataMerchCheck?: DefaultFlagDataMerchCheck | null,
+): boolean {
+  for (const position of positions) {
+    if (position.status === "confirmed" && DEFAULT_FLAG_PATTERN.test(position.label)) return true
+  }
+  if (!latestDataMerchCheck || latestDataMerchCheck.status !== "records") return false
+  for (const merchant of latestDataMerchCheck.merchants ?? []) {
+    for (const record of merchant?.records ?? []) {
+      if (typeof record?.category === "string" && DEFAULT_FLAG_PATTERN.test(record.category)) return true
+    }
+  }
+  return false
+}
+
+async function loadLatestDataMerchCheck(workspaceId: string, dealId: string): Promise<DefaultFlagDataMerchCheck | null> {
+  try {
+    const checks = await listChecks(workspaceId, dealId)
+    return checks[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+export function buildScoringInputs(
+  deal: DealRecord,
+  aggregate: UnderwritingAggregate | null,
+  months: StatementMonthRecord[],
+  positions: ExistingPositionCandidate[],
+  latestDataMerchCheck?: DefaultFlagDataMerchCheck | null,
+): ScoringInputs {
   const asOf = aggregate?.computedAt ?? deal.updatedAt
   const revenue = metricNumber(aggregate?.monthlyRevenue)
   const adb = metricNumber(aggregate?.averageDailyBalance)
   const nsf = metricNumber(aggregate?.nsfCount)
   const negative = metricNumber(aggregate?.negativeDays)
+  const deposit = metricNumber(aggregate?.depositCount)
+  const worstMonthNsf = metricNumber(aggregate?.worstMonthNsf)
   const payments = positions
     .filter((position) => position.status !== "dismissed")
     .reduce((sum, position) => sum + (typeof position.estimatedPayment === "number" && Number.isFinite(position.estimatedPayment) ? position.estimatedPayment : 0), 0)
@@ -694,10 +802,11 @@ function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null
     ...(deal.entityType ? { entity: deal.entityType } : {}),
     ...(deal.industry ? { industry: deal.industry } : {}),
     ...(deal.naicsCode ? { naics: deal.naicsCode } : {}),
-    defaultFlag: deal.status === "default",
+    defaultFlag: resolveDefaultFlag(positions, latestDataMerchCheck),
     ...(deal.startDate ? { tibMonths: monthsBetween(deal.startDate, asOf) } : {}),
     ...(deal.ficoScore != null ? { fico: deal.ficoScore } : {}),
     ...(deal.requestedAmount != null ? { requestedAmount: deal.requestedAmount } : {}),
+    ...(deal.requestedTermMonths != null ? { termMonths: deal.requestedTermMonths } : {}),
     ...(revenue.value != null ? { monthlyRevenue: revenue.value } : {}),
     revenueUnknown: !aggregate || revenue.unknown,
     ...(adb.value != null ? { averageDailyBalance: adb.value } : {}),
@@ -706,7 +815,11 @@ function scoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null
     nsfUnknown: !aggregate || nsf.unknown,
     ...(negative.value != null ? { negativeDays: negative.value } : {}),
     negativeUnknown: !aggregate || negative.unknown,
-    positionCount: aggregate?.positionCount ?? positions.length,
+    ...(deposit.value != null ? { depositCount: deposit.value } : {}),
+    depositUnknown: !aggregate || deposit.unknown,
+    ...(worstMonthNsf.value != null ? { worstMonthNsf: worstMonthNsf.value } : {}),
+    positionCount: aggregate?.positionCount ?? positions.filter((position) => position.status === "confirmed").length,
+    proposedPositionCount: positions.filter((position) => position.status === "proposed").length,
     ...(revenue.value != null ? { availableMonthlyRevenue: Math.max(0, revenue.value - payments) } : {}),
     availableUnknown: !aggregate || availableUnknown,
     ...(latestPeriod || aggregate?.computedAt ? { dataAge: latestPeriod ?? aggregate?.computedAt } : {}),
@@ -750,7 +863,7 @@ export async function getDealScores(actor: DealActor, dealId: string): Promise<D
     stale,
     staleReasons: reasons,
     disclaimer: SCORE_FIT_DISCLAIMER,
-    autoSelectableFunderIds: stale ? [] : autoSelectableFunderIds(scores),
+    autoSelectableFunderIds: stale ? [] : await gatedAutoSelectableFunderIds(actor, deal.id, scores),
     funders: funderSummaries(funders),
   }
 }
@@ -762,7 +875,8 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
   const aggregate = await loadAggregate(actor, deal.id)
   const months = await loadMonths(actor, deal.id)
   const positions = await loadPositions(actor, deal.id)
-  const inputs = scoringInputs(deal, aggregate, months, positions)
+  const latestDataMerchCheck = await loadLatestDataMerchCheck(actor.workspaceId, deal.id)
+  const inputs = buildScoringInputs(deal, aggregate, months, positions, latestDataMerchCheck)
   const versions = await currentVersions(actor, deal, funders, aggregate)
   const previous = await findLatestScoreSnapshot(actor.workspaceId, deal.id)
   const reasons = staleReasonsFor(previous, versions)
@@ -797,7 +911,7 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
       stale: false,
       staleReasons: [],
       disclaimer: SCORE_FIT_DISCLAIMER,
-      autoSelectableFunderIds: autoSelectableFunderIds(previous.scores),
+      autoSelectableFunderIds: await gatedAutoSelectableFunderIds(actor, deal.id, previous.scores),
       funders: funderSummaries(funders),
     }
   }
@@ -822,7 +936,7 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
     stale: false,
     staleReasons: [],
     disclaimer: SCORE_FIT_DISCLAIMER,
-    autoSelectableFunderIds: autoSelectableFunderIds(saved.scores),
+    autoSelectableFunderIds: await gatedAutoSelectableFunderIds(actor, deal.id, saved.scores),
     funders: funderSummaries(funders),
   }
 }

@@ -4,6 +4,7 @@ import { newId } from "../db"
 import type { DealActor } from "../deals/schema"
 import type { QueueSubmissionsResult } from "../submissions/contracts"
 import { queueSubmissions as enqueueSubmissions } from "../submissions/queue"
+import { evaluateUnderwritingSendGates, underwritingSendGateError } from "./send-gates"
 
 export async function queueSubmissions(input: {
   actor: DealActor
@@ -11,6 +12,8 @@ export async function queueSubmissions(input: {
   funderIds: string[]
   analysisRunId?: string
 }): Promise<QueueSubmissionsResult> {
+  const gate = await evaluateUnderwritingSendGates(input.actor, input.dealId)
+  if (!gate.ok) throw underwritingSendGateError(gate)
   const confirmationKey = input.analysisRunId?.trim() || newId()
   return enqueueSubmissions({
     actor: input.actor,

@@ -91,6 +91,99 @@ test("AES ciphertext is not used as the query key", () => {
   assert.notEqual(encryptSensitive("123456789", workspaceId), encryptSensitive("123456789", workspaceId))
 })
 
+test("same EIN across workspaceIds produces different lookup hashes; same workspace is stable", () => {
+  const ein = "12-3456789"
+  const last4 = "7788"
+  const workspaceA = "workspace-hmac-a"
+  const workspaceB = "workspace-hmac-b"
+
+  const einA1 = einLookupHash(workspaceA, ein)
+  const einA2 = einLookupHash(workspaceA, ein)
+  const einB = einLookupHash(workspaceB, ein)
+  assert.equal(typeof einA1, "string")
+  assert.equal(einA1, einA2)
+  assert.notEqual(einA1, einB)
+
+  const idA1 = identityLookupHash(workspaceA, last4)
+  const idA2 = identityLookupHash(workspaceA, last4)
+  const idB = identityLookupHash(workspaceB, last4)
+  assert.equal(typeof idA1, "string")
+  assert.equal(idA1, idA2)
+  assert.notEqual(idA1, idB)
+})
+
+test("merchant hash backfill rewrites legacy unscoped hashes to workspace-scoped values", async () => {
+  const { createHmac, createHash } = await import("node:crypto")
+  const ein = "55-6677001"
+  const last4 = "9001"
+  const normalizedEin = normalizeEin(ein)!
+  const key = process.env.MCA_DATA_ENCRYPTION_KEY
+    ? Buffer.from(process.env.MCA_DATA_ENCRYPTION_KEY, "base64url")
+    : createHash("sha256").update("mca-local-development-encryption-key").digest()
+  const legacyEinHash = createHmac("sha256", key).update(`ein:${normalizedEin}`, "utf8").digest("hex")
+  const legacyIdHash = createHmac("sha256", key).update(`id4:${last4}`, "utf8").digest("hex")
+  const scopedEinHash = einLookupHash(workspaceId, ein)!
+  const scopedIdHash = identityLookupHash(workspaceId, last4)!
+  assert.notEqual(legacyEinHash, scopedEinHash)
+  assert.notEqual(legacyIdHash, scopedIdHash)
+
+  const now = new Date().toISOString()
+  const dealId = newId()
+  const ownerId = newId()
+  const merchantId = newId()
+  const merchantOwnerId = newId()
+  await getDatabase().prepare(`INSERT INTO mca_merchants
+    (id, workspace_id, legal_name, ein_cipher, ein_lookup_hash, address_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, '{}', ?, ?)`).run(
+    merchantId, workspaceId, "Legacy Hash Merchant LLC", encryptSensitive(ein, workspaceId), legacyEinHash, now, now,
+  )
+  await getDatabase().prepare(`INSERT INTO mca_merchant_owners
+    (id, workspace_id, merchant_id, first_name, last_name, ownership_percent, is_primary, identity_last4_cipher, identity_last4_lookup_hash)
+    VALUES (?, ?, ?, 'Les', 'Hash', 100, 1, ?, ?)`).run(
+    merchantOwnerId, workspaceId, merchantId, encryptSensitive(last4, workspaceId), legacyIdHash,
+  )
+  await getDatabase().prepare(`INSERT INTO deals
+    (id, workspace_id, merchant_id, display_id, legal_name, ein_cipher, ein_lookup_hash, address_json, status, pipeline_version, draft_state,
+     missing_required_json, field_sources_json, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'lead', 1, 'partial', '[]', '{}', 1, ?, ?)`).run(
+    dealId, workspaceId, merchantId, `MCA-${dealId.slice(0, 8).toUpperCase()}`, "Legacy Hash Merchant LLC",
+    encryptSensitive(ein, workspaceId), legacyEinHash, now, now,
+  )
+  await getDatabase().prepare(`INSERT INTO deal_owners
+    (id, workspace_id, deal_id, first_name, last_name, ownership_percent, is_primary, identity_last4_cipher, identity_last4_lookup_hash)
+    VALUES (?, ?, ?, 'Les', 'Hash', 100, 1, ?, ?)`).run(
+    ownerId, workspaceId, dealId, encryptSensitive(last4, workspaceId), legacyIdHash,
+  )
+
+  await backfillMerchantHashes({ workspaceId })
+  const deal = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM deals WHERE id = ?",
+  ).get(dealId)
+  const owner = await getDatabase().prepare<{ identity_last4_lookup_hash: string | null }>(
+    "SELECT identity_last4_lookup_hash FROM deal_owners WHERE id = ?",
+  ).get(ownerId)
+  const merchant = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM mca_merchants WHERE id = ?",
+  ).get(merchantId)
+  const merchantOwner = await getDatabase().prepare<{ identity_last4_lookup_hash: string | null }>(
+    "SELECT identity_last4_lookup_hash FROM mca_merchant_owners WHERE id = ?",
+  ).get(merchantOwnerId)
+  assert.equal(deal?.ein_lookup_hash, scopedEinHash)
+  assert.equal(owner?.identity_last4_lookup_hash, scopedIdHash)
+  assert.equal(merchant?.ein_lookup_hash, scopedEinHash)
+  assert.equal(merchantOwner?.identity_last4_lookup_hash, scopedIdHash)
+
+  await backfillMerchantHashes({ workspaceId })
+  const dealAgain = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM deals WHERE id = ?",
+  ).get(dealId)
+  const merchantAgain = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM mca_merchants WHERE id = ?",
+  ).get(merchantId)
+  assert.equal(dealAgain?.ein_lookup_hash, scopedEinHash)
+  assert.equal(merchantAgain?.ein_lookup_hash, scopedEinHash)
+})
+
 test("lookup by EIN finds existing merchant after create", async () => {
   await createDeal(actor(), { idempotencyKey: nextKey("acme"), legalName: "Acme LLC", ein: "12-3456789" })
   const found = await lookupMerchants(actor(), { ein: "123456789" })
@@ -381,12 +474,39 @@ test("attach with a different EIN does not rewrite the original merchant identit
   assert.equal(merchant?.owners[0]?.identityLast4, "1111")
 })
 
-test("forceDuplicate inserts a new merchant even when the EIN hash collides", async () => {
+test("unique index rejects a second merchant row for the same workspace EIN hash", async () => {
+  const now = new Date().toISOString()
+  const ein = "12-1199555"
+  const hash = einLookupHash(workspaceId, ein)!
+  const firstId = newId()
+  const secondId = newId()
+  await getDatabase().prepare(`INSERT INTO mca_merchants
+    (id, workspace_id, legal_name, ein_cipher, ein_lookup_hash, address_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, '{}', ?, ?)`).run(
+    firstId, workspaceId, "Unique Ein First LLC", encryptSensitive(ein, workspaceId), hash, now, now,
+  )
+  await assert.rejects(
+    () => getDatabase().prepare(`INSERT INTO mca_merchants
+      (id, workspace_id, legal_name, ein_cipher, ein_lookup_hash, address_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, '{}', ?, ?)`).run(
+      secondId, workspaceId, "Unique Ein Second LLC", encryptSensitive(ein, workspaceId), hash, now, now,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /unique|duplicate|merchants_workspace_ein_hash_uidx/i)
+      return true
+    },
+  )
+  assert.equal(await merchantCountForEin(ein), 1)
+})
+
+test("forceDuplicate as admin attaches the existing merchant and audits merchant.force_attach", async () => {
   const first = await createDeal(actor(), {
     idempotencyKey: nextKey("force-one"),
     legalName: "Force One LLC",
     ein: "12-1100110",
   })
+  assert.ok(first.deal.merchantId)
   const second = await createDeal(actor(), {
     idempotencyKey: nextKey("force-two"),
     legalName: "Force Two LLC",
@@ -394,9 +514,49 @@ test("forceDuplicate inserts a new merchant even when the EIN hash collides", as
     forceDuplicate: true,
   })
   assert.notEqual(second.deal.id, first.deal.id)
-  assert.notEqual(second.deal.merchantId, first.deal.merchantId)
+  assert.equal(second.deal.merchantId, first.deal.merchantId)
   assert.equal(await dealCountForEin("12-1100110"), 2)
-  assert.equal(await merchantCountForEin("12-1100110"), 2)
+  assert.equal(await merchantCountForEin("12-1100110"), 1)
+  const audit = await getDatabase().prepare<{ action: string; resource_id: string; metadata: string }>(
+    "SELECT action, resource_id, metadata FROM audit_events WHERE workspace_id = ? AND action = 'merchant.force_attach' AND resource_id = ? ORDER BY created_at DESC LIMIT 1",
+  ).get(workspaceId, first.deal.merchantId)
+  assert.equal(audit?.action, "merchant.force_attach")
+  assert.equal(audit?.resource_id, first.deal.merchantId)
+})
+
+test("rep forceDuplicate is rejected with 403 and does not create a deal", async () => {
+  await createDeal(actor(), {
+    idempotencyKey: nextKey("force-rep-seed"),
+    legalName: "Force Rep Seed LLC",
+    ein: "12-1100111",
+  })
+  const beforeDeals = await dealCountForEin("12-1100111")
+  const beforeMerchants = await merchantCountForEin("12-1100111")
+  const rep = actor({
+    userId: "merchant-rep",
+    membershipId: "merchant-rep-member",
+    role: "rep",
+    managedMembershipIds: [],
+    activeMembershipIds: ["merchant-rep-member"],
+  })
+  await assert.rejects(
+    () => createDeal(rep, {
+      idempotencyKey: nextKey("force-rep-denied"),
+      legalName: "Force Rep Denied LLC",
+      ein: "12-1100111",
+      forceDuplicate: true,
+    }),
+    (error: unknown) => {
+      assert.ok(error && typeof error === "object" && "status" in error && "code" in error)
+      assert.equal((error as { status: number }).status, 403)
+      return true
+    },
+  )
+  assert.equal(await dealCountForEin("12-1100111"), beforeDeals)
+  assert.equal(await merchantCountForEin("12-1100111"), beforeMerchants)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT COUNT(*)::int AS count FROM deals WHERE workspace_id = ? AND legal_name = ?",
+  ).get(workspaceId, "Force Rep Denied LLC"))?.count, 0)
 })
 
 test("owner last4 matches do not 409 create and are returned as lookup-only plus create warnings", async () => {

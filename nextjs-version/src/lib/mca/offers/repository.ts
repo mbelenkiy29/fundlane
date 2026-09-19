@@ -1,7 +1,7 @@
 import "server-only"
 
 import { getDatabase, newId, nowIso, parseJson, type DbExecutor } from "../db"
-import type { OfferRecord, OfferRevision, OfferRevisionState, OfferSource, OfferTermsInput, PaymentFrequency } from "./contracts"
+import { defaultOfferRevisionExpiresAt, type OfferRecord, type OfferRevision, type OfferRevisionState, type OfferSource, type OfferTermsInput, type PaymentFrequency } from "./contracts"
 
 type OfferRow = {
   id: string; workspace_id: string; deal_id: string; submission_id: string | null; funder_id: string | null
@@ -13,7 +13,7 @@ type RevisionRow = {
   factor_rate_millionths: number | null; buy_rate_millionths: number | null; term_months: number | null
   payment_amount_cents: number | null; payment_frequency: PaymentFrequency | null; fee_cents: number | null
   commission_cents: number | null; stipulations_json: string; incomplete_fields_json: string
-  effective_at: string; created_by_user_id: string | null; created_at: string
+  effective_at: string; expires_at: string; created_by_user_id: string | null; created_at: string
 }
 
 const fromMillionths = (value: number | null) => value === null ? undefined : Number(value) / 1_000_000
@@ -36,6 +36,7 @@ function revisionFromRow(row: RevisionRow): OfferRevision {
     stipulations: parseJson(row.stipulations_json, []),
     incompleteFields: parseJson(row.incomplete_fields_json, []),
     effectiveAt: row.effective_at,
+    expiresAt: row.expires_at,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
   }
@@ -87,13 +88,14 @@ async function insertRevision(database: DbExecutor, input: {
   await database.prepare(`INSERT INTO mca_offer_revisions
     (id, workspace_id, offer_id, revision_number, state, product, amount_cents, factor_rate_millionths,
      buy_rate_millionths, term_months, payment_amount_cents, payment_frequency, fee_cents, commission_cents,
-     stipulations_json, incomplete_fields_json, effective_at, created_by_user_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+     stipulations_json, incomplete_fields_json, effective_at, expires_at, created_by_user_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     input.id, input.workspaceId, input.offerId, input.revisionNumber, input.state, input.terms.product ?? null,
     input.terms.amountCents ?? null, toMillionths(input.terms.factorRate), toMillionths(input.terms.buyRate),
     input.terms.termMonths ?? null, input.terms.paymentAmountCents ?? null, input.terms.paymentFrequency ?? null,
     input.terms.feeCents ?? null, input.terms.commissionCents ?? null, JSON.stringify(input.terms.stipulations ?? []),
-    JSON.stringify(input.incompleteFields), input.terms.effectiveAt ?? input.createdAt, input.createdByUserId, input.createdAt,
+    JSON.stringify(input.incompleteFields), input.terms.effectiveAt ?? input.createdAt, defaultOfferRevisionExpiresAt(input.createdAt),
+    input.createdByUserId, input.createdAt,
   )
 }
 

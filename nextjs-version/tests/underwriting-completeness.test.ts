@@ -10,6 +10,7 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import type { DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { storeDocument, renameDocument } from "../src/lib/mca/documents/service"
+import type { DocumentCategory } from "../src/lib/mca/documents/contracts"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import {
   checkCompleteness,
@@ -18,10 +19,16 @@ import {
   requireCompletenessActor,
   setRequiredStatementMonths,
 } from "../src/lib/mca/underwriting/completeness"
+import { closedLookbackMonths, setUnderwritingNowForTests } from "../src/lib/mca/underwriting/lookback"
 import { GET as getDealCompleteness, POST as rerunDealCompleteness } from "../src/app/api/mca/underwriting/completeness/[dealId]/route"
+
+const FROZEN_NOW = new Date("2026-09-18T16:00:00.000Z")
+const WORKSPACE_TZ = "America/New_York"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
+delete process.env.MCA_BACKGROUND_JOBS
+delete process.env.VERCEL
 
 const actor = (workspaceId = "workspace-docs"): DealActor => ({
   workspaceId,
@@ -72,22 +79,20 @@ async function addWorkspace(id: string) {
     VALUES (?, ?, NULL, ?, NULL, ?, ?, ?)`).run(`fixture-user-${id}`, `${id}@example.test`, id, `APP-${id}`, now, now)
 }
 
-function lookbackMonths(count: number, now = new Date()): string[] {
-  const year = now.getUTCFullYear()
-  const month = now.getUTCMonth()
-  const periods: string[] = []
-  for (let offset = count - 1; offset >= 0; offset -= 1) {
-    const date = new Date(Date.UTC(year, month - offset, 1))
-    periods.push(`${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`)
-  }
-  return periods
+function lookbackMonths(count = 3): string[] {
+  return closedLookbackMonths(count, WORKSPACE_TZ)
 }
 
 function pdf(tag: string): Uint8Array {
   return new Uint8Array(Buffer.from(`%PDF-1.4\n${tag}\n%%EOF\n`))
 }
 
-async function upload(dealId: string, input: { key: string; filename: string; category: "statement" | "application" | "api_application"; workspaceId?: string }) {
+async function upload(dealId: string, input: {
+  key: string
+  filename: string
+  category: DocumentCategory
+  workspaceId?: string
+}) {
   return storeDocument(actor(input.workspaceId), {
     dealId,
     idempotencyKey: input.key,
@@ -99,33 +104,130 @@ async function upload(dealId: string, input: { key: string; filename: string; ca
   })
 }
 
+async function insertStatementMonth(input: {
+  id: string
+  dealId: string
+  documentId: string
+  accountKind: string
+  period: string
+}) {
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_statement_months
+    (id, workspace_id, deal_id, document_id, account_kind, period, deposits, deposit_count,
+     average_daily_balance, nsf_count, negative_days, ending_balance, extraction_version,
+     corrected, original_extraction, created_at, updated_at)
+    VALUES (?, 'workspace-docs', ?, ?, ?, ?, '0', '0', '0', '0', '0', '0', 1, 0, '{}', ?, ?)`).run(
+    input.id,
+    input.dealId,
+    input.documentId,
+    input.accountKind,
+    input.period,
+    now,
+    now,
+  )
+}
+
+async function uploadRequiredIdentity(dealId: string, prefix: string) {
+  await upload(dealId, { key: `${prefix}-dl`, filename: "driver-license.pdf", category: "driver_license" })
+  await upload(dealId, { key: `${prefix}-vc`, filename: "voided-check.pdf", category: "voided_check" })
+}
+
+async function uploadCheckingMonths(dealId: string, prefix: string, months: string[]) {
+  const docs = []
+  for (const [index, month] of months.entries()) {
+    const doc = await upload(dealId, {
+      key: `${prefix}-m${index}`,
+      filename: `Bank-${month}.pdf`,
+      category: "statement",
+    })
+    await insertStatementMonth({
+      id: `${prefix}-month-${month}`,
+      dealId,
+      documentId: doc.id,
+      accountKind: "checking",
+      period: month,
+    })
+    docs.push(doc)
+  }
+  return docs
+}
+
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_completeness")
   Object.assign(process.env, testDatabase.env())
+  delete process.env.MCA_BACKGROUND_JOBS
+  delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
   await addWorkspace("workspace-docs")
   await addWorkspace("workspace-other")
 })
 
 beforeEach(async () => {
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
   await setRequiredStatementMonths(actor(), 3)
 })
 
 after(async () => {
+  setUnderwritingNowForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
 })
 
-test("MIC-164: application with only 2 of 3 statement months is not ready and names the gap", async () => {
+test("closed-month lookback excludes current month in workspace timezone", async () => {
+  assert.deepEqual(closedLookbackMonths(3, WORKSPACE_TZ, FROZEN_NOW), ["2026-06", "2026-07", "2026-08"])
+
+  const deal = (await createDeal(actor(), { idempotencyKey: "closed-lookback-deal", legalName: "Closed Lookback LLC" })).deal
+  await upload(deal.id, { key: "closed-app", filename: "application.pdf", category: "application" })
+
+  const result = await checkCompleteness(actor(), deal.id)
+  assert.equal(result.ready, false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-06"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-07"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-08"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-09"), false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_driver_license"), true)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_voided_check"), true)
+  assert.deepEqual(JSON.parse(result.ruleSnapshot).lookbackMonths, ["2026-06", "2026-07", "2026-08"])
+})
+
+test("MIC-164: filename-only statements never cover months or make a deal ready", async () => {
+  const deal = (await createDeal(actor(), { idempotencyKey: "filename-deal", legalName: "Filename Merchant LLC" })).deal
+  const months = lookbackMonths(3)
+  assert.deepEqual(months, ["2026-06", "2026-07", "2026-08"])
+  await upload(deal.id, { key: "filename-app", filename: "application.pdf", category: "application" })
+  await uploadRequiredIdentity(deal.id, "filename")
+  const named = []
+  for (const [index, month] of months.entries()) {
+    named.push(await upload(deal.id, {
+      key: `filename-m${index}`,
+      filename: `Bank-${month}-stmt.pdf`,
+      category: "statement",
+    }))
+  }
+
+  const result = await checkCompleteness(actor(), deal.id)
+  assert.equal(result.ready, false)
+  for (const month of months) {
+    assert.equal(result.findings.some((finding) => finding.code === `missing_statement_${month}`), true)
+  }
+  for (const doc of named) {
+    assert.equal(result.findings.some((finding) => finding.code === "unknown_statement_period" && finding.documentId === doc.id), true)
+  }
+  assert.equal(JSON.parse(result.ruleSnapshot).statementSource, "mca_statement_months")
+})
+
+test("MIC-164: application with only 2 of 3 checking months is not ready and names the gap", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "gap-deal", legalName: "Gap Merchant LLC" })).deal
   const months = lookbackMonths(3)
+  assert.deepEqual(months, ["2026-06", "2026-07", "2026-08"])
   await upload(deal.id, { key: "gap-app", filename: "application.pdf", category: "application" })
-  await upload(deal.id, { key: "gap-m0", filename: `Bank-${months[0]}-stmt.pdf`, category: "statement" })
-  await upload(deal.id, { key: "gap-m1", filename: `Bank-${months[1]}-stmt.pdf`, category: "statement" })
+  await uploadRequiredIdentity(deal.id, "gap")
+  await uploadCheckingMonths(deal.id, "gap", months.slice(0, 2))
 
   const result = await checkCompleteness(actor(), deal.id)
   const missingCode = `missing_statement_${months[2]}`
@@ -134,6 +236,9 @@ test("MIC-164: application with only 2 of 3 statement months is not ready and na
   assert.equal(result.findings.find((finding) => finding.code === missingCode)?.period, months[2])
   assert.equal(result.findings.some((finding) => finding.code === `missing_statement_${months[0]}`), false)
   assert.equal(result.findings.some((finding) => finding.code === `missing_statement_${months[1]}`), false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_statement_2026-09"), false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_driver_license"), false)
+  assert.equal(result.findings.some((finding) => finding.code === "missing_voided_check"), false)
   assert.equal(JSON.parse(result.ruleSnapshot).requiredStatementMonths, 3)
 })
 
@@ -141,8 +246,8 @@ test("MIC-164: unchanged rerun keeps version and does not emit another readiness
   const deal = (await createDeal(actor(), { idempotencyKey: "stable-deal", legalName: "Stable Merchant LLC" })).deal
   const months = lookbackMonths(3)
   await upload(deal.id, { key: "stable-app", filename: "application.pdf", category: "application" })
-  await upload(deal.id, { key: "stable-m0", filename: `Bank-${months[0]}.pdf`, category: "statement" })
-  await upload(deal.id, { key: "stable-m1", filename: `Bank-${months[1]}.pdf`, category: "statement" })
+  await uploadRequiredIdentity(deal.id, "stable")
+  await uploadCheckingMonths(deal.id, "stable", months.slice(0, 2))
 
   const first = await checkCompleteness(actor(), deal.id)
   const second = await checkCompleteness(actor(), deal.id)
@@ -156,9 +261,8 @@ test("MIC-164: unreadable statement blocks ready", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "unread-deal", legalName: "Unread Merchant LLC" })).deal
   const months = lookbackMonths(3)
   await upload(deal.id, { key: "unread-app", filename: "application.pdf", category: "application" })
-  await upload(deal.id, { key: "unread-m0", filename: `Bank-${months[0]}.pdf`, category: "statement" })
-  await upload(deal.id, { key: "unread-m1", filename: `Bank-${months[1]}.pdf`, category: "statement" })
-  await upload(deal.id, { key: "unread-m2", filename: `Bank-${months[2]}.pdf`, category: "statement" })
+  await uploadRequiredIdentity(deal.id, "unread")
+  await uploadCheckingMonths(deal.id, "unread", months)
   setDocumentScannerForTests(scanner("infected"))
   const quarantined = await upload(deal.id, { key: "unread-bad", filename: `Bank-${months[2]}-copy.pdf`, category: "statement" })
   await updateDocumentScan(actor().workspaceId, quarantined.id, "quarantined", "legacy-scanner", {}, new Date().toISOString())
@@ -168,14 +272,36 @@ test("MIC-164: unreadable statement blocks ready", async () => {
   assert.equal(result.findings.some((finding) => finding.code === "unreadable_document" && finding.documentId === quarantined.id), true)
 })
 
+test("MIC-164: missing driver license or voided check blocks ready", async () => {
+  const deal = (await createDeal(actor(), { idempotencyKey: "identity-deal", legalName: "Identity Merchant LLC" })).deal
+  const months = lookbackMonths(3)
+  await upload(deal.id, { key: "identity-app", filename: "application.pdf", category: "application" })
+  await uploadCheckingMonths(deal.id, "identity", months)
+
+  const withoutIdentity = await checkCompleteness(actor(), deal.id)
+  assert.equal(withoutIdentity.ready, false)
+  assert.equal(withoutIdentity.findings.some((finding) => finding.code === "missing_driver_license"), true)
+  assert.equal(withoutIdentity.findings.some((finding) => finding.code === "missing_voided_check"), true)
+
+  await upload(deal.id, { key: "identity-dl", filename: "driver-license.pdf", category: "driver_license" })
+  const withDlOnly = await checkCompleteness(actor(), deal.id)
+  assert.equal(withDlOnly.ready, false)
+  assert.equal(withDlOnly.findings.some((finding) => finding.code === "missing_driver_license"), false)
+  assert.equal(withDlOnly.findings.some((finding) => finding.code === "missing_voided_check"), true)
+
+  await upload(deal.id, { key: "identity-vc", filename: "voided-check.pdf", category: "voided_check" })
+  const complete = await checkCompleteness(actor(), deal.id)
+  assert.equal(complete.ready, true)
+  assert.equal(complete.findings.length, 0)
+})
+
 test("MIC-164: partial application fields are still ready when required documents satisfy the rules", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "partial-deal", legalName: "Partial Merchant LLC" })).deal
   assert.equal((await getDealForDocument(actor(), deal.id)).draftState, "partial")
   const months = lookbackMonths(3)
   await upload(deal.id, { key: "partial-app", filename: "api-application.pdf", category: "api_application" })
-  for (const [index, month] of months.entries()) {
-    await upload(deal.id, { key: `partial-m${index}`, filename: `Checking-${month}.pdf`, category: "statement" })
-  }
+  await uploadRequiredIdentity(deal.id, "partial")
+  await uploadCheckingMonths(deal.id, "partial", months)
 
   const result = await checkCompleteness(actor(), deal.id)
   assert.equal((await getDealForDocument(actor(), deal.id)).draftState, "partial")
@@ -191,9 +317,10 @@ test("MIC-164: cross-workspace completeness access is 404", async () => {
   await assert.rejects(() => listReadinessEvents(actor("workspace-other"), deal.id), (error: { code?: string }) => error.code === "deal_not_found")
 })
 
-test("MIC-164: unknown period, period mismatch, and MIC-179 checking months", async () => {
+test("MIC-164: unknown period, period mismatch, and checking months only", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "period-deal", legalName: "Period Merchant LLC" })).deal
   await upload(deal.id, { key: "period-app", filename: "application.pdf", category: "application" })
+  await uploadRequiredIdentity(deal.id, "period")
   const unknown = await upload(deal.id, { key: "period-unknown", filename: "bank-statement.pdf", category: "statement" })
   const mismatched = await upload(deal.id, { key: "period-mismatch", filename: "Bank-2026-08.pdf", category: "statement" })
   await renameDocument(actor(), mismatched.id, "Bank-2026-07.pdf")
@@ -202,22 +329,27 @@ test("MIC-164: unknown period, period mismatch, and MIC-179 checking months", as
   assert.equal(first.ready, false)
   assert.equal(first.findings.some((finding) => finding.code === "unknown_statement_period" && finding.documentId === unknown.id), true)
   assert.equal(first.findings.some((finding) => finding.code === "period_mismatch" && finding.documentId === mismatched.id), true)
+  assert.equal(first.findings.some((finding) => finding.code === "unknown_statement_period" && finding.documentId === mismatched.id), true)
 
   const months = lookbackMonths(3)
   const preferred = await upload(deal.id, { key: "period-preferred", filename: "Bank-2019-01.pdf", category: "statement" })
   const savings = await upload(deal.id, { key: "period-savings", filename: `Savings-${months[2]}.pdf`, category: "statement" })
-  const now = new Date().toISOString()
-  const insertMonth = getDatabase().prepare(`INSERT INTO mca_statement_months
-    (id, workspace_id, deal_id, document_id, account_kind, period, deposits, deposit_count,
-     average_daily_balance, nsf_count, negative_days, ending_balance, extraction_version,
-     corrected, original_extraction, created_at, updated_at)
-    VALUES (?, 'workspace-docs', ?, ?, ?, ?, '0', '0', '0', '0', '0', '0', 1, 0, '{}', ?, ?)`)
-  await insertMonth.run("month-checking", deal.id, preferred.id, "checking", months[0], now, now)
-  await insertMonth.run("month-savings", deal.id, savings.id, "savings", months[2], now, now)
+  await insertStatementMonth({ id: "month-checking", dealId: deal.id, documentId: preferred.id, accountKind: "checking", period: months[0] })
+  await insertStatementMonth({ id: "month-savings", dealId: deal.id, documentId: savings.id, accountKind: "savings", period: months[2] })
+  await insertStatementMonth({
+    id: "month-mismatch-extract",
+    dealId: deal.id,
+    documentId: mismatched.id,
+    accountKind: "checking",
+    period: months[1],
+  })
 
   const withTable = await checkCompleteness(actor(), deal.id)
   assert.equal(withTable.findings.some((finding) => finding.code === `missing_statement_${months[0]}`), false)
+  assert.equal(withTable.findings.some((finding) => finding.code === `missing_statement_${months[1]}`), false)
   assert.equal(withTable.findings.some((finding) => finding.code === `missing_statement_${months[2]}`), true)
+  assert.equal(withTable.findings.some((finding) => finding.code === "period_mismatch" && finding.documentId === mismatched.id), true)
+  assert.equal(withTable.findings.some((finding) => finding.code === "unknown_statement_period" && finding.documentId === mismatched.id), false)
   assert.equal(withTable.version > first.version, true)
   assert.equal((await listReadinessEvents(actor(), deal.id)).length, 2)
 })
@@ -273,4 +405,6 @@ test("MIC-164: deal completeness routes return empty then persist a rerun", asyn
   const rerunBody = await rerun.json() as { ready: boolean; findings: Array<{ code: string }> }
   assert.equal(rerunBody.ready, false)
   assert.equal(rerunBody.findings.some((finding) => finding.code === "missing_application"), true)
+  assert.equal(rerunBody.findings.some((finding) => finding.code === "missing_driver_license"), true)
+  assert.equal(rerunBody.findings.some((finding) => finding.code === "missing_voided_check"), true)
 })

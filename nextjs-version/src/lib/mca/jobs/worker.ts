@@ -1,10 +1,13 @@
 import "server-only"
 
-import { getDatabase } from "../db"
+import { getDatabase, nowIso, parseJson } from "../db"
+import { enqueueSubmissionDelivery } from "../submissions/delivery-job"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { getDealForDocument } from "../deals/service"
 import { processDirectUpload } from "../documents/direct-uploads"
+import { findDocumentById } from "../documents/repository"
+import { documentScanActor } from "../documents/scan-job"
 import { retryDocumentScan } from "../documents/service"
 import { extractApplicationDraft, retryApplicationDraftScan } from "../documents/application-drafts"
 import { findJobById } from "../submissions/repository"
@@ -23,6 +26,11 @@ import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-servi
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   if (job.kind === "application_invitation_reminder") return (await import("../applications/reminders")).processInvitationReminder(job)
+  if (job.kind === "document_scan") {
+    const record = await findDocumentById(job.workspace_id, job.resource_id)
+    if (!record) throw new AppError(404, "document_not_found", "The requested document was not found.")
+    return retryDocumentScan(documentScanActor(record), job.resource_id)
+  }
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {
@@ -43,7 +51,6 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
     }
     case "multipart_task": return processMultipartTask(actor, payload)
     case "document_upload": return processDirectUpload(job.workspace_id, job.resource_id)
-    case "document_scan": return retryDocumentScan(actor, job.resource_id)
     case "draft_scan": return retryApplicationDraftScan(actor, job.resource_id)
     case "draft_extract": return extractApplicationDraft(actor, job.resource_id, payload.approvedFields)
     case "export_create": return createExportJob(actor, payload as CreateExportInput)
@@ -65,15 +72,31 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
 
 const reportedLegacySubmissions = new Set<string>()
 /** New outbox/job inserts are atomic. Older rows lack durable session/key provenance and require review. */
-export async function recoverSubmissionOutbox(): Promise<void> {
-  const rows = await getDatabase().prepare<{ id: string }>(`SELECT j.id FROM mca_submission_jobs j
+export async function recoverSubmissionOutbox(): Promise<number> {
+  const rows = await getDatabase().prepare<{ id: string; workspace_id: string; deal_id: string; payload_json: string }>(`SELECT j.id, j.workspace_id, j.deal_id, o.payload_json FROM mca_submission_jobs j
     JOIN mca_submission_outbox o ON o.job_id=j.id WHERE o.processed_at IS NULL AND j.state IN ('queued','sending')
     AND NOT EXISTS (SELECT 1 FROM mca_background_jobs b WHERE b.kind='submission_delivery' AND b.resource_id=j.id) ORDER BY o.created_at LIMIT 20`).all()
+  let enqueued = 0
   for (const row of rows) {
-    if (reportedLegacySubmissions.has(row.id)) continue
-    reportedLegacySubmissions.add(row.id)
-    console.error(JSON.stringify({ event: "legacy_submission_requires_review", jobId: row.id, code: "original_authority_unavailable" }))
+    const payload = parseJson<Record<string, unknown>>(row.payload_json, {})
+    const actor = payload.actor
+    const actorWorkspaceId = actor && typeof actor === "object" && !Array.isArray(actor)
+      ? (actor as { workspaceId?: unknown }).workspaceId
+      : undefined
+    if (typeof actorWorkspaceId !== "string" || actorWorkspaceId !== row.workspace_id) {
+      if (reportedLegacySubmissions.has(row.id)) continue
+      reportedLegacySubmissions.add(row.id)
+      console.error(JSON.stringify({ event: "legacy_submission_requires_review", jobId: row.id, code: "original_authority_unavailable" }))
+      continue
+    }
+    await enqueueSubmissionDelivery({ workspaceId: row.workspace_id, dealId: row.deal_id, id: row.id })
+    enqueued += 1
   }
+  return enqueued
+}
+
+export async function touchDocumentWorkerHeartbeat(): Promise<void> {
+  await getDatabase().prepare("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=? WHERE id").run(nowIso())
 }
 
 export async function runNextBackgroundJob(): Promise<boolean> {
