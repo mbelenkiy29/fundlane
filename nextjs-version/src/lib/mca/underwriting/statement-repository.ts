@@ -1,6 +1,7 @@
 import "server-only"
 
 import { getDatabase, nowIso, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
+import { computeUnderwritingAggregate, resolveUnderwritingWindow } from "./aggregates"
 import type { ExistingPositionCandidate, MetricEvidence, StatementAccountKind, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { normalizeIsoDates, normalizeMetric, normalizeWarnings } from "./statement-extraction"
 
@@ -330,113 +331,6 @@ export async function deleteCorrectedMonthRecords(workspaceId: string, dealId: s
   return Number((await db().prepare("DELETE FROM mca_statement_months WHERE workspace_id = ? AND deal_id = ? AND corrected = 1").run(workspaceId, dealId)).changes)
 }
 
-function uniqueCheckingMonths(months: StatementMonthRecord[]): StatementMonthRecord[] {
-  return months.filter((month) => month.accountKind === "checking" && !month.duplicateOfId)
-}
-
-function averagePeriodTotals(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  const byPeriod = new Map<string, StatementMonthRecord[]>()
-  for (const month of months) {
-    const group = byPeriod.get(month.period) ?? []
-    group.push(month)
-    byPeriod.set(month.period, group)
-  }
-  const totals: Array<{ value: number; confidence: number }> = []
-  for (const group of byPeriod.values()) {
-    let sum = 0
-    let confidence = 1
-    for (const month of group) {
-      const metric = pick(month)
-      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-      sum += metric.value
-      confidence = Math.min(confidence, metric.confidence)
-    }
-    totals.push({ value: sum, confidence })
-  }
-  return {
-    value: totals.reduce((sum, item) => sum + item.value, 0) / totals.length,
-    unknown: false,
-    confidence: totals.reduce((sum, item) => sum + item.confidence, 0) / totals.length,
-    text,
-  }
-}
-
-function sumMetrics(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  let sum = 0
-  let confidence = 1
-  for (const month of months) {
-    const metric = pick(month)
-    if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-    sum += metric.value
-    confidence = Math.min(confidence, metric.confidence)
-  }
-  return { value: sum, unknown: false, confidence, text }
-}
-
-function worstMonthMetric(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  const byPeriod = new Map<string, StatementMonthRecord[]>()
-  for (const month of months) {
-    const group = byPeriod.get(month.period) ?? []
-    group.push(month)
-    byPeriod.set(month.period, group)
-  }
-  let worst: number | null = null
-  let confidence = 1
-  for (const group of byPeriod.values()) {
-    let sum = 0
-    for (const month of group) {
-      const metric = pick(month)
-      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-      sum += metric.value
-      confidence = Math.min(confidence, metric.confidence)
-    }
-    worst = worst == null ? sum : Math.max(worst, sum)
-  }
-  return worst == null ? { ...UNKNOWN_METRIC, text } : { value: worst, unknown: false, confidence, text }
-}
-
-function collectWarnings(months: StatementMonthRecord[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const month of months) {
-    if (month.duplicateOfId) continue
-    for (const warning of month.warnings) {
-      if (seen.has(warning)) continue
-      seen.add(warning)
-      out.push(warning)
-    }
-  }
-  return out
-}
-
-export function computeUnderwritingAggregateFromMonths(
-  dealId: string,
-  months: StatementMonthRecord[],
-  positions: ExistingPositionCandidate[],
-  version: number,
-  computedAt: string,
-  stale: boolean,
-): UnderwritingAggregate {
-  const unique = uniqueCheckingMonths(months)
-  return {
-    dealId,
-    version,
-    monthlyRevenue: averagePeriodTotals(unique, (month) => month.deposits, "Average of unique checking months' deposits; accounts in the same period are summed first."),
-    averageDailyBalance: averagePeriodTotals(unique, (month) => month.averageDailyBalance, "Average of unique checking months' ADB; accounts in the same period are summed first."),
-    nsfCount: sumMetrics(unique, (month) => month.nsfCount, "Sum of NSF counts from unique checking statements."),
-    negativeDays: sumMetrics(unique, (month) => month.negativeDays, "Sum of negative days from unique checking statements."),
-    depositCount: averagePeriodTotals(unique, (month) => month.depositCount, "Average of unique checking months' deposit counts; accounts in the same period are summed first."),
-    worstMonthNsf: worstMonthMetric(unique, (month) => month.nsfCount, "Worst-month NSF count across unique checking statements."),
-    warnings: collectWarnings(months),
-    positionCount: positions.length,
-    stale,
-    computedAt,
-  }
-}
-
 function metricsDiffer(left: MetricEvidence, right: MetricEvidence): boolean {
   return left.unknown !== right.unknown || left.value !== right.value
 }
@@ -475,17 +369,18 @@ export async function saveRecomputedAggregate(workspaceId: string, dealId: strin
   const existing = await getAggregateRecord(workspaceId, dealId)
   const months = await listMonthRecords(workspaceId, dealId)
   const positions = await listPositionRecords(workspaceId, dealId)
-  const computed = computeUnderwritingAggregateFromMonths(
+  const computed = computeUnderwritingAggregate({
     dealId,
-    months.map(toMonthSummary),
-    positions.map(toPositionSummary),
-    existing?.version ?? 1,
+    months: months.map(toMonthSummary),
+    positions: positions.map(toPositionSummary),
+    window: await resolveUnderwritingWindow(workspaceId),
+    version: existing?.version ?? 1,
     computedAt,
-    stale,
-  )
+  })
   const row: UnderwritingAggregateRow = {
     workspaceId,
     ...computed,
+    stale,
     sourceFingerprint: existing?.sourceFingerprint ?? "",
   }
   await writeAggregateRow(row)
@@ -502,14 +397,14 @@ async function reconcileReviewedAggregate(
   replaceReviewed: boolean,
 ): Promise<{ months: StatementMonthRow[]; positions: ExistingPositionRow[]; aggregate: UnderwritingAggregateRow }> {
   if (replaceReviewed || !persisted.months.some((month) => month.corrected)) return persisted
-  const recomputed = computeUnderwritingAggregateFromMonths(
+  const recomputed = computeUnderwritingAggregate({
     dealId,
-    persisted.months.map(toMonthSummary),
-    persisted.positions.map(toPositionSummary),
-    persisted.aggregate.version,
-    persisted.aggregate.computedAt,
-    persisted.aggregate.stale,
-  )
+    months: persisted.months.map(toMonthSummary),
+    positions: persisted.positions.map(toPositionSummary),
+    window: await resolveUnderwritingWindow(workspaceId),
+    version: persisted.aggregate.version,
+    computedAt: persisted.aggregate.computedAt,
+  })
   if (
     !metricsDiffer(recomputed.monthlyRevenue, persisted.aggregate.monthlyRevenue)
     && !metricsDiffer(recomputed.averageDailyBalance, persisted.aggregate.averageDailyBalance)

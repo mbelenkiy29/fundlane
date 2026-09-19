@@ -18,6 +18,7 @@ import {
   listStatementMonths,
   setStatementExtractionProviderForTests,
 } from "../src/lib/mca/underwriting/statements"
+import { setUnderwritingNowForTests } from "../src/lib/mca/underwriting/lookback"
 import {
   analyzeDealStatementsForCorrections,
   correctExistingPosition,
@@ -27,6 +28,8 @@ import {
 import { GET as listCorrections } from "../src/app/api/mca/underwriting/corrections/route"
 import { GET as getCorrections, POST as postCorrection } from "../src/app/api/mca/underwriting/corrections/[dealId]/route"
 import { POST as analyzeCorrections } from "../src/app/api/mca/underwriting/corrections/[dealId]/analyze/route"
+
+const FROZEN_NOW = new Date("2026-09-18T16:00:00.000Z")
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
@@ -85,6 +88,8 @@ function extraction(input: {
   nsfCount?: MetricEvidence
   negativeDays?: MetricEvidence
   endingBalance?: MetricEvidence
+  nsfDates?: string[]
+  negativeDates?: string[]
   positions?: StatementExtraction["positions"]
 }): StatementExtraction {
   return {
@@ -97,8 +102,8 @@ function extraction(input: {
     nsfCount: input.nsfCount ?? known(1, "1 NSF"),
     negativeDays: input.negativeDays ?? known(2, "2 negative days"),
     endingBalance: input.endingBalance ?? known(3_500, "Ending 3500"),
-    nsfDates: [],
-    negativeDates: [],
+    nsfDates: input.nsfDates ?? [],
+    negativeDates: input.negativeDates ?? [],
     positions: input.positions ?? [{ label: "Rapid Capital", estimatedPayment: 1_200, evidence: "ACH Rapid Capital 1200" }],
     warnings: [],
     provider: "fixture-corrections",
@@ -152,6 +157,7 @@ before(async () => {
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   setStatementExtractionProviderForTests(provider)
+  setUnderwritingNowForTests(FROZEN_NOW)
   await addWorkspace("workspace-corrections")
   await addWorkspace("workspace-other")
 })
@@ -160,8 +166,10 @@ beforeEach(() => {
   extractCalls.length = 0
   setStatementExtractionProviderForTests(provider)
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
 })
 after(async () => {
+  setUnderwritingNowForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   setStatementExtractionProviderForTests()
@@ -172,10 +180,12 @@ after(async () => {
 test("MIC-172 changing one monthly revenue recalculates the aggregate and sets stale", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "rev-deal", legalName: "Revenue Correction LLC" })).deal
   await uploadStatement(actor(), deal.id, "jul.pdf", "rev-jul", extraction({
-    period: "2026-07", accountSuffix: "1111", deposits: known(10_000, "10000"), nsfCount: known(1, "1"), negativeDays: known(1, "1"), positions: [],
+    period: "2026-07", accountSuffix: "1111", deposits: known(10_000, "10000"),
+    nsfCount: known(1, "1"), nsfDates: ["2026-07-10"], negativeDays: known(1, "1"), negativeDates: ["2026-07-11"], positions: [],
   }))
   await uploadStatement(actor(), deal.id, "aug.pdf", "rev-aug", extraction({
-    period: "2026-08", accountSuffix: "1111", deposits: known(8_000, "8000"), nsfCount: known(1, "1"), negativeDays: known(1, "1"), positions: [],
+    period: "2026-08", accountSuffix: "1111", deposits: known(8_000, "8000"),
+    nsfCount: known(1, "1"), nsfDates: ["2026-08-10"], negativeDays: known(1, "1"), negativeDates: ["2026-08-11"], positions: [],
   }))
   const analyzed = await analyzeDealStatements(actor(), deal.id)
   assert.equal(analyzed.aggregate.monthlyRevenue.value, 9_000)

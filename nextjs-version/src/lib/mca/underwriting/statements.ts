@@ -8,7 +8,8 @@ import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { listDocuments, getDocumentContent } from "../documents/service"
 import { requestCorrelationId } from "../http"
-import { STATEMENT_ACCOUNT_KINDS, type ExistingPositionCandidate, type MetricEvidence, type StatementAccountKind, type StatementMonthRecord, type UnderwritingAggregate } from "./contracts"
+import { computeUnderwritingAggregate, resolveUnderwritingWindow } from "./aggregates"
+import { STATEMENT_ACCOUNT_KINDS, type ExistingPositionCandidate, type StatementAccountKind, type StatementMonthRecord, type UnderwritingAggregate } from "./contracts"
 import {
   normalizeIsoDates,
   normalizeMetric,
@@ -34,7 +35,6 @@ import {
 export { setStatementExtractionProviderForTests }
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
-const UNKNOWN_METRIC: MetricEvidence = { value: null, unknown: true, confidence: 0 }
 
 export interface StatementUnderwritingResult {
   months: StatementMonthRecord[]
@@ -97,88 +97,6 @@ function fingerprintFor(documentIds: string[]): string {
   return [...documentIds].sort().join(",")
 }
 
-function uniqueCheckingMonths(months: StatementMonthRecord[]): StatementMonthRecord[] {
-  return months.filter((month) => month.accountKind === "checking" && !month.duplicateOfId)
-}
-
-function averagePeriodTotals(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  const byPeriod = new Map<string, StatementMonthRecord[]>()
-  for (const month of months) {
-    const group = byPeriod.get(month.period) ?? []
-    group.push(month)
-    byPeriod.set(month.period, group)
-  }
-  const totals: Array<{ value: number; confidence: number }> = []
-  for (const group of byPeriod.values()) {
-    let sum = 0
-    let confidence = 1
-    for (const month of group) {
-      const metric = pick(month)
-      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-      sum += metric.value
-      confidence = Math.min(confidence, metric.confidence)
-    }
-    totals.push({ value: sum, confidence })
-  }
-  return {
-    value: totals.reduce((sum, item) => sum + item.value, 0) / totals.length,
-    unknown: false,
-    confidence: totals.reduce((sum, item) => sum + item.confidence, 0) / totals.length,
-    text,
-  }
-}
-
-function sumMetrics(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  let sum = 0
-  let confidence = 1
-  for (const month of months) {
-    const metric = pick(month)
-    if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-    sum += metric.value
-    confidence = Math.min(confidence, metric.confidence)
-  }
-  return { value: sum, unknown: false, confidence, text }
-}
-
-function worstMonthMetric(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
-  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
-  const byPeriod = new Map<string, StatementMonthRecord[]>()
-  for (const month of months) {
-    const group = byPeriod.get(month.period) ?? []
-    group.push(month)
-    byPeriod.set(month.period, group)
-  }
-  let worst: number | null = null
-  let confidence = 1
-  for (const group of byPeriod.values()) {
-    let sum = 0
-    for (const month of group) {
-      const metric = pick(month)
-      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
-      sum += metric.value
-      confidence = Math.min(confidence, metric.confidence)
-    }
-    worst = worst == null ? sum : Math.max(worst, sum)
-  }
-  return worst == null ? { ...UNKNOWN_METRIC, text } : { value: worst, unknown: false, confidence, text }
-}
-
-function collectWarnings(months: StatementMonthRecord[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const month of months) {
-    if (month.duplicateOfId) continue
-    for (const warning of month.warnings) {
-      if (seen.has(warning)) continue
-      seen.add(warning)
-      out.push(warning)
-    }
-  }
-  return out
-}
-
 function isDuplicateOf(canonical: StatementMonthRecord, candidate: StatementMonthRecord): boolean {
   if (canonical.period !== candidate.period) return false
   const left = accountSuffix(canonical.accountSuffix) ?? ""
@@ -205,24 +123,6 @@ function markDuplicates(months: StatementMonthRow[], documentCreatedAt: Map<stri
     canonicals.push(next)
     return next
   })
-}
-
-function computeAggregate(dealId: string, months: StatementMonthRecord[], positions: ExistingPositionCandidate[], version: number, computedAt: string): UnderwritingAggregate {
-  const unique = uniqueCheckingMonths(months)
-  return {
-    dealId,
-    version,
-    monthlyRevenue: averagePeriodTotals(unique, (month) => month.deposits, "Average of unique checking months' deposits; accounts in the same period are summed first."),
-    averageDailyBalance: averagePeriodTotals(unique, (month) => month.averageDailyBalance, "Average of unique checking months' ADB; accounts in the same period are summed first."),
-    nsfCount: sumMetrics(unique, (month) => month.nsfCount, "Sum of NSF counts from unique checking statements."),
-    negativeDays: sumMetrics(unique, (month) => month.negativeDays, "Sum of negative days from unique checking statements."),
-    depositCount: averagePeriodTotals(unique, (month) => month.depositCount, "Average of unique checking months' deposit counts; accounts in the same period are summed first."),
-    worstMonthNsf: worstMonthMetric(unique, (month) => month.nsfCount, "Worst-month NSF count across unique checking statements."),
-    warnings: collectWarnings(months),
-    positionCount: positions.length,
-    stale: false,
-    computedAt,
-  }
 }
 
 function monthFromExtraction(input: {
@@ -391,9 +291,17 @@ export async function analyzeDealStatements(
     )
     const summaries = months.map((month) => toMonthSummary({ ...month, workspaceId: actor.workspaceId, dealId }))
     const positionSummaries = positions.map((position) => toPositionSummary({ ...position, workspaceId: actor.workspaceId, dealId }))
+    const window = await resolveUnderwritingWindow(actor.workspaceId)
     const aggregate: UnderwritingAggregateRow = {
       workspaceId: actor.workspaceId,
-      ...computeAggregate(dealId, summaries, positionSummaries, (lockedAggregate?.version ?? 0) + 1, now),
+      ...computeUnderwritingAggregate({
+        dealId,
+        months: summaries,
+        positions: positionSummaries,
+        window,
+        version: (lockedAggregate?.version ?? 0) + 1,
+        computedAt: now,
+      }),
       sourceFingerprint: fingerprint,
     }
     const persisted = await persistStatementAnalysis({

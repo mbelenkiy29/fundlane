@@ -12,7 +12,9 @@ import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { isDocumentReady } from "../src/lib/mca/documents/contracts"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
-import type { MetricEvidence, StatementAccountKind } from "../src/lib/mca/underwriting/contracts"
+import type { ExistingPositionCandidate, MetricEvidence, StatementAccountKind, StatementMonthRecord } from "../src/lib/mca/underwriting/contracts"
+import { computeUnderwritingAggregate } from "../src/lib/mca/underwriting/aggregates"
+import { setUnderwritingNowForTests } from "../src/lib/mca/underwriting/lookback"
 import type { StatementExtraction, StatementExtractionProvider } from "../src/lib/mca/underwriting/statement-extraction"
 import {
   analyzeDealStatements,
@@ -24,6 +26,8 @@ import {
 import { GET as listStatements } from "../src/app/api/mca/underwriting/statements/route"
 import { GET as getStatements } from "../src/app/api/mca/underwriting/statements/[dealId]/route"
 import { POST as analyzeStatements } from "../src/app/api/mca/underwriting/statements/[dealId]/analyze/route"
+
+const FROZEN_NOW = new Date("2026-09-18T16:00:00.000Z")
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 delete process.env.MCA_DOCUMENT_SCANNER
@@ -133,6 +137,7 @@ before(async () => {
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner("clean"))
   setStatementExtractionProviderForTests(provider)
+  setUnderwritingNowForTests(FROZEN_NOW)
   await addWorkspace("workspace-statements")
   await addWorkspace("workspace-other")
 })
@@ -141,8 +146,10 @@ beforeEach(() => {
   extractCalls.length = 0
   setStatementExtractionProviderForTests(provider)
   setDocumentScannerForTests(scanner("clean"))
+  setUnderwritingNowForTests(FROZEN_NOW)
 })
 after(async () => {
+  setUnderwritingNowForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   setStatementExtractionProviderForTests()
@@ -170,7 +177,7 @@ test("MIC-179 duplicate statements same period/account do not double-count depos
   assert.equal(first.aggregate.negativeDays.value, 2)
   assert.equal(first.aggregate.stale, false)
   assert.equal(first.positions.length, 1)
-  assert.equal(first.aggregate.positionCount, 1)
+  assert.equal(first.aggregate.positionCount, 0)
 })
 
 test("MIC-179 uncertain extraction stays unknown in the aggregate and is never presented as zero", async () => {
@@ -258,19 +265,23 @@ test("statement extraction persists NSF and negative dates without changing depo
 test("MIC-179 unique checking accounts in the same period are summed before the monthly average", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "multi-acct", legalName: "Two Accounts LLC" })).deal
   await uploadStatement(actor(), deal.id, "acct-1111-jul.pdf", "acct-jul", extraction({
-    period: "2026-07", accountSuffix: "1111", deposits: known(6_000, "6000"), averageDailyBalance: known(1_000, "1000"), nsfCount: known(1, "1"), negativeDays: known(1, "1"), positions: [],
+    period: "2026-07", accountSuffix: "1111", deposits: known(6_000, "6000"), averageDailyBalance: known(1_000, "1000"),
+    nsfCount: known(1, "1"), nsfDates: ["2026-07-15"], negativeDays: known(1, "1"), negativeDates: ["2026-07-16"], positions: [],
   }))
   await uploadStatement(actor(), deal.id, "acct-1111-aug.pdf", "acct-aug-1", extraction({
-    period: "2026-08", accountSuffix: "1111", deposits: known(10_000, "10000"), averageDailyBalance: known(2_000, "2000"), nsfCount: known(1, "1"), negativeDays: known(2, "2"), positions: [],
+    period: "2026-08", accountSuffix: "1111", deposits: known(10_000, "10000"), averageDailyBalance: known(2_000, "2000"),
+    nsfCount: known(1, "1"), nsfDates: ["2026-08-04"], negativeDays: known(2, "2"), negativeDates: ["2026-08-05", "2026-08-06"], positions: [],
   }))
   await uploadStatement(actor(), deal.id, "acct-2222-aug.pdf", "acct-aug-2", extraction({
-    period: "2026-08", accountSuffix: "2222", deposits: known(5_000, "5000"), averageDailyBalance: known(1_000, "1000"), nsfCount: known(2, "2"), negativeDays: known(1, "1"), positions: [],
+    period: "2026-08", accountSuffix: "2222", deposits: known(5_000, "5000"), averageDailyBalance: known(1_000, "1000"),
+    nsfCount: known(2, "2"), nsfDates: ["2026-08-04", "2026-08-19"], negativeDays: known(1, "1"), negativeDates: ["2026-08-07"], positions: [],
   }))
   const result = await analyzeDealStatements(actor(), deal.id)
   assert.equal(result.aggregate.monthlyRevenue.value, 10_500)
   assert.equal(result.aggregate.averageDailyBalance.value, 2_000)
-  assert.equal(result.aggregate.nsfCount.value, 4)
+  assert.equal(result.aggregate.nsfCount.value, 3)
   assert.equal(result.aggregate.negativeDays.value, 4)
+  assert.equal(result.aggregate.worstMonthNsf.value, 2)
 })
 
 test("MIC-179 cross-workspace analysis is a 404", async () => {
@@ -394,4 +405,152 @@ test("MIC-179 deals:read lists, deals:write analyzes, and intake:write is 403", 
   assert.equal(listedBody.months.length, 1)
   assert.equal(listedBody.aggregate.monthlyRevenue.value, 7_500)
   assert.equal((await getStatements(dealRequest("stmt-read"), params)).status, 200)
+})
+
+const LOOKBACK = ["2026-06", "2026-07", "2026-08"]
+const FIVE_NSF_DAYS = ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"]
+
+function statementMonth(overrides: Partial<StatementMonthRecord> & { id: string; period: string }): StatementMonthRecord {
+  return {
+    dealId: "deal-aggregate",
+    documentId: `doc-${overrides.id}`,
+    accountKind: "checking",
+    deposits: known(10_000, "deposits"),
+    depositCount: known(12, "12 deposits"),
+    averageDailyBalance: known(4_000, "ADB"),
+    nsfCount: known(0, "0 NSF"),
+    negativeDays: known(0, "0 negative days"),
+    nsfDates: [],
+    negativeDates: [],
+    endingBalance: known(3_500, "ending"),
+    warnings: [],
+    extractionVersion: 1,
+    corrected: false,
+    ...overrides,
+  }
+}
+
+function existingPosition(status: ExistingPositionCandidate["status"], id = `pos-${status}`): ExistingPositionCandidate {
+  return { id, dealId: "deal-aggregate", label: `Position ${status}`, evidence: "ACH", status }
+}
+
+function aggregateOf(input: { months?: StatementMonthRecord[]; positions?: ExistingPositionCandidate[]; window?: string[] }) {
+  return computeUnderwritingAggregate({
+    dealId: "deal-aggregate",
+    months: input.months ?? [],
+    positions: input.positions ?? [],
+    window: input.window ?? LOOKBACK,
+    version: 1,
+    computedAt: "2026-09-18T16:00:00.000Z",
+  })
+}
+
+test("unique-day NSF: same 5 days on two accounts count as 5", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({ id: "acct-1111", period: "2026-08", accountSuffix: "1111", nsfDates: FIVE_NSF_DAYS, nsfCount: known(5, "5 NSF") }),
+      statementMonth({ id: "acct-2222", period: "2026-08", accountSuffix: "2222", nsfDates: FIVE_NSF_DAYS, nsfCount: known(5, "5 NSF") }),
+    ],
+  })
+  assert.equal(result.nsfCount.value, 5)
+  assert.equal(result.nsfCount.unknown, false)
+  assert.notEqual(result.nsfCount.value, 10)
+  assert.equal(result.worstMonthNsf.value, 5)
+})
+
+test("unique-day NSF: disjoint dates across accounts are unioned", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({
+        id: "acct-1111", period: "2026-08", accountSuffix: "1111",
+        nsfDates: ["2026-08-01", "2026-08-02"], nsfCount: known(2, "2 NSF"),
+      }),
+      statementMonth({
+        id: "acct-2222", period: "2026-08", accountSuffix: "2222",
+        nsfDates: ["2026-08-03", "2026-08-04", "2026-08-05"], nsfCount: known(3, "3 NSF"),
+      }),
+    ],
+  })
+  assert.equal(result.nsfCount.value, 5)
+  assert.equal(result.nsfCount.unknown, false)
+  assert.equal(result.worstMonthNsf.value, 5)
+})
+
+test("unique-day NSF: known count on a single file without dates is used", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({ id: "aug", period: "2026-08", nsfDates: [], nsfCount: known(3, "3 NSF") }),
+    ],
+  })
+  assert.equal(result.nsfCount.value, 3)
+  assert.equal(result.nsfCount.unknown, false)
+  assert.equal(result.worstMonthNsf.value, 3)
+})
+
+test("unique-day NSF: two files without dates are unknown", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({ id: "acct-1111", period: "2026-08", accountSuffix: "1111", nsfDates: [], nsfCount: known(2, "2 NSF") }),
+      statementMonth({ id: "acct-2222", period: "2026-08", accountSuffix: "2222", nsfDates: [], nsfCount: known(3, "3 NSF") }),
+    ],
+  })
+  assert.equal(result.nsfCount.unknown, true)
+  assert.equal(result.nsfCount.value, null)
+  assert.equal(result.worstMonthNsf.unknown, true)
+})
+
+test("unique-day NSF: worst-month is the highest monthly unique-day count", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({
+        id: "jul", period: "2026-07",
+        nsfDates: ["2026-07-10", "2026-07-11"], nsfCount: known(2, "2 NSF"),
+      }),
+      statementMonth({
+        id: "aug", period: "2026-08",
+        nsfDates: FIVE_NSF_DAYS, nsfCount: known(5, "5 NSF"),
+      }),
+    ],
+  })
+  assert.equal(result.nsfCount.value, 7)
+  assert.equal(result.worstMonthNsf.value, 5)
+  assert.equal(result.worstMonthNsf.unknown, false)
+})
+
+test("aggregate skips unknown period and current month", () => {
+  const result = aggregateOf({
+    months: [
+      statementMonth({
+        id: "unknown", period: "unknown",
+        deposits: known(99_000, "skip"), averageDailyBalance: known(50_000, "skip"),
+        nsfDates: FIVE_NSF_DAYS, nsfCount: known(5, "skip"),
+      }),
+      statementMonth({
+        id: "current", period: "2026-09",
+        deposits: known(80_000, "skip"), averageDailyBalance: known(80_000, "skip"),
+        nsfDates: FIVE_NSF_DAYS, nsfCount: known(5, "skip"),
+      }),
+      statementMonth({
+        id: "aug", period: "2026-08",
+        deposits: known(10_000, "keep"), averageDailyBalance: known(4_000, "keep"),
+        nsfDates: ["2026-08-10"], nsfCount: known(1, "1 NSF"),
+      }),
+    ],
+  })
+  assert.equal(result.monthlyRevenue.value, 10_000)
+  assert.equal(result.averageDailyBalance.value, 4_000)
+  assert.equal(result.nsfCount.value, 1)
+  assert.equal(result.worstMonthNsf.value, 1)
+})
+
+test("proposed positions contribute 0 to positionCount", () => {
+  const result = aggregateOf({ positions: [existingPosition("proposed")] })
+  assert.equal(result.positionCount, 0)
+})
+
+test("dismissed positions do not inflate positionCount", () => {
+  const result = aggregateOf({
+    positions: [existingPosition("confirmed"), existingPosition("dismissed"), existingPosition("proposed")],
+  })
+  assert.equal(result.positionCount, 1)
 })
