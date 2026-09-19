@@ -5,7 +5,7 @@ import { getDatabase, newId, parseJson, recordAuditEvent, withTransaction, type 
 import type { DealActor } from "../deals/schema"
 import type { AdapterStatusResult, SubmissionJob } from "./contracts"
 import { nowIso } from "./clock"
-import { insertAttempt, insertDealSubmissionCache } from "./repository"
+import { displayCacheStatus, insertAttempt, insertDealSubmissionCache, updateJobRecord } from "./repository"
 
 export const STATUS_MAPPING_VERSION = 1 as const
 
@@ -442,7 +442,19 @@ export async function reconcileProviderStatus(input: ReconcileProviderStatusInpu
     }
 
     const ignoreReason = shouldIgnore(currentOffer, mapped, evidence)
-    const nextCache = ignoreReason ? submission.status : cacheStatus(mapped, submission.status)
+    let jobState = input.job.state
+    if (!ignoreReason && mapped.normalized === "funded") {
+      const updated = await updateJobRecord(input.job.workspaceId, input.job.id, { state: "funded" }, executor)
+      jobState = updated.state
+    } else if (!ignoreReason && mapped.normalized === "declined" && input.job.state !== "funded") {
+      const updated = await updateJobRecord(input.job.workspaceId, input.job.id, { state: "declined" }, executor)
+      jobState = updated.state
+    }
+    const nextCache = ignoreReason
+      ? submission.status
+      : mapped.normalized === "funded" || mapped.normalized === "declined"
+        ? displayCacheStatus(jobState)
+        : cacheStatus(mapped, submission.status)
     if (!ignoreReason) {
       await insertDealSubmissionCache({
         workspaceId: input.job.workspaceId,

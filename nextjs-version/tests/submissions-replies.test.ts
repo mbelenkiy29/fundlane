@@ -277,6 +277,7 @@ type QueueBody = {
       notes: string[]
       subjectHits?: string[]
       candidateDealIds?: string[]
+      candidateJobIds?: string[]
     }
   }>
 }
@@ -499,4 +500,51 @@ test("MIC-149: ambiguous and unrecognized replies go to pending_review, intake i
   assert.equal(badJson.status, 400)
 
   assert.ok(betaFunderId)
+})
+
+test("unique-domain reply with zero subject hits stays pending_review", async () => {
+  const gammaFunderId = (await createFunder(actor(), {
+    idempotencyKey: "gamma-replies-funder-zero-hit",
+    legalName: "Gamma Capital LLC",
+    nickname: "Gamma",
+    domains: ["gamma-replies.example.test"],
+    routes: [{ kind: "email", label: "Gamma inbox", destination: "submissions@gamma-replies.example.test", documentExceptions: [], active: true }],
+  })).funder.id
+  const deal = await seedDeal("Unique Domain Zero Hit LLC")
+  const sent = await sendTo(deal.id, gammaFunderId)
+  const spy: MailboxSpy = {
+    list: 0,
+    mutations: [],
+    messages: [{
+      providerMessageId: "gamma-unique-domain-zero-hit",
+      threadId: "gmail-thread-zero-hit",
+      rfcMessageId: "<reply-zero-hit@gamma-replies.example.test>",
+      from: "Underwriting <uw@gamma-replies.example.test>",
+      subject: "Checking in",
+      body: "Any update on the file?",
+    }],
+  }
+  setReplyMailboxForTests(fixtureMailbox(spy))
+
+  const run = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ senderId, enabled: true }),
+  }))
+  assert.equal(run.status, 200)
+  const runBody = await run.json() as RunBody
+  const ingested = runBody.ingested.find((item) => item.providerMessageId === "gamma-unique-domain-zero-hit")
+  assert.equal(ingested?.state, "pending_review")
+
+  const queued = await repliesGet(cookieRequest(`/api/mca/submissions/replies?dealId=${deal.id}`, "admin-session-token"))
+  assert.equal(queued.status, 200)
+  const queueBody = await queued.json() as QueueBody
+  const reply = queueBody.replies.find((item) => item.providerMessageId === "gamma-unique-domain-zero-hit")
+  assert.ok(reply)
+  assert.equal(reply.state, "pending_review")
+  assert.equal(reply.matchedDealId, undefined)
+  assert.equal(reply.matchedJobId, undefined)
+  assert.equal(reply.evidence.subjectHits?.length ?? 0, 0)
+  assert.equal(reply.evidence.candidateJobIds?.includes(sent.jobId), true)
+  assert.equal(reply.evidence.candidateDealIds?.includes(deal.id), true)
+  assert.equal(spy.mutations.length, 0)
 })

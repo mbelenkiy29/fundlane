@@ -399,6 +399,27 @@ test("MIC-113: out-of-order pending does not regress funded or duplicate offers"
   assert.equal(rows[0]?.raw_status, "funded")
   const cache = await submissionRow(job.jobId)
   assert.equal(cache?.status, "approved")
+  const fundedJob = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(job.jobId)
+  assert.equal(fundedJob?.state, "funded")
+})
+
+test("reconciliation declined maps the submission job to declined", async () => {
+  const { job } = await submitJob(statusFunderId)
+  const webhook = await postWebhook(job.jobId, {
+    eventId: "evt-declined-job",
+    status: "declined",
+  })
+  assert.equal(webhook.status, 200)
+  const body = await webhook.json() as { ignored: boolean; normalized: string }
+  assert.equal(body.ignored, false)
+  assert.equal(body.normalized, "declined")
+  const declinedJob = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(job.jobId)
+  assert.equal(declinedJob?.state, "declined")
+  assert.equal((await submissionRow(job.jobId))?.status, "declined")
 })
 
 test("MIC-113: unknown status remains visible with the original value and does not invent terms", async () => {

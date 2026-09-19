@@ -420,36 +420,19 @@ test("MIC-122: approval without financial terms does not fabricate amounts and r
   assert.equal(firstBody.state, "success")
   assert.equal(firstBody.classification, "approval")
   assert.equal(firstBody.termsUnknown, true)
+  assert.equal(firstBody.requiresReview, true)
   assert.equal(firstBody.replayed, false)
-  assert.equal(firstBody.offer?.created, true)
-  assert.equal(firstBody.offer?.amount, null)
-  assert.equal(firstBody.offer?.rate, null)
-  assert.equal(firstBody.offer?.term, null)
-  assert.equal(firstBody.offer?.source, "email")
-  assert.equal(firstBody.offer?.termsUnknown, true)
-  assert.equal(firstBody.offer?.status, "received")
+  assert.equal(firstBody.offer, undefined)
   assert.equal(firstBody.replyState, "processed")
   assert.match(firstBody.message ?? "", /left unknown/)
   assert.equal(JSON.stringify(firstBody).includes("25000"), false)
   assertNoSecret(firstBody)
-
-  const offerId = firstBody.offer!.id
-  const stored = await getDatabase().prepare<{
-    id: string
-    amount: number | null
-    rate: number | null
-    term: number | null
-    source: string | null
-    terms_unknown: number | string
-    status: string
-  }>("SELECT id, amount, rate, term, source, terms_unknown, status FROM deal_offers WHERE id = ?").get(offerId)
-  assert.equal(stored?.id, offerId)
-  assert.equal(stored?.amount, null)
-  assert.equal(stored?.rate, null)
-  assert.equal(stored?.term, null)
-  assert.equal(stored?.source, "email")
-  assert.equal(Number(stored?.terms_unknown), 1)
-  assert.equal(stored?.status, "received")
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM deal_offers WHERE deal_id = ?",
+  ).get(deal.id))?.count, 0)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(deal.id))?.count, 0)
 
   const replay = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
     method: "POST",
@@ -458,10 +441,9 @@ test("MIC-122: approval without financial terms does not fabricate amounts and r
   assert.equal(replay.status, 200)
   const replayBody = await replay.json() as ExtractBody
   assert.equal(replayBody.replayed, true)
-  assert.equal(replayBody.offer?.id, offerId)
-  assert.equal(replayBody.offer?.created, false)
-  assert.equal(replayBody.offer?.amount, null)
+  assert.equal(replayBody.offer, undefined)
   assert.equal(replayBody.termsUnknown, true)
+  assert.equal(replayBody.requiresReview, true)
 
   const corrected = await extractPatch(cookieRequest(`/api/mca/submissions/extract/${replyId}`, "admin-session-token", {
     method: "PATCH",
@@ -470,16 +452,36 @@ test("MIC-122: approval without financial terms does not fabricate amounts and r
   assert.equal(corrected.status, 200)
   const correctedBody = await corrected.json() as ExtractBody
   assert.equal(correctedBody.corrected, true)
-  assert.equal(correctedBody.offer?.id, offerId)
+  assert.equal(correctedBody.requiresReview, false)
+  assert.equal(correctedBody.offer?.created, true)
   assert.equal(correctedBody.offer?.amount, 25_000)
   assert.equal(correctedBody.offer?.rate, 1.35)
   assert.equal(correctedBody.offer?.term, 10)
   assert.equal(correctedBody.termsUnknown, false)
   assert.equal(correctedBody.offer?.status, "presented")
+  const offerId = correctedBody.offer!.id
   const offerCount = await getDatabase().prepare<{ count: number }>(
     "SELECT count(*)::int AS count FROM deal_offers WHERE deal_id = ? AND COALESCE(source, 'email') = 'email'",
   ).get(deal.id)
   assert.equal(offerCount?.count, 1)
+  const closing = await getDatabase().prepare<{
+    id: string
+    source: string
+    external_id: string | null
+    submission_id: string | null
+    amount_cents: number | null
+  }>(`SELECT o.id, o.source, o.external_id, o.submission_id, r.amount_cents
+      FROM mca_offers o
+      JOIN mca_offer_revisions r ON r.workspace_id = o.workspace_id AND r.id = o.current_revision_id
+      WHERE o.deal_id = ?`).get(deal.id)
+  assert.equal(closing?.source, "email")
+  assert.equal(closing?.external_id, `email-extract:${replyId}`)
+  assert.equal(closing?.submission_id, sent.jobId)
+  assert.equal(closing?.amount_cents, 2_500_000)
+  assert.ok(offerId)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(deal.id))?.count, 1)
   assert.equal(fetchCalls, 0)
   assert.equal(classifyCalls.some((item) => item.body.includes("We will send terms shortly")), true)
 })
@@ -648,4 +650,110 @@ test("MIC-122: unrelated stays unmatched, email is data not instructions, and AP
   assert.equal(unavailable.status, 503)
   assert.equal((await unavailable.json() as { error: { code: string } }).error.code, "provider_unavailable")
   assert.equal(fetchCalls, 0)
+})
+
+test("confirmed approval with amount bridges mca_offers in integer cents", async () => {
+  const deal = await seedDeal("Approved With Terms LLC")
+  const sent = await sendTo(deal.id)
+  setReplyOutcomeClassifierForTests({
+    name: "fixture-terms",
+    model: "fixture-v1",
+    async classify() {
+      return classified({
+        classification: "approval",
+        summary: "Approved with stated terms.",
+        amount: { value: 25_000, unknown: false, evidence: "Approved for 25000" },
+        rate: { value: 1.35, unknown: false, evidence: "rate 1.35" },
+        term: { value: 10, unknown: false, evidence: "10 months" },
+      })
+    },
+  })
+  const ingested = await ingest([{
+    providerMessageId: "alpha-approval-with-terms",
+    threadId: "thread-approval-with-terms",
+    from: "Underwriting <uw@alpha-extract.example.test>",
+    subject: `Application approved for ${deal.displayId}`,
+    body: "Approved for 25000 at rate 1.35 for 10 months.",
+  }])
+  const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-approval-with-terms")?.id
+  assert.ok(replyId)
+  assert.equal(ingested.ingested[0]?.state, "matched")
+
+  const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(extracted.status, 200)
+  const body = await extracted.json() as ExtractBody
+  assert.equal(body.classification, "approval")
+  assert.equal(body.requiresReview, false)
+  assert.equal(body.offer?.created, true)
+  assert.equal(body.offer?.amount, 25_000)
+  assert.equal(body.offer?.source, "email")
+
+  const closing = await getDatabase().prepare<{
+    source: string
+    external_id: string | null
+    submission_id: string | null
+    amount_cents: number | null
+    factor_rate_millionths: number | null
+    term_months: number | null
+  }>(`SELECT o.source, o.external_id, o.submission_id, r.amount_cents, r.factor_rate_millionths, r.term_months
+      FROM mca_offers o
+      JOIN mca_offer_revisions r ON r.workspace_id = o.workspace_id AND r.id = o.current_revision_id
+      WHERE o.deal_id = ?`).get(deal.id)
+  assert.equal(closing?.source, "email")
+  assert.equal(closing?.external_id, `email-extract:${replyId}`)
+  assert.equal(closing?.submission_id, sent.jobId)
+  assert.equal(closing?.amount_cents, 2_500_000)
+  assert.equal(closing?.factor_rate_millionths, 1_350_000)
+  assert.equal(closing?.term_months, 10)
+
+  const replay = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId }),
+  }))
+  assert.equal((await replay.json() as ExtractBody).offer?.created, false)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(deal.id))?.count, 1)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offer_revisions WHERE offer_id IN (SELECT id FROM mca_offers WHERE deal_id = ?)",
+  ).get(deal.id))?.count, 1)
+})
+
+test("confirmed decline maps the submission job to declined", async () => {
+  const deal = await seedDeal("Declined File LLC")
+  const sent = await sendTo(deal.id)
+  const ingested = await ingest([{
+    providerMessageId: "alpha-decline-outcome",
+    threadId: "thread-decline-outcome",
+    from: "Underwriting <uw@alpha-extract.example.test>",
+    subject: `Unable to offer for ${deal.displayId}`,
+    body: "We are unable to offer funding on this file.",
+  }])
+  const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-decline-outcome")?.id
+  assert.ok(replyId)
+
+  const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(extracted.status, 200)
+  const body = await extracted.json() as ExtractBody
+  assert.equal(body.classification, "decline")
+  assert.equal(body.requiresReview, false)
+  assert.equal(body.offer?.status, "declined")
+
+  const job = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(sent.jobId)
+  assert.equal(job?.state, "declined")
+  const cache = await getDatabase().prepare<{ status: string }>(
+    "SELECT status FROM deal_submissions WHERE job_id = ?",
+  ).get(sent.jobId)
+  assert.equal(cache?.status, "declined")
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(deal.id))?.count, 0)
 })

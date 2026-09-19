@@ -690,12 +690,31 @@ function correlate(message: MailboxMessage, anchors: SubmissionAnchor[], funders
   if (domainAnchors.length === 1) {
     const hit = domainAnchors[0]!
     const hits = subjectHitsFor(message, hit)
-    if (hits.length) notes.push(`Separate-thread subject/body matched ${hits.join(", ")}.`)
-    else notes.push("Separate-thread reply linked by a unique authorized domain and a single sent job.")
+    if (hits.length) {
+      notes.push(`Separate-thread subject/body matched ${hits.join(", ")}.`)
+      return {
+        state: "matched",
+        matchedDealId: hit.dealId,
+        matchedJobId: hit.jobId,
+        evidence: defaultEvidence({
+          method: "domain",
+          rfcMessageId: message.rfcMessageId,
+          inReplyTo,
+          references,
+          threadId: message.threadId,
+          fromDomain,
+          funderIds: [hit.funderId],
+          funderNames: [hit.funderName],
+          candidateJobIds: [hit.jobId],
+          candidateDealIds: [hit.dealId],
+          subjectHits: hits,
+          notes,
+        }),
+      }
+    }
+    notes.push("Unique authorized domain without subject or deal identifier evidence; left pending review.")
     return {
-      state: "matched",
-      matchedDealId: hit.dealId,
-      matchedJobId: hit.jobId,
+      state: "pending_review",
       evidence: defaultEvidence({
         method: "domain",
         rfcMessageId: message.rfcMessageId,
@@ -717,9 +736,9 @@ function correlate(message: MailboxMessage, anchors: SubmissionAnchor[], funders
     .map((anchor) => ({ anchor, score: scoreAnchor(message, anchor, fromDomain), hits: subjectHitsFor(message, anchor) }))
     .sort((left, right) => right.score - left.score)
   const best = ranked[0]
-  const uniqueBest = best && best.score > 0 && ranked.filter((item) => item.score === best.score).length === 1
+  const uniqueBest = best && best.hits.length > 0 && ranked.filter((item) => item.score === best.score).length === 1
   if (uniqueBest && best) {
-    notes.push(`Separate-thread fuzzy match used funder.domains then subject evidence (${best.hits.join(", ") || "score"}).`)
+    notes.push(`Separate-thread fuzzy match used funder.domains then subject evidence (${best.hits.join(", ")}).`)
     return {
       state: "matched",
       matchedDealId: best.anchor.dealId,

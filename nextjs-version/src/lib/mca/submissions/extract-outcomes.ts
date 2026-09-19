@@ -3,12 +3,13 @@ import "server-only"
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { requireReplyRead, requireReplyWrite, getReply, type FunderReply } from "./replies"
-import { findJobById, insertDealSubmissionCache } from "./repository"
+import { upsertClosingOfferFromExtract } from "./closing-offers"
+import { displayCacheStatus, findJobById, insertDealSubmissionCache, updateJobRecord } from "./repository"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
 import { AppError } from "../errors"
-import type { ReplyState } from "./contracts"
+import type { ReplyState, SubmissionJob } from "./contracts"
 
 export const EXTRACTION_KIND = "mca:reply-extraction:v1"
 export const EXTRACTION_SCHEMA_VERSION = 1
@@ -741,12 +742,31 @@ async function writeSnapshot(row: ReplyRow, snapshot: ReplyExtractionSnapshot, n
   )
 }
 
+async function applyExtractJobOutcome(input: {
+  classification: OutcomeClassification
+  job: SubmissionJob
+}): Promise<void> {
+  if (input.classification !== "decline") return
+  if (input.job.state === "funded") return
+  const job = await updateJobRecord(input.job.workspaceId, input.job.id, { state: "declined" })
+  await insertDealSubmissionCache({
+    workspaceId: job.workspaceId,
+    dealId: job.dealId,
+    funderName: job.displayFunderName,
+    status: displayCacheStatus(job.state),
+    funderId: job.funderId,
+    jobId: job.id,
+    routeKind: job.routeKind,
+  })
+}
+
 async function upsertEmailOffer(input: {
   actor: DealActor
   reply: FunderReply
   snapshot: ReplyExtractionSnapshot
 }): Promise<ExtractOfferView | undefined> {
   const classification = input.snapshot.classification
+  if (input.snapshot.requiresReview) return undefined
   if (classification !== "approval" && classification !== "decline") return undefined
   if (!input.reply.matchedDealId || !input.reply.matchedJobId) return undefined
   const job = await findJobById(input.actor.workspaceId, input.reply.matchedJobId)
@@ -1005,6 +1025,25 @@ async function runExtract(actor: DealActor, replyId: string, options: {
     if (!options.preview) {
       offer = await upsertEmailOffer({ actor, reply, snapshot })
       if (offer) snapshot = { ...snapshot, offerId: offer.id }
+      else if (snapshot.offerId) offer = await offerViewFor(actor.workspaceId, snapshot)
+      if (!snapshot.requiresReview && snapshot.classification === "approval" && snapshot.terms.amount.value != null && !snapshot.terms.amount.unknown && reply.matchedJobId) {
+        const job = await findJobById(actor.workspaceId, reply.matchedJobId)
+        if (job && job.dealId === reply.matchedDealId) {
+          await upsertClosingOfferFromExtract({
+            actor,
+            replyId: reply.id,
+            job,
+            amountDollars: snapshot.terms.amount.value,
+            factorRate: snapshot.terms.rate.unknown ? null : snapshot.terms.rate.value,
+            termMonths: snapshot.terms.term.unknown ? null : snapshot.terms.term.value,
+            paymentFrequency: snapshot.terms.frequency.unknown ? null : snapshot.terms.frequency.value,
+          })
+        }
+      }
+      if (!snapshot.requiresReview && snapshot.classification === "decline" && reply.matchedJobId) {
+        const job = await findJobById(actor.workspaceId, reply.matchedJobId)
+        if (job && job.dealId === reply.matchedDealId) await applyExtractJobOutcome({ classification: snapshot.classification, job })
+      }
       const persistedTasks = await upsertTasks({ actor, reply, snapshot })
       tasks = persistedTasks.tasks
       snapshot = { ...snapshot, stipulations: persistedTasks.stipulations.length ? persistedTasks.stipulations : snapshot.stipulations }
