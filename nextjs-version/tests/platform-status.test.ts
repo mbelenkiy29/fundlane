@@ -3,14 +3,18 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
   parseWindow,
   safeRoute,
   safeIdentifier,
   isInteractiveApi,
   incidentTransition,
+  documentWorkerReady,
   type Incident,
 } from "../src/lib/mca/operations/contracts"
+import { GET as healthGet } from "../src/app/api/internal/health/route"
 import {
   runMonitor as monitorTick,
   queueMetrics,
@@ -179,6 +183,9 @@ test("overlapping invocations cannot collect or send twice", async () => {
 })
 test("failed health triggers once, accepted alert recovers once, content contains no secrets", async () => {
   await database.query("TRUNCATE mca_private.ops_incidents")
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()"
+  )
   let sends = 0
   const sender: typeof fetch = async (url, options) => {
     if (String(url).includes("/api/internal/health"))
@@ -214,6 +221,9 @@ test("failed health triggers once, accepted alert recovers once, content contain
 })
 test("ambiguous alert delivery is not automatically retried", async () => {
   await database.query("TRUNCATE mca_private.ops_incidents")
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()"
+  )
   let sends = 0
   const fetcher: typeof fetch = async (url) => {
     if (String(url).includes("/api/internal/health")) throw new Error("offline")
@@ -299,9 +309,77 @@ test('polled dashboards do not inflate activity, while explicit sends count',()=
 
 test('disabled alerts still allow incidents to recover; duplicate minute ticks skip',async()=>{
   await database.query('TRUNCATE mca_private.ops_incidents')
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()"
+  )
   for(let i=0;i<3;i++)await runMonitor(db,config,async()=>{throw new Error('offline')})
   assert.equal((await database.query('SELECT * FROM mca_private.ops_incidents WHERE opened_at IS NOT NULL')).rowCount,2)
   for(let i=0;i<3;i++)await runMonitor(db,config,healthy)
   assert.equal((await database.query('SELECT * FROM mca_private.ops_incidents WHERE opened_at IS NOT NULL')).rowCount,0)
   assert.deepEqual(await monitorTick(db,config,healthy),{skipped:true})
+})
+
+test("document worker ready vs lag surfaces metrics, health workerReady, incident, and dashboard warning", async () => {
+  assert.equal(documentWorkerReady({ documentWorkerHeartbeatAgeSeconds: 30 }), true)
+  assert.equal(documentWorkerReady({ documentWorkerHeartbeatAgeSeconds: 90 }), true)
+  assert.equal(documentWorkerReady({ documentWorkerHeartbeatAgeSeconds: 91 }), false)
+  assert.equal(documentWorkerReady({ documentWorkerHeartbeatAgeSeconds: null }), false)
+
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()"
+  )
+  const fresh = await queueMetrics(db)
+  assert.ok(fresh.documentWorkerHeartbeatAgeSeconds != null)
+  assert.ok(fresh.documentWorkerHeartbeatAgeSeconds! <= 90)
+  assert.equal(documentWorkerReady(fresh), true)
+
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=NULL"
+  )
+  assert.equal((await queueMetrics(db)).documentWorkerHeartbeatAgeSeconds, null)
+
+  process.env.MCA_MONITOR_TOKEN = "x".repeat(40)
+  const auth = {
+    headers: { authorization: `Bearer ${"x".repeat(40)}` },
+  }
+  const laggingHealth = await healthGet(
+    new Request("https://fundlane.io/api/internal/health", auth)
+  )
+  assert.equal(laggingHealth.status, 200)
+  const laggingBody = await laggingHealth.json()
+  assert.equal(laggingBody.databaseOk, true)
+  assert.equal(laggingBody.workerReady, false)
+
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()"
+  )
+  const readyHealth = await healthGet(
+    new Request("https://fundlane.io/api/internal/health", auth)
+  )
+  assert.equal(readyHealth.status, 200)
+  assert.equal((await readyHealth.json()).workerReady, true)
+
+  await database.query("TRUNCATE mca_private.ops_incidents")
+  await database.query(
+    "UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()-interval '5 minutes'"
+  )
+  for (let i = 0; i < 3; i++) await runMonitor(db, config, healthy)
+  assert.equal(
+    (
+      await database.query(
+        "SELECT * FROM mca_private.ops_incidents WHERE component='document_worker' AND opened_at IS NOT NULL"
+      )
+    ).rowCount,
+    1
+  )
+
+  const dashboard = readFileSync(
+    resolve(process.cwd(), "src/components/mca/operations/status-dashboard.tsx"),
+    "utf8"
+  )
+  assert.match(
+    dashboard,
+    /Document worker has not claimed work recently\./
+  )
+  assert.match(dashboard, /documentWorkerReady/)
 })

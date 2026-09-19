@@ -14,7 +14,12 @@ import {
 } from "recharts"
 import { Button } from "@/components/ui/button"
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table"
-import type { Status, Window, ErrorEvent } from "@/lib/mca/operations/contracts"
+import {
+  documentWorkerReady,
+  type Status,
+  type Window,
+  type ErrorEvent,
+} from "@/lib/mca/operations/contracts"
 const number = (n: number | null | undefined) =>
   n == null ? "Unavailable" : n.toLocaleString()
 const stamp = (s: string) =>
@@ -144,6 +149,14 @@ export function StatusDashboard({ preview }: { preview?: Status }) {
           className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900"
         >
           {error} Previous data, if shown, is stale.
+        </p>
+      )}
+      {metrics && !documentWorkerReady(metrics) && (
+        <p
+          role="alert"
+          className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          Document worker has not claimed work recently.
         </p>
       )}
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
