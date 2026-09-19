@@ -18,7 +18,7 @@ import {
   setEmailDeliveryFetchForTests,
   upsertSubmissionEmailTemplate,
 } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
 
@@ -125,6 +125,7 @@ before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setEmailDeliveryFetchForTests(async (_input, init) => {
     captured.push({
       body: typeof init?.body === "string" ? init.body : "",
@@ -183,6 +184,7 @@ before(async () => {
 
 after(async () => {
   setEmailDeliveryFetchForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

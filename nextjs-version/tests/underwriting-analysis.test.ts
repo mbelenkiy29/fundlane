@@ -16,6 +16,7 @@ import {
   runAnalysisIfReady,
   updateAnalysisSettings,
 } from "../src/lib/mca/underwriting/analysis"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { GET as getSettings, POST as postSettings } from "../src/app/api/mca/underwriting/analysis/route"
 import { GET as getDealAnalysisRoute, POST as postDealAnalysisRoute } from "../src/app/api/mca/underwriting/analysis/[dealId]/route"
 
@@ -147,9 +148,11 @@ function dqStateRules(): EligibilityRule[] {
 before(async () => {
   testDatabase = await createPostgresTestDatabase("underwriting_analysis")
   Object.assign(process.env, testDatabase.env())
+  setSubmissionCompletenessForTests(true)
 })
 
 after(async () => {
+  setSubmissionCompletenessForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
 })

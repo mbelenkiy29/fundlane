@@ -13,7 +13,7 @@ import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   REPLY_INGEST_INTERVAL_MS,
   setReplyMailboxForTests,
@@ -146,6 +146,7 @@ before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   await seed()
   const sender = await createSender(actor(), {
     provider: "smtp",
@@ -176,6 +177,7 @@ before(async () => {
 
 after(async () => {
   setReplyMailboxForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

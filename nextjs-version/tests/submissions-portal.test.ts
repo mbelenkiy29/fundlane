@@ -12,7 +12,7 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { setWebhookFetchForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as portalGet, POST as portalPost } from "../src/app/api/mca/submissions/portal/[dealId]/route"
 
@@ -118,6 +118,7 @@ before(async () => {
   delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setWebhookFetchForTests(async (input, init) => {
     const headers = new Headers(init?.headers)
     captured.push({
@@ -151,6 +152,7 @@ before(async () => {
 
 after(async () => {
   setWebhookFetchForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

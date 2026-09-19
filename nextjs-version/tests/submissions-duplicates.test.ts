@@ -16,7 +16,7 @@ import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setClock } from "../src/lib/mca/submissions/clock"
 import { packageFingerprint, submissionMerchantIdentityKey } from "../src/lib/mca/submissions/identity"
 import { assertDuplicatePolicy } from "../src/lib/mca/submissions/duplicate-policy"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { setEmailDeliveryFetchForTests } from "../src/lib/mca/submissions/email-templates"
 import { POST as submissionsPost } from "../src/app/api/mca/submissions/[dealId]/route"
@@ -154,6 +154,7 @@ before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   await seed()
   const sender = await createSender(actor(), {
     provider: "smtp",
@@ -192,6 +193,7 @@ afterEach(() => {
 
 after(async () => {
   setClock(null)
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   setEmailDeliveryFetchForTests()

@@ -12,7 +12,7 @@ import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { persistNewDestination } from "../src/lib/mca/submissions/repository"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 delete process.env.MCA_DOCUMENT_SCANNER
@@ -64,11 +64,12 @@ before(async () => {
   testDatabase = await createPostgresTestDatabase("jobs_worker")
   process.env.DATABASE_URL = testDatabase.databaseUrl
   setDocumentStorageForTests(storage)
+  setSubmissionCompletenessForTests(true)
   await addWorkspace("workspace-jobs")
   dealId = (await createDeal(actor(), { idempotencyKey: "jobs-staging", legalName: "Jobs staging" })).deal.id
 })
 after(async () => {
-  setDocumentStorageForTests(); setDocumentScannerForTests(); await closeDatabaseForTests(); await testDatabase.close()
+  setDocumentStorageForTests(); setDocumentScannerForTests(); setSubmissionCompletenessForTests(); await closeDatabaseForTests(); await testDatabase.close()
   if (previousJobs === undefined) delete process.env.MCA_BACKGROUND_JOBS
   else process.env.MCA_BACKGROUND_JOBS = previousJobs
   if (previousVercel === undefined) delete process.env.VERCEL

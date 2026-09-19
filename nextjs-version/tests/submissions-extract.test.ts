@@ -13,7 +13,7 @@ import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   setReplyMailboxForTests,
   type MailboxMessage,
@@ -196,6 +196,7 @@ before(async () => {
   }) as typeof fetch
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setReplyOutcomeClassifierForTests(fixtureClassifier)
   await seed()
   const sender = await createSender(actor(), {
@@ -228,6 +229,7 @@ after(async () => {
   globalThis.fetch = originalFetch
   setReplyOutcomeClassifierForTests()
   setReplyMailboxForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

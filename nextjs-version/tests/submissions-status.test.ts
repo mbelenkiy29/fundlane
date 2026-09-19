@@ -19,7 +19,7 @@ import {
   setAdapterEnvironmentForTests,
   upsertAdapterCredential,
 } from "../src/lib/mca/submissions/adapters/credentials"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { WEBHOOK_SECRET_HEADER } from "../src/lib/mca/submissions/webhooks"
 import { POST as webhookPost } from "../src/app/api/mca/submissions/webhooks/[slug]/route"
 import { GET as refreshGet, POST as refreshPost } from "../src/app/api/mca/submissions/webhooks/refresh/route"
@@ -184,6 +184,7 @@ before(async () => {
   delete process.env.VERCEL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   registerAdapter(statusAdapter)
   registerAdapter(submitOnly)
   await seed()
@@ -220,6 +221,7 @@ beforeEach(() => {
 
 after(async () => {
   setAdapterEnvironmentForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()

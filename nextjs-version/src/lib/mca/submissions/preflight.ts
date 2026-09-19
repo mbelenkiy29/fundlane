@@ -14,6 +14,12 @@ export interface PreflightError {
   message: string
 }
 
+export interface PreflightWarning {
+  field: string
+  message: string
+  severity: "warning"
+}
+
 export interface SenderProbe {
   senderId?: string
   error?: PreflightError
@@ -24,7 +30,18 @@ export interface DestinationPreflight {
   displayName: string
   route: FunderRoute
   errors: PreflightError[]
+  warnings: PreflightWarning[]
   originals: OutgoingDocument[]
+}
+
+export function dataMerchPreflightWarnings(check?: { status?: string; resultSummary?: string } | null): PreflightWarning[] {
+  if (check?.status !== "records") return []
+  const summary = check.resultSummary?.trim()
+  return [{
+    field: "datamerch",
+    message: summary ? `DataMerch records: ${summary}` : "DataMerch returned records for this merchant.",
+    severity: "warning",
+  }]
 }
 
 export async function probeSubmissionSender(actor: DealActor): Promise<SenderProbe> {
@@ -56,13 +73,16 @@ export function preflightDestination(input: {
   funder?: FunderRecord
   documents: DocumentSummary[]
   sender: SenderProbe
+  dataMerch?: { status?: string; resultSummary?: string } | null
 }): DestinationPreflight {
   const errors: PreflightError[] = []
+  const warnings = dataMerchPreflightWarnings(input.dataMerch)
   if (!input.funder) {
     return {
       displayName: "Unknown funder",
       route: MISSING_ROUTE,
       errors: [{ field: "funderId", message: "The requested funder was not found." }],
+      warnings,
       originals: [],
     }
   }
@@ -77,11 +97,16 @@ export function preflightDestination(input: {
   if (selected.kind === "email") {
     if (input.sender.error) errors.push(input.sender.error)
   }
+  const originals = originalsForRoute(input.documents, selected)
+  if (!originals.length) {
+    errors.push({ field: "documents", message: "No ready documents are available to send." })
+  }
   return {
     funder: input.funder,
     displayName: displayName(input.funder),
     route: selected,
     errors,
-    originals: originalsForRoute(input.documents, selected),
+    warnings,
+    originals,
   }
 }

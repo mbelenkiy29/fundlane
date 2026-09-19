@@ -1,18 +1,28 @@
 import "./helpers/business-auth";
-import test, { after, before } from "node:test"
+import test, { after, afterEach, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
+import { insertCheck } from "../src/lib/mca/datamerch/repository"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { Role } from "../src/lib/mca/types"
+import type { DocumentCategory, DocumentProcessingState, DocumentSummary } from "../src/lib/mca/documents/contracts"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
+import type { FunderRoute } from "../src/lib/mca/funders/contracts"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { originalsForRoute } from "../src/lib/mca/submissions/jobs"
+import {
+  getSubmissionSelection,
+  queueSubmissions as queueDealSubmissions,
+  setSubmissionCompletenessForTests,
+} from "../src/lib/mca/submissions/queue"
+import { closedLookbackMonths } from "../src/lib/mca/underwriting/lookback"
 import { queueSubmissions } from "../src/lib/mca/underwriting/submission-port"
 import { GET as submissionsGet, POST as submissionsPost } from "../src/app/api/mca/submissions/[dealId]/route"
 
@@ -116,6 +126,7 @@ before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   await seed()
   const sender = await createSender(actor(), {
     provider: "smtp",
@@ -139,7 +150,12 @@ before(async () => {
   })).funder.id
 })
 
+afterEach(() => {
+  setSubmissionCompletenessForTests(true)
+})
+
 after(async () => {
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
@@ -190,13 +206,33 @@ async function seedReadyCompleteness(workspaceId: string, dealId: string) {
   ).run(`comp-${dealId}`, workspaceId, dealId, `ready-${dealId}`, now)
 }
 
-async function seedDeal() {
+function taggedPdf(tag: string): Uint8Array {
+  return new Uint8Array(Buffer.from(`%PDF-1.4\n${tag}\n%%EOF\n`))
+}
+
+function summaryDoc(id: string, state: DocumentProcessingState, category: DocumentCategory = "statement"): DocumentSummary {
+  return {
+    id,
+    dealId: "deal-originals",
+    workspaceId: ids.workspace,
+    originalFilename: `${id}.pdf`,
+    displayFilename: `${id}.pdf`,
+    mimeType: "application/pdf",
+    byteLength: 12,
+    checksum: `sum-${id}`,
+    category,
+    version: 1,
+    createdAt: "2026-09-18T00:00:00.000Z",
+    processingState: state,
+  }
+}
+
+async function seedBareDeal() {
   dealCounter += 1
   const deal = (await createDeal(actor(), {
     idempotencyKey: `submission-deal-${dealCounter}`,
     legalName: `Submission Merchant ${dealCounter} LLC`,
   })).deal
-  await seedReadyCompleteness(ids.workspace, deal.id)
   const document = await storeDocument(actor(), {
     dealId: deal.id,
     idempotencyKey: `submission-doc-${dealCounter}`,
@@ -207,6 +243,90 @@ async function seedDeal() {
     source: "test",
   })
   return { deal, document }
+}
+
+async function seedDeal() {
+  const seeded = await seedBareDeal()
+  await seedReadyCompleteness(ids.workspace, seeded.deal.id)
+  return seeded
+}
+
+async function markDocumentState(documentId: string, state: DocumentProcessingState) {
+  await getDatabase().prepare("UPDATE mca_documents SET processing_state = ? WHERE id = ?").run(state, documentId)
+}
+
+async function insertCheckingMonth(dealId: string, documentId: string, period: string) {
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_statement_months
+    (id, workspace_id, deal_id, document_id, account_kind, period, deposits, deposit_count,
+     average_daily_balance, nsf_count, negative_days, ending_balance, extraction_version,
+     corrected, original_extraction, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'checking', ?, '0', '0', '0', '0', '0', '0', 1, 0, '{}', ?, ?)`).run(
+    newId(), ids.workspace, dealId, documentId, period, now, now,
+  )
+}
+
+async function seedLiveReadyDeal() {
+  dealCounter += 1
+  const deal = (await createDeal(actor(), {
+    idempotencyKey: `submission-deal-${dealCounter}`,
+    legalName: `Submission Merchant ${dealCounter} LLC`,
+  })).deal
+  const prefix = `live-${dealCounter}`
+  await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `${prefix}-app`,
+    filename: "application.pdf",
+    mimeType: "application/pdf",
+    bytes: taggedPdf(`${prefix}-app`),
+    category: "application",
+    source: "test",
+  })
+  await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `${prefix}-dl`,
+    filename: "driver-license.pdf",
+    mimeType: "application/pdf",
+    bytes: taggedPdf(`${prefix}-dl`),
+    category: "driver_license",
+    source: "test",
+  })
+  await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `${prefix}-vc`,
+    filename: "voided-check.pdf",
+    mimeType: "application/pdf",
+    bytes: taggedPdf(`${prefix}-vc`),
+    category: "voided_check",
+    source: "test",
+  })
+  for (const [index, period] of closedLookbackMonths(3, "America/New_York").entries()) {
+    const statement = await storeDocument(actor(), {
+      dealId: deal.id,
+      idempotencyKey: `${prefix}-stmt-${period}`,
+      filename: `Bank-${period}.pdf`,
+      mimeType: "application/pdf",
+      bytes: taggedPdf(`${prefix}-stmt-${index}`),
+      category: "statement",
+      source: "test",
+    })
+    await insertCheckingMonth(deal.id, statement.id, period)
+  }
+  return deal
+}
+
+async function seedProposedPosition(dealId: string) {
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_existing_positions
+    (id, workspace_id, deal_id, document_id, label, estimated_payment, evidence, status, corrected, correction_reason, corrected_by_user_id, corrected_at, created_at, updated_at)
+    VALUES (?, ?, ?, NULL, 'OCR MCA', NULL, 'fixture', 'proposed', 0, NULL, NULL, NULL, ?, ?)`).run(
+    newId(), ids.workspace, dealId, now, now,
+  )
+}
+
+function isSendGateError(error: unknown, code: "completeness_not_ready" | "positions_unconfirmed") {
+  const next = error as { status?: number; code?: string; extra?: { reasons?: string[] } }
+  return next.status === 422 && next.code === code && Boolean(next.extra?.reasons?.includes(code))
 }
 
 async function jobRow(jobId: string) {
@@ -421,6 +541,152 @@ test("MIC-166 permissions: deals:read lists, intake and read keys cannot confirm
 
   const localOnForeign = await submissionsGet(cookieRequest(`/api/mca/submissions/${foreign.id}`, "admin-session-token"), params(foreign.id))
   assert.equal(localOnForeign.status, 404)
+})
+
+test("originalsForRoute keeps ready and clean documents and drops unreadies and exceptions", () => {
+  const route: FunderRoute = {
+    id: "route-ready-docs",
+    kind: "email",
+    label: "Submissions",
+    destination: "subs@emailcap.example.test",
+    documentExceptions: ["voided_check"],
+    active: true,
+  }
+  const originals = originalsForRoute([
+    summaryDoc("clean", "clean"),
+    summaryDoc("ready", "ready"),
+    summaryDoc("pending", "pending_scan"),
+    summaryDoc("quarantined", "quarantined"),
+    summaryDoc("failed", "scan_failed"),
+    summaryDoc("upload", "upload_failed"),
+    summaryDoc("voided", "clean", "voided_check"),
+  ], route)
+  assert.deepEqual(originals.map((item) => item.documentId).sort(), ["clean", "ready"])
+})
+
+test("queue submissions reject when live completeness is not ready", async () => {
+  setSubmissionCompletenessForTests()
+  const { deal } = await seedBareDeal()
+  await assert.rejects(
+    () => queueDealSubmissions({
+      actor: actor(),
+      dealId: deal.id,
+      funderIds: [emailFunderId],
+      confirmationKey: "gate-incomplete",
+    }),
+    (error: unknown) => isSendGateError(error, "completeness_not_ready") && (error as { code: string }).code !== "deal_not_ready",
+  )
+  const stored = await getDatabase().prepare<{ ready: number }>(
+    "SELECT ready FROM mca_completeness_results WHERE deal_id = ? ORDER BY version DESC LIMIT 1",
+  ).get(deal.id)
+  assert.equal(Number(stored?.ready), 0)
+})
+
+test("HTTP confirm uses completeness_not_ready not deal_not_ready", async () => {
+  setSubmissionCompletenessForTests()
+  const { deal } = await seedBareDeal()
+  const response = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ funderIds: [emailFunderId], confirmationKey: "http-incomplete" }),
+  }), params(deal.id))
+  assert.equal(response.status, 422)
+  const body = await response.json() as { error: { code: string; reasons?: string[] } }
+  assert.equal(body.error.code, "completeness_not_ready")
+  assert.notEqual(body.error.code, "deal_not_ready")
+  assert.equal(body.error.reasons?.includes("completeness_not_ready"), true)
+})
+
+test("queue submissions reject unconfirmed positions after a live completeness check", async () => {
+  setSubmissionCompletenessForTests()
+  const deal = await seedLiveReadyDeal()
+  await seedProposedPosition(deal.id)
+  await assert.rejects(
+    () => queueDealSubmissions({
+      actor: actor(),
+      dealId: deal.id,
+      funderIds: [emailFunderId],
+      confirmationKey: "gate-proposed",
+    }),
+    (error: unknown) => isSendGateError(error, "positions_unconfirmed"),
+  )
+})
+
+test("queue submissions preflight fails when no ready originals remain", async () => {
+  const { deal, document } = await seedBareDeal()
+  await markDocumentState(document.id, "pending_scan")
+  const result = await queueDealSubmissions({
+    actor: actor(),
+    dealId: deal.id,
+    funderIds: [emailFunderId],
+    confirmationKey: "empty-originals",
+  })
+  assert.equal(result.jobs[0]?.state, "preflight_failed")
+  assert.match(result.jobs[0]?.reason ?? "", /ready document/i)
+})
+
+test("queue submissions package only ready originals", async () => {
+  const { deal, document: cleanDoc } = await seedBareDeal()
+  const readyDoc = await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `ready-original-${dealCounter}`,
+    filename: "ready-statement.pdf",
+    mimeType: "application/pdf",
+    bytes: taggedPdf(`ready-${dealCounter}`),
+    category: "statement",
+    source: "test",
+  })
+  await markDocumentState(readyDoc.id, "ready")
+  const pendingDoc = await storeDocument(actor(), {
+    dealId: deal.id,
+    idempotencyKey: `pending-original-${dealCounter}`,
+    filename: "pending-statement.pdf",
+    mimeType: "application/pdf",
+    bytes: taggedPdf(`pending-${dealCounter}`),
+    category: "statement",
+    source: "test",
+  })
+  await markDocumentState(pendingDoc.id, "pending_scan")
+  const result = await queueDealSubmissions({
+    actor: actor(),
+    dealId: deal.id,
+    funderIds: [emailFunderId],
+    confirmationKey: "ready-originals-only",
+  })
+  const job = result.jobs[0]
+  assert.ok(job)
+  assert.notEqual(job.state, "preflight_failed")
+  const row = await getDatabase().prepare<{ package_json: string }>("SELECT package_json FROM mca_submission_jobs WHERE id = ?").get(job.jobId)
+  const packaged = JSON.parse(row?.package_json ?? "{}") as { documentIds?: string[] }
+  assert.deepEqual([...(packaged.documentIds ?? [])].sort(), [cleanDoc.id, readyDoc.id].sort())
+  assert.equal((packaged.documentIds ?? []).includes(pendingDoc.id), false)
+})
+
+test("queue submissions warn on DataMerch records without failing the destination", async () => {
+  const { deal } = await seedBareDeal()
+  await insertCheck({
+    id: newId(),
+    workspaceId: ids.workspace,
+    dealId: deal.id,
+    dealVersion: deal.version,
+    status: "records",
+    correlationId: `datamerch-${deal.id}`,
+    resultSummary: "2 records for Harbor Coffee LLC (risk: high)",
+    recordCount: 2,
+    createdAt: new Date().toISOString(),
+  })
+  const selection = await getSubmissionSelection(actor(), deal.id)
+  const emailFunder = selection.funders.find((item) => item.id === emailFunderId)
+  assert.ok(emailFunder)
+  assert.equal(emailFunder.preflightErrors.length, 0)
+  assert.ok(emailFunder.preflightWarnings.some((item) => item.field === "datamerch" && item.severity === "warning"))
+  const result = await queueDealSubmissions({
+    actor: actor(),
+    dealId: deal.id,
+    funderIds: [emailFunderId],
+    confirmationKey: "datamerch-warn",
+  })
+  assert.ok(result.jobs[0])
+  assert.notEqual(result.jobs[0].state, "preflight_failed")
 })
 
 test("dashboard scopes rows, detail, filter choices and manual history without exposing terms", async () => {

@@ -23,7 +23,7 @@ import {
   type ReminderDeliveryMessage,
 } from "../src/lib/mca/comms/reminders"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions } from "../src/lib/mca/submissions/queue"
+import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { insertJob } from "../src/lib/mca/submissions/repository"
 import { setWebhookFetchForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as remindersGet, POST as remindersPost } from "../src/app/api/mca/comms/reminders/route"
@@ -174,6 +174,7 @@ before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_TOKEN
   setDocumentStorageForTests(storage)
   setDocumentScannerForTests(scanner)
+  setSubmissionCompletenessForTests(true)
   setWebhookFetchForTests(async () => new Response("accepted", { status: 202 }))
   await seed()
   const sender = await createSender(actor(), {
@@ -232,6 +233,7 @@ after(async () => {
   setReminderTransportForTests()
   setReminderDeliveryFetchForTests()
   setWebhookFetchForTests()
+  setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
   await closeDatabaseForTests()
