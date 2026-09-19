@@ -42,8 +42,7 @@ function encryptionKey(): Buffer {
 }
 
 export function hmacLookup(kind: LookupHashKind, workspaceId: string, normalized: string): string {
-  void workspaceId;
-  return createHmac("sha256", encryptionKey()).update(`${kind}:${normalized}`, "utf8").digest("hex");
+  return createHmac("sha256", encryptionKey()).update(`${kind}:${workspaceId}:${normalized}`, "utf8").digest("hex");
 }
 
 export function hmacScopedToken(scope: string, workspaceId: string, subject: string): string {

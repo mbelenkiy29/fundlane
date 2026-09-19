@@ -91,6 +91,75 @@ test("AES ciphertext is not used as the query key", () => {
   assert.notEqual(encryptSensitive("123456789", workspaceId), encryptSensitive("123456789", workspaceId))
 })
 
+test("same EIN across workspaceIds produces different lookup hashes; same workspace is stable", () => {
+  const ein = "12-3456789"
+  const last4 = "7788"
+  const workspaceA = "workspace-hmac-a"
+  const workspaceB = "workspace-hmac-b"
+
+  const einA1 = einLookupHash(workspaceA, ein)
+  const einA2 = einLookupHash(workspaceA, ein)
+  const einB = einLookupHash(workspaceB, ein)
+  assert.equal(typeof einA1, "string")
+  assert.equal(einA1, einA2)
+  assert.notEqual(einA1, einB)
+
+  const idA1 = identityLookupHash(workspaceA, last4)
+  const idA2 = identityLookupHash(workspaceA, last4)
+  const idB = identityLookupHash(workspaceB, last4)
+  assert.equal(typeof idA1, "string")
+  assert.equal(idA1, idA2)
+  assert.notEqual(idA1, idB)
+})
+
+test("merchant hash backfill rewrites legacy unscoped hashes to workspace-scoped values", async () => {
+  const { createHmac, createHash } = await import("node:crypto")
+  const ein = "55-6677001"
+  const last4 = "9001"
+  const normalizedEin = normalizeEin(ein)!
+  const key = process.env.MCA_DATA_ENCRYPTION_KEY
+    ? Buffer.from(process.env.MCA_DATA_ENCRYPTION_KEY, "base64url")
+    : createHash("sha256").update("mca-local-development-encryption-key").digest()
+  const legacyEinHash = createHmac("sha256", key).update(`ein:${normalizedEin}`, "utf8").digest("hex")
+  const legacyIdHash = createHmac("sha256", key).update(`id4:${last4}`, "utf8").digest("hex")
+  const scopedEinHash = einLookupHash(workspaceId, ein)!
+  const scopedIdHash = identityLookupHash(workspaceId, last4)!
+  assert.notEqual(legacyEinHash, scopedEinHash)
+  assert.notEqual(legacyIdHash, scopedIdHash)
+
+  const now = new Date().toISOString()
+  const dealId = newId()
+  const ownerId = newId()
+  await getDatabase().prepare(`INSERT INTO deals
+    (id, workspace_id, display_id, legal_name, ein_cipher, ein_lookup_hash, address_json, status, pipeline_version, draft_state,
+     missing_required_json, field_sources_json, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, '{}', 'lead', 1, 'partial', '[]', '{}', 1, ?, ?)`).run(
+    dealId, workspaceId, `MCA-${dealId.slice(0, 8).toUpperCase()}`, "Legacy Hash Merchant LLC",
+    encryptSensitive(ein, workspaceId), legacyEinHash, now, now,
+  )
+  await getDatabase().prepare(`INSERT INTO deal_owners
+    (id, workspace_id, deal_id, first_name, last_name, ownership_percent, is_primary, identity_last4_cipher, identity_last4_lookup_hash)
+    VALUES (?, ?, ?, 'Les', 'Hash', 100, 1, ?, ?)`).run(
+    ownerId, workspaceId, dealId, encryptSensitive(last4, workspaceId), legacyIdHash,
+  )
+
+  await backfillMerchantHashes({ workspaceId })
+  const deal = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM deals WHERE id = ?",
+  ).get(dealId)
+  const owner = await getDatabase().prepare<{ identity_last4_lookup_hash: string | null }>(
+    "SELECT identity_last4_lookup_hash FROM deal_owners WHERE id = ?",
+  ).get(ownerId)
+  assert.equal(deal?.ein_lookup_hash, scopedEinHash)
+  assert.equal(owner?.identity_last4_lookup_hash, scopedIdHash)
+
+  await backfillMerchantHashes({ workspaceId })
+  const dealAgain = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM deals WHERE id = ?",
+  ).get(dealId)
+  assert.equal(dealAgain?.ein_lookup_hash, scopedEinHash)
+})
+
 test("lookup by EIN finds existing merchant after create", async () => {
   await createDeal(actor(), { idempotencyKey: nextKey("acme"), legalName: "Acme LLC", ein: "12-3456789" })
   const found = await lookupMerchants(actor(), { ein: "123456789" })
