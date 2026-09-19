@@ -67,6 +67,7 @@ export async function upsertClosingOfferFromExtract(input: {
   termMonths?: number | null
   paymentFrequency?: string | null
 }): Promise<OfferRecord | undefined> {
+  if (input.job.state === "funded") return undefined
   const terms = termsFromExtract(input)
   if (!terms) return undefined
   const externalId = emailExtractExternalId(input.replyId)

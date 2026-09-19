@@ -219,6 +219,7 @@ export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult>
   try {
     const response = await http()(resolved.target.url, {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         accept: "application/json",

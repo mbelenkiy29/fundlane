@@ -795,3 +795,97 @@ test("confirmed decline does not regress a funded job or approved cache", async 
     "SELECT count(*)::int AS count FROM deal_offers WHERE deal_id = ? AND status = 'declined'",
   ).get(deal.id))?.count, 0)
 })
+
+test("confirmed approval does not insert or revise mca_offers for a funded job", async () => {
+  const insertDeal = await seedDeal("Funded No Closing Offer LLC")
+  const insertSent = await sendTo(insertDeal.id)
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET state = 'funded' WHERE id = ?").run(insertSent.jobId)
+  await getDatabase().prepare("UPDATE deal_submissions SET status = 'approved' WHERE job_id = ?").run(insertSent.jobId)
+
+  setReplyOutcomeClassifierForTests({
+    name: "fixture-funded-insert",
+    model: "fixture-v1",
+    async classify() {
+      return classified({
+        classification: "approval",
+        summary: "Approved with stated terms.",
+        amount: { value: 25_000, unknown: false, evidence: "Approved for 25000" },
+        rate: { value: 1.35, unknown: false, evidence: "rate 1.35" },
+        term: { value: 10, unknown: false, evidence: "10 months" },
+      })
+    },
+  })
+  const insertIngested = await ingest([{
+    providerMessageId: "alpha-approval-after-funded-insert",
+    threadId: "thread-approval-after-funded-insert",
+    from: "Underwriting <uw@alpha-extract.example.test>",
+    subject: `Application approved for ${insertDeal.displayId}`,
+    body: "Approved for 25000 at rate 1.35 for 10 months.",
+  }])
+  const insertReplyId = insertIngested.ingested.find((item) => item.providerMessageId === "alpha-approval-after-funded-insert")?.id
+  assert.ok(insertReplyId)
+
+  const insertExtracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId: insertReplyId }),
+  }))
+  assert.equal(insertExtracted.status, 200)
+  assert.equal((await insertExtracted.json() as ExtractBody).classification, "approval")
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(insertDeal.id))?.count, 0)
+  assert.equal((await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(insertSent.jobId))?.state, "funded")
+
+  const reviseDeal = await seedDeal("Funded Existing Closing Offer LLC")
+  const reviseSent = await sendTo(reviseDeal.id)
+  const reviseIngested = await ingest([{
+    providerMessageId: "alpha-approval-before-funded-revise",
+    threadId: "thread-approval-before-funded-revise",
+    from: "Underwriting <uw@alpha-extract.example.test>",
+    subject: `Application approved for ${reviseDeal.displayId}`,
+    body: "Approved for 25000 at rate 1.35 for 10 months.",
+  }])
+  const reviseReplyId = reviseIngested.ingested.find((item) => item.providerMessageId === "alpha-approval-before-funded-revise")?.id
+  assert.ok(reviseReplyId)
+  const created = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId: reviseReplyId }),
+  }))
+  assert.equal(created.status, 200)
+  assert.equal((await created.json() as ExtractBody).offer?.created, true)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
+  ).get(reviseDeal.id))?.count, 1)
+
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET state = 'funded' WHERE id = ?").run(reviseSent.jobId)
+  await getDatabase().prepare("UPDATE deal_submissions SET status = 'approved' WHERE job_id = ?").run(reviseSent.jobId)
+  setReplyOutcomeClassifierForTests({
+    name: "fixture-funded-revise",
+    model: "fixture-v1",
+    async classify() {
+      return classified({
+        classification: "approval",
+        summary: "Approved with restated terms.",
+        amount: { value: 50_000, unknown: false, evidence: "Approved for 50000" },
+        rate: { value: 1.4, unknown: false, evidence: "rate 1.4" },
+        term: { value: 12, unknown: false, evidence: "12 months" },
+      })
+    },
+  })
+  const revised = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId: reviseReplyId }),
+  }))
+  assert.equal(revised.status, 200)
+  const closing = await getDatabase().prepare<{
+    amount_cents: number | null
+    revisions: number
+  }>(`SELECT r.amount_cents, (SELECT count(*)::int FROM mca_offer_revisions x WHERE x.offer_id = o.id) AS revisions
+      FROM mca_offers o
+      JOIN mca_offer_revisions r ON r.workspace_id = o.workspace_id AND r.id = o.current_revision_id
+      WHERE o.deal_id = ?`).get(reviseDeal.id)
+  assert.equal(closing?.amount_cents, 2_500_000)
+  assert.equal(closing?.revisions, 1)
+})

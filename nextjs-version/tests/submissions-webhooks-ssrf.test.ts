@@ -352,3 +352,38 @@ test("deliverWebhook rejects literal private destinations without DNS lookup", a
   assert.equal(ula.ok, false)
   assert.equal(fetchCalls.length, 0)
 })
+
+test("deliverWebhook does not follow a 302 to a private IP as success", async () => {
+  const privateUrl = "https://10.0.0.8/secret"
+  setWebhookLookupForTests(async (hostname) => {
+    lookupCalls.push(hostname)
+    if (hostname === "public.example.test") return [{ address: "203.0.113.10", family: 4 }]
+    throw new Error(`unexpected lookup: ${hostname}`)
+  })
+  setWebhookFetchForTests(async (input, init) => {
+    const url = String(input)
+    fetchCalls.push(url)
+    const redirect = init?.redirect ?? "follow"
+    if (url.startsWith("https://public.example.test/hook")) {
+      if (redirect === "error") {
+        throw new TypeError("URI requested responds with a redirect, redirect mode is set to error")
+      }
+      if (redirect === "manual") {
+        return new Response(null, { status: 302, headers: { location: privateUrl } })
+      }
+      fetchCalls.push(privateUrl)
+      return new Response("ssrf", { status: 200 })
+    }
+    if (url === privateUrl || url.includes("10.0.0.8")) {
+      return new Response("ssrf", { status: 200 })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+
+  const result = await deliverWebhook(webhookJob("https://token@public.example.test/hook"))
+  assert.equal(result.ok, false)
+  assert.notEqual(result.state, "sent")
+  assert.equal(fetchCalls.includes(privateUrl), false)
+  assert.equal(fetchCalls.some((url) => url.includes("10.0.0.8")), false)
+  assert.equal(lookupCalls.includes("10.0.0.8"), false)
+})
