@@ -757,3 +757,41 @@ test("confirmed decline maps the submission job to declined", async () => {
     "SELECT count(*)::int AS count FROM mca_offers WHERE deal_id = ?",
   ).get(deal.id))?.count, 0)
 })
+
+test("confirmed decline does not regress a funded job or approved cache", async () => {
+  const deal = await seedDeal("Already Funded LLC")
+  const sent = await sendTo(deal.id)
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET state = 'funded' WHERE id = ?").run(sent.jobId)
+  await getDatabase().prepare("UPDATE deal_submissions SET status = 'approved' WHERE job_id = ?").run(sent.jobId)
+
+  const ingested = await ingest([{
+    providerMessageId: "alpha-decline-after-funded",
+    threadId: "thread-decline-after-funded",
+    from: "Underwriting <uw@alpha-extract.example.test>",
+    subject: `Unable to offer for ${deal.displayId}`,
+    body: "We are unable to offer funding on this file.",
+  }])
+  const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-decline-after-funded")?.id
+  assert.ok(replyId)
+
+  const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(extracted.status, 200)
+  const body = await extracted.json() as ExtractBody
+  assert.equal(body.classification, "decline")
+  assert.equal(body.requiresReview, false)
+
+  const job = await getDatabase().prepare<{ state: string }>(
+    "SELECT state FROM mca_submission_jobs WHERE id = ?",
+  ).get(sent.jobId)
+  assert.equal(job?.state, "funded")
+  const cache = await getDatabase().prepare<{ status: string }>(
+    "SELECT status FROM deal_submissions WHERE job_id = ?",
+  ).get(sent.jobId)
+  assert.equal(cache?.status, "approved")
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM deal_offers WHERE deal_id = ? AND status = 'declined'",
+  ).get(deal.id))?.count, 0)
+})

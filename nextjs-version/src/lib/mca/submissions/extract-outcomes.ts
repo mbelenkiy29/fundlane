@@ -771,6 +771,7 @@ async function upsertEmailOffer(input: {
   if (!input.reply.matchedDealId || !input.reply.matchedJobId) return undefined
   const job = await findJobById(input.actor.workspaceId, input.reply.matchedJobId)
   if (!job || job.dealId !== input.reply.matchedDealId) return undefined
+  if (job.state === "funded") return undefined
   await insertDealSubmissionCache({
     workspaceId: job.workspaceId,
     dealId: job.dealId,
