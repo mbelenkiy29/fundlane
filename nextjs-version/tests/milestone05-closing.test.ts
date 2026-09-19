@@ -20,7 +20,7 @@ import {
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { storeDocument } from "../src/lib/mca/documents/service"
-import { encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
+import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 import { GET as snapshotGet } from "../src/app/api/mca/closing/[dealId]/route"
 import { POST as stipulationPost } from "../src/app/api/mca/closing/stipulations/route"
 
@@ -411,4 +411,65 @@ test("legacy HMAC merchant upload hashes remain redeemable until expiry", async 
   assert.equal(replay.url, `https://app.example.test/merchant-upload/${token}`)
   const count = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int count FROM mca_merchant_upload_links WHERE workspace_id=?").get(ids.workspace)
   assert.equal(count?.count, 1)
+})
+
+test("ABA routing checksum accepts 021000021 and rejects 123456789", async () => {
+  const { assertUsAbaRoutingNumber } = await import("../src/lib/mca/closing/aba")
+  assert.equal(assertUsAbaRoutingNumber("021000021"), "021000021")
+  assert.equal(assertUsAbaRoutingNumber("021-000-021"), "021000021")
+  assert.throws(() => assertUsAbaRoutingNumber("123456789"), (error: { code?: string }) => error.code === "routing_number_invalid")
+  assert.throws(() => assertUsAbaRoutingNumber("12345678"), (error: { code?: string }) => error.code === "routing_number_invalid")
+})
+
+test("confirmPsfRequest requires ABA checksum and deal-matching contact email unless admin override", async () => {
+  await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true, destination: "https://example.com/psf", signingSecret: "psf-signing-secret-at-least-32-characters" })
+  const base = {
+    dealId,
+    offerId: selectedOfferId,
+    revisionId: selectedRevisionId,
+    amountCents: 4000000,
+    bankName: "Secret Harbor Bank",
+    accountNumber: "1234567890",
+    businessName: "Synthetic Bakery LLC",
+    contactName: "Mira",
+    deliver: false,
+  }
+  await assert.rejects(
+    () => confirmPsfRequest(actor(), { ...base, routingNumber: "123456789", contactEmail: "mira@example.test", idempotencyKey: "psf-bad-aba" }),
+    (error: { code?: string }) => error.code === "routing_number_invalid",
+  )
+  await assert.rejects(
+    () => confirmPsfRequest(actor(), { ...base, routingNumber: "021000021", contactEmail: "other@example.test", idempotencyKey: "psf-email-mismatch" }),
+    (error: { code?: string }) => error.code === "recipient_override_required",
+  )
+  await assert.rejects(
+    () => confirmPsfRequest({ ...actor(), role: "rep" }, { ...base, routingNumber: "021000021", contactEmail: "other@example.test", overrideReason: "Merchant asked for a different inbox.", idempotencyKey: "psf-email-rep-denied" }),
+    (error: { code?: string }) => error.code === "recipient_override_denied",
+  )
+  const overridden = await confirmPsfRequest(actor(), {
+    ...base,
+    routingNumber: "021000021",
+    contactEmail: "other@example.test",
+    overrideReason: "Merchant asked for a different inbox.",
+    idempotencyKey: "psf-email-override",
+  })
+  assert.equal(overridden.request.state, "pending")
+  assert.equal(overridden.request.accountLast4, "7890")
+  assert.equal(JSON.stringify(overridden.request).toLowerCase().includes("other@example.test"), false)
+  const storedEmail = await getDatabase().prepare<{ contact_email_cipher: string }>("SELECT contact_email_cipher FROM mca_psf_requests WHERE id=?").get(overridden.request.id)
+  assert.equal(decryptSensitive(String(storedEmail?.contact_email_cipher), ids.workspace), "other@example.test")
+  const audit = await getDatabase().prepare<{ action: string; metadata: string }>("SELECT action, metadata FROM audit_events WHERE workspace_id=? AND action='closing.recipient_overridden' ORDER BY created_at DESC LIMIT 1").get(ids.workspace)
+  assert.equal(audit?.action, "closing.recipient_overridden")
+  assert.equal(String(audit?.metadata).includes("other@example.test"), false)
+  await getDatabase().prepare("DELETE FROM mca_psf_requests WHERE workspace_id=?").run(ids.workspace)
+  const matched = await confirmPsfRequest(actor(), {
+    ...base,
+    routingNumber: "021-000-021",
+    contactEmail: "Mira@Example.test",
+    idempotencyKey: "psf-email-match",
+  })
+  assert.equal(matched.request.state, "pending")
+  assert.equal(matched.request.offer.revisionId, selectedRevisionId)
+  const matchedEmail = await getDatabase().prepare<{ contact_email_cipher: string }>("SELECT contact_email_cipher FROM mca_psf_requests WHERE id=?").get(matched.request.id)
+  assert.equal(decryptSensitive(String(matchedEmail?.contact_email_cipher), ids.workspace), "mira@example.test")
 })

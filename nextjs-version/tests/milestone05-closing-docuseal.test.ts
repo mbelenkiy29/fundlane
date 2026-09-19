@@ -83,6 +83,15 @@ function submitter(overrides: Record<string, unknown> = {}): Record<string, unkn
   }
 }
 
+test("DocuSeal submission input rejects ABA checksum failures", () => {
+  assert.throws(
+    () => buildDocuSealPsfSubmissionRequest(config, { ...input, routingNumber: "123456789" }),
+    (error: { code?: string }) => error.code === "routing_number_invalid",
+  )
+  const body = buildDocuSealPsfSubmissionRequest(config, { ...input, routingNumber: "021-000-021" })
+  assert.equal(body.submitters[0].fields[2].default_value, "021000021")
+})
+
 test("DocuSeal PSF request binds the approved template, signer, and exact immutable fields without auto-signing", () => {
   const body = buildDocuSealPsfSubmissionRequest(config, input)
   assert.equal(body.template_id, 42)

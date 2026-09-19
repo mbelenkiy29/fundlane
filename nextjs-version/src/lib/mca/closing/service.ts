@@ -22,6 +22,7 @@ import { closingTransport, contentHash, deliveryCorrelationId, postmarkConnectio
 import type { ClosingTransport, ClosingTransportRequest } from "./delivery"
 import { createMerchantOfferSmsTransport } from "./offer-sms"
 import { deliverPsfRequestWithDocuSeal, docuSealPsfConnectionConfigured, recordDocuSealPsfWebhook as processDocuSealPsfWebhook, selectPsfDeliveryProvider } from "./psf-docuseal-service"
+import { assertUsAbaRoutingNumber } from "./aba"
 import { bindFunderEmail, bindMerchantEmail, bindMerchantSms, maskClosingEmail, maskClosingSms, recordRecipientOverrideAudit } from "./recipients"
 import type { ClosingDelivery, ClosingRequestPreview, ClosingSnapshot, ContractWorkflow, MerchantUploadLink, OfferMessagePreview, OfferRevisionBinding, PsfRequestSummary, StipulationState, StipulationTask } from "./contracts"
 
@@ -552,8 +553,8 @@ export async function confirmPsfRequest(actor: DealActor, input: { dealId: strin
   const deal = await getDealForDocument(actor, input.dealId)
   const offer = await resolveOffer(actor, input.dealId, input.offerId, input.revisionId)
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new AppError(422, "amount_invalid", "Enter a positive amount in cents.")
-  const routing = input.routingNumber.replace(/\D/g, ""), account = input.accountNumber.replace(/\s/g, "")
-  if (!/^\d{9}$/.test(routing)) throw new AppError(422, "routing_number_invalid", "Enter a 9-digit routing number.")
+  const routing = assertUsAbaRoutingNumber(input.routingNumber)
+  const account = input.accountNumber.replace(/\s/g, "")
   if (!/^\d{4,17}$/.test(account)) throw new AppError(422, "account_number_invalid", "Enter a bank account number containing 4 to 17 digits.")
   const bound = bindMerchantEmail(deal, { recipient: input.contactEmail, overrideReason: input.overrideReason, dealId: input.dealId, kind: "psf_request" }, actor)
   await recordRecipientOverrideAudit(actor, bound, { dealId: input.dealId, kind: "psf_request" })
