@@ -266,6 +266,54 @@ test("queueSubmissions enqueues submission_delivery when background jobs are ena
   }
 })
 
+test("production preview_not_sent applies only to email preview refs", async () => {
+  const previewRef = JSON.stringify({
+    messageId: "<preview@submissions.mca.local>",
+    threadId: "<preview@submissions.mca.local>",
+    inReplyTo: null,
+    references: ["<preview@submissions.mca.local>"],
+    delivery: "preview",
+    snapshot: {
+      to: ["subs@outbox.example.test"],
+      cc: [],
+      replyTo: "broker@example.test",
+      fromName: "Broker Desk",
+      fromAddress: "broker@example.test",
+      subject: "Preview",
+      body: "Preview body",
+      attachments: [],
+      workspacePrefix: "",
+      funderPrefix: "",
+      signature: "",
+      senderId: "sender-preview",
+    },
+  })
+  const previousWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  delete process.env.MCA_EMAIL_WEBHOOK_URL
+  setSubmissionEmailProductionForTests(true)
+  try {
+    assert.doesNotThrow(() => assertProductionDeliveryNotPreview({
+      ok: true,
+      state: "sent",
+      correlationId: "corr-api",
+      externalRef: "adapter-application-99",
+    }))
+    assert.throws(
+      () => assertProductionDeliveryNotPreview({
+        ok: true,
+        state: "sent",
+        correlationId: "corr-preview",
+        externalRef: previewRef,
+      }),
+      (error: unknown) => error instanceof AppError && error.status === 409 && error.code === "preview_not_sent",
+    )
+  } finally {
+    setSubmissionEmailProductionForTests()
+    if (previousWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
+  }
+})
+
 test("production preview refs are not recorded as sent", async () => {
   const previewRef = JSON.stringify({
     messageId: "<preview@submissions.mca.local>",

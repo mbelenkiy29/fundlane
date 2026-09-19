@@ -29,7 +29,7 @@ function isCompletedAttempt(state: AttemptState): boolean {
 export function assertProductionDeliveryNotPreview(delivered: DeliverResult): void {
   if (!isSubmissionEmailProduction()) return
   const ref = parseEmailAttemptRef(delivered.externalRef)
-  if (ref?.delivery === "preview" || (delivered.state === "sent" && !process.env.MCA_EMAIL_WEBHOOK_URL?.trim())) {
+  if (ref?.delivery === "preview") {
     throw new AppError(409, "preview_not_sent", "Preview deliveries cannot be recorded as sent in production.")
   }
 }
