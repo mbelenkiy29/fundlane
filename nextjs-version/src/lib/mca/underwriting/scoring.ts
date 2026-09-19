@@ -36,6 +36,7 @@ import {
   SOFT_WEIGHT_REQUESTED_AMOUNT,
   SOFT_WEIGHT_REVENUE_FIT,
 } from "./policy"
+import { listChecks } from "../datamerch/repository"
 import { getUnderwritingAggregate, listExistingPositions, listStatementMonths } from "./statements"
 import {
   findLatestScoreSnapshot,
@@ -45,6 +46,14 @@ import {
 } from "./snapshot-repository"
 
 export { POLICY_VERSION, SCORE_FIT_DISCLAIMER }
+
+/** Confirmed position labels and DataMerch categories that set defaultFlag. */
+export const DEFAULT_FLAG_PATTERN = /\bdefaults?\b|\bdefaulted\b|\bslow[\s_-]?pay\b/i
+
+export type DefaultFlagDataMerchCheck = {
+  status: string
+  merchants?: Array<{ records?: Array<{ category?: string | null } | null> | null } | null> | null
+}
 
 export interface ScoreDealResult {
   snapshot: ReturnType<typeof toAnalysisSnapshot>
@@ -687,7 +696,38 @@ async function loadCompletenessVersion(actor: DealActor, dealId: string): Promis
   }
 }
 
-export function buildScoringInputs(deal: DealRecord, aggregate: UnderwritingAggregate | null, months: StatementMonthRecord[], positions: ExistingPositionCandidate[]): ScoringInputs {
+export function resolveDefaultFlag(
+  positions: Array<Pick<ExistingPositionCandidate, "status" | "label">>,
+  latestDataMerchCheck?: DefaultFlagDataMerchCheck | null,
+): boolean {
+  for (const position of positions) {
+    if (position.status === "confirmed" && DEFAULT_FLAG_PATTERN.test(position.label)) return true
+  }
+  if (!latestDataMerchCheck || latestDataMerchCheck.status !== "records") return false
+  for (const merchant of latestDataMerchCheck.merchants ?? []) {
+    for (const record of merchant?.records ?? []) {
+      if (typeof record?.category === "string" && DEFAULT_FLAG_PATTERN.test(record.category)) return true
+    }
+  }
+  return false
+}
+
+async function loadLatestDataMerchCheck(workspaceId: string, dealId: string): Promise<DefaultFlagDataMerchCheck | null> {
+  try {
+    const checks = await listChecks(workspaceId, dealId)
+    return checks[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+export function buildScoringInputs(
+  deal: DealRecord,
+  aggregate: UnderwritingAggregate | null,
+  months: StatementMonthRecord[],
+  positions: ExistingPositionCandidate[],
+  latestDataMerchCheck?: DefaultFlagDataMerchCheck | null,
+): ScoringInputs {
   const asOf = aggregate?.computedAt ?? deal.updatedAt
   const revenue = metricNumber(aggregate?.monthlyRevenue)
   const adb = metricNumber(aggregate?.averageDailyBalance)
@@ -708,7 +748,7 @@ export function buildScoringInputs(deal: DealRecord, aggregate: UnderwritingAggr
     ...(deal.entityType ? { entity: deal.entityType } : {}),
     ...(deal.industry ? { industry: deal.industry } : {}),
     ...(deal.naicsCode ? { naics: deal.naicsCode } : {}),
-    defaultFlag: deal.status === "default",
+    defaultFlag: resolveDefaultFlag(positions, latestDataMerchCheck),
     ...(deal.startDate ? { tibMonths: monthsBetween(deal.startDate, asOf) } : {}),
     ...(deal.ficoScore != null ? { fico: deal.ficoScore } : {}),
     ...(deal.requestedAmount != null ? { requestedAmount: deal.requestedAmount } : {}),
@@ -781,7 +821,8 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
   const aggregate = await loadAggregate(actor, deal.id)
   const months = await loadMonths(actor, deal.id)
   const positions = await loadPositions(actor, deal.id)
-  const inputs = buildScoringInputs(deal, aggregate, months, positions)
+  const latestDataMerchCheck = await loadLatestDataMerchCheck(actor.workspaceId, deal.id)
+  const inputs = buildScoringInputs(deal, aggregate, months, positions, latestDataMerchCheck)
   const versions = await currentVersions(actor, deal, funders, aggregate)
   const previous = await findLatestScoreSnapshot(actor.workspaceId, deal.id)
   const reasons = staleReasonsFor(previous, versions)

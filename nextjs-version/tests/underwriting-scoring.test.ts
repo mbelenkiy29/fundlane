@@ -15,10 +15,12 @@ import {
   getDealScores,
   rankScores,
   requireScoreActor,
+  resolveDefaultFlag,
   scoreDeal,
 } from "../src/lib/mca/underwriting/scoring"
 import type { ScoringInputs } from "../src/lib/mca/underwriting/scoring"
 import type { ExistingPositionCandidate, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
+import { insertCheck } from "../src/lib/mca/datamerch/repository"
 import { GET as getScores, POST as postScores } from "../src/app/api/mca/underwriting/scores/[dealId]/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -423,4 +425,113 @@ test("requestedTermMonths persists and scoring inputs expose term, deposits, wor
   assert.equal(inputs.worstMonthNsf, 2)
   assert.equal(inputs.proposedPositionCount, 1)
   assert.equal(inputs.positionCount, 1)
+})
+
+function position(
+  dealId: string,
+  label: string,
+  status: ExistingPositionCandidate["status"],
+  id = newId(),
+): ExistingPositionCandidate {
+  return { id, dealId, label, status, evidence: "fixture", estimatedPayment: 100 }
+}
+
+test("resolveDefaultFlag: confirmed defaultish labels and DataMerch Default/Slow pay only", () => {
+  assert.equal(resolveDefaultFlag([], null), false)
+  assert.equal(resolveDefaultFlag([], undefined), false)
+
+  assert.equal(resolveDefaultFlag([position("d", "Default - Xpress", "confirmed")]), true)
+  assert.equal(resolveDefaultFlag([position("d", "merchant defaulted", "confirmed")]), true)
+  assert.equal(resolveDefaultFlag([position("d", "defaults on ACH", "confirmed")]), true)
+  assert.equal(resolveDefaultFlag([position("d", "Slow pay funder", "confirmed")]), true)
+  assert.equal(resolveDefaultFlag([position("d", "slow-pay", "confirmed")]), true)
+  assert.equal(resolveDefaultFlag([position("d", "slow_pay account", "confirmed")]), true)
+
+  assert.equal(resolveDefaultFlag([position("d", "OCR default position", "proposed")]), false)
+  assert.equal(resolveDefaultFlag([position("d", "Default - dismissed", "dismissed")]), false)
+  assert.equal(resolveDefaultFlag([position("d", "active MCA", "confirmed")]), false)
+
+  assert.equal(resolveDefaultFlag([], { status: "records", merchants: [{ records: [{ category: "Default" }] }] }), true)
+  assert.equal(resolveDefaultFlag([], { status: "records", merchants: [{ records: [{ category: "Slow pay" }] }] }), true)
+  assert.equal(resolveDefaultFlag([], { status: "records", merchants: [{ records: [{ category: "Inquiry" }] }] }), false)
+  assert.equal(resolveDefaultFlag([], { status: "no_result", merchants: [{ records: [{ category: "Default" }] }] }), false)
+  assert.equal(resolveDefaultFlag([], { status: "failed", merchants: [{ records: [{ category: "Default" }] }] }), false)
+  assert.equal(resolveDefaultFlag([], { status: "queued" }), false)
+})
+
+test("buildScoringInputs defaultFlag ignores deal.status; proposed OCR default does not count", async () => {
+  const workspaceId = `ws-default-flag-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  const created = await createDeal(actor(workspaceId), {
+    idempotencyKey: `default-flag-${workspaceId}`,
+    legalName: "Default Flag Merchant LLC",
+    entityType: "llc",
+    address: { line1: "1 Harbor St", city: "Brooklyn", state: "NY", postalCode: "11201" },
+    startDate: "2020-01-01",
+    industry: "restaurants",
+    naicsCode: "722511",
+    monthlyRevenue: 20_000,
+    ficoScore: 680,
+    requestedAmount: 50_000,
+    fundingPurpose: "working capital",
+  })
+  const deal: DealRecord = { ...created.deal, status: "default" }
+
+  assert.equal(buildScoringInputs(deal, null, [], []).defaultFlag, false)
+  assert.equal(
+    buildScoringInputs(deal, null, [], [position(deal.id, "OCR default from statement", "proposed")]).defaultFlag,
+    false,
+  )
+  assert.equal(
+    buildScoringInputs(deal, null, [], [position(deal.id, "Confirmed default position", "confirmed")]).defaultFlag,
+    true,
+  )
+  assert.equal(
+    buildScoringInputs(
+      deal,
+      null,
+      [],
+      [],
+      { status: "records", merchants: [{ records: [{ category: "Default" }] }] },
+    ).defaultFlag,
+    true,
+  )
+  assert.equal(
+    buildScoringInputs(deal, null, [], [], null).defaultFlag,
+    false,
+  )
+})
+
+test("scoreDeal loads latest DataMerch records for defaultFlag hard DQ", async () => {
+  const workspaceId = `ws-dm-default-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  const deal = await merchantDeal(workspaceId, "dm-default")
+  await seedFunder(workspaceId, "dm-default-fit", fitRules())
+
+  const without = await scoreDeal(actor(workspaceId), deal.id)
+  const withoutScore = without.snapshot.scores[0]
+  assert.ok(withoutScore)
+  assert.equal(withoutScore.eligible, true)
+  assert.equal(withoutScore.reasons.some((reason) => reason.ruleId === "hard.default_status" && reason.result === "pass"), true)
+
+  await insertCheck({
+    id: newId(),
+    workspaceId,
+    dealId: deal.id,
+    dealVersion: deal.version,
+    status: "records",
+    correlationId: `corr-dm-default-${workspaceId}`,
+    resultSummary: "1 record",
+    recordCount: 1,
+    queryKind: "legal_name",
+    merchants: [{ name: deal.legalName, records: [{ category: "Slow pay", notes: "ACH returned", funder: "North" }] }],
+    createdAt: new Date().toISOString(),
+  })
+
+  const withDefault = await scoreDeal(actor(workspaceId), deal.id)
+  const blocked = withDefault.snapshot.scores[0]
+  assert.ok(blocked)
+  assert.equal(blocked.eligible, false)
+  assert.equal(blocked.grade, "DQ")
+  assert.equal(blocked.reasons.some((reason) => reason.ruleId === "hard.default_status" && reason.result === "fail"), true)
 })
