@@ -1,7 +1,9 @@
 import "server-only"
 
 import { newId } from "../db"
-import type { AttemptState, JobState, SubmissionJob } from "./contracts"
+import { AppError } from "../errors"
+import type { AttemptState, DeliverResult, JobState, SubmissionJob } from "./contracts"
+import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
 import {
@@ -22,6 +24,14 @@ function clip(value: string | undefined, max = 2_000): string | undefined {
 
 function isCompletedAttempt(state: AttemptState): boolean {
   return state === "sent" || state === "failed" || state === "skipped"
+}
+
+export function assertProductionDeliveryNotPreview(delivered: DeliverResult): void {
+  if (!isSubmissionEmailProduction()) return
+  const ref = parseEmailAttemptRef(delivered.externalRef)
+  if (ref?.delivery === "preview" || (delivered.state === "sent" && !process.env.MCA_EMAIL_WEBHOOK_URL?.trim())) {
+    throw new AppError(409, "preview_not_sent", "Preview deliveries cannot be recorded as sent in production.")
+  }
 }
 
 async function refreshCache(job: SubmissionJob): Promise<void> {
@@ -82,7 +92,8 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       state: "sending",
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     }
-    const delivered = await deliverSubmission(sending)
+    const delivered = await deliverSubmission(sending, packaged.documents)
+    assertProductionDeliveryNotPreview(delivered)
     const nextState: JobState = delivered.state
     const reason = clip(delivered.errorMessage) ?? (delivered.ok ? undefined : "Delivery failed.")
     await updateAttempt(job.id, job.attemptKey, {
@@ -102,9 +113,10 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
     return saved
   } catch (error) {
     const message = error instanceof Error ? clip(error.message) : "Delivery failed."
+    const errorCode = error instanceof AppError ? error.code : "delivery_failed"
     await updateAttempt(job.id, job.attemptKey, {
       state: "failed",
-      errorCode: "delivery_failed",
+      errorCode,
       errorMessage: message ?? null,
     })
     const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason: message ?? "Delivery failed." })

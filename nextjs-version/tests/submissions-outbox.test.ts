@@ -1,6 +1,7 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
+import { AppError } from "../src/lib/mca/errors"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
@@ -9,8 +10,8 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
-import { setEmailDeliveryFetchForTests } from "../src/lib/mca/submissions/email-templates"
-import { processJobDelivery } from "../src/lib/mca/submissions/outbox"
+import { setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
+import { assertProductionDeliveryNotPreview, processJobDelivery } from "../src/lib/mca/submissions/outbox"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   findJobById,
@@ -169,6 +170,7 @@ before(async () => {
 
 after(async () => {
   setEmailDeliveryFetchForTests()
+  setSubmissionEmailProductionForTests()
   setSenderDeliveryFetchForTests()
   setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
@@ -261,5 +263,70 @@ test("queueSubmissions enqueues submission_delivery when background jobs are ena
     assert.equal(delivery?.state, "queued")
   } finally {
     delete process.env.MCA_BACKGROUND_JOBS
+  }
+})
+
+test("production preview refs are not recorded as sent", async () => {
+  const previewRef = JSON.stringify({
+    messageId: "<preview@submissions.mca.local>",
+    threadId: "<preview@submissions.mca.local>",
+    inReplyTo: null,
+    references: ["<preview@submissions.mca.local>"],
+    delivery: "preview",
+    snapshot: {
+      to: ["subs@outbox.example.test"],
+      cc: [],
+      replyTo: "broker@example.test",
+      fromName: "Broker Desk",
+      fromAddress: "broker@example.test",
+      subject: "Preview",
+      body: "Preview body",
+      attachments: [],
+      workspacePrefix: "",
+      funderPrefix: "",
+      signature: "",
+      senderId: "sender-preview",
+    },
+  })
+  setSubmissionEmailProductionForTests(true)
+  try {
+    assert.throws(
+      () => assertProductionDeliveryNotPreview({
+        ok: true,
+        state: "sent",
+        correlationId: "corr-preview",
+        externalRef: previewRef,
+      }),
+      (error: unknown) => error instanceof AppError && error.status === 409 && error.code === "preview_not_sent",
+    )
+    assert.doesNotThrow(() => assertProductionDeliveryNotPreview({
+      ok: true,
+      state: "sent",
+      correlationId: "corr-sent",
+      externalRef: previewRef.replace('"preview"', '"sent"'),
+    }))
+  } finally {
+    setSubmissionEmailProductionForTests()
+  }
+
+  const { deal, document } = await seedDeal()
+  const queued = await persistQueuedJob(deal.id, document, "outbox-prod-preview")
+  const previousWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  delete process.env.MCA_EMAIL_WEBHOOK_URL
+  setSubmissionEmailProductionForTests(true)
+  try {
+    const saved = await processJobDelivery(queued)
+    assert.equal(saved.state, "failed")
+    assert.notEqual(saved.state, "sent")
+    const attempt = await getDatabase().prepare<{ state: string; error_code: string | null; external_ref: string | null }>(
+      "SELECT state, error_code, external_ref FROM mca_submission_attempts WHERE job_id = ?",
+    ).get(saved.id)
+    assert.equal(attempt?.state, "failed")
+    assert.ok(attempt?.error_code === "email_delivery_unconfigured" || attempt?.error_code === "preview_not_sent")
+    assert.equal(attempt?.external_ref, null)
+  } finally {
+    setSubmissionEmailProductionForTests()
+    if (previousWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
   }
 })

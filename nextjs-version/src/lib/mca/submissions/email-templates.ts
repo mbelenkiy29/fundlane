@@ -15,7 +15,8 @@ import { canManageWorkspace } from "../policy"
 import type { EmailSender } from "../senders/contracts"
 import { listSendersByWorkspace } from "../senders/repository"
 import { assertSenderUsable, listSenders } from "../senders/service"
-import type { DeliverResult, SubmissionJob } from "./contracts"
+import type { DeliverResult, OutgoingDocument, SubmissionJob } from "./contracts"
+import { getOutgoingDocumentBytes } from "./compress"
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const SUBJECT_MAX = 500
@@ -37,9 +38,18 @@ Thank you.`
 
 type EmailFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 let fetchOverride: EmailFetch | undefined
+let productionForTests: boolean | undefined
 
 export function setEmailDeliveryFetchForTests(fetchImpl?: EmailFetch): void {
   fetchOverride = fetchImpl
+}
+
+export function setSubmissionEmailProductionForTests(value?: boolean): void {
+  productionForTests = value
+}
+
+export function isSubmissionEmailProduction(): boolean {
+  return productionForTests ?? process.env.NODE_ENV === "production"
 }
 
 function http(): EmailFetch {
@@ -99,6 +109,7 @@ export interface SubmissionEmailAttachment {
   checksum: string
   byteLength: number
   category: string
+  bytesBase64?: string
 }
 
 export interface RenderedSubmissionEmail {
@@ -444,6 +455,7 @@ function redactedPayload(rendered: RenderedSubmissionEmail, correlationId: strin
       filename: item.filename,
       checksum: item.checksum,
       byteLength: item.byteLength,
+      ...(item.bytesBase64 ? { bytesBase64: item.bytesBase64 } : {}),
     })),
     jobId: job?.id,
     dealId: job?.dealId,
@@ -548,6 +560,27 @@ async function loadJobDocuments(job: SubmissionJob): Promise<Array<{ id: string;
   })
 }
 
+async function attachmentsFromPackage(
+  packaged: OutgoingDocument[],
+  originals: Array<{ id: string; filename: string; checksum: string; byteLength: number; category: string }>,
+): Promise<SubmissionEmailAttachment[]> {
+  const byOriginal = new Map(originals.map((document) => [document.id, document]))
+  const attachments: SubmissionEmailAttachment[] = []
+  for (const document of packaged) {
+    const meta = byOriginal.get(document.originalDocumentId)
+    const bytes = await getOutgoingDocumentBytes(document)
+    attachments.push({
+      documentId: document.documentId,
+      filename: meta?.filename ?? document.documentId,
+      checksum: document.checksum,
+      byteLength: bytes.byteLength,
+      category: meta?.category ?? "other_stip",
+      bytesBase64: Buffer.from(bytes).toString("base64"),
+    })
+  }
+  return attachments
+}
+
 function summariesToAttachments(documents: DocumentSummary[]) {
   return documents.map((document) => ({
     id: document.id,
@@ -638,7 +671,7 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
   const messageId = messageIdFor(correlationId)
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL?.trim()
   if (!webhook) {
-    if (process.env.NODE_ENV === "production") {
+    if (isSubmissionEmailProduction()) {
       return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.")
     }
     const ref: EmailAttemptRef = {
@@ -681,7 +714,7 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
   }
 }
 
-export async function sendSubmissionEmail(job: SubmissionJob): Promise<DeliverResult> {
+export async function sendSubmissionEmail(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
   const correlationId = newId()
   if (job.routeKind !== "email") {
     return failed(correlationId, "provider_unavailable", `Email transport for ${job.funderId} is not configured yet.`)
@@ -699,9 +732,12 @@ export async function sendSubmissionEmail(job: SubmissionJob): Promise<DeliverRe
       route: job.route,
       documents,
       sender,
-      includedDocumentIds: job.packageDocumentIds,
+      includedDocumentIds: packaged.length
+        ? packaged.map((document) => document.originalDocumentId)
+        : job.packageDocumentIds,
     })
-    return await deliverRendered(rendered, correlationId, job)
+    const attachments = packaged.length ? await attachmentsFromPackage(packaged, documents) : rendered.attachments
+    return await deliverRendered({ ...rendered, attachments }, correlationId, job)
   } catch (error) {
     if (error instanceof AppError) return failed(correlationId, error.code, error.message)
     return failed(correlationId, "delivery_failed", "Email delivery failed.")
