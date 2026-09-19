@@ -6,6 +6,7 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
+import { createFunder } from "../src/lib/mca/funders/directory"
 import { createOffer, selectOfferRevision } from "../src/lib/mca/offers/service"
 import { setClosingTransportForTests } from "../src/lib/mca/closing/delivery"
 import { createSmsAccount, recordSmsConsent } from "../src/lib/mca/sms/service"
@@ -43,10 +44,20 @@ async function seed() {
   await db.prepare("INSERT INTO mca_email_senders (id,workspace_id,provider,purpose,from_name,from_address,signature,credential_cipher,state,is_default,verified_at,last_error,created_by_user_id,created_at,updated_at) VALUES ('merchant-sender',?,'smtp','merchant','Closer','closer@example.test',NULL,?,'verified',1,?,NULL,?,?,?)").run(ids.workspace, encryptSensitive(JSON.stringify({ kind: "smtp", host: "smtp.example.test", port: 587, username: "u", password: "secret", secure: false }), ids.workspace), now, ids.user, now, now)
   await db.prepare("INSERT INTO mca_email_senders (id,workspace_id,provider,purpose,from_name,from_address,signature,credential_cipher,state,is_default,verified_at,last_error,created_by_user_id,created_at,updated_at) VALUES ('submission-sender',?,'smtp','submission','Closer','closer@example.test',NULL,?,'verified',1,?,NULL,?,?,?)").run(ids.workspace, encryptSensitive(JSON.stringify({ kind: "smtp", host: "smtp.example.test", port: 587, username: "u", password: "secret", secure: false }), ids.workspace), now, ids.user, now, now)
   dealId = (await createDeal(actor(), { idempotencyKey: "closing-deal", legalName: "Synthetic Bakery LLC", contactName: "Mira", contactEmail: "mira@example.test", contactPhone: "+12125550123" })).deal.id
-  const first = await createOffer(actor(), { dealId, funderName: "Northstar Capital", terms: { amountCents: 4000000, factorRate: 1.25, termMonths: 10, paymentAmountCents: 250000, paymentFrequency: "weekly", commissionCents: 320000 } })
+  const northstar = (await createFunder(actor(), {
+    idempotencyKey: "closing-northstar",
+    legalName: "Northstar Capital",
+    routes: [{ kind: "email", label: "Contracts", destination: "contracts@northstar.example", active: true }],
+  })).funder
+  const harbor = (await createFunder(actor(), {
+    idempotencyKey: "closing-harbor",
+    legalName: "Harbor Funding",
+    routes: [{ kind: "email", label: "Contracts", destination: "contracts@harbor.example", active: true }],
+  })).funder
+  const first = await createOffer(actor(), { dealId, funderId: northstar.id, funderName: "Northstar Capital", terms: { amountCents: 4000000, factorRate: 1.25, termMonths: 10, paymentAmountCents: 250000, paymentFrequency: "weekly", commissionCents: 320000 } })
   selectedOfferId = first.id; selectedRevisionId = first.currentRevisionId
   await selectOfferRevision(actor(), { dealId, offerId: first.id, revisionId: first.currentRevisionId, selected: true })
-  const second = await createOffer(actor(), { dealId, funderName: "Harbor Funding", terms: { amountCents: 4500000, factorRate: 1.28, termMonths: 12, paymentAmountCents: 240000, paymentFrequency: "weekly", commissionCents: 400000 } })
+  const second = await createOffer(actor(), { dealId, funderId: harbor.id, funderName: "Harbor Funding", terms: { amountCents: 4500000, factorRate: 1.28, termMonths: 12, paymentAmountCents: 240000, paymentFrequency: "weekly", commissionCents: 400000 } })
   secondRevisionId = second.currentRevisionId
 }
 
@@ -219,4 +230,66 @@ test("closing HTTP routes enforce read/write scopes, session page visibility, an
   await getDatabase().prepare("UPDATE workspaces SET page_visibility=? WHERE id=?").run(JSON.stringify({ dashboard: true, deals: false, users: true, reports: true, payments: true, workspace: true, integrations: true }), ids.workspace)
   const session = new Request(`http://localhost/api/mca/closing/${dealId}`, { headers: { cookie: "mca_session=closing-token" } })
   assert.equal((await snapshotGet(session, { params: Promise.resolve({ dealId }) })).status, 403)
+})
+
+test("recipient binding defaults to deal contact, masks previews, and audits admin overrides", async () => {
+  const { bindMerchantEmail, bindMerchantSms, bindFunderEmail } = await import("../src/lib/mca/closing/recipients")
+  const { getDealForDocument } = await import("../src/lib/mca/deals/service")
+  const deal = await getDealForDocument(actor(), dealId)
+
+  const defaultEmail = bindMerchantEmail(deal, {}, actor())
+  assert.equal(defaultEmail.address, "mira@example.test")
+  assert.equal(defaultEmail.masked, "m•••@example.test")
+  assert.equal(defaultEmail.overridden, false)
+  assert.equal(defaultEmail.source, "deal_contact")
+
+  const matched = bindMerchantEmail(deal, { recipient: "Mira@Example.test" }, actor())
+  assert.equal(matched.overridden, false)
+  assert.equal(matched.address, "mira@example.test")
+
+  assert.throws(() => bindMerchantEmail(deal, { recipient: "other@example.test" }, actor()), (error: { code?: string }) => error.code === "recipient_override_required")
+  assert.throws(() => bindMerchantEmail(deal, { recipient: "other@example.test", overrideReason: "short" }, actor()), (error: { code?: string }) => error.code === "recipient_override_required")
+  assert.throws(() => bindMerchantEmail(deal, { recipient: "other@example.test", overrideReason: "Merchant asked for a different inbox." }, { ...actor(), role: "rep" }), (error: { code?: string }) => error.code === "recipient_override_denied")
+  assert.throws(() => bindMerchantEmail(deal, { recipient: "other@example.test", overrideReason: "Merchant asked for a different inbox." }, { ...actor(), source: "api_key", userId: null, membershipId: null, role: null }), (error: { code?: string }) => error.code === "recipient_override_denied")
+
+  const overridden = bindMerchantEmail(deal, { recipient: "other@example.test", overrideReason: "Merchant asked for a different inbox." }, actor())
+  assert.equal(overridden.overridden, true)
+  assert.equal(overridden.address, "other@example.test")
+  assert.equal(overridden.source, "admin_override")
+
+  const defaultSms = bindMerchantSms(deal, {}, actor())
+  assert.equal(defaultSms.address, "+12125550123")
+  assert.equal(defaultSms.masked, "•••0123")
+  assert.equal(defaultSms.overridden, false)
+
+  const missingDeal = await createDeal(actor(), { idempotencyKey: "closing-no-contact", legalName: "No Contact LLC" })
+  const bare = await getDealForDocument(actor(), missingDeal.deal.id)
+  assert.throws(() => bindMerchantEmail(bare, {}, actor()), (error: { code?: string }) => error.code === "merchant_contact_missing")
+  assert.throws(() => bindMerchantSms(bare, {}, actor()), (error: { code?: string }) => error.code === "merchant_contact_missing")
+
+  const funder = (await createFunder(actor(), {
+    idempotencyKey: "closing-funder-route",
+    legalName: "Route Capital",
+    routes: [{ kind: "email", label: "Contracts", destination: "contracts@route.example", active: true }],
+  })).funder
+  const funderBound = await bindFunderEmail({ funderId: funder.id, dealId }, actor())
+  assert.equal(funderBound.address, "contracts@route.example")
+  assert.equal(funderBound.source, "funder_route")
+  assert.equal(funderBound.overridden, false)
+  await assert.rejects(() => bindFunderEmail({ funderId: funder.id, recipient: "other@route.example", dealId }, actor()), (error: { code?: string }) => error.code === "recipient_override_required")
+
+  const preview = await previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", idempotencyKey: "bind-default-preview" })
+  assert.equal(preview.recipientMasked, "m•••@example.test")
+  assert.equal(JSON.stringify(preview).includes("mira@example.test"), false)
+
+  await assert.rejects(() => previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", recipient: "other@example.test", idempotencyKey: "bind-other-no-reason" }), (error: { code?: string }) => error.code === "recipient_override_required")
+  await assert.rejects(() => previewMerchantOffers({ ...actor(), role: "rep" }, { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", recipient: "other@example.test", overrideReason: "Merchant asked for a different inbox.", idempotencyKey: "bind-rep-denied" }), (error: { code?: string }) => error.code === "recipient_override_denied")
+
+  const adminPreview = await previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", recipient: "other@example.test", overrideReason: "Merchant asked for a different inbox.", idempotencyKey: "bind-admin-override" })
+  assert.equal(adminPreview.recipientMasked, "o•••@example.test")
+  const audit = await getDatabase().prepare<{ action: string; metadata: string }>("SELECT action, metadata FROM audit_events WHERE workspace_id=? AND action='closing.recipient_overridden' ORDER BY created_at DESC LIMIT 1").get(ids.workspace)
+  assert.equal(audit?.action, "closing.recipient_overridden")
+  assert.equal(audit?.metadata.includes("other@example.test"), false)
+  assert.equal(audit?.metadata.includes("mira@example.test"), false)
+  assert.match(audit?.metadata ?? "", /Merchant asked for a different inbox/)
 })

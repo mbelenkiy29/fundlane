@@ -22,11 +22,11 @@ import { closingTransport, contentHash, deliveryCorrelationId, postmarkConnectio
 import type { ClosingTransport, ClosingTransportRequest } from "./delivery"
 import { createMerchantOfferSmsTransport } from "./offer-sms"
 import { deliverPsfRequestWithDocuSeal, docuSealPsfConnectionConfigured, recordDocuSealPsfWebhook as processDocuSealPsfWebhook, selectPsfDeliveryProvider } from "./psf-docuseal-service"
+import { bindFunderEmail, bindMerchantEmail, bindMerchantSms, maskClosingEmail, maskClosingSms, recordRecipientOverrideAudit } from "./recipients"
 import type { ClosingDelivery, ClosingRequestPreview, ClosingSnapshot, ContractWorkflow, MerchantUploadLink, OfferMessagePreview, OfferRevisionBinding, PsfRequestSummary, StipulationState, StipulationTask } from "./contracts"
 
 type Row = Record<string, string | number | null>
 const idempotencyPattern = /^[A-Za-z0-9._:-]{1,160}$/
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function required(value: string | undefined, field: string, max = 300): string {
   const normalized = value?.trim()
@@ -40,8 +40,8 @@ function idempotency(value: string): string {
 }
 
 function offerSnapshot(value: OfferRevisionForClosing): OfferRevisionBinding { return { ...value } }
-function maskEmail(value: string): string { const [local, domain] = value.split("@"); return domain ? `${local.slice(0, 1)}•••@${domain}` : "••••" }
-function maskRecipient(value: string, channel: "email" | "sms"): string { return channel === "email" ? maskEmail(value) : `•••${value.replace(/\D/g, "").slice(-4)}` }
+function maskEmail(value: string): string { return maskClosingEmail(value) }
+function maskRecipient(value: string, channel: "email" | "sms"): string { return channel === "email" ? maskClosingEmail(value) : maskClosingSms(value) }
 function json<T>(value: unknown, fallback: T): T { return parseJson(value, fallback) }
 
 function stipulation(row: Row): StipulationTask {
@@ -339,9 +339,12 @@ async function attemptDelivery(actor: DealActor, input: { dealId: string; kind: 
   return delivery(updated!)
 }
 
-export async function previewStipulationRequest(actor: DealActor, input: { dealId: string; stipulationIds: string[]; recipient: string; senderId?: string; channel?: "email" | "sms"; idempotencyKey: string; origin: string }): Promise<ClosingRequestPreview> {
+export async function previewStipulationRequest(actor: DealActor, input: { dealId: string; stipulationIds: string[]; recipient?: string; overrideReason?: string; senderId?: string; channel?: "email" | "sms"; idempotencyKey: string; origin: string }): Promise<ClosingRequestPreview> {
   const deal = await getDealForDocument(actor, input.dealId), channel = input.channel ?? "email"
-  if (channel === "email" && !emailPattern.test(input.recipient.trim())) throw new AppError(422, "recipient_invalid", "Enter a valid recipient email address.")
+  const bound = channel === "email"
+    ? bindMerchantEmail(deal, { recipient: input.recipient, overrideReason: input.overrideReason, dealId: input.dealId, kind: "stipulation_request" }, actor)
+    : bindMerchantSms(deal, { recipient: input.recipient, overrideReason: input.overrideReason, dealId: input.dealId, kind: "stipulation_request" }, actor)
+  await recordRecipientOverrideAudit(actor, bound, { dealId: input.dealId, kind: "stipulation_request" })
   if (!input.stipulationIds.length) throw new AppError(422, "stipulations_required", "Choose at least one open stipulation.")
   const rows = await getDatabase().prepare<Row>(`SELECT * FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? AND id = ANY(?) AND status='open' ORDER BY created_at`).all(actor.workspaceId, input.dealId, input.stipulationIds)
   if (rows.length !== new Set(input.stipulationIds).size) throw new AppError(422, "stipulations_invalid", "Each requested item must be an open stipulation on this deal.")
@@ -354,7 +357,7 @@ export async function previewStipulationRequest(actor: DealActor, input: { dealI
   const merchant = deal.dbaName || deal.legalName || "there"
   const subject = `Documents needed for ${deal.displayId}`
   const body = `Hello ${merchant},\n\nPlease upload the following requested documents using the secure, expiring links below:\n\n${lines.join("\n")}\n\nPlease contact your representative if a requested item is unavailable.`
-  return persistRequestPreview(actor, { dealId: input.dealId, kind: "stipulation_request", recordId: String(rows[0].id), channel, senderId: input.senderId, recipient: input.recipient.trim(), subject: channel === "email" ? subject : undefined, body, idempotencyKey: input.idempotencyKey })
+  return persistRequestPreview(actor, { dealId: input.dealId, kind: "stipulation_request", recordId: String(rows[0].id), channel, senderId: input.senderId, recipient: bound.address, subject: channel === "email" ? subject : undefined, body, idempotencyKey: input.idempotencyKey })
 }
 
 export async function acceptOfferForClosing(actor: DealActor, input: { dealId: string; offerId?: string; revisionId?: string; idempotencyKey: string }): Promise<ContractWorkflow> {
@@ -383,12 +386,13 @@ async function validatedClosingDocuments(actor: DealActor, dealId: string, docum
   return { attachments, missing }
 }
 
-export async function previewContractAction(actor: DealActor, input: { workflowId: string; action: "request_contract" | "request_repricing"; recipient: string; senderId: string; attachedDocumentIds?: string[]; exceptions?: Record<string, string>; reason?: string; idempotencyKey: string }): Promise<{ workflow: ContractWorkflow; preview: ClosingRequestPreview }> {
-  if (!emailPattern.test(input.recipient.trim())) throw new AppError(422, "recipient_invalid", "Enter a valid funder recipient email address.")
+export async function previewContractAction(actor: DealActor, input: { workflowId: string; action: "request_contract" | "request_repricing"; recipient?: string; overrideReason?: string; senderId: string; attachedDocumentIds?: string[]; exceptions?: Record<string, string>; reason?: string; idempotencyKey: string }): Promise<{ workflow: ContractWorkflow; preview: ClosingRequestPreview }> {
   await assertSenderUsable(actor, input.senderId, "submission")
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=?").get(actor.workspaceId, input.workflowId)
   if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
   const deal = await getDealForDocument(actor, String(row.deal_id))
+  const bound = await bindFunderEmail({ funderId: row.funder_id ? String(row.funder_id) : undefined, recipient: input.recipient, overrideReason: input.overrideReason, dealId: deal.id, resourceId: input.workflowId, kind: input.action }, actor)
+  await recordRecipientOverrideAudit(actor, bound, { dealId: deal.id, resourceId: input.workflowId, kind: input.action === "request_contract" ? "contract_request" : "repricing_request" })
   const { attachments, missing } = await validatedClosingDocuments(actor, deal.id, input.attachedDocumentIds ?? [], input.exceptions ?? {})
   if (input.action === "request_contract" && missing.length) throw new AppError(422, "closing_documents_missing", "Attach a driver license and voided check, or record an explicit exception for each missing item.", Object.fromEntries(missing.map((item) => [item, ["Attach this document or enter an exception."]])))
   const openStips = await getDatabase().prepare<Row>("SELECT label FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? AND status IN ('open','received') ORDER BY created_at").all(actor.workspaceId, deal.id)
@@ -396,10 +400,10 @@ export async function previewContractAction(actor: DealActor, input: { workflowI
   const kind = input.action === "request_contract" ? "contract_request" : "repricing_request", state = input.action === "request_contract" ? "contract_requested" : "repricing_requested", now = nowIso()
   const subject = input.action === "request_contract" ? `Contract request · ${deal.displayId}` : `Repricing request · ${deal.displayId}`
   const body = `${input.action === "request_contract" ? "Please prepare the contract" : "Please review the requested repricing"} for ${deal.legalName || deal.dbaName || deal.displayId}.\n\nOffer revision: ${row.offer_revision_number}\nFunder: ${row.funder_name}${input.action === "request_repricing" ? `\nReason: ${input.reason!.trim()}` : ""}\nAttachments: ${attachments.length}\nOutstanding stipulations: ${openStips.length ? openStips.map((item) => item.label).join(", ") : "None"}`
-  const updated = await getDatabase().prepare<Row>(`UPDATE mca_contract_workflows SET state=?,recipient_cipher=?,attached_document_ids_json=?,outstanding_stips_json=?,${input.action === "request_contract" ? "contract_requested_at" : "repricing_requested_at"}=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(state, encryptSensitive(input.recipient.trim(), actor.workspaceId), JSON.stringify(attachments), JSON.stringify(openStips.map((item) => String(item.label))), now, now, actor.workspaceId, input.workflowId)
+  const updated = await getDatabase().prepare<Row>(`UPDATE mca_contract_workflows SET state=?,recipient_cipher=?,attached_document_ids_json=?,outstanding_stips_json=?,${input.action === "request_contract" ? "contract_requested_at" : "repricing_requested_at"}=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(state, encryptSensitive(bound.address, actor.workspaceId), JSON.stringify(attachments), JSON.stringify(openStips.map((item) => String(item.label))), now, now, actor.workspaceId, input.workflowId)
   const documentMap = new Map((await listDocuments(actor, deal.id)).map((item) => [item.id, item]))
   const attachmentRefs = attachments.map((id) => { const item = documentMap.get(id)!; return { id, version: item.version, checksum: item.checksum } })
-  const preview = await persistRequestPreview(actor, { dealId: deal.id, kind, recordId: input.workflowId, channel: "email", senderId: input.senderId, recipient: input.recipient.trim(), subject, body, attachmentRefs, idempotencyKey: input.idempotencyKey })
+  const preview = await persistRequestPreview(actor, { dealId: deal.id, kind, recordId: input.workflowId, channel: "email", senderId: input.senderId, recipient: bound.address, subject, body, attachmentRefs, idempotencyKey: input.idempotencyKey })
   return { workflow: await contract(updated!, actor), preview }
 }
 
@@ -522,16 +526,17 @@ async function psfConfigForUse(actor: DealActor): Promise<{ endpoint: string; se
   return { endpoint: await safeWebhookUrl(decryptSensitive(String(row.destination_cipher), actor.workspaceId)), secret: decryptSensitive(String(row.signing_secret_cipher), actor.workspaceId) }
 }
 
-export async function confirmPsfRequest(actor: DealActor, input: { dealId: string; offerId?: string; revisionId?: string; amountCents: number; bankName: string; routingNumber: string; accountNumber: string; businessName: string; contactName: string; contactEmail: string; idempotencyKey: string; deliver?: boolean; attemptKey?: string }): Promise<{ request: PsfRequestSummary; delivery?: ClosingDelivery }> {
+export async function confirmPsfRequest(actor: DealActor, input: { dealId: string; offerId?: string; revisionId?: string; amountCents: number; bankName: string; routingNumber: string; accountNumber: string; businessName: string; contactName: string; contactEmail?: string; overrideReason?: string; idempotencyKey: string; deliver?: boolean; attemptKey?: string }): Promise<{ request: PsfRequestSummary; delivery?: ClosingDelivery }> {
   await psfVisibilityForUse(actor)
-  await getDealForDocument(actor, input.dealId)
+  const deal = await getDealForDocument(actor, input.dealId)
   const offer = await resolveOffer(actor, input.dealId, input.offerId, input.revisionId)
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new AppError(422, "amount_invalid", "Enter a positive amount in cents.")
   const routing = input.routingNumber.replace(/\D/g, ""), account = input.accountNumber.replace(/\s/g, "")
   if (!/^\d{9}$/.test(routing)) throw new AppError(422, "routing_number_invalid", "Enter a 9-digit routing number.")
   if (!/^\d{4,17}$/.test(account)) throw new AppError(422, "account_number_invalid", "Enter a bank account number containing 4 to 17 digits.")
-  if (!emailPattern.test(input.contactEmail.trim())) throw new AppError(422, "contact_email_invalid", "Enter a valid merchant contact email.")
-  const clearPayload = { schemaVersion: 1, requestType: "psf", dealId: input.dealId, offerId: offer.offerId, offerRevisionId: offer.revisionId, offerRevisionNumber: offer.revisionNumber, amountCents: input.amountCents, bankName: required(input.bankName, "bankName", 180), routingNumber: routing, accountNumber: account, businessName: required(input.businessName, "businessName", 220), contactName: required(input.contactName, "contactName", 180), contactEmail: input.contactEmail.trim() }
+  const bound = bindMerchantEmail(deal, { recipient: input.contactEmail, overrideReason: input.overrideReason, dealId: input.dealId, kind: "psf_request" }, actor)
+  await recordRecipientOverrideAudit(actor, bound, { dealId: input.dealId, kind: "psf_request" })
+  const clearPayload = { schemaVersion: 1, requestType: "psf", dealId: input.dealId, offerId: offer.offerId, offerRevisionId: offer.revisionId, offerRevisionNumber: offer.revisionNumber, amountCents: input.amountCents, bankName: required(input.bankName, "bankName", 180), routingNumber: routing, accountNumber: account, businessName: required(input.businessName, "businessName", 220), contactName: required(input.contactName, "contactName", 180), contactEmail: bound.address }
   const hash = contentHash(clearPayload), key = idempotency(input.idempotencyKey), now = nowIso(), id = newId(), correlationId = deliveryCorrelationId()
   const inserted = await getDatabase().prepare<Row>(`INSERT INTO mca_psf_requests
     (id,workspace_id,deal_id,offer_id,offer_revision_id,offer_revision_number,amount_cents,bank_name_cipher,routing_number_cipher,account_number_cipher,business_name_cipher,contact_name_cipher,contact_email_cipher,payload_version,payload_hash,state,idempotency_key,correlation_id,external_request_id,last_error_code,last_error_message,delivered_at,signed_at,created_by_user_id,created_at,updated_at)
@@ -591,16 +596,18 @@ function renderOfferLine(offer: OfferRevisionForClosing): string {
   return [offer.funderName, money(offer.amountCents), offer.factorRate ? `factor ${offer.factorRate.toFixed(3)}` : undefined, offer.termMonths ? `${offer.termMonths} months` : undefined, offer.paymentAmountCents && offer.paymentFrequency ? `${money(offer.paymentAmountCents)} ${offer.paymentFrequency}` : undefined].filter(Boolean).join(" · ")
 }
 
-export async function previewMerchantOffers(actor: DealActor, input: { dealId: string; selectionMode: "selected" | "all" | "highest"; revisionId?: string; channel: "email" | "sms"; senderId?: string; recipient: string; idempotencyKey: string }): Promise<OfferMessagePreview> {
+export async function previewMerchantOffers(actor: DealActor, input: { dealId: string; selectionMode: "selected" | "all" | "highest"; revisionId?: string; channel: "email" | "sms"; senderId?: string; recipient?: string; overrideReason?: string; idempotencyKey: string }): Promise<OfferMessagePreview> {
   const deal = await getDealForDocument(actor, input.dealId)
   let senderId = input.senderId
-  let recipient = input.recipient.trim()
+  const bound = input.channel === "email"
+    ? bindMerchantEmail(deal, { recipient: input.recipient, overrideReason: input.overrideReason, dealId: input.dealId, kind: "offer_message" }, actor)
+    : bindMerchantSms(deal, { recipient: input.recipient, overrideReason: input.overrideReason, dealId: input.dealId, kind: "offer_message" }, actor)
+  await recordRecipientOverrideAudit(actor, bound, { dealId: input.dealId, kind: "offer_message" })
+  const recipient = bound.address
   if (input.channel === "email") {
-    if (!emailPattern.test(recipient)) throw new AppError(422, "recipient_invalid", "Enter a valid merchant email address.")
     if (!senderId) throw new AppError(422, "sender_required", "Choose a verified merchant sender.")
     await assertSenderUsable(actor, senderId, "merchant")
   } else {
-    recipient = normalizeSmsRecipient(recipient)
     const consent = await getSmsConsent(actor, input.dealId, recipient)
     if (consent.state !== "opted_in") throw new AppError(409, consent.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", consent.state === "opted_out" ? "This merchant opted out of text messages." : "Record merchant SMS consent before preparing a text preview.")
     const route = await resolveSmsRoute(actor, { dealId: input.dealId, senderAccountId: senderId })
