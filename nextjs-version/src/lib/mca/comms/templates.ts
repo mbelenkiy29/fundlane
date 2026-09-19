@@ -15,6 +15,7 @@ import { listMemberships } from "../memberships"
 import type { MembershipSummary } from "../types"
 import { listOfferRevisionsForClosing } from "../offers/service"
 import type { OfferRevisionForClosing } from "../offers/contracts"
+import { pickHighestMerchantOffer } from "../offers/rank"
 import { canManageWorkspace } from "../policy"
 import { MESSAGE_CHANNELS, type MessageChannel } from "./contracts"
 
@@ -501,11 +502,17 @@ function eligibleOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClos
 }
 
 function sortOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClosing[] {
-  return [...offers].sort((left, right) => right.amountCents - left.amountCents || left.funderName.localeCompare(right.funderName) || left.offerId.localeCompare(right.offerId))
+  return [...offers].sort((left, right) => {
+    if (right.amountCents !== left.amountCents) return right.amountCents - left.amountCents
+    const leftFactor = left.factorRate ?? Number.POSITIVE_INFINITY
+    const rightFactor = right.factorRate ?? Number.POSITIVE_INFINITY
+    if (leftFactor !== rightFactor) return leftFactor - rightFactor
+    return left.revisionId.localeCompare(right.revisionId) || left.funderName.localeCompare(right.funderName) || left.offerId.localeCompare(right.offerId)
+  })
 }
 
 function highestOffer(offers: OfferRevisionForClosing[]): OfferRevisionForClosing | undefined {
-  return sortOffers(offers)[0]
+  return offers.length ? pickHighestMerchantOffer(offers) : undefined
 }
 
 function resolveAlias(name: string): string {

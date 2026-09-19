@@ -473,3 +473,53 @@ test("confirmPsfRequest requires ABA checksum and deal-matching contact email un
   const matchedEmail = await getDatabase().prepare<{ contact_email_cipher: string }>("SELECT contact_email_cipher FROM mca_psf_requests WHERE id=?").get(matched.request.id)
   assert.equal(decryptSensitive(String(matchedEmail?.contact_email_cipher), ids.workspace), "mira@example.test")
 })
+
+test("pickHighestMerchantOffer ranks amount desc, then lower factor, then revisionId asc", async () => {
+  const { pickHighestMerchantOffer } = await import("../src/lib/mca/offers/rank")
+  const tied = [
+    { amountCents: 5_000_000, factorRate: 1.35, revisionId: "rev-b" },
+    { amountCents: 5_000_000, factorRate: 1.28, revisionId: "rev-a" },
+    { amountCents: 4_000_000, factorRate: 1.1, revisionId: "rev-c" },
+  ]
+  assert.equal(pickHighestMerchantOffer(tied).revisionId, "rev-a")
+
+  const missingFactor = [
+    { amountCents: 5_000_000, revisionId: "rev-missing" },
+    { amountCents: 5_000_000, factorRate: 1.4, revisionId: "rev-known" },
+  ]
+  assert.equal(pickHighestMerchantOffer(missingFactor).revisionId, "rev-known")
+
+  const revisionTie = [
+    { amountCents: 5_000_000, factorRate: 1.3, revisionId: "rev-z" },
+    { amountCents: 5_000_000, factorRate: 1.3, revisionId: "rev-m" },
+  ]
+  assert.equal(pickHighestMerchantOffer(revisionTie).revisionId, "rev-m")
+  assert.throws(() => pickHighestMerchantOffer([]))
+})
+
+test("highest merchant preview picks lower factor on equal amount", async () => {
+  const worse = await createOffer(actor(), {
+    dealId,
+    funderName: "Worse Factor Capital",
+    externalId: "rank-worse-1",
+    terms: { amountCents: 6_000_000, factorRate: 1.4, termMonths: 10, paymentAmountCents: 300000, paymentFrequency: "weekly" },
+  })
+  const better = await createOffer(actor(), {
+    dealId,
+    funderName: "Better Factor Capital",
+    externalId: "rank-better-1",
+    terms: { amountCents: 6_000_000, factorRate: 1.25, termMonths: 10, paymentAmountCents: 300000, paymentFrequency: "weekly" },
+  })
+  const preview = await previewMerchantOffers(actor(), {
+    dealId,
+    selectionMode: "highest",
+    channel: "email",
+    senderId: "merchant-sender",
+    recipient: "mira@example.test",
+    idempotencyKey: "rank-highest-factor-tie",
+  })
+  assert.equal(preview.offer.revisionId, better.currentRevisionId)
+  assert.match(preview.body, /Better Factor Capital/)
+  assert.equal(preview.body.includes("Worse Factor Capital"), false)
+  assert.notEqual(worse.currentRevisionId, better.currentRevisionId)
+})

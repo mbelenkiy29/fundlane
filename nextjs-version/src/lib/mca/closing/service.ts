@@ -18,6 +18,7 @@ import { getSmsConsent, listSmsAccounts, normalizeSmsRecipient, resolveSmsRoute 
 import type { TwilioSmsTransport } from "../sms/twilio"
 import { assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing, listOfferRevisionsForClosing } from "../offers/service"
 import type { OfferRevisionForClosing } from "../offers/contracts"
+import { pickHighestMerchantOffer } from "../offers/rank"
 import { closingTransport, contentHash, deliveryCorrelationId, postmarkConnectionConfigured } from "./delivery"
 import type { ClosingTransport, ClosingTransportRequest } from "./delivery"
 import { createMerchantOfferSmsTransport } from "./offer-sms"
@@ -640,7 +641,7 @@ export async function previewMerchantOffers(actor: DealActor, input: { dealId: s
   offers = offers.filter((offer) => offer.state === "active" || (offer.state === "superseded" && offer.selected))
   if (input.revisionId) offers = offers.filter((offer) => offer.revisionId === input.revisionId)
   if (input.selectionMode === "selected") offers = offers.filter((offer) => offer.selected)
-  if (input.selectionMode === "highest" && offers.length) offers = [offers.reduce((best, offer) => offer.amountCents > best.amountCents ? offer : best)]
+  if (input.selectionMode === "highest" && offers.length) offers = [pickHighestMerchantOffer(offers)]
   if (!offers.length) throw new AppError(422, "offer_preview_empty", "No eligible offer revisions match this preview mode.")
   if (input.selectionMode === "selected") for (const offer of offers) assertOfferRevisionEligibleForClosing(offer)
   const subject = input.channel === "email" ? `Funding options for ${deal.dbaName || deal.legalName || deal.displayId}` : undefined
