@@ -45,6 +45,10 @@ export function offerRevisionValidity(
   return "active"
 }
 
+export function isSplitFundProduct(product?: string | null): boolean {
+  return typeof product === "string" && /^split[\s_-]*fund$/i.test(product.trim())
+}
+
 export interface OfferRecord {
   id: string
   workspaceId: string

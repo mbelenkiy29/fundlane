@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import type { DealActor } from "../src/lib/mca/deals/schema"
-import { offerRevisionValidity } from "../src/lib/mca/offers/contracts"
+import { isSplitFundProduct, offerRevisionValidity } from "../src/lib/mca/offers/contracts"
 import { assertOfferRevisionEligibleForClosing, createOffer, getOfferRevisionForClosing, reviseOffer, selectOfferRevision } from "../src/lib/mca/offers/service"
 import { approveManualSubmission, createManualSubmission } from "../src/lib/mca/offers/manual-submissions"
 import { confirmOfferFunding, reverseFundingEvent } from "../src/lib/mca/funding/service"
@@ -23,6 +23,12 @@ async function queryRow<T>(sql: string, values: unknown[] = []): Promise<T> {
 
 async function queryRows<T>(sql: string, values: unknown[] = []): Promise<T[]> {
   return (await fixture.query(sql, values)).rows as T[]
+}
+
+async function clearActiveSelections(dealId = ids.deal): Promise<void> {
+  await getDatabase().prepare(
+    "UPDATE mca_offer_selections SET active = 0, deselected_at = ?, reason = ? WHERE workspace_id = ? AND deal_id = ? AND active = 1",
+  ).run(now, "test_clear", ids.workspace, dealId)
 }
 
 async function seed() {
@@ -77,6 +83,7 @@ test("MIC-109 retains revisions and exact selection history without moving a dea
 })
 
 test("MIC-109 selection retries are no-ops and stale deselection preserves the newer revision", async () => {
+  await clearActiveSelections()
   const offer = await createOffer(admin, { dealId: ids.deal, funderName: "Selection Capital", externalId: "selection-1", terms: { amountCents: 6_000_000, factorRate: 1.3 } })
   await Promise.all([
     selectOfferRevision(admin, { dealId: ids.deal, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true }),
@@ -91,7 +98,7 @@ test("MIC-109 selection retries are no-ops and stale deselection preserves the n
 })
 
 test("MIC-118 concurrent confirmation creates one advance and ledger set, and rollback is atomic", async () => {
-  const offer = await createOffer(admin, { dealId: ids.deal, submissionId: "provider-job", funderId: "provider-funder", funderName: "Provider Funding", source: "api", externalId: "funding-1", terms: { amountCents: 7_000_000, factorRate: 1.25, paymentAmountCents: 350_000, paymentFrequency: "weekly", commissionCents: 560_000, feeCents: 20_000 } })
+  const offer = await createOffer(admin, { dealId: ids.deal, submissionId: "provider-job", funderId: "provider-funder", funderName: "Provider Funding", source: "api", externalId: "funding-1", terms: { product: "split-fund", amountCents: 7_000_000, factorRate: 1.25, paymentAmountCents: 350_000, paymentFrequency: "weekly", commissionCents: 560_000, feeCents: 20_000 } })
   await selectOfferRevision(admin, { dealId: ids.deal, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true })
   const input = { dealId: ids.deal, offerId: offer.id, offerRevisionId: offer.currentRevisionId, idempotencyKey: "fund-double-click", fundedAt: "2025-05-03", feeCents: 20_000, expectedCommissionAt: "2025-05-10", expectedFeeAt: "2025-05-08", paymentCount: 20, paymentFrequency: "weekly" as const, calendarConvention: "calendar_days" as const, splits: [{ recipientMembershipId: ids.member, percentageBasisPoints: 10000 }] }
   const results = await Promise.all([confirmOfferFunding(admin, input), confirmOfferFunding(admin, input)])
@@ -107,7 +114,7 @@ test("MIC-118 concurrent confirmation creates one advance and ledger set, and ro
   await fixture.query("UPDATE deals SET status='contract' WHERE id=$1", [ids.secondDeal])
   assert.equal((await queryRow<{ count: number }>("SELECT count(*)::int count FROM mca_accounting_payments")).count, paymentCountBeforeStatus)
 
-  const paidOffer = await createOffer(admin, { dealId: ids.deal, funderName: "Paid History Capital", externalId: "funding-paid", terms: { amountCents: 1_500_000, factorRate: 1.2, commissionCents: 120_000 } })
+  const paidOffer = await createOffer(admin, { dealId: ids.deal, funderName: "Paid History Capital", externalId: "funding-paid", terms: { product: "split-fund", amountCents: 1_500_000, factorRate: 1.2, commissionCents: 120_000 } })
   await selectOfferRevision(admin, { dealId: ids.deal, offerId: paidOffer.id, revisionId: paidOffer.currentRevisionId, selected: true })
   const paidFunding = await confirmOfferFunding(admin, { dealId: ids.deal, offerId: paidOffer.id, offerRevisionId: paidOffer.currentRevisionId, idempotencyKey: "fund-paid-history", fundedAt: "2025-05-03", splits: [{ recipientMembershipId: ids.member, percentageBasisPoints: 10000 }] })
   const paidPayment = await queryRow<{ id: string }>("SELECT id FROM mca_accounting_payments WHERE funding_event_id=$1 AND type='commission'", [paidFunding.fundingEventId])
@@ -125,19 +132,20 @@ test("MIC-118 concurrent confirmation creates one advance and ledger set, and ro
   assert.deepEqual(await queryRow<{ status: string; received_amount_cents: number; received_at: string }>("SELECT status,received_amount_cents,received_at FROM mca_accounting_payments WHERE id=$1", [paidPayment.id]), { status: "received", received_amount_cents: 120000, received_at: "2025-05-04" })
   assert.deepEqual(await queryRow<{ status: string; paid_at: string }>("SELECT status,paid_at FROM mca_payment_distributions WHERE payment_id=$1", [paidPayment.id]), { status: "paid", paid_at: "2025-05-04" })
 
-  const correctionOffer = await reviseOffer(admin, offer.id, { expectedRevisionNumber: 1, terms: { amountCents: 7_000_000, factorRate: 1.25, paymentAmountCents: 340_000, paymentFrequency: "weekly", commissionCents: 560_000, feeCents: 20_000 } })
+  const correctionOffer = await reviseOffer(admin, offer.id, { expectedRevisionNumber: 1, terms: { product: "split-fund", amountCents: 7_000_000, factorRate: 1.25, paymentAmountCents: 340_000, paymentFrequency: "weekly", commissionCents: 560_000, feeCents: 20_000 } })
   await selectOfferRevision(admin, { dealId: ids.deal, offerId: offer.id, revisionId: correctionOffer.currentRevisionId, selected: true })
   await confirmOfferFunding(admin, { ...input, offerRevisionId: correctionOffer.currentRevisionId, idempotencyKey: "fund-correction", correctionOfEventId: results[0].fundingEventId })
   assert.equal((await queryRow<{ state: string }>("SELECT state FROM mca_funding_events WHERE id=$1", [results[0].fundingEventId])).state, "corrected")
   assert.equal((await queryRow<{ status: string }>("SELECT o.status FROM deal_offers o JOIN deal_submissions s ON s.id=o.submission_id WHERE s.job_id='provider-job'")).status, "accepted")
   assert.equal((await queryRow<{ count: number }>("SELECT count(*)::int count FROM audit_events WHERE resource_id=$1 AND action='funding.reversed'", [results[0].fundingEventId])).count, 1)
-  const failed = await createOffer(admin, { dealId: ids.deal, funderName: "Rollback Capital", externalId: "rollback-1", terms: { amountCents: 3_000_000, factorRate: 1.2 } })
+  const failed = await createOffer(admin, { dealId: ids.deal, funderName: "Rollback Capital", externalId: "rollback-1", terms: { product: "split-fund", amountCents: 3_000_000, factorRate: 1.2 } })
   await selectOfferRevision(admin, { dealId: ids.deal, offerId: failed.id, revisionId: failed.currentRevisionId, selected: true })
   await assert.rejects(() => confirmOfferFunding(admin, { dealId: ids.deal, offerId: failed.id, offerRevisionId: failed.currentRevisionId, idempotencyKey: "rollback-funding", fundedAt: "2025-06-01" }, async () => { throw new Error("injected accounting failure") }), /injected accounting failure/)
   assert.equal((await queryRow<{ count: number }>("SELECT count(*)::int count FROM mca_advances WHERE offer_revision_id=$1", [failed.currentRevisionId])).count, 0)
 })
 
 test("MIC-125 manual submissions are admin-session only and create no outbound job", async () => {
+  await clearActiveSelections()
   const outboundJobsBefore = (await queryRow<{ count: number }>("SELECT count(*)::int count FROM mca_submission_jobs WHERE deal_id=$1", [ids.deal])).count
   await assert.rejects(() => createManualSubmission(apiActor, { dealId: ids.deal, funderName: "Legacy Funder", historicalAt: "2024-03-01", reason: "Migration", idempotencyKey: "manual-denied" }), /administrator session/)
   const created = await createManualSubmission(admin, { dealId: ids.deal, funderName: "Legacy Funder", historicalAt: "2024-03-01", reason: "Phone approval", idempotencyKey: "manual-local" })
@@ -228,6 +236,60 @@ test("offerRevisionValidity treats past effectiveAt as in force and expires afte
   assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-20T00:00:00.000Z", expiresAt: "2026-01-14T00:00:00.000Z" }, now), "expired")
 })
 
+test("isSplitFundProduct matches split-fund variants only", () => {
+  for (const product of ["split-fund", "split_fund", "split fund", "Split-Fund", "SPLITFUND", " split-fund "]) {
+    assert.equal(isSplitFundProduct(product), true, product)
+  }
+  for (const product of [undefined, null, "", "MCA", "split-funding", "fund-split", "split"]) {
+    assert.equal(isSplitFundProduct(product), false, String(product))
+  }
+})
+
+test("second non-split select on a deal returns offer_selection_conflict; split-fund allows multi-select", async () => {
+  const first = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Conflict First",
+    externalId: "select-conflict-1",
+    terms: { product: "MCA", amountCents: 1_000_000, factorRate: 1.2 },
+  })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: first.id, revisionId: first.currentRevisionId, selected: true })
+
+  const second = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Conflict Second",
+    externalId: "select-conflict-2",
+    terms: { product: "MCA", amountCents: 1_100_000, factorRate: 1.21 },
+  })
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: second.id, revisionId: second.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_selection_conflict",
+  )
+
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: first.id, revisionId: first.currentRevisionId, selected: false })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: second.id, revisionId: second.currentRevisionId, selected: true })
+
+  const splitA = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Split A",
+    externalId: "select-split-a",
+    terms: { product: "split-fund", amountCents: 500_000, factorRate: 1.15 },
+  })
+  const splitB = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Split B",
+    externalId: "select-split-b",
+    terms: { product: "split_fund", amountCents: 600_000, factorRate: 1.16 },
+  })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: second.id, revisionId: second.currentRevisionId, selected: false })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: splitA.id, revisionId: splitA.currentRevisionId, selected: true })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: splitB.id, revisionId: splitB.currentRevisionId, selected: true })
+  const active = await queryRows<{ offer_id: string }>(
+    "SELECT offer_id FROM mca_offer_selections WHERE deal_id=$1 AND active=1 ORDER BY offer_id",
+    [ids.secondDeal],
+  )
+  assert.deepEqual(active.map((row) => row.offer_id).sort(), [splitA.id, splitB.id].sort())
+})
+
 test("createOffer defaults expiresAt to createdAt plus 14 days", async () => {
   const offer = await createOffer(admin, { dealId: ids.deal, funderName: "Expiry Default Capital", externalId: "expiry-default-1", terms: { amountCents: 1_000_000 } })
   const revision = offer.revisions[0]
@@ -236,6 +298,7 @@ test("createOffer defaults expiresAt to createdAt plus 14 days", async () => {
 })
 
 test("expired and not-yet-effective revisions cannot be newly selected or funded; deselect remains allowed", async () => {
+  await clearActiveSelections()
   const expired = await createOffer(admin, { dealId: ids.deal, funderName: "Expired Capital", externalId: "expiry-select-1", terms: { amountCents: 2_000_000, factorRate: 1.2 } })
   await getDatabase().prepare("UPDATE mca_offer_revisions SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", expired.currentRevisionId)
   await assert.rejects(
@@ -266,6 +329,7 @@ test("expired and not-yet-effective revisions cannot be newly selected or funded
 })
 
 test("funded linked submission is ineligible at select and fund", async () => {
+  await clearActiveSelections()
   await getDatabase().prepare(`INSERT INTO mca_submission_jobs
     (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_by_user_id,created_at,updated_at)
     VALUES ('funded-job',?,?,'provider-funder','Provider Funding','api','{}','funded','funded-confirm','funded-attempt',1,'[]','{"documentIds":[]}','[]',?,?,?)`).run(ids.workspace, ids.deal, ids.user, now, now)

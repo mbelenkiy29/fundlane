@@ -4,7 +4,7 @@ import { nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } f
 import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
-import { offerRevisionValidity, type OfferRecord, type OfferRevision, type OfferRevisionForClosing, type OfferSource, type OfferTermsInput } from "./contracts"
+import { isSplitFundProduct, offerRevisionValidity, type OfferRecord, type OfferRevision, type OfferRevisionForClosing, type OfferSource, type OfferTermsInput } from "./contracts"
 import { findOffer, findOfferByExternal, insertOffer, insertOfferRevision, listOffers, OfferRevisionConflictError, setSelection } from "./repository"
 
 const requiredTerms: Array<keyof OfferTermsInput> = ["amountCents", "factorRate", "termMonths", "paymentAmountCents", "paymentFrequency"]
@@ -115,6 +115,7 @@ export async function reviseOffer(actor: DealActor, offerId: string, input: { ex
 export async function selectOfferRevision(actor: DealActor, input: { dealId: string; offerId: string; revisionId: string; selected: boolean; reason?: string }): Promise<OfferRecord> {
   await getDealForDocument(actor, input.dealId)
   return withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:offer-select:${input.dealId}`)
     await database.prepare("SELECT id FROM mca_offers WHERE workspace_id = ? AND deal_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, input.dealId, input.offerId)
     const offer = await findOffer(actor.workspaceId, input.offerId, database)
     if (!offer || offer.dealId !== input.dealId) throw new AppError(404, "offer_not_found", "The requested offer was not found.")
@@ -124,6 +125,14 @@ export async function selectOfferRevision(actor: DealActor, input: { dealId: str
       if (revision.state !== "active") throw new AppError(409, "offer_revision_ineligible", "Only the current active revision can be newly selected.")
       assertOfferRevisionValidity(revision)
       await assertLinkedSubmissionNotFunded(database, actor.workspaceId, offer.submissionId)
+      if (!offer.selectedRevisionIds.includes(revision.id)) {
+        const other = await database.prepare<{ offer_id: string }>(
+          "SELECT offer_id FROM mca_offer_selections WHERE workspace_id = ? AND deal_id = ? AND active = 1 AND offer_id != ?",
+        ).get(actor.workspaceId, input.dealId, input.offerId)
+        if (other && !isSplitFundProduct(revision.product)) {
+          throw new AppError(409, "offer_selection_conflict", "This deal already has a selected offer revision.")
+        }
+      }
     }
     await setSelection({ workspaceId: actor.workspaceId, dealId: input.dealId, offerId: input.offerId, revisionId: input.revisionId, selected: input.selected, actorUserId: actor.userId, reason: input.reason?.trim() || undefined }, database)
     if (input.selected) await syncDealToOffer(database, actor, input.dealId)
