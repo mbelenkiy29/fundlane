@@ -2,6 +2,8 @@ import "./helpers/business-auth";
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
@@ -522,4 +524,28 @@ test("highest merchant preview picks lower factor on equal amount", async () => 
   assert.match(preview.body, /Better Factor Capital/)
   assert.equal(preview.body.includes("Worse Factor Capital"), false)
   assert.notEqual(worse.currentRevisionId, better.currentRevisionId)
+})
+
+test("production gates stay qualified and closing UI renders all four lines", async () => {
+  const snapshot = await getClosingSnapshot(actor(), dealId)
+  const gates = snapshot.productionGates
+  assert.equal(typeof gates.merchantEmail, "string")
+  assert.equal(typeof gates.merchantSms, "string")
+  assert.equal(typeof gates.contractDelivery, "string")
+  assert.equal(typeof gates.psfDelivery, "string")
+  for (const copy of [gates.merchantEmail, gates.contractDelivery, gates.psfDelivery]) {
+    assert.equal(/\bready\b/i.test(copy), false, `email/PSF gate must not use bare ready: ${copy}`)
+    assert.match(copy, /configured|unavailable|available after/i)
+  }
+  assert.match(gates.merchantEmail, /configured; verify delivery|unavailable: connect merchant email/i)
+  assert.match(gates.contractDelivery, /configured; verify delivery|unavailable: connect contract delivery/i)
+  assert.match(gates.psfDelivery, /configured|available after an administrator connects/i)
+
+  const source = readFileSync(resolve(process.cwd(), "src/components/mca/closing/closing-panel.tsx"), "utf8")
+  assert.match(source, /productionGates\.merchantEmail/)
+  assert.match(source, /productionGates\.merchantSms/)
+  assert.match(source, /productionGates\.contractDelivery/)
+  assert.match(source, /productionGates\.psfDelivery/)
+  assert.match(source, /Provider readiness/)
+  assert.equal(/\bready\b/i.test(gates.merchantEmail), false)
 })
