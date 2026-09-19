@@ -14,7 +14,7 @@ export const mca_merchant_installments = pgTable("mca_merchant_installments", {
   unique("mca_merchant_installments_sequence_key").on(table.workspace_id, table.advance_id, table.sequence),
   index("mca_merchant_installments_due_idx").on(table.workspace_id, table.occurrence_date, table.advance_id),
   check("mca_merchant_installments_sequence_check", sql`${table.sequence} > 0`),
-  check("mca_merchant_installments_amount_check", sql`${table.amount_cents} > 0`),
+  check("mca_merchant_installments_amount_check", sql`${table.amount_cents} >= 0`),
 ])
 
 export const mca_merchant_receipts = pgTable("mca_merchant_receipts", {

@@ -137,6 +137,6 @@ export function generateExpectedInstallments(input: {
     const remaining = isLast && input.paybackCents != null
       ? Math.max(0, input.paybackCents - input.periodicPaymentCents! * (dates.length - 1))
       : input.periodicPaymentCents!
-    return { sequence: index + 1, occurrenceDate: ymd(date), amountCents: remaining || input.periodicPaymentCents! }
+    return { sequence: index + 1, occurrenceDate: ymd(date), amountCents: remaining }
   })
 }

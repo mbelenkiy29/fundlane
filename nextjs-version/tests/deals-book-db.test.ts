@@ -101,3 +101,20 @@ test("large repayment schedules use bounded batches and preserve every installme
   assert.equal(await persistInstallments(counted, input), 0)
   assert.equal(inserts, 10)
 })
+
+test("leftover last installment of 0 persists and sums to payback", async () => {
+  const db = getDatabase()
+  await db.prepare("DELETE FROM mca_servicing_alerts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_receipts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_installments WHERE advance_id=?").run(ids.advance)
+  const input = {
+    workspaceId: ids.workspace, advanceId: ids.advance, fundedAt: "2026-09-08", paymentCount: 10,
+    paymentFrequency: "daily", calendarConvention: "calendar_days", periodicPaymentCents: 1000, paybackCents: 9000, createdAt: now,
+  }
+  assert.equal(await persistInstallments(db, input), 10)
+  const rows = await db.prepare<{ amountCents: number }>(
+    `SELECT amount_cents AS "amountCents" FROM mca_merchant_installments WHERE advance_id=? ORDER BY sequence`,
+  ).all(ids.advance)
+  assert.equal(rows.at(-1)?.amountCents, 0)
+  assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 9000)
+})

@@ -45,6 +45,16 @@ test("unknown calendars produce no installments", () => {
   }), [])
 })
 
+test("payback 9000 over 10x1000 leaves last installment 0 and sums to 9000", () => {
+  const rows = generateExpectedInstallments({
+    fundedAt: "2026-09-08", paymentCount: 10, paymentFrequency: "daily", calendarConvention: "calendar_days",
+    periodicPaymentCents: 1000, paybackCents: 9000,
+  })
+  assert.equal(rows.length, 10)
+  assert.equal(rows[9]?.amountCents, 0)
+  assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 9000)
+})
+
 test("calendar windows use workspace timezone and Monday weeks", () => {
   assert.deepEqual(calendarWindow("2026-09-13T06:00:00.000Z", "America/New_York", "today"), { from: "2026-09-13", to: "2026-09-13" })
   assert.deepEqual(calendarWindow("2026-09-13T06:00:00.000Z", "America/New_York", "week"), { from: "2026-09-07", to: "2026-09-13" })

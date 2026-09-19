@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { allocateCents, multiplyCentsByDecimal, parseDecimal } from "../src/lib/mca/accounting/money"
+import { allocateCents, multiplyCentsByDecimal, multiplyCentsByRatio, parseDecimal, ratioFromMillionths } from "../src/lib/mca/accounting/money"
 import { calculateOffer } from "../src/lib/mca/accounting/calculations"
 import { estimateScheduledPaidIn } from "../src/lib/mca/advances/performance"
 
@@ -25,6 +25,30 @@ test("MIC-161 rejects float-prone decimal forms and a runtime commission base ch
   assert.throws(() => parseDecimal("1e-3"), /base-10 decimal/)
   assert.throws(() => parseDecimal("1.1234567"), /at most 6/)
   assert.throws(() => calculateOffer({ principalCents: 100, factorRate: "1.2", commissionBasis: "payback", commissionPointsBasisPoints: 100 } as never), /principal/)
+})
+
+test("factorRateMillionths 1_350_000 on 4_000_000 yields payback 5_400_000", () => {
+  const ratio = ratioFromMillionths(1_350_000)
+  assert.equal(ratio.numerator, BigInt(1_350_000))
+  assert.equal(ratio.denominator, BigInt(1_000_000))
+  assert.equal(multiplyCentsByRatio(4_000_000, ratio), 5_400_000)
+  const result = calculateOffer({
+    principalCents: 4_000_000,
+    factorRateMillionths: 1_350_000,
+    commissionBasis: "principal",
+    commissionPointsBasisPoints: 0,
+  })
+  assert.equal(result.paybackCents, 5_400_000)
+})
+
+test("string factorRate 1.25 still works", () => {
+  const result = calculateOffer({
+    principalCents: 4_000_000,
+    factorRate: "1.25",
+    commissionBasis: "principal",
+    commissionPointsBasisPoints: 0,
+  })
+  assert.equal(result.paybackCents, 5_000_000)
 })
 
 test("MIC-103 33.33/33.33/33.34 split reconciles exactly", () => {

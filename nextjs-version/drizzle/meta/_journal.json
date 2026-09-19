@@ -276,6 +276,13 @@
       "breakpoints": true
     },
     {
+      "idx": 41,
+      "version": "7",
+      "when": 1789550000044,
+      "tag": "0044_money_remittance",
+      "breakpoints": true
+    },
+    {
       "idx": 42,
       "version": "7",
       "when": 1789550000045,
