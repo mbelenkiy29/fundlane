@@ -549,3 +549,75 @@ test("production gates stay qualified and closing UI renders all four lines", as
   assert.match(source, /Provider readiness/)
   assert.equal(/\bready\b/i.test(gates.merchantEmail), false)
 })
+
+test("closing consumes email-sourced mca_offers from C extract bridge", async () => {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+  const deal = await createDeal(actor(), {
+    idempotencyKey: "c-bridge-deal",
+    legalName: "Bridge Merchant LLC",
+    contactName: "Pat",
+    contactEmail: "pat@example.test",
+    contactPhone: "+12125550999",
+  })
+  const funder = await createFunder(actor(), {
+    idempotencyKey: "c-bridge-funder",
+    legalName: "Bridge Capital",
+    routes: [{ kind: "email", label: "Contracts", destination: "contracts@bridge.example", active: true }],
+  })
+  const jobId = "c-bridge-job"
+  const replyId = "c-bridge-reply-1"
+  await db.prepare(`INSERT INTO mca_submission_jobs
+    (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_by_user_id,created_at,updated_at)
+    VALUES (?,?,?,?,?,'email','{}','sent','c-bridge-confirm','c-bridge-attempt',1,'[]','{"documentIds":[]}','[]',?,?,?)`).run(
+    jobId, ids.workspace, deal.deal.id, funder.funder.id, "Bridge Capital", ids.user, now, now,
+  )
+
+  const amountCents = 2_500_000
+  const offer = await createOffer(actor(), {
+    dealId: deal.deal.id,
+    submissionId: jobId,
+    funderId: funder.funder.id,
+    funderName: "Bridge Capital",
+    source: "email",
+    externalId: `email-extract:${replyId}`,
+    terms: { amountCents, factorRate: 1.35, termMonths: 10, paymentAmountCents: 250_000, paymentFrequency: "weekly" },
+  })
+  assert.equal(offer.source, "email")
+  assert.equal(offer.externalId, `email-extract:${replyId}`)
+  assert.equal(offer.submissionId, jobId)
+  assert.equal(offer.revisions[0]?.amountCents, amountCents)
+
+  await selectOfferRevision(actor(), { dealId: deal.deal.id, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true })
+  const workflow = await acceptOfferForClosing(actor(), {
+    dealId: deal.deal.id,
+    offerId: offer.id,
+    revisionId: offer.currentRevisionId,
+    idempotencyKey: "c-bridge-accept",
+  })
+  assert.equal(workflow.state, "accepted")
+  assert.equal(workflow.offer.offerId, offer.id)
+  assert.equal(workflow.offer.revisionId, offer.currentRevisionId)
+  assert.equal(workflow.offer.amountCents, amountCents)
+
+  await selectOfferRevision(actor(), { dealId: deal.deal.id, offerId: offer.id, revisionId: offer.currentRevisionId, selected: false })
+  const fundedJobId = "c-bridge-funded-job"
+  await db.prepare(`INSERT INTO mca_submission_jobs
+    (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_by_user_id,created_at,updated_at)
+    VALUES (?,?,?,?,?,'email','{}','funded','c-bridge-funded-confirm','c-bridge-funded-attempt',1,'[]','{"documentIds":[]}','[]',?,?,?)`).run(
+    fundedJobId, ids.workspace, deal.deal.id, funder.funder.id, "Bridge Capital", ids.user, now, now,
+  )
+  const fundedOffer = await createOffer(actor(), {
+    dealId: deal.deal.id,
+    submissionId: fundedJobId,
+    funderId: funder.funder.id,
+    funderName: "Bridge Capital",
+    source: "email",
+    externalId: "email-extract:c-bridge-reply-funded",
+    terms: { amountCents: 2_600_000, factorRate: 1.3, termMonths: 10, paymentAmountCents: 260_000, paymentFrequency: "weekly" },
+  })
+  await assert.rejects(
+    () => selectOfferRevision(actor(), { dealId: deal.deal.id, offerId: fundedOffer.id, revisionId: fundedOffer.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_ineligible",
+  )
+})
