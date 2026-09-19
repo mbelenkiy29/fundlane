@@ -20,7 +20,8 @@ import {
   scoreDeal,
 } from "../src/lib/mca/underwriting/scoring"
 import type { ScoringInputs } from "../src/lib/mca/underwriting/scoring"
-import type { ExistingPositionCandidate, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
+import type { ExistingPositionCandidate, FunderScore, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
+import { AUTO_SELECT_GRADES } from "../src/lib/mca/underwriting/policy"
 import { insertCheck } from "../src/lib/mca/datamerch/repository"
 import { GET as getScores, POST as postScores } from "../src/app/api/mca/underwriting/scores/[dealId]/route"
 
@@ -131,6 +132,16 @@ async function seedFunder(workspaceId: string, key: string, rules: EligibilityRu
   return id
 }
 
+async function seedReadyCompleteness(workspaceId: string, dealId: string, version = 1) {
+  const now = new Date().toISOString()
+  await exec(
+    `INSERT INTO mca_completeness_results
+      (id, workspace_id, deal_id, ready, version, rule_snapshot, findings_json, findings_fingerprint, checked_at)
+     VALUES (?, ?, ?, 1, ?, '{"requiredStatementMonths":3}', '[]', ?, ?)`,
+    newId(), workspaceId, dealId, version, `ready-${version}`, now,
+  )
+}
+
 async function seedAggregate(workspaceId: string, dealId: string, extra: { stale?: boolean; version?: number; revenue?: number } = {}) {
   const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 0.95, text: String(value) })
   await exec(
@@ -194,6 +205,30 @@ test("MIC-163 hard DQ runs before score and cannot be auto-selected", async () =
   assert.equal(blockedScore.reasons.some((reason) => reason.ruleId.startsWith("soft.")), false)
   assert.deepEqual(autoSelectableFunderIds(scored), ["fit-ok"])
   assert.equal(fitScore.rank < blockedScore.rank, true)
+})
+
+test("auto-select is C+ only: D and F grades are not auto-selected", () => {
+  assert.deepEqual(AUTO_SELECT_GRADES, ["A", "B", "C"])
+  const scored: FunderScore[] = [
+    { funderId: "grade-a", rank: 1, score: 90, grade: "A", eligible: true, reasons: [] },
+    { funderId: "grade-b", rank: 2, score: 80, grade: "B", eligible: true, reasons: [] },
+    { funderId: "grade-c", rank: 3, score: 70, grade: "C", eligible: true, reasons: [] },
+    { funderId: "grade-d", rank: 4, score: 65, grade: "D", eligible: true, reasons: [] },
+    { funderId: "grade-f", rank: 5, score: 40, grade: "F", eligible: true, reasons: [] },
+    { funderId: "grade-dq", rank: 6, score: 0, grade: "DQ", eligible: false, reasons: [] },
+  ]
+  assert.deepEqual(autoSelectableFunderIds(scored), ["grade-a", "grade-b", "grade-c"])
+})
+
+test("scoreDeal autoSelectableFunderIds requires send-gate ok", async () => {
+  const workspaceId = `ws-score-gate-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  const deal = await merchantDeal(workspaceId, "gate-empty")
+  await seedFunder(workspaceId, "gate-fit", fitRules())
+  const scored = await scoreDeal(actor(workspaceId), deal.id)
+  assert.equal(scored.snapshot.scores.some((row) => row.eligible && row.grade === "A"), true)
+  assert.deepEqual(scored.autoSelectableFunderIds, [])
+  assert.deepEqual((await getDealScores(actor(workspaceId), deal.id)).autoSelectableFunderIds, [])
 })
 
 test("MIC-163 same inputs and policyVersion 2 produce identical scores and retry identity", async () => {
@@ -392,6 +427,7 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
   await addWorkspace(workspaceId)
   await addWorkspace(otherId)
   const deal = await merchantDeal(workspaceId, "http-score")
+  await seedReadyCompleteness(workspaceId, deal.id)
   await seedFunder(workspaceId, "http-fit", fitRules())
   const now = new Date().toISOString()
   const creatorId = `score-user-${workspaceId}`

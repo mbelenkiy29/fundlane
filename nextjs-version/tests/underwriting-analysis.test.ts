@@ -245,6 +245,44 @@ test("MIC-148 automatic_send requires admin enablement, snapshots settings, and 
   assert.equal(analysisQueueCallsForTests()[0]?.dealId, deal.id)
 })
 
+test("automatic_send is blocked with completeness_not_ready or positions_unconfirmed", async () => {
+  const workspaceId = `ws-analysis-gates-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  resetAnalysisQueueCallsForTests()
+  await updateAnalysisSettings(actor(workspaceId), { automaticSendEnabled: true, mode: "automatic_send" })
+  await seedFunder(workspaceId, "gate-fit", fitRules())
+
+  const incomplete = await merchantDeal(workspaceId, "send-incomplete")
+  await exec(`UPDATE mca_completeness_results SET ready = 0 WHERE workspace_id = ? AND deal_id = ?`, workspaceId, incomplete.id)
+  const blockedIncomplete = await runAnalysis(actor(workspaceId), incomplete.id)
+  assert.equal(blockedIncomplete.run.mode, "automatic_send")
+  assert.equal(blockedIncomplete.run.state, "blocked")
+  assert.equal(blockedIncomplete.run.reason, "completeness_not_ready")
+  assert.deepEqual(blockedIncomplete.run.selectedFunderIds, [])
+  assert.equal(blockedIncomplete.run.queued, false)
+
+  const proposed = await merchantDeal(workspaceId, "send-proposed")
+  const now = new Date().toISOString()
+  await exec(
+    `INSERT INTO mca_existing_positions
+      (id, workspace_id, deal_id, document_id, label, estimated_payment, evidence, status, corrected, correction_reason, corrected_by_user_id, corrected_at, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 'OCR MCA', NULL, 'fixture', 'proposed', 0, NULL, NULL, NULL, ?, ?)`,
+    newId(), workspaceId, proposed.id, now, now,
+  )
+  const blockedProposed = await runAnalysis(actor(workspaceId), proposed.id)
+  assert.equal(blockedProposed.run.state, "blocked")
+  assert.equal(blockedProposed.run.reason, "positions_unconfirmed")
+  assert.deepEqual(blockedProposed.run.selectedFunderIds, [])
+  assert.equal(blockedProposed.run.queued, false)
+  assert.equal(analysisQueueCallsForTests().length, 0)
+
+  const reviewable = await merchantDeal(workspaceId, "send-review")
+  await exec(`UPDATE mca_completeness_results SET ready = 0 WHERE workspace_id = ? AND deal_id = ?`, workspaceId, reviewable.id)
+  const reviewed = await runAnalysis(actor(workspaceId), reviewable.id, { mode: "review_first" })
+  assert.equal(reviewed.run.state, "review_pending")
+  assert.equal(reviewed.run.reason, "review_pending")
+})
+
 test("MIC-148 run override leaves workspace defaults and retries keep identity without duplicate sends", async () => {
   const workspaceId = `ws-analysis-override-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)

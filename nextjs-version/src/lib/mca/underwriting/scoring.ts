@@ -14,6 +14,7 @@ import type { EligibilityRule, FunderRecord } from "../funders/contracts"
 import type { CompletenessResult, ExistingPositionCandidate, FunderScore, MetricEvidence, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { getCompleteness } from "./completeness"
 import {
+  AUTO_SELECT_GRADES,
   DEFAULT_ADB_SCALE,
   DEFAULT_FICO_FLOOR,
   DEFAULT_NSF_SCALE,
@@ -37,6 +38,7 @@ import {
   SOFT_WEIGHT_REVENUE_FIT,
 } from "./policy"
 import { listChecks } from "../datamerch/repository"
+import { evaluateUnderwritingSendGates } from "./send-gates"
 import { getUnderwritingAggregate, listExistingPositions, listStatementMonths } from "./statements"
 import {
   findLatestScoreSnapshot,
@@ -165,10 +167,18 @@ export async function requireScoreActor(request: Request, mode: "read" | "write"
 }
 
 export function autoSelectableFunderIds(scores: FunderScore[]): string[] {
+  const allowed = new Set<string>(AUTO_SELECT_GRADES)
   return [...scores]
-    .filter((score) => score.eligible && score.grade !== "DQ")
+    .filter((score) => score.eligible && allowed.has(score.grade))
     .sort((left, right) => left.rank - right.rank || left.funderId.localeCompare(right.funderId))
     .map((score) => score.funderId)
+}
+
+async function gatedAutoSelectableFunderIds(actor: DealActor, dealId: string, scores: FunderScore[]): Promise<string[]> {
+  const ids = autoSelectableFunderIds(scores)
+  if (ids.length === 0) return []
+  const gate = await evaluateUnderwritingSendGates(actor, dealId)
+  return gate.ok ? ids : []
 }
 
 export function gradeFromScore(score: number, eligible: boolean): Grade {
@@ -853,7 +863,7 @@ export async function getDealScores(actor: DealActor, dealId: string): Promise<D
     stale,
     staleReasons: reasons,
     disclaimer: SCORE_FIT_DISCLAIMER,
-    autoSelectableFunderIds: stale ? [] : autoSelectableFunderIds(scores),
+    autoSelectableFunderIds: stale ? [] : await gatedAutoSelectableFunderIds(actor, deal.id, scores),
     funders: funderSummaries(funders),
   }
 }
@@ -901,7 +911,7 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
       stale: false,
       staleReasons: [],
       disclaimer: SCORE_FIT_DISCLAIMER,
-      autoSelectableFunderIds: autoSelectableFunderIds(previous.scores),
+      autoSelectableFunderIds: await gatedAutoSelectableFunderIds(actor, deal.id, previous.scores),
       funders: funderSummaries(funders),
     }
   }
@@ -926,7 +936,7 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
     stale: false,
     staleReasons: [],
     disclaimer: SCORE_FIT_DISCLAIMER,
-    autoSelectableFunderIds: autoSelectableFunderIds(saved.scores),
+    autoSelectableFunderIds: await gatedAutoSelectableFunderIds(actor, deal.id, saved.scores),
     funders: funderSummaries(funders),
   }
 }

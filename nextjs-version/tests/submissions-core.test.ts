@@ -181,12 +181,22 @@ function assertNoSecret(value: unknown) {
   assert.equal(text.includes("credential_cipher"), false)
 }
 
+async function seedReadyCompleteness(workspaceId: string, dealId: string) {
+  const now = new Date().toISOString()
+  await getDatabase().prepare(
+    `INSERT INTO mca_completeness_results
+      (id, workspace_id, deal_id, ready, version, rule_snapshot, findings_json, findings_fingerprint, checked_at)
+     VALUES (?, ?, ?, 1, 1, '{"requiredStatementMonths":3}', '[]', ?, ?)`,
+  ).run(`comp-${dealId}`, workspaceId, dealId, `ready-${dealId}`, now)
+}
+
 async function seedDeal() {
   dealCounter += 1
   const deal = (await createDeal(actor(), {
     idempotencyKey: `submission-deal-${dealCounter}`,
     legalName: `Submission Merchant ${dealCounter} LLC`,
   })).deal
+  await seedReadyCompleteness(ids.workspace, deal.id)
   const document = await storeDocument(actor(), {
     dealId: deal.id,
     idempotencyKey: `submission-doc-${dealCounter}`,
@@ -330,6 +340,7 @@ test("MIC-166 HTTP confirmation is idempotent and mixed destinations stay indepe
 test("MIC-166 email without a usable submission sender fails independently of other destinations", async () => {
   const other = actor(ids.otherWorkspace)
   const deal = (await createDeal(other, { idempotencyKey: "no-sender-deal", legalName: "No Sender Merchant LLC" })).deal
+  await seedReadyCompleteness(ids.otherWorkspace, deal.id)
   await storeDocument(other, {
     dealId: deal.id,
     idempotencyKey: "no-sender-doc",

@@ -295,6 +295,24 @@ test("MIC-150 confirm revalidates completeness ready and score freshness", async
   )
 })
 
+test("MIC-150 confirm is 409 positions_unconfirmed when proposed positions remain", async () => {
+  const workspaceId = `ws-review-proposed-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  await seedMember(workspaceId, "admin")
+  const { deal, fitId } = await reviewedDeal(workspaceId, "proposed")
+  const now = new Date().toISOString()
+  await exec(
+    `INSERT INTO mca_existing_positions
+      (id, workspace_id, deal_id, document_id, label, estimated_payment, evidence, status, corrected, correction_reason, corrected_by_user_id, corrected_at, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 'OCR MCA', NULL, 'fixture', 'proposed', 0, NULL, NULL, NULL, ?, ?)`,
+    newId(), workspaceId, deal.id, now, now,
+  )
+  await assert.rejects(
+    () => confirmAnalysisReview(actor(workspaceId), { dealId: deal.id, selectedFunderIds: [fitId] }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "positions_unconfirmed",
+  )
+})
+
 test("MIC-150 approval binds to that snapshot only and retries keep identity", async () => {
   const workspaceId = `ws-review-bind-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)

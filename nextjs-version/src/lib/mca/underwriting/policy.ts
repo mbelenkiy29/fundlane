@@ -23,7 +23,7 @@ export const HARD_DQ_FIELDS = [
 
 export type HardDqField = (typeof HARD_DQ_FIELDS)[number]
 
-/** Grades eligible for auto-select once Task 8 wires send gates. */
+/** Grades eligible for auto-select (C+). D and F never auto-select. */
 export const AUTO_SELECT_GRADES = ["A", "B", "C"] as const
 
 export type AutoSelectGrade = (typeof AUTO_SELECT_GRADES)[number]

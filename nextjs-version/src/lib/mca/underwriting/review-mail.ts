@@ -14,6 +14,7 @@ import type { AnalysisDestination } from "./analysis-repository"
 import { getCompleteness } from "./completeness"
 import type { AnalysisSnapshot, FunderScore } from "./contracts"
 import { autoSelectableFunderIds, getDealScores } from "./scoring"
+import { evaluateUnderwritingSendGates, underwritingSendGateMessage } from "./send-gates"
 
 export const REVIEW_TOKEN_TTL_MS = 5 * 60_000
 export const DEFAULT_REVIEW_ROLES: Role[] = ["admin", "manager", "super_admin"]
@@ -650,9 +651,12 @@ export async function confirmAnalysisReview(actor: DealActor, input: {
     })
     return { ...view, run: view.run!, snapshot: view.snapshot!, approval: existing }
   }
-  const completeness = await getCompleteness(actor, run.dealId)
-  if (!completeness?.ready) {
-    throw new AppError(409, "deal_not_ready", "Document completeness is not ready.")
+  const gate = await evaluateUnderwritingSendGates(actor, run.dealId)
+  if (!gate.completenessReady) {
+    throw new AppError(409, "deal_not_ready", underwritingSendGateMessage("completeness_not_ready"))
+  }
+  if (gate.proposedPositionCount > 0) {
+    throw new AppError(409, "positions_unconfirmed", underwritingSendGateMessage("positions_unconfirmed"))
   }
   const scores = await getDealScores(actor, run.dealId)
   if (scores.stale || !scores.snapshot || scores.snapshot.id !== run.snapshotId) {
