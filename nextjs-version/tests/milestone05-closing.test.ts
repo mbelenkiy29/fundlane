@@ -13,7 +13,7 @@ import { createSmsAccount, recordSmsConsent } from "../src/lib/mca/sms/service"
 import type { TwilioSmsTransport } from "../src/lib/mca/sms/twilio"
 import {
   acceptOfferForClosing, confirmPsfRequest, createMerchantUploadLink, createStipulation, getClosingSnapshot,
-  inspectMerchantUpload, markContractFinalReview, previewContractAction, previewMerchantOffers, recordContractSignature, recordPhonePitch,
+  inspectMerchantUpload, markContractFinalReview, previewContractAction, previewMerchantOffers, previewStipulationRequest, recordContractSignature, recordPhonePitch,
   recordPsfWebhook, sendMerchantOfferPreview, sendRequestPreview, updatePsfConfiguration, updateStipulation, uploadMerchantDocument,
   redeemClosingArtifact,
 } from "../src/lib/mca/closing/service"
@@ -27,6 +27,11 @@ import { POST as stipulationPost } from "../src/app/api/mca/closing/stipulations
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const ids = { workspace: "closing-workspace", otherWorkspace: "closing-other", user: "closing-user", member: "closing-member", otherUser: "closing-other-user", otherMember: "closing-other-member" }
 const actor = (workspaceId = ids.workspace): DealActor => ({ workspaceId, userId: workspaceId === ids.workspace ? ids.user : ids.otherUser, membershipId: workspaceId === ids.workspace ? ids.member : ids.otherMember, role: "admin", managedMembershipIds: [], activeMembershipIds: [workspaceId === ids.workspace ? ids.member : ids.otherMember], source: "user", correlationId: `corr-${workspaceId}` })
+function guessedUploadHmac(workspaceId: string, stipulationId: string, key: string): string {
+  const configured = process.env.MCA_UPLOAD_TOKEN_SECRET
+  const secret = configured && configured.length >= 32 ? Buffer.from(configured) : Buffer.from("local-only-upload-token-secret-32-bytes-minimum")
+  return createHmac("sha256", secret).update(`${workspaceId}:${stipulationId}:${key}`).digest("base64url")
+}
 const files = new Map<string, Uint8Array>()
 const storage: DocumentStorage = { name: "memory", async putImmutable(key, bytes) { if (files.has(key)) throw new Error("exists"); files.set(key, bytes) }, async get(key) { const bytes = files.get(key); if (!bytes) throw new Error("missing"); return bytes } }
 const pdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"))
@@ -341,4 +346,69 @@ test("admin SMS recipient override can record consent and preview without deal-p
     if (priorAccounts === undefined) delete process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON; else process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON = priorAccounts
     if (priorBaseUrl === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL; else process.env.MCA_SMS_PUBLIC_BASE_URL = priorBaseUrl
   }
+})
+
+test("stipulation preview uses placeholders and send mints one idempotent random upload URL", async () => {
+  const stip = await createStipulation(actor(), { dealId, documentCategory: "driver_license", label: "Owner driver license", idempotencyKey: "stip-preview-send" })
+  const preview = await previewStipulationRequest(actor(), {
+    dealId,
+    stipulationIds: [stip.id],
+    senderId: "merchant-sender",
+    idempotencyKey: "stip-preview-1",
+    origin: "https://app.example.test",
+  })
+  assert.equal(preview.body.includes("/merchant-upload/"), false)
+  assert.match(preview.body, new RegExp(`\\[secure-upload:${stip.id}\\]`))
+  const previewLinks = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int count FROM mca_merchant_upload_links WHERE workspace_id=?").get(ids.workspace)
+  assert.equal(previewLinks?.count, 0)
+
+  const staff = await createMerchantUploadLink(actor(), { stipulationId: stip.id, idempotencyKey: "staff-link-now", origin: "https://app.example.test" })
+  assert.match(staff.url ?? "", /^https:\/\/app\.example\.test\/merchant-upload\/[A-Za-z0-9_-]{30,}$/)
+  await assert.rejects(() => inspectMerchantUpload(guessedUploadHmac(ids.workspace, stip.id, "staff-link-now")), (error: { code?: string }) => error.code === "upload_link_invalid")
+  await getDatabase().prepare("DELETE FROM mca_merchant_upload_links WHERE workspace_id=?").run(ids.workspace)
+
+  let deliveredBody = ""
+  setClosingTransportForTests({ async deliver(request) { deliveredBody = request.body ?? ""; return { state: "sent", correlationId: request.correlationId, externalId: "stip-mail-1" } } })
+  const sent = await sendRequestPreview(actor(), preview.id, "stip-send-1")
+  assert.equal(sent.state, "sent")
+  assert.match(deliveredBody, /\/merchant-upload\/[A-Za-z0-9_-]{30,}/)
+  assert.equal(deliveredBody.includes("[secure-upload:"), false)
+  const links = await getDatabase().prepare<{ id: string; idempotency_key: string; token_cipher: string | null; token_hash: string }>("SELECT id,idempotency_key,token_cipher,token_hash FROM mca_merchant_upload_links WHERE workspace_id=?").all(ids.workspace)
+  assert.equal(links.length, 1)
+  assert.equal(links[0].idempotency_key, `send:${preview.id}:${stip.id}`)
+  assert.ok(links[0].token_cipher)
+  const token = deliveredBody.match(/\/merchant-upload\/([A-Za-z0-9_-]+)/)?.[1]
+  assert.ok(token)
+  assert.equal(links[0].token_cipher?.includes(token!), false)
+  assert.equal(JSON.stringify(links[0]).includes(token!), false)
+  const publicView = await inspectMerchantUpload(token!)
+  assert.equal(publicView.destinationCategory, "driver_license")
+
+  let replayDeliveries = 0
+  setClosingTransportForTests({ async deliver(request) { replayDeliveries += 1; return { state: "sent", correlationId: request.correlationId, externalId: "must-not-resend" } } })
+  const replay = await sendRequestPreview(actor(), preview.id, "stip-send-replay")
+  assert.equal(replay.state, "sent")
+  assert.equal(replayDeliveries, 0)
+  const afterReplay = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int count FROM mca_merchant_upload_links WHERE workspace_id=?").get(ids.workspace)
+  assert.equal(afterReplay?.count, 1)
+
+  await assert.rejects(() => inspectMerchantUpload(guessedUploadHmac(ids.workspace, stip.id, `send:${preview.id}:${stip.id}`)), (error: { code?: string }) => error.code === "upload_link_invalid")
+  await assert.rejects(() => inspectMerchantUpload(guessedUploadHmac(ids.workspace, stip.id, `preview:stip-preview-1:${stip.id}`)), (error: { code?: string }) => error.code === "upload_link_invalid")
+})
+
+test("legacy HMAC merchant upload hashes remain redeemable until expiry", async () => {
+  const stip = await createStipulation(actor(), { dealId, documentCategory: "voided_check", label: "Voided check", idempotencyKey: "stip-legacy-hmac" })
+  const key = "legacy-hmac-link"
+  const token = guessedUploadHmac(ids.workspace, stip.id, key)
+  const now = new Date().toISOString()
+  const expiresAt = new Date(Date.now() + 86_400_000).toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_merchant_upload_links
+    (id,workspace_id,deal_id,stipulation_id,token_hash,destination_category,expires_at,max_uploads,used_count,revoked_at,idempotency_key,created_by_user_id,created_at,updated_at)
+    VALUES ('legacy-hmac-row',?,?,?,?,?,?,1,0,NULL,?,?,?,?)`).run(ids.workspace, dealId, stip.id, hashOpaqueToken(token), "voided_check", expiresAt, key, ids.user, now, now)
+  const publicView = await inspectMerchantUpload(token)
+  assert.equal(publicView.destinationCategory, "voided_check")
+  const replay = await createMerchantUploadLink(actor(), { stipulationId: stip.id, idempotencyKey: key, origin: "https://app.example.test" })
+  assert.equal(replay.url, `https://app.example.test/merchant-upload/${token}`)
+  const count = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int count FROM mca_merchant_upload_links WHERE workspace_id=?").get(ids.workspace)
+  assert.equal(count?.count, 1)
 })

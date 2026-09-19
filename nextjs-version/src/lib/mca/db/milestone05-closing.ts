@@ -15,7 +15,7 @@ export const mca_closing_stipulations = pgTable("mca_closing_stipulations", {
 
 export const mca_merchant_upload_links = pgTable("mca_merchant_upload_links", {
   id: text().primaryKey().notNull(), workspace_id: text().notNull(), deal_id: text().notNull(),
-  stipulation_id: text(), token_hash: text().notNull(), destination_category: text().notNull(),
+  stipulation_id: text(), token_hash: text().notNull(), token_cipher: text(), destination_category: text().notNull(),
   expires_at: text().notNull(), max_uploads: integer().default(1).notNull(), used_count: integer().default(0).notNull(),
   revoked_at: text(), idempotency_key: text().notNull(), created_by_user_id: text(), created_at: text().notNull(), updated_at: text().notNull(),
 }, (table) => [

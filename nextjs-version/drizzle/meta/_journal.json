@@ -283,6 +283,13 @@
       "breakpoints": true
     },
     {
+      "idx": 40,
+      "version": "7",
+      "when": 1789550000043,
+      "tag": "0043_closing_upload_and_offer_expiry",
+      "breakpoints": true
+    },
+    {
       "idx": 41,
       "version": "7",
       "when": 1789550000044,

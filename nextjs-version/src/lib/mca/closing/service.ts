@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 import { lookup } from "node:dns/promises"
 import { isIP } from "node:net"
 import { AppError } from "../errors"
-import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../crypto"
+import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken } from "../crypto"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
@@ -172,19 +172,20 @@ export async function createMerchantUploadLink(actor: DealActor, input: { stipul
   await getDealForDocument(actor, String(taskRow.deal_id))
   if (["verified", "waived"].includes(String(taskRow.status))) throw new AppError(409, "stipulation_closed", "This stipulation no longer accepts uploads.")
   const key = idempotency(input.idempotencyKey)
-  const token = merchantUploadToken(actor.workspaceId, input.stipulationId, key)
+  const origin = input.origin.replace(/\/$/, "")
   const existing = await getDatabase().prepare<Row>("SELECT * FROM mca_merchant_upload_links WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
   if (existing) {
     if (String(existing.stipulation_id) !== input.stipulationId) throw new AppError(409, "idempotency_conflict", "That retry key already identifies another upload request.")
-    return { ...uploadLink(existing), url: `${input.origin.replace(/\/$/, "")}/merchant-upload/${token}` }
+    return { ...uploadLink(existing), url: `${origin}/merchant-upload/${merchantUploadTokenFromRow(existing, actor.workspaceId, input.stipulationId, key)}` }
   }
+  const token = createOpaqueToken(32)
   const id = newId(), now = nowIso(), hours = Math.min(Math.max(input.expiresInHours ?? 72, 1), 168), maxUploads = Math.min(Math.max(input.maxUploads ?? 1, 1), 10)
   const expiresAt = new Date(Date.now() + hours * 3_600_000).toISOString()
   const row = await getDatabase().prepare<Row>(`INSERT INTO mca_merchant_upload_links
-    (id,workspace_id,deal_id,stipulation_id,token_hash,destination_category,expires_at,max_uploads,used_count,revoked_at,idempotency_key,created_by_user_id,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,0,NULL,?,?,?,?) RETURNING *`).get(id, actor.workspaceId, taskRow.deal_id, input.stipulationId, hashOpaqueToken(token), taskRow.document_category, expiresAt, maxUploads, key, actor.userId, now, now)
+    (id,workspace_id,deal_id,stipulation_id,token_hash,token_cipher,destination_category,expires_at,max_uploads,used_count,revoked_at,idempotency_key,created_by_user_id,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?) RETURNING *`).get(id, actor.workspaceId, taskRow.deal_id, input.stipulationId, hashOpaqueToken(token), encryptSensitive(token, actor.workspaceId), taskRow.document_category, expiresAt, maxUploads, key, actor.userId, now, now)
   await recordAuditEvent({ context: actor, action: "closing.upload_link_created", resourceType: "merchant_upload_link", resourceId: id, metadata: { stipulationId: input.stipulationId, expiresAt, maxUploads }, correlationId: actor.correlationId })
-  return { ...uploadLink(row!), url: `${input.origin.replace(/\/$/, "")}/merchant-upload/${token}` }
+  return { ...uploadLink(row!), url: `${origin}/merchant-upload/${token}` }
 }
 
 function closingTokenSecret(name: "upload" | "artifact"): Buffer {
@@ -197,6 +198,27 @@ function closingTokenSecret(name: "upload" | "artifact"): Buffer {
 
 function merchantUploadToken(workspaceId: string, stipulationId: string, key: string): string {
   return createHmac("sha256", closingTokenSecret("upload")).update(`${workspaceId}:${stipulationId}:${key}`).digest("base64url")
+}
+
+function merchantUploadTokenFromRow(row: Row, workspaceId: string, stipulationId: string, key: string): string {
+  if (row.token_cipher) return decryptSensitive(String(row.token_cipher), workspaceId)
+  return merchantUploadToken(workspaceId, stipulationId, key)
+}
+
+function secureUploadPlaceholder(): RegExp {
+  return /\[secure-upload:([A-Za-z0-9._:-]{1,160})\]/g
+}
+
+async function materializeSecureUploadBody(actor: DealActor, previewId: string, body: string, origin: string): Promise<string> {
+  const stipulationIds = [...new Set([...body.matchAll(secureUploadPlaceholder())].map((match) => match[1]))]
+  if (!stipulationIds.length) return body
+  const urls = new Map<string, string>()
+  for (const stipulationId of stipulationIds) {
+    const link = await createMerchantUploadLink(actor, { stipulationId, idempotencyKey: `send:${previewId}:${stipulationId}`, origin })
+    if (!link.url) throw new AppError(409, "upload_link_unavailable", "Create a new preview to issue a fresh secure upload link.")
+    urls.set(stipulationId, link.url)
+  }
+  return body.replace(secureUploadPlaceholder(), (_match, stipulationId: string) => urls.get(stipulationId) ?? `[secure-upload:${stipulationId}]`)
 }
 
 function closingArtifactOrigin(): string {
@@ -350,9 +372,7 @@ export async function previewStipulationRequest(actor: DealActor, input: { dealI
   if (rows.length !== new Set(input.stipulationIds).size) throw new AppError(422, "stipulations_invalid", "Each requested item must be an open stipulation on this deal.")
   const lines: string[] = []
   for (const row of rows) {
-    const link = await createMerchantUploadLink(actor, { stipulationId: String(row.id), idempotencyKey: `preview:${input.idempotencyKey}:${row.id}`, origin: input.origin })
-    if (!link.url) throw new AppError(409, "upload_link_unavailable", "Create a new preview to issue a fresh secure upload link.")
-    lines.push(`• ${row.label}: ${link.url}`)
+    lines.push(`• ${row.label}: [secure-upload:${row.id}]`)
   }
   const merchant = deal.dbaName || deal.legalName || "there"
   const subject = `Documents needed for ${deal.displayId}`
@@ -418,10 +438,11 @@ export async function sendRequestPreview(actor: DealActor, previewId: string, at
     const sender = await assertSenderUsable(actor, senderId, String(row.kind) === "stipulation_request" ? "merchant" : "submission")
     emailSender = { fromName: sender.fromName, fromAddress: sender.fromAddress }
   }
-  const recipient = decryptSensitive(String(row.recipient_cipher), actor.workspaceId), subject = row.subject_cipher ? decryptSensitive(String(row.subject_cipher), actor.workspaceId) : undefined, body = decryptSensitive(String(row.body_cipher), actor.workspaceId)
+  const recipient = decryptSensitive(String(row.recipient_cipher), actor.workspaceId), subject = row.subject_cipher ? decryptSensitive(String(row.subject_cipher), actor.workspaceId) : undefined, storedBody = decryptSensitive(String(row.body_cipher), actor.workspaceId)
   const attachmentRefs = json<Array<{ id: string; version: number; checksum: string }>>(row.attachment_document_refs_json, [])
-  const pinnedHash = contentHash({ kind: row.kind, recordId: row.record_id, channel, senderId, recipient, subject, body, attachmentRefs })
+  const pinnedHash = contentHash({ kind: row.kind, recordId: row.record_id, channel, senderId, recipient, subject, body: storedBody, attachmentRefs })
   if (pinnedHash !== row.content_hash) throw new AppError(409, "preview_integrity_failed", "The saved preview no longer matches its immutable content hash.")
+  const body = String(row.kind) === "stipulation_request" ? await materializeSecureUploadBody(actor, String(row.id), storedBody, closingArtifactOrigin()) : storedBody
   const attachments = await Promise.all(attachmentRefs.map(async (ref) => {
     const current = await getDocument(actor, ref.id)
     if (current.version !== ref.version || current.checksum !== ref.checksum || !isDocumentReady(current.processingState)) throw new AppError(409, "attachment_changed", "A pinned contract attachment is no longer available in the validated version.")
