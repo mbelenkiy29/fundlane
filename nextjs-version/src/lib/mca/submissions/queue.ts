@@ -13,6 +13,7 @@ import { backgroundJobsEnabled } from "../jobs/queue"
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
 import { enqueueSubmissionDelivery } from "./delivery-job"
 import { assertDuplicatePolicy } from "./duplicate-policy"
+import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
 import { loadFunderForDestination, preflightDestination, probeSubmissionSender, type SenderProbe } from "./preflight"
@@ -141,6 +142,8 @@ async function queueDestination(input: {
   privilegedRetry?: boolean
   privilegedReason?: string
   dealVersion: number
+  dealEin?: string | null
+  merchantId?: string | null
   documents: DocumentSummary[]
   sender: SenderProbe
 }): Promise<QueuedJobSummary> {
@@ -188,6 +191,13 @@ async function queueDestination(input: {
     documentVersions: freezeDocumentVersions(input.documents),
     packageDocumentIds: preflight.originals.map((document) => document.documentId),
     preflightErrors: preflight.errors,
+    merchantIdentityKey: submissionMerchantIdentityKey({
+      workspaceId: input.actor.workspaceId,
+      ein: input.dealEin,
+      merchantId: input.merchantId,
+      dealId: input.dealId,
+    }),
+    packageFingerprint: packageFingerprint(preflight.originals.map((document) => document.checksum)),
     reason,
     createdByUserId: input.actor.userId,
     actor: input.actor,
@@ -218,6 +228,8 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
         privilegedRetry: input.privilegedRetry,
         privilegedReason: input.privilegedReason,
         dealVersion: deal.version,
+        dealEin: deal.ein,
+        merchantId: deal.merchantId,
         documents,
         sender,
       }))

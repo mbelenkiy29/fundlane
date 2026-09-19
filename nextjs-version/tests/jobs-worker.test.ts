@@ -172,6 +172,8 @@ test("recover enqueues missing delivery jobs and skips actorless legacy rows; se
     documentVersions: [],
     packageDocumentIds: [],
     preflightErrors: [],
+    merchantIdentityKey: `deal:${dealId}`,
+    packageFingerprint: "",
     createdByUserId: null,
     actor: actor(),
   })).job
@@ -189,6 +191,8 @@ test("recover enqueues missing delivery jobs and skips actorless legacy rows; se
     documentVersions: [],
     packageDocumentIds: [],
     preflightErrors: [],
+    merchantIdentityKey: `deal:${dealId}`,
+    packageFingerprint: "",
     createdByUserId: null,
   })).job
 

@@ -1450,6 +1450,8 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 	document_versions_json: text().notNull(),
 	package_json: text().notNull(),
 	preflight_errors_json: text().notNull(),
+	merchant_identity_key: text().default('').notNull(),
+	package_fingerprint: text().default('').notNull(),
 	reason: text(),
 	created_by_user_id: text(),
 	created_at: text().notNull(),
@@ -1457,6 +1459,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 }, (table) => [
 	index("mca_submission_jobs_deal_idx").using("btree", table.workspace_id.asc().nullsLast(), table.deal_id.asc().nullsLast(), table.created_at.desc().nullsFirst()),
 	index("mca_submission_jobs_funder_idx").using("btree", table.workspace_id.asc().nullsLast(), table.deal_id.asc().nullsLast(), table.funder_id.asc().nullsLast()),
+	index("mca_submission_jobs_identity_funder_idx").using("btree", table.workspace_id.asc().nullsLast(), table.merchant_identity_key.asc().nullsLast(), table.funder_id.asc().nullsLast(), table.created_at.asc().nullsLast()),
 	unique("mca_submission_jobs_confirmation_key").on(table.workspace_id, table.confirmation_key, table.funder_id),
 	foreignKey({
 		columns: [table.workspace_id],
@@ -1474,7 +1477,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 		name: "mca_submission_jobs_funder_id_fkey",
 	}),
 	check("mca_submission_jobs_route_kind_check", sql`route_kind = ANY (ARRAY['email'::text, 'api'::text, 'manual_portal'::text, 'custom_webhook'::text])`),
-	check("mca_submission_jobs_state_check", sql`state = ANY (ARRAY['preflight_failed'::text, 'queued'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'skipped'::text, 'pending_portal'::text, 'blocked_duplicate'::text])`),
+	check("mca_submission_jobs_state_check", sql`state = ANY (ARRAY['preflight_failed'::text, 'queued'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'skipped'::text, 'pending_portal'::text, 'blocked_duplicate'::text, 'declined'::text, 'funded'::text])`),
 ]);
 
 export const mca_submission_attempts = pgTable("mca_submission_attempts", {

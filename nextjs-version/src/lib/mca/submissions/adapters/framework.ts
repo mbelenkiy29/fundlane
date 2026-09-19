@@ -342,6 +342,8 @@ function jobFromCredential(
     documentVersions: input.documentVersions ?? [],
     packageDocumentIds: input.packageDocumentIds ?? [],
     preflightErrors: input.preflightErrors ?? [],
+    merchantIdentityKey: input.merchantIdentityKey ?? `deal:${input.dealId ?? "unbound"}`,
+    packageFingerprint: input.packageFingerprint ?? "",
     reason: input.reason,
     createdAt: input.createdAt ?? record.updatedAt,
     updatedAt: input.updatedAt ?? record.updatedAt,

@@ -344,6 +344,8 @@ async function insertApiJob(dealId: string) {
     documentVersions: [],
     packageDocumentIds: [],
     preflightErrors: [],
+    merchantIdentityKey: `deal:${dealId}`,
+    packageFingerprint: "",
     createdByUserId: ids.adminUser,
   })
   return inserted.job

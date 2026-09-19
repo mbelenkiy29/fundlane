@@ -26,6 +26,8 @@ type JobRow = {
   document_versions_json: string
   package_json: string
   preflight_errors_json: string
+  merchant_identity_key: string
+  package_fingerprint: string
   reason: string | null
   created_by_user_id: string | null
   created_at: string
@@ -73,6 +75,8 @@ export interface JobInsert {
   documentVersions: SubmissionJob["documentVersions"]
   packageDocumentIds: string[]
   preflightErrors: Array<{ field: string; message: string }>
+  merchantIdentityKey: string
+  packageFingerprint: string
   reason?: string
   createdByUserId: string | null
   actor?: DealActor
@@ -114,6 +118,8 @@ function fromJobRow(row: JobRow): SubmissionJob {
     documentVersions: parseJson(row.document_versions_json, []),
     packageDocumentIds: parseJson<{ documentIds?: string[] }>(row.package_json, {}).documentIds ?? parseJson<string[]>(row.package_json, []),
     preflightErrors: parseJson(row.preflight_errors_json, []),
+    merchantIdentityKey: row.merchant_identity_key,
+    packageFingerprint: row.package_fingerprint,
     reason: row.reason ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -178,8 +184,9 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
   const id = newId()
   const row = await executor.prepare<{ id: string }>(`INSERT INTO mca_submission_jobs
     (id, workspace_id, deal_id, funder_id, display_funder_name, route_kind, route_json, state, confirmation_key, attempt_key,
-     analysis_run_id, deal_version, document_versions_json, package_json, preflight_errors_json, reason, created_by_user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     analysis_run_id, deal_version, document_versions_json, package_json, preflight_errors_json, merchant_identity_key, package_fingerprint,
+     reason, created_by_user_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (workspace_id, confirmation_key, funder_id) DO NOTHING
     RETURNING id`).get(
     id,
@@ -197,6 +204,8 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
     JSON.stringify(input.documentVersions),
     JSON.stringify({ documentIds: input.packageDocumentIds }),
     JSON.stringify(input.preflightErrors),
+    input.merchantIdentityKey,
+    input.packageFingerprint,
     input.reason ?? null,
     input.createdByUserId,
     now,
@@ -417,6 +426,8 @@ export async function persistNewDestination(input: JobInsert): Promise<{ job: Su
 
 export function displayCacheStatus(state: JobState): string {
   if (state === "sent") return "sent"
+  if (state === "declined") return "declined"
+  if (state === "funded") return "approved"
   if (state === "preflight_failed" || state === "failed" || state === "blocked_duplicate") return "errored"
   return "queued"
 }

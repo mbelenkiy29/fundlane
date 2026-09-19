@@ -12,6 +12,8 @@ export const JOB_STATES = [
   "skipped",
   "pending_portal",
   "blocked_duplicate",
+  "declined",
+  "funded",
 ] as const
 export type JobState = (typeof JOB_STATES)[number]
 
@@ -75,6 +77,8 @@ export interface SubmissionJob {
   documentVersions: Array<{ documentId: string; checksum: string; category: string }>
   packageDocumentIds: string[]
   preflightErrors: Array<{ field: string; message: string }>
+  merchantIdentityKey: string
+  packageFingerprint: string
   reason?: string
   createdAt: string
   updatedAt: string

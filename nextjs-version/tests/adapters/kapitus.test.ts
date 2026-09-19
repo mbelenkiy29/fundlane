@@ -42,6 +42,8 @@ function jobFor(extra: Partial<SubmissionJob> = {}): SubmissionJob {
     ],
     packageDocumentIds: ["doc-app-1", "doc-stmt-1"],
     preflightErrors: [],
+    merchantIdentityKey: "deal:fixture",
+    packageFingerprint: "",
     createdAt: "2026-09-08T00:00:00.000Z",
     updatedAt: "2026-09-08T00:00:00.000Z",
     ...extra,
