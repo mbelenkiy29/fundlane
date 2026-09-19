@@ -130,11 +130,23 @@ test("merchant hash backfill rewrites legacy unscoped hashes to workspace-scoped
   const now = new Date().toISOString()
   const dealId = newId()
   const ownerId = newId()
+  const merchantId = newId()
+  const merchantOwnerId = newId()
+  await getDatabase().prepare(`INSERT INTO mca_merchants
+    (id, workspace_id, legal_name, ein_cipher, ein_lookup_hash, address_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, '{}', ?, ?)`).run(
+    merchantId, workspaceId, "Legacy Hash Merchant LLC", encryptSensitive(ein, workspaceId), legacyEinHash, now, now,
+  )
+  await getDatabase().prepare(`INSERT INTO mca_merchant_owners
+    (id, workspace_id, merchant_id, first_name, last_name, ownership_percent, is_primary, identity_last4_cipher, identity_last4_lookup_hash)
+    VALUES (?, ?, ?, 'Les', 'Hash', 100, 1, ?, ?)`).run(
+    merchantOwnerId, workspaceId, merchantId, encryptSensitive(last4, workspaceId), legacyIdHash,
+  )
   await getDatabase().prepare(`INSERT INTO deals
-    (id, workspace_id, display_id, legal_name, ein_cipher, ein_lookup_hash, address_json, status, pipeline_version, draft_state,
+    (id, workspace_id, merchant_id, display_id, legal_name, ein_cipher, ein_lookup_hash, address_json, status, pipeline_version, draft_state,
      missing_required_json, field_sources_json, version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, '{}', 'lead', 1, 'partial', '[]', '{}', 1, ?, ?)`).run(
-    dealId, workspaceId, `MCA-${dealId.slice(0, 8).toUpperCase()}`, "Legacy Hash Merchant LLC",
+    VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'lead', 1, 'partial', '[]', '{}', 1, ?, ?)`).run(
+    dealId, workspaceId, merchantId, `MCA-${dealId.slice(0, 8).toUpperCase()}`, "Legacy Hash Merchant LLC",
     encryptSensitive(ein, workspaceId), legacyEinHash, now, now,
   )
   await getDatabase().prepare(`INSERT INTO deal_owners
@@ -150,14 +162,26 @@ test("merchant hash backfill rewrites legacy unscoped hashes to workspace-scoped
   const owner = await getDatabase().prepare<{ identity_last4_lookup_hash: string | null }>(
     "SELECT identity_last4_lookup_hash FROM deal_owners WHERE id = ?",
   ).get(ownerId)
+  const merchant = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM mca_merchants WHERE id = ?",
+  ).get(merchantId)
+  const merchantOwner = await getDatabase().prepare<{ identity_last4_lookup_hash: string | null }>(
+    "SELECT identity_last4_lookup_hash FROM mca_merchant_owners WHERE id = ?",
+  ).get(merchantOwnerId)
   assert.equal(deal?.ein_lookup_hash, scopedEinHash)
   assert.equal(owner?.identity_last4_lookup_hash, scopedIdHash)
+  assert.equal(merchant?.ein_lookup_hash, scopedEinHash)
+  assert.equal(merchantOwner?.identity_last4_lookup_hash, scopedIdHash)
 
   await backfillMerchantHashes({ workspaceId })
   const dealAgain = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
     "SELECT ein_lookup_hash FROM deals WHERE id = ?",
   ).get(dealId)
+  const merchantAgain = await getDatabase().prepare<{ ein_lookup_hash: string | null }>(
+    "SELECT ein_lookup_hash FROM mca_merchants WHERE id = ?",
+  ).get(merchantId)
   assert.equal(dealAgain?.ein_lookup_hash, scopedEinHash)
+  assert.equal(merchantAgain?.ein_lookup_hash, scopedEinHash)
 })
 
 test("lookup by EIN finds existing merchant after create", async () => {
