@@ -608,7 +608,7 @@ export async function previewMerchantOffers(actor: DealActor, input: { dealId: s
     if (!senderId) throw new AppError(422, "sender_required", "Choose a verified merchant sender.")
     await assertSenderUsable(actor, senderId, "merchant")
   } else {
-    const consent = await getSmsConsent(actor, input.dealId, recipient)
+    const consent = await getSmsConsent(actor, input.dealId, recipient, { matchDealContact: !bound.overridden })
     if (consent.state !== "opted_in") throw new AppError(409, consent.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", consent.state === "opted_out" ? "This merchant opted out of text messages." : "Record merchant SMS consent before preparing a text preview.")
     const route = await resolveSmsRoute(actor, { dealId: input.dealId, senderAccountId: senderId })
     if (!route.providerConfigured) throw new AppError(503, "sms_provider_unconfigured", "The assigned text messaging account is not ready. Ask an administrator to finish its provider setup in Settings.")

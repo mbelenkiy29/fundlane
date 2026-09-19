@@ -293,3 +293,52 @@ test("recipient binding defaults to deal contact, masks previews, and audits adm
   assert.equal(audit?.metadata.includes("mira@example.test"), false)
   assert.match(audit?.metadata ?? "", /Merchant asked for a different inbox/)
 })
+
+test("admin SMS recipient override can record consent and preview without deal-phone lock", async () => {
+  const priorProvider = process.env.MCA_SMS_PROVIDER, priorAccounts = process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON, priorBaseUrl = process.env.MCA_SMS_PUBLIC_BASE_URL
+  const sender = "+12125550998", overridePhone = "+12125550987"
+  try {
+    process.env.MCA_SMS_PROVIDER = "twilio"
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "https://sms.example.test"
+    process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON = JSON.stringify({ [ids.workspace]: { CLOSING_OVERRIDE: { accountSid: `AC${"d".repeat(32)}`, apiKeySid: `SK${"e".repeat(32)}`, apiKeySecret: "synthetic-secret", authToken: "synthetic-auth-token", allowedSenders: [sender] } } })
+    const account = await createSmsAccount(actor(), { label: "Override texts", senderKind: "phone_number", senderIdentity: sender, credentialRef: "CLOSING_OVERRIDE", memberIds: [ids.member], isDefault: true })
+    await assert.rejects(
+      () => recordSmsConsent(actor(), { dealId, recipient: overridePhone, state: "opted_in", evidence: "Override mobile consent evidence", idempotencyKey: "closing-sms-override-consent-denied" }),
+      (error: { code?: string }) => error.code === "recipient_deal_mismatch",
+    )
+    await recordSmsConsent(actor(), { dealId, recipient: overridePhone, state: "opted_in", evidence: "Override mobile consent evidence", idempotencyKey: "closing-sms-override-consent", matchDealContact: false })
+    const preview = await previewMerchantOffers(actor(), {
+      dealId,
+      revisionId: selectedRevisionId,
+      selectionMode: "selected",
+      channel: "sms",
+      senderId: account.id,
+      recipient: overridePhone,
+      overrideReason: "Merchant asked to use a different mobile.",
+      idempotencyKey: "closing-sms-override-preview",
+    })
+    assert.equal(preview.recipientMasked, "•••0987")
+    assert.equal(JSON.stringify(preview).includes(overridePhone), false)
+    const audit = await getDatabase().prepare<{ action: string; metadata: string }>("SELECT action, metadata FROM audit_events WHERE workspace_id=? AND action='closing.recipient_overridden' ORDER BY created_at DESC LIMIT 1").get(ids.workspace)
+    assert.equal(audit?.action, "closing.recipient_overridden")
+    assert.equal(audit?.metadata.includes(overridePhone), false)
+    assert.match(audit?.metadata ?? "", /different mobile/)
+
+    let calls = 0
+    const sent = await sendMerchantOfferPreview(actor(), preview.id, "closing-sms-override-send", {
+      async send(request) {
+        calls += 1
+        assert.equal(request.recipient, overridePhone)
+        assert.equal(request.body, preview.body)
+        return { state: "accepted", externalId: `SM${"f".repeat(32)}`, providerStatus: "queued" }
+      },
+    })
+    assert.equal(sent.delivery.state, "sent")
+    assert.equal(sent.pitched, true)
+    assert.equal(calls, 1)
+  } finally {
+    if (priorProvider === undefined) delete process.env.MCA_SMS_PROVIDER; else process.env.MCA_SMS_PROVIDER = priorProvider
+    if (priorAccounts === undefined) delete process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON; else process.env.MCA_SMS_TWILIO_ACCOUNTS_JSON = priorAccounts
+    if (priorBaseUrl === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL; else process.env.MCA_SMS_PUBLIC_BASE_URL = priorBaseUrl
+  }
+})

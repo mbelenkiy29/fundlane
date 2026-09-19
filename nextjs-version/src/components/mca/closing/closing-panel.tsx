@@ -77,15 +77,20 @@ export function ClosingPanel({ dealId, onChanged }: { dealId: string; onChanged?
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Closing state could not be loaded.") }
   }, [dealId])
   React.useEffect(() => { void load() }, [load])
+  const dealPhoneDigits = (data?.merchantContact.phone ?? "").replace(/\D/g, "")
+  const merchantPhoneDigits = merchantPhone.replace(/\D/g, "")
+  const smsUsesDealContact = Boolean(dealPhoneDigits) && merchantPhoneDigits === dealPhoneDigits
+
   React.useEffect(() => {
     if (merchantChannel !== "sms" || !merchantPhone.trim()) { setSmsConsent("unknown"); return }
     let active = true
     setSmsConsent("loading")
-    void requestJson<{ state: "unknown" | "opted_in" | "opted_out" }>(`/api/mca/sms/consent?dealId=${encodeURIComponent(dealId)}&recipient=${encodeURIComponent(merchantPhone)}`)
+    const query = new URLSearchParams({ dealId, recipient: merchantPhone, ...(smsUsesDealContact ? {} : { matchDealContact: "false" }) })
+    void requestJson<{ state: "unknown" | "opted_in" | "opted_out" }>(`/api/mca/sms/consent?${query}`)
       .then((result) => { if (active) setSmsConsent(result.state) })
       .catch(() => { if (active) setSmsConsent("unknown") })
     return () => { active = false }
-  }, [dealId, merchantChannel, merchantPhone])
+  }, [dealId, merchantChannel, merchantPhone, smsUsesDealContact])
 
   async function run<T>(scope: string, operation: () => Promise<T>, success: string): Promise<T | undefined> {
     setBusy(scope); setError(undefined); setNotice(undefined)
@@ -119,7 +124,7 @@ export function ClosingPanel({ dealId, onChanged }: { dealId: string; onChanged?
   }
   async function recordMerchantSmsConsent(state: "opted_in" | "opted_out") {
     const scope = `sms-consent-${state}`
-    const result = await run(scope, () => requestJson<{ state: "opted_in" | "opted_out" }>("/api/mca/sms/consent", { method: "POST", body: JSON.stringify({ dealId, recipient: merchantPhone, state, evidence: smsConsentEvidence, idempotencyKey: retryKey(scope) }) }), state === "opted_in" ? "Merchant text consent recorded." : "Merchant text opt-out recorded.")
+    const result = await run(scope, () => requestJson<{ state: "opted_in" | "opted_out" }>("/api/mca/sms/consent", { method: "POST", body: JSON.stringify({ dealId, recipient: merchantPhone, state, evidence: smsConsentEvidence, idempotencyKey: retryKey(scope), ...(smsUsesDealContact ? {} : { matchDealContact: false }) }) }), state === "opted_in" ? "Merchant text consent recorded." : "Merchant text opt-out recorded.")
     if (result) { setSmsConsent(result.state); setSmsConsentEvidence("") }
   }
   async function previewContract(workflow: ContractWorkflow, action: "request_contract" | "request_repricing") {
