@@ -294,11 +294,17 @@ function candidatesFor(run: AnalysisRunView, snapshot: AnalysisSnapshot, funders
         : run.destinations.filter((row) => row.outcome === "selected").map((row) => row.funderId),
   )
   const destinations = new Map(run.destinations.map((row) => [row.funderId, row]))
+  // Same C+ allowlist as confirmAnalysisReview / auto-select — D and F stay visible but not selectable.
+  const selectable = new Set(autoSelectableFunderIds(snapshot.scores))
   return [...snapshot.scores]
     .sort((left, right) => left.rank - right.rank || left.funderId.localeCompare(right.funderId))
     .map((score) => {
       const destination = destinations.get(score.funderId)
-      const eligible = score.eligible && score.grade !== "DQ"
+      const eligible = selectable.has(score.funderId)
+      const gradeBlocked = score.eligible && score.grade !== "DQ" && !eligible
+      const reason = gradeBlocked
+        ? "Grade below C is not selectable"
+        : destination?.reason
       return {
         funderId: score.funderId,
         name: funderName(funders, score.funderId),
@@ -308,7 +314,8 @@ function candidatesFor(run: AnalysisRunView, snapshot: AnalysisSnapshot, funders
         selected: selected.has(score.funderId),
         blocked: !eligible,
         reasons: score.reasons,
-        ...(destination ? { outcome: destination.outcome, reason: destination.reason } : {}),
+        ...(destination ? { outcome: destination.outcome } : gradeBlocked ? { outcome: "excluded" as const } : {}),
+        ...(reason ? { reason } : {}),
       }
     })
 }

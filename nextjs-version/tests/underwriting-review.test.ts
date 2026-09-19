@@ -381,6 +381,42 @@ test("MIC-150 disqualified funders cannot be confirmed and empty selection is re
   assert.deepEqual(ok.approval.selectedFunderIds, [fitId])
 })
 
+test("review candidates mark grade D/F as not selectable, matching auto-select allowlist", async () => {
+  const workspaceId = `ws-review-grade-df-${newId().slice(0, 8)}`
+  await addWorkspace(workspaceId)
+  await seedMember(workspaceId, "admin")
+  const { deal, fitId, run } = await reviewedDeal(workspaceId, "grade-df")
+  const row = await getDatabase().prepare<{ scores_json: string }>(
+    `SELECT scores_json FROM mca_score_snapshots WHERE workspace_id = ? AND id = ?`,
+  ).get(workspaceId, run.snapshotId)
+  assert.ok(row)
+  const scores = JSON.parse(row.scores_json) as Array<{ funderId: string; grade: string; eligible: boolean; score: number }>
+  const next = scores.map((score) => score.funderId === fitId
+    ? { ...score, grade: "D", score: 65, eligible: true }
+    : score)
+  await exec(`UPDATE mca_score_snapshots SET scores_json = ? WHERE workspace_id = ? AND id = ?`, JSON.stringify(next), workspaceId, run.snapshotId)
+  await exec(
+    `UPDATE mca_analysis_runs SET selected_funder_ids = '[]', destinations_json = ? WHERE workspace_id = ? AND id = ?`,
+    JSON.stringify([{ funderId: fitId, outcome: "excluded", reason: "outside top N" }]),
+    workspaceId,
+    run.id,
+  )
+
+  const loaded = await getDealReview(actor(workspaceId), deal.id)
+  const candidate = loaded.candidates.find((row) => row.funderId === fitId)
+  assert.ok(candidate)
+  assert.equal(candidate.grade, "D")
+  assert.equal(candidate.eligible, false)
+  assert.equal(candidate.blocked, true)
+  assert.equal(candidate.reason, "Grade below C is not selectable")
+
+  await assert.rejects(
+    () => confirmAnalysisReview(actor(workspaceId), { dealId: deal.id, selectedFunderIds: [fitId] }),
+    (error: { status?: number; code?: string; fieldErrors?: Record<string, string[]> }) =>
+      error.status === 422 && error.code === "validation_failed" && Boolean(error.fieldErrors?.selectedFunderIds?.[0]),
+  )
+})
+
 test("MIC-150 deals:read loads, deals:write confirms, intake:write is 403, foreign workspace is 404", async () => {
   const workspaceId = `ws-review-http-${newId().slice(0, 8)}`
   const otherId = `ws-review-http-other-${newId().slice(0, 8)}`

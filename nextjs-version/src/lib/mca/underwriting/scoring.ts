@@ -400,8 +400,8 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
       }
       if (field === "nsf") {
         reasons.push(inputs.nsfUnknown || inputs.nsfCount == null
-          ? compareUnknown(rule, "NSF count is unknown, so the funder's NSF maximum cannot pass.")
-          : evaluateNumeric(rule, inputs.nsfCount, "NSF count", String(inputs.nsfCount)))
+          ? compareUnknown(rule, "Unique-day NSF is unknown, so the funder's NSF maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.nsfCount, "Unique-day NSF", String(inputs.nsfCount)))
         continue
       }
       if (field === "negative_days") {
@@ -411,7 +411,7 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
         continue
       }
       if (field === "positions") {
-        reasons.push(evaluateNumeric(rule, inputs.positionCount, "Existing positions", String(inputs.positionCount)))
+        reasons.push(evaluateNumeric(rule, inputs.positionCount, "Confirmed positions", String(inputs.positionCount)))
         continue
       }
       if (field === "time_in_business") {
@@ -509,7 +509,7 @@ function softReasonsAndScore(inputs: ScoringInputs, rules: EligibilityRule[]): {
   {
     const scale = maxPositions && maxPositions > 0 ? maxPositions : DEFAULT_POSITION_SCALE
     positions = intScore(Math.max(0, scale - inputs.positionCount), scale)
-    reasons.push({ ruleId: "soft.positions", result: "pass", detail: `Position count ${inputs.positionCount} scores ${positions} against maximum ${scale}.` })
+    reasons.push({ ruleId: "soft.positions", result: "pass", detail: `Confirmed positions ${inputs.positionCount} scores ${positions} against maximum ${scale}.` })
   }
 
   let requested = 0

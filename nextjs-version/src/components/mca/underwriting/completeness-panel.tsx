@@ -58,7 +58,9 @@ export function CompletenessPanel({ dealId }: { dealId: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ClipboardCheck className="size-5" />Document completeness</CardTitle>
-        <CardDescription>Readiness depends on a clean application, ready driver license and voided check, and the last {payload?.requiredStatementMonths ?? 3} closed checking-statement months from extraction — not filenames or application field completeness.</CardDescription>
+        <CardDescription>
+          Readiness depends on a clean application, ready driver license and voided check, and the last {payload?.requiredStatementMonths ?? 3} closed checking-statement months from extraction — not filenames or application field completeness. Automatic send and review confirm still also require confirmed positions (no proposed left).
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
