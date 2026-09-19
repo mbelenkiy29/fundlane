@@ -58,7 +58,7 @@ export function CompletenessPanel({ dealId }: { dealId: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ClipboardCheck className="size-5" />Document completeness</CardTitle>
-        <CardDescription>Readiness depends on a clean application and the last {payload?.requiredStatementMonths ?? 3} checking-statement months, not on application field completeness.</CardDescription>
+        <CardDescription>Readiness depends on a clean application, ready driver license and voided check, and the last {payload?.requiredStatementMonths ?? 3} closed checking-statement months from extraction — not filenames or application field completeness.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
@@ -71,15 +71,15 @@ export function CompletenessPanel({ dealId }: { dealId: string }) {
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {!loading && !error && !result && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No completeness check yet. Run a check after uploading the application and recent statements.
+            No completeness check yet. Run a check after uploading the application, ID, voided check, and recent statements.
           </div>
         )}
         {result && (
           <div className="space-y-3">
             <p role="status" className="text-sm">
               {result.ready
-                ? "Required documents are present. This deal can proceed independently of draft field completeness."
-                : "This deal is not ready. Resolve the named gaps below, then rerun."}
+                ? "Required documents are present (application, driver license, voided check, and extracted checking months). This deal can proceed independently of draft field completeness."
+                : "This deal is not ready. Resolve the named gaps below — months must come from extracted checking statements — then rerun."}
             </p>
             {gaps.length > 0 && (
               <ul className="list-disc space-y-1 pl-5 text-sm">

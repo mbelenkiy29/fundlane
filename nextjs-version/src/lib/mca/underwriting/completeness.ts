@@ -26,8 +26,10 @@ import {
 import { closedLookbackMonths } from "./lookback"
 
 const APPLICATION_CATEGORIES = new Set(["application", "api_application"])
+const UNREADABLE_CATEGORIES = new Set(["application", "api_application", "statement", "driver_license", "voided_check"])
 const UNREADABLE_STATES = new Set(["quarantined", "scan_failed", "upload_failed"])
 const PERIOD_PATTERN = /\d{4}-(?:0[1-9]|1[0-2])/g
+const VALID_PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 
 export type ReadinessEvent = ReadinessEventRecord
 
@@ -104,7 +106,9 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
       lookbackMonths: lookback,
       timeZone,
       requireCleanApplication: true,
-      statementSource: statementMonths ? "mca_statement_months" : "filename",
+      requireDriverLicense: true,
+      requireVoidedCheck: true,
+      statementSource: "mca_statement_months",
       defaultRequiredStatementMonths: DEFAULT_REQUIRED_STATEMENT_MONTHS,
     }),
     findings,
@@ -136,7 +140,7 @@ function filenamePeriod(document: DocumentSummary): { period?: string; mismatch:
 function evaluateFindings(
   documents: DocumentSummary[],
   lookback: string[],
-  statementMonths: Map<string, Array<{ period: string; accountKind: string }>> | undefined,
+  statementMonths: Map<string, Array<{ period: string; accountKind: string }>>,
 ): CompletenessFinding[] {
   const findings: CompletenessFinding[] = []
   const covered = new Set<string>()
@@ -144,9 +148,15 @@ function evaluateFindings(
   if (!hasCleanApplication) {
     findings.push({ code: "missing_application", message: "Upload a merchant application." })
   }
+  if (!documents.some((document) => document.category === "driver_license" && isDocumentReady(document.processingState))) {
+    findings.push({ code: "missing_driver_license", message: "Upload a ready driver license." })
+  }
+  if (!documents.some((document) => document.category === "voided_check" && isDocumentReady(document.processingState))) {
+    findings.push({ code: "missing_voided_check", message: "Upload a ready voided check." })
+  }
 
   for (const document of documents) {
-    if ((APPLICATION_CATEGORIES.has(document.category) || document.category === "statement") && UNREADABLE_STATES.has(document.processingState)) {
+    if (UNREADABLE_CATEGORIES.has(document.category) && UNREADABLE_STATES.has(document.processingState)) {
       findings.push({
         code: "unreadable_document",
         message: "This document is blocked or its upload is incomplete and cannot be used for completeness.",
@@ -155,20 +165,23 @@ function evaluateFindings(
     }
     if (document.category !== "statement") continue
 
-    const extracted = statementMonths?.get(document.id)
+    const extracted = statementMonths.get(document.id) ?? []
+    const checking = extracted.filter((row) => row.accountKind === "checking")
+    const validChecking = checking.filter((row) => VALID_PERIOD.test(row.period))
     const parsed = filenamePeriod(document)
-    if (extracted && extracted.length) {
-      const checking = extracted.filter((row) => row.accountKind === "checking" && /^\d{4}-(0[1-9]|1[0-2])$/.test(row.period))
-      if (parsed.mismatch || (parsed.period && checking.length > 0 && !checking.some((row) => row.period === parsed.period))) {
+    const ready = isDocumentReady(document.processingState)
+
+    if (validChecking.length > 0) {
+      if (parsed.mismatch || (parsed.period && !validChecking.some((row) => row.period === parsed.period))) {
         findings.push({
           code: "period_mismatch",
           message: "The statement filename period does not match the recorded statement month.",
           documentId: document.id,
-          period: parsed.period ?? checking[0]?.period,
+          period: parsed.period ?? validChecking[0]?.period,
         })
       }
-      if (isDocumentReady(document.processingState)) {
-        for (const row of checking) covered.add(row.period)
+      if (ready) {
+        for (const row of validChecking) covered.add(row.period)
       }
       continue
     }
@@ -180,19 +193,15 @@ function evaluateFindings(
         documentId: document.id,
         period: parsePeriods(document.displayFilename)[0],
       })
-      continue
     }
-    if (!parsed.period) {
-      if (isDocumentReady(document.processingState)) {
-        findings.push({
-          code: "unknown_statement_period",
-          message: "The statement period could not be parsed as YYYY-MM from the filename.",
-          documentId: document.id,
-        })
-      }
-      continue
+
+    if (ready && (extracted.length === 0 || checking.length > 0)) {
+      findings.push({
+        code: "unknown_statement_period",
+        message: "The statement period could not be determined from extraction as YYYY-MM.",
+        documentId: document.id,
+      })
     }
-    if (isDocumentReady(document.processingState)) covered.add(parsed.period)
   }
 
   for (const period of lookback) {
