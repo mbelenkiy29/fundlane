@@ -34,7 +34,7 @@ export type AdapterEnvironment = (typeof ADAPTER_ENVIRONMENTS)[number]
 
 export interface DuplicateDecision {
   allowed: boolean
-  code?: "retry_too_soon" | "active_duplicate" | "privileged_retry"
+  code?: "retry_too_soon" | "active_duplicate" | "package_unchanged" | "privileged_retry"
   eligibleAt?: string
   reason?: string
 }

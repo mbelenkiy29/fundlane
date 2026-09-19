@@ -158,10 +158,19 @@ async function queueDestination(input: {
     }
   }
 
+  const merchantIdentityKey = submissionMerchantIdentityKey({
+    workspaceId: input.actor.workspaceId,
+    ein: input.dealEin,
+    merchantId: input.merchantId,
+    dealId: input.dealId,
+  })
+  const fingerprint = packageFingerprint(preflight.originals.map((document) => document.checksum))
   const duplicate = await assertDuplicatePolicy({
     actor: input.actor,
     dealId: input.dealId,
     funderId: input.funderId,
+    merchantIdentityKey,
+    packageFingerprint: fingerprint,
     privilegedRetry: input.privilegedRetry,
     privilegedReason: input.privilegedReason,
   })
@@ -191,13 +200,8 @@ async function queueDestination(input: {
     documentVersions: freezeDocumentVersions(input.documents),
     packageDocumentIds: preflight.originals.map((document) => document.documentId),
     preflightErrors: preflight.errors,
-    merchantIdentityKey: submissionMerchantIdentityKey({
-      workspaceId: input.actor.workspaceId,
-      ein: input.dealEin,
-      merchantId: input.merchantId,
-      dealId: input.dealId,
-    }),
-    packageFingerprint: packageFingerprint(preflight.originals.map((document) => document.checksum)),
+    merchantIdentityKey,
+    packageFingerprint: fingerprint,
     reason,
     createdByUserId: input.actor.userId,
     actor: input.actor,
