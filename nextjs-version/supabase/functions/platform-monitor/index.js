@@ -18,6 +18,9 @@ function sendTransactionalWebhook(url, token, message, correlationId, fetcher = 
 }
 
 // src/lib/mca/operations/contracts.ts
+function documentWorkerReady(metrics) {
+  return metrics.documentWorkerHeartbeatAgeSeconds != null && metrics.documentWorkerHeartbeatAgeSeconds <= 90;
+}
 function safeIdentifier(value) {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(value) ? value : null;
 }
@@ -58,7 +61,8 @@ async function queueMetrics(db) {
     (SELECT count(*)::int FROM mca_email_senders WHERE state IN ('expired','revoked','failed')) reconnect,
     ((SELECT count(*) FROM mca_email_messages WHERE direction='outbound' AND state='failed' AND updated_at::timestamptz>=now()-interval '10 minutes')+
       (SELECT count(*) FROM mca_background_jobs WHERE kind='application_invitation_email' AND state='failed' AND updated_at::timestamptz>=now()-interval '10 minutes'))::int "recentEmailFailures",
-    (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors"`);
+    (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors",
+    (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds"`);
   return row;
 }
 async function runMonitor(db, config, fetcher = fetch) {
@@ -124,6 +128,11 @@ async function runMonitor(db, config, fetcher = fetch) {
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],
       ["email_failures", metrics ? metrics.recentEmailFailures >= 5 : null, 1],
+      [
+        "document_worker",
+        metrics ? !documentWorkerReady(metrics) : null,
+        3
+      ],
       ["metrics_unavailable", metrics === null, 3]
     ];
     for (const [component, bad, threshold] of rules) {
