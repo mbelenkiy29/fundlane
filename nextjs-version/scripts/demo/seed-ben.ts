@@ -95,7 +95,7 @@ export function buildSeed(target: Target, asOf: string) {
     for (const installment of installments) {
       const installmentId = key(`installment-${i}-${installment.sequence}`)
       add("mca_merchant_installments", { id: installmentId, advance_id: advanceId, sequence: installment.sequence, occurrence_date: installment.occurrenceDate, amount_cents: installment.amountCents, created_at: now })
-      if (installment.sequence <= paidCount) add("mca_merchant_receipts", { id: key(`receipt-${i}-${installment.sequence}`), advance_id: advanceId, installment_id: installmentId, amount_cents: installment.amountCents, received_at: timestamp(installment.occurrenceDate), origin: "system", status: "received", idempotency_key: `${BATCH}:receipt:${i}:${installment.sequence}`, created_by_user_id: target.user_id, created_at: now })
+      if (installment.sequence <= paidCount) add("mca_merchant_receipts", { id: key(`receipt-${i}-${installment.sequence}`), advance_id: advanceId, installment_id: installmentId, amount_cents: installment.amountCents, received_at: timestamp(installment.occurrenceDate), received_on: installment.occurrenceDate, origin: "system", status: "received", idempotency_key: `${BATCH}:receipt:${i}:${installment.sequence}`, created_by_user_id: target.user_id, created_at: now })
     }
     assert.equal(installments.slice(0, paidCount).reduce((sum, r) => sum + r.amountCents, 0), calc.paybackCents * percent / 100)
   }
@@ -127,7 +127,7 @@ export async function verifySeed(client: pg.Client, manifest: Manifest) {
   const commissions = await client.query(`SELECT status,count(*)::int count FROM mca_accounting_payments WHERE workspace_id=$1 AND id=ANY($2::text[]) GROUP BY status`, [manifest.target.workspace_id, manifest.ids.mca_accounting_payments])
   assert.deepEqual(Object.fromEntries(commissions.rows.map(r => [r.status,r.count])), { received: 30, partial: 30, expected: 20 })
   const invalid = await client.query(`SELECT count(*)::int count FROM mca_merchant_receipts r JOIN mca_merchant_installments i ON i.id=r.installment_id
-    WHERE r.id=ANY($1::text[]) AND (r.advance_id<>i.advance_id OR r.workspace_id<>i.workspace_id OR left(r.received_at,10)<>i.occurrence_date OR left(r.received_at,10)>$2)`, [manifest.ids.mca_merchant_receipts, manifest.asOf])
+    WHERE r.id=ANY($1::text[]) AND (r.advance_id<>i.advance_id OR r.workspace_id<>i.workspace_id OR r.received_on<>i.occurrence_date OR r.received_on>$2)`, [manifest.ids.mca_merchant_receipts, manifest.asOf])
   assert.equal(invalid.rows[0].count, 0, "Receipt dates and relationships")
   return { funded: 80, fullyRepaid: 20, halfRepaid: 20, partiallyRepaid: 30, newlyFunded: 10, commissions: Object.fromEntries(commissions.rows.map(r => [r.status,r.count])) }
 }

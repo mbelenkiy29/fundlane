@@ -1,11 +1,24 @@
 import { assertCents } from "../accounting/money"
+import { calendarDateInZone } from "../deals/book-math"
 
 const DAY_MS = 86_400_000
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+const DEFAULT_TIME_ZONE = "America/New_York"
 
 function utcDay(value: string): Date {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00.000Z`) : new Date(value)
+  const date = DATE_ONLY.test(value) ? new Date(`${value}T00:00:00.000Z`) : new Date(value)
   if (!Number.isFinite(date.getTime())) throw new TypeError("Date must be a valid ISO date or timestamp.")
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+}
+
+function resolveTimeZone(timeZone?: string): string {
+  return timeZone?.trim() || DEFAULT_TIME_ZONE
+}
+
+function calendarDay(value: string, timeZone: string): Date {
+  const date = calendarDateInZone(value, timeZone)
+  if (!DATE_ONLY.test(date)) throw new TypeError("Date must be a valid ISO date or timestamp.")
+  return utcDay(date)
 }
 
 function businessDays(start: Date, end: Date): number {
@@ -39,6 +52,7 @@ export interface ScheduledPaidInInput {
   paymentCount: number | null
   paymentFrequency: string | null
   calendarConvention: string | null
+  timeZone?: string
 }
 
 export interface ScheduledPaidInEstimate {
@@ -56,8 +70,9 @@ export function estimateScheduledPaidIn(input: ScheduledPaidInInput): ScheduledP
   assertCents(input.paybackCents, "paybackCents")
   assertCents(input.periodicPaymentCents, "periodicPaymentCents")
   if (!Number.isSafeInteger(input.paymentCount) || input.paymentCount <= 0) throw new TypeError("paymentCount must be positive.")
-  const funded = utcDay(input.fundedAt)
-  const asOf = utcDay(input.asOf)
+  const timeZone = resolveTimeZone(input.timeZone)
+  const funded = calendarDay(input.fundedAt, timeZone)
+  const asOf = calendarDay(input.asOf, timeZone)
   if (asOf < funded) return { paidInCents: 0, paidInBasisPoints: 0, elapsedPayments: 0, label: "scheduled_estimate" }
   const days = Math.floor((asOf.getTime() - funded.getTime()) / DAY_MS)
   if (!["calendar_days", "business_days", "fixed_count"].includes(input.calendarConvention)) {
@@ -117,12 +132,13 @@ export function generateExpectedInstallments(input: {
   calendarConvention: string | null
   periodicPaymentCents: number | null
   paybackCents?: number | null
+  timeZone?: string
 }): ExpectedInstallment[] {
   if (input.paymentCount === null || input.periodicPaymentCents === null || !input.paymentFrequency || !input.calendarConvention) return []
   if (!Number.isSafeInteger(input.paymentCount) || input.paymentCount <= 0) return []
   if (!Number.isSafeInteger(input.periodicPaymentCents) || input.periodicPaymentCents <= 0) return []
   if (!["calendar_days", "business_days", "fixed_count"].includes(input.calendarConvention)) return []
-  const funded = utcDay(input.fundedAt)
+  const funded = calendarDay(input.fundedAt, resolveTimeZone(input.timeZone))
   const dates: Date[] = []
   for (let sequence = 1; sequence <= input.paymentCount; sequence += 1) {
     if (input.paymentFrequency === "daily" && input.calendarConvention === "business_days") dates.push(addBusinessDays(funded, sequence))

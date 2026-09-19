@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { generateExpectedInstallments } from "../src/lib/mca/advances/performance"
 import {
   assignAdvanceNumbers,
+  calendarDateInZone,
   calendarWindow,
   completedReceipts,
   merchantIdentity,
@@ -59,6 +60,20 @@ test("calendar windows use workspace timezone and Monday weeks", () => {
   assert.deepEqual(calendarWindow("2026-09-13T06:00:00.000Z", "America/New_York", "today"), { from: "2026-09-13", to: "2026-09-13" })
   assert.deepEqual(calendarWindow("2026-09-13T06:00:00.000Z", "America/New_York", "week"), { from: "2026-09-07", to: "2026-09-13" })
   assert.deepEqual(calendarWindow("2026-09-13T06:00:00.000Z", "America/New_York", "month"), { from: "2026-09-01", to: "2026-09-30" })
+})
+
+test("2026-09-13T02:00:00.000Z is the previous calendar day in New York", () => {
+  assert.equal(calendarDateInZone("2026-09-13T02:00:00.000Z", "America/New_York"), "2026-09-12")
+  assert.equal(calendarDateInZone("2026-09-13T02:00:00.000Z", "UTC"), "2026-09-13")
+})
+
+test("expected installments use workspace timezone for funded timestamps", () => {
+  const input = {
+    fundedAt: "2026-09-13T02:00:00.000Z", paymentCount: 1, paymentFrequency: "daily",
+    calendarConvention: "calendar_days", periodicPaymentCents: 1000, paybackCents: 1000,
+  }
+  assert.equal(generateExpectedInstallments({ ...input, timeZone: "UTC" })[0]?.occurrenceDate, "2026-09-14")
+  assert.equal(generateExpectedInstallments({ ...input, timeZone: "America/New_York" })[0]?.occurrenceDate, "2026-09-13")
 })
 
 test("missed installments are due in-window without a matching receipt", () => {

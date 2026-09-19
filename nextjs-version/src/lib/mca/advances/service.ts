@@ -5,6 +5,7 @@ import { recordAuditEvent, withImmediateTransaction } from "../db"
 import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import type { AdvancePerformanceStatus, AdvanceSummary } from "../accounting/contracts"
+import { getWorkspaceSettings } from "../workspaces"
 import { estimateScheduledPaidIn } from "./performance"
 import { findAdvanceRow, insertStatusHistory, latestPerformanceStatuses, listAdvanceRows, statusHistories, type AdvanceRow, type StatusHistoryRow } from "./repository"
 
@@ -14,11 +15,12 @@ async function assertVisible(actor: DealActor, row: AdvanceRow | undefined): Pro
   return row
 }
 
-function summary(row: AdvanceRow, status: AdvancePerformanceStatus, asOf: string, history: StatusHistoryRow[] = []): AdvanceSummary {
+function summary(row: AdvanceRow, status: AdvancePerformanceStatus, asOf: string, history: StatusHistoryRow[] = [], timeZone: string): AdvanceSummary {
   const estimate = estimateScheduledPaidIn({
     fundedAt: row.funded_at, asOf, paybackCents: row.payback_cents,
     periodicPaymentCents: row.periodic_payment_cents, paymentCount: row.payment_count,
     paymentFrequency: row.payment_frequency, calendarConvention: row.calendar_convention,
+    timeZone,
   })
   return {
     id: row.id, dealId: row.deal_id, offerId: row.offer_id, fundedAt: row.funded_at,
@@ -35,9 +37,13 @@ function summary(row: AdvanceRow, status: AdvancePerformanceStatus, asOf: string
 }
 
 export async function listAdvances(actor: DealActor, asOf = new Date().toISOString()): Promise<AdvanceSummary[]> {
-  const [rows, statuses, histories] = await Promise.all([listAdvanceRows(actor.workspaceId), latestPerformanceStatuses(actor.workspaceId), statusHistories(actor.workspaceId)])
+  const [rows, statuses, histories, settings] = await Promise.all([
+    listAdvanceRows(actor.workspaceId), latestPerformanceStatuses(actor.workspaceId), statusHistories(actor.workspaceId),
+    getWorkspaceSettings(actor.workspaceId),
+  ])
+  const timeZone = settings.timezone || "America/New_York"
   const visible = await Promise.all(rows.map(async (row) => {
-    try { await assertVisible(actor, row); return summary(row, statuses.get(row.id) ?? "on_track", asOf, histories.get(row.id)) }
+    try { await assertVisible(actor, row); return summary(row, statuses.get(row.id) ?? "on_track", asOf, histories.get(row.id), timeZone) }
     catch (error) { if (error instanceof AppError && error.status === 404) return null; throw error }
   }))
   return visible.filter((item): item is AdvanceSummary => item !== null)
@@ -45,8 +51,10 @@ export async function listAdvances(actor: DealActor, asOf = new Date().toISOStri
 
 export async function getAdvance(actor: DealActor, id: string, asOf = new Date().toISOString()): Promise<AdvanceSummary> {
   const row = await assertVisible(actor, await findAdvanceRow(actor.workspaceId, id))
-  const [statuses, histories] = await Promise.all([latestPerformanceStatuses(actor.workspaceId), statusHistories(actor.workspaceId)])
-  return summary(row, statuses.get(row.id) ?? "on_track", asOf, histories.get(row.id))
+  const [statuses, histories, settings] = await Promise.all([
+    latestPerformanceStatuses(actor.workspaceId), statusHistories(actor.workspaceId), getWorkspaceSettings(actor.workspaceId),
+  ])
+  return summary(row, statuses.get(row.id) ?? "on_track", asOf, histories.get(row.id), settings.timezone || "America/New_York")
 }
 
 export async function recordAdvanceStatus(actor: DealActor, id: string, input: {
@@ -66,6 +74,7 @@ export async function recordAdvanceStatus(actor: DealActor, id: string, input: {
     })
     await recordAuditEvent({ context: actor, action: "advance.performance.recorded", resourceType: "advance", resourceId: id,
       correlationId: actor.correlationId, metadata: { status: input.status, historyId: inserted.id }, executor: database })
-    return summary(row, input.status, new Date().toISOString())
+    const settings = await getWorkspaceSettings(actor.workspaceId)
+    return summary(row, input.status, new Date().toISOString(), [], settings.timezone || "America/New_York")
   })
 }

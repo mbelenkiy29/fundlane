@@ -144,6 +144,7 @@ export async function listDealBook(actor: DealActor, filters: BookFilters = {}):
     const estimate = estimateScheduledPaidIn({
       fundedAt: row.funded_at, asOf, paybackCents: row.payback_cents, periodicPaymentCents: row.periodic_payment_cents,
       paymentCount: row.payment_count, paymentFrequency: row.payment_frequency, calendarConvention: row.calendar_convention,
+      timeZone: timezone,
     })
     const advanceReceipts = receiptsByAdvance.get(row.id) ?? []
     const receivedCents = advanceReceipts.reduce((sum, item) => sum + item.amount_cents, 0)
@@ -152,9 +153,9 @@ export async function listDealBook(actor: DealActor, filters: BookFilters = {}):
       scheduledPaidInCents: estimate.paidInCents, scheduledPaidInBasisPoints: estimate.paidInBasisPoints,
     })
     const installmentRows = (installmentsByAdvance.get(row.id) ?? []).map((item) => ({ occurrenceDate: item.occurrence_date }))
-    const receiptDates = new Set(advanceReceipts.map((item) => calendarDateInZone(item.received_at, timezone) || item.received_at.slice(0, 10)))
+    const receiptDates = new Set(advanceReceipts.map((item) => item.received_on || calendarDateInZone(item.received_at, timezone)))
     const missed = missedInstallments(installmentRows, receiptDates, missedWindow, asOfDate)
-    const completed = completedReceipts(advanceReceipts.map((item) => ({ receivedDate: calendarDateInZone(item.received_at, timezone) || item.received_at.slice(0, 10) })), completedWindow)
+    const completed = completedReceipts(advanceReceipts.map((item) => ({ receivedDate: item.received_on || calendarDateInZone(item.received_at, timezone) })), completedWindow)
     const ageDays = Math.floor((Date.parse(asOf) - Date.parse(row.funded_at)) / 86_400_000)
     const performanceStatus = performance.get(row.id) ?? "on_track"
     const status = servicingStatus(performanceStatus)
@@ -211,7 +212,7 @@ export async function listDealBook(actor: DealActor, filters: BookFilters = {}):
   let completedCount = 0
   for (const row of filtered) {
     for (const receipt of receiptsByAdvance.get(row.id) ?? []) {
-      const date = calendarDateInZone(receipt.received_at, timezone) || receipt.received_at.slice(0, 10)
+      const date = receipt.received_on || calendarDateInZone(receipt.received_at, timezone)
       if (date >= completedWindow.from && date <= completedWindow.to) {
         completedCents += receipt.amount_cents
         completedCount += 1
@@ -238,7 +239,7 @@ export async function getDealBookRow(actor: DealActor, advanceId: string, filter
   const row = list.rows.find((item) => item.id === advanceId)
   if (!row) throw new AppError(404, "advance_not_found", "The requested advance was not found.")
   const [installments, receipts] = await Promise.all([listInstallments(actor.workspaceId, advanceId), listReceipts(actor.workspaceId, advanceId)])
-  const receivedDates = new Set(receipts.filter((item) => item.status === "received").map((item) => item.received_at.slice(0, 10)))
+  const receivedDates = new Set(receipts.filter((item) => item.status === "received").map((item) => calendarDateInZone(item.received_at, list.timezone)))
   return {
     ...row,
     installments: installments.map((item) => ({

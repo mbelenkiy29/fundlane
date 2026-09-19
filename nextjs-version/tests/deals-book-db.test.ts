@@ -6,7 +6,7 @@ import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import { persistInstallments, recordReceipt, runMissedPaymentAlerts } from "../src/lib/mca/deals/remittance"
-import { listDealBook } from "../src/lib/mca/deals/book"
+import { getDealBookRow, listDealBook } from "../src/lib/mca/deals/book"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const ids = { workspace: "ws-book", user: "user-book", member: "member-book", deal: "deal-book", offer: "offer-book", revision: "revision-book", event: "event-book", advance: "advance-book" }
@@ -117,4 +117,65 @@ test("leftover last installment of 0 persists and sums to payback", async () => 
   ).all(ids.advance)
   assert.equal(rows.at(-1)?.amountCents, 0)
   assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 9000)
+})
+
+test("receipts and missed alerts use workspace calendar dates not UTC slices", async () => {
+  const db = getDatabase()
+  await db.prepare("DELETE FROM mca_servicing_alerts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_receipts WHERE advance_id=?").run(ids.advance)
+  await db.prepare("DELETE FROM mca_merchant_installments WHERE advance_id=?").run(ids.advance)
+
+  assert.equal(await persistInstallments(db, {
+    workspaceId: ids.workspace, advanceId: ids.advance, fundedAt: "2026-09-13T02:00:00.000Z",
+    paymentCount: 2, paymentFrequency: "daily", calendarConvention: "calendar_days",
+    periodicPaymentCents: 100_000, paybackCents: 200_000, createdAt: now, timeZone: "America/New_York",
+  }), 2)
+  const fundedDates = await db.prepare<{ occurrenceDate: string }>(
+    `SELECT occurrence_date AS "occurrenceDate" FROM mca_merchant_installments WHERE advance_id=? ORDER BY sequence`,
+  ).all(ids.advance)
+  assert.deepEqual(fundedDates.map((row) => row.occurrenceDate), ["2026-09-13", "2026-09-14"])
+
+  await db.prepare("DELETE FROM mca_merchant_installments WHERE advance_id=?").run(ids.advance)
+  assert.equal(await persistInstallments(db, {
+    workspaceId: ids.workspace, advanceId: ids.advance, fundedAt: "2026-09-08",
+    paymentCount: 10, paymentFrequency: "daily", calendarConvention: "calendar_days",
+    periodicPaymentCents: 100_000, paybackCents: 1_000_000, createdAt: now, timeZone: "America/New_York",
+  }), 10)
+
+  const receipt = await recordReceipt(actor, ids.advance, {
+    amountCents: 100_000, receivedAt: "2026-09-13T02:00:00.000Z", origin: "manual", idempotencyKey: "tz-receipt-ny",
+  })
+  assert.equal(receipt.received_on, "2026-09-12")
+  assert.ok(receipt.installment_id)
+  const matched = await db.prepare<{ occurrence_date: string }>(
+    `SELECT occurrence_date FROM mca_merchant_installments WHERE id=?`,
+  ).get(receipt.installment_id)
+  assert.equal(matched?.occurrence_date, "2026-09-12")
+
+  const alerts = await runMissedPaymentAlerts(actor, "2026-09-13T06:00:00.000Z")
+  assert.ok(alerts.created >= 1)
+  const byDate = await db.prepare<{ occurrence_date: string; count: number }>(
+    `SELECT occurrence_date, count(*)::int AS count FROM mca_servicing_alerts
+     WHERE advance_id=? AND kind='missed_payment' AND occurrence_date IN ('2026-09-12','2026-09-13')
+     GROUP BY occurrence_date`,
+  ).all(ids.advance)
+  const counts = Object.fromEntries(byDate.map((row) => [row.occurrence_date, row.count]))
+  assert.equal(counts["2026-09-12"], undefined)
+  assert.equal(counts["2026-09-13"], 1)
+
+  const detail = await getDealBookRow(actor, ids.advance, { asOf: "2026-09-13T02:00:00.000Z" })
+  assert.equal(detail.installments.find((item) => item.occurrenceDate === "2026-09-12")?.received, true)
+  assert.equal(detail.installments.find((item) => item.occurrenceDate === "2026-09-13")?.received, false)
+
+  await db.prepare("UPDATE workspaces SET timezone='UTC' WHERE id=?").run(ids.workspace)
+  const utcReceipt = await recordReceipt(actor, ids.advance, {
+    amountCents: 100_000, receivedAt: "2026-09-13T02:00:00.000Z", origin: "manual", idempotencyKey: "tz-receipt-utc",
+  })
+  assert.equal(utcReceipt.received_on, "2026-09-13")
+  assert.ok(utcReceipt.installment_id)
+  const utcMatched = await db.prepare<{ occurrence_date: string }>(
+    `SELECT occurrence_date FROM mca_merchant_installments WHERE id=?`,
+  ).get(utcReceipt.installment_id)
+  assert.equal(utcMatched?.occurrence_date, "2026-09-13")
+  await db.prepare("UPDATE workspaces SET timezone='America/New_York' WHERE id=?").run(ids.workspace)
 })

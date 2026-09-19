@@ -85,3 +85,12 @@ test("MIC-107 arbitrary and missing calendars remain unknown", () => {
   assert.equal(estimateScheduledPaidIn({ ...base, calendarConvention: "merchant_guess" }).label, "unknown")
   assert.equal(estimateScheduledPaidIn({ ...base, calendarConvention: null }).paidInCents, null)
 })
+
+test("scheduled paid-in uses workspace timezone for as-of timestamps", () => {
+  const base = {
+    fundedAt: "2026-09-08", paybackCents: 10_000, periodicPaymentCents: 1000, paymentCount: 10,
+    paymentFrequency: "daily", calendarConvention: "calendar_days", asOf: "2026-09-13T02:00:00.000Z",
+  }
+  assert.equal(estimateScheduledPaidIn({ ...base, timeZone: "UTC" }).elapsedPayments, 5)
+  assert.equal(estimateScheduledPaidIn({ ...base, timeZone: "America/New_York" }).elapsedPayments, 4)
+})

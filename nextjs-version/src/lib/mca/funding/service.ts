@@ -159,6 +159,7 @@ export async function confirmOfferFunding(
       input.paymentCount ?? null, input.paymentFrequency ?? revision.payment_frequency, input.calendarConvention ?? null,
       commissionCents, feeCents, expectedCommissionAt ?? null, expectedFeeAt ?? null, source, JSON.stringify(calculation), createdAt, createdAt,
     )
+    const timezone = await database.prepare<{ timezone: string }>("SELECT timezone FROM workspaces WHERE id=?").get(actor.workspaceId)
     await persistInstallments(database, {
       workspaceId: actor.workspaceId, advanceId, fundedAt,
       paymentCount: input.paymentCount ?? null,
@@ -166,6 +167,7 @@ export async function confirmOfferFunding(
       calendarConvention: input.calendarConvention ?? null,
       periodicPaymentCents: revision.payment_amount_cents ?? calculation?.periodicPaymentEstimateCents ?? null,
       paybackCents: calculation?.paybackCents ?? null, createdAt,
+      timeZone: timezone?.timezone?.trim() || "America/New_York",
     })
     let accounting: { recordIds: string[] }
     try {
