@@ -516,9 +516,9 @@ export function buildSyntheticTemplateValues(input: { origin: string; workspaceI
   const origin = input.origin.replace(/\/$/, "") || "https://app.example.test"
   const dealId = SYNTHETIC_TEMPLATE_DEAL_ID
   const offers: OfferRevisionForClosing[] = [
-    { offerId: "syn-1", revisionId: "syn-1r", revisionNumber: 1, state: "active", selected: true, funderName: "Northstar Capital", amountCents: 5_000_000, termMonths: 24, paymentAmountCents: 220_000, paymentFrequency: "monthly", commissionCents: 999_999 },
-    { offerId: "syn-2", revisionId: "syn-2r", revisionNumber: 1, state: "active", selected: true, funderName: "Harbor Funding", amountCents: 7_500_000, termMonths: 36, paymentAmountCents: 208_333, paymentFrequency: "monthly", commissionCents: 888_888 },
-    { offerId: "syn-3", revisionId: "syn-3r", revisionNumber: 1, state: "active", selected: false, funderName: "Summit Advance", amountCents: 10_000_000, termMonths: 12, paymentAmountCents: 520_000, paymentFrequency: "weekly", commissionCents: 777_777 },
+    { offerId: "syn-1", revisionId: "syn-1r", revisionNumber: 1, state: "active", selected: true, funderName: "Northstar Capital", amountCents: 5_000_000, termMonths: 24, paymentAmountCents: 220_000, paymentFrequency: "monthly", commissionCents: 999_999, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
+    { offerId: "syn-2", revisionId: "syn-2r", revisionNumber: 1, state: "active", selected: true, funderName: "Harbor Funding", amountCents: 7_500_000, termMonths: 36, paymentAmountCents: 208_333, paymentFrequency: "monthly", commissionCents: 888_888, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
+    { offerId: "syn-3", revisionId: "syn-3r", revisionNumber: 1, state: "active", selected: false, funderName: "Summit Advance", amountCents: 10_000_000, termMonths: 12, paymentAmountCents: 520_000, paymentFrequency: "weekly", commissionCents: 777_777, effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" },
   ]
   const all = sortOffers(eligibleOffers(offers))
   const selected = sortOffers(all.filter((item) => item.selected))

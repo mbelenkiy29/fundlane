@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import type { DealActor } from "../src/lib/mca/deals/schema"
-import { createOffer, getOfferRevisionForClosing, reviseOffer, selectOfferRevision } from "../src/lib/mca/offers/service"
+import { offerRevisionValidity } from "../src/lib/mca/offers/contracts"
+import { assertOfferRevisionEligibleForClosing, createOffer, getOfferRevisionForClosing, reviseOffer, selectOfferRevision } from "../src/lib/mca/offers/service"
 import { approveManualSubmission, createManualSubmission } from "../src/lib/mca/offers/manual-submissions"
 import { confirmOfferFunding, reverseFundingEvent } from "../src/lib/mca/funding/service"
 import { commitHistoricalImport, previewHistoricalImport } from "../src/lib/mca/historical/service"
@@ -216,4 +217,69 @@ test("a fresh upload can finish a partially failed run without replaying its suc
   const retry = await commitHistoricalImport(admin, { runId: original.runId, expectedPreviewRevision: 1 })
   assert.equal(retry.created, 1); assert.equal(retry.duplicates, 1); assert.equal(retry.failed, 0)
   assert.equal((await queryRow<{ count: number }>("SELECT count(*)::int count FROM mca_historical_import_rows WHERE source_id='partial-reupload' AND outcome='created'")).count, 2)
+})
+
+test("offerRevisionValidity treats past effectiveAt as in force and expires after expiresAt", () => {
+  const now = "2026-01-15T00:00:00.000Z"
+  assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-29T00:00:00.000Z" }, now), "active")
+  assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-15T00:00:00.000Z", expiresAt: "2026-01-29T00:00:00.000Z" }, now), "active")
+  assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-20T00:00:00.000Z", expiresAt: "2026-01-29T00:00:00.000Z" }, now), "not_yet_effective")
+  assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-15T00:00:00.000Z" }, now), "expired")
+  assert.equal(offerRevisionValidity({ effectiveAt: "2026-01-20T00:00:00.000Z", expiresAt: "2026-01-14T00:00:00.000Z" }, now), "expired")
+})
+
+test("createOffer defaults expiresAt to createdAt plus 14 days", async () => {
+  const offer = await createOffer(admin, { dealId: ids.deal, funderName: "Expiry Default Capital", externalId: "expiry-default-1", terms: { amountCents: 1_000_000 } })
+  const revision = offer.revisions[0]
+  assert.equal(revision.expiresAt, new Date(Date.parse(revision.createdAt) + 14 * 24 * 60 * 60 * 1000).toISOString())
+  assert.equal(offerRevisionValidity(revision, revision.createdAt), "active")
+})
+
+test("expired and not-yet-effective revisions cannot be newly selected or funded; deselect remains allowed", async () => {
+  const expired = await createOffer(admin, { dealId: ids.deal, funderName: "Expired Capital", externalId: "expiry-select-1", terms: { amountCents: 2_000_000, factorRate: 1.2 } })
+  await getDatabase().prepare("UPDATE mca_offer_revisions SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", expired.currentRevisionId)
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.deal, offerId: expired.id, revisionId: expired.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_expired",
+  )
+
+  const future = await createOffer(admin, { dealId: ids.deal, funderName: "Future Capital", externalId: "expiry-future-1", terms: { amountCents: 2_100_000, factorRate: 1.2, effectiveAt: "2099-06-01T00:00:00.000Z" } })
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.deal, offerId: future.id, revisionId: future.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_not_yet_effective",
+  )
+
+  const selected = await createOffer(admin, { dealId: ids.deal, funderName: "Deselect Capital", externalId: "expiry-deselect-1", terms: { amountCents: 2_200_000, factorRate: 1.2 } })
+  await selectOfferRevision(admin, { dealId: ids.deal, offerId: selected.id, revisionId: selected.currentRevisionId, selected: true })
+  await getDatabase().prepare("UPDATE mca_offer_revisions SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", selected.currentRevisionId)
+  const snapshot = await getOfferRevisionForClosing(admin, { dealId: ids.deal, offerId: selected.id, revisionId: selected.currentRevisionId })
+  assert.throws(
+    () => assertOfferRevisionEligibleForClosing(snapshot),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_expired",
+  )
+  await assert.rejects(
+    () => confirmOfferFunding(admin, { dealId: ids.deal, offerId: selected.id, offerRevisionId: selected.currentRevisionId, idempotencyKey: "fund-expired-1", fundedAt: "2026-01-02" }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_expired",
+  )
+  const deselected = await selectOfferRevision(admin, { dealId: ids.deal, offerId: selected.id, revisionId: selected.currentRevisionId, selected: false })
+  assert.deepEqual(deselected.selectedRevisionIds, [])
+})
+
+test("funded linked submission is ineligible at select and fund", async () => {
+  await getDatabase().prepare(`INSERT INTO mca_submission_jobs
+    (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_by_user_id,created_at,updated_at)
+    VALUES ('funded-job',?,?,'provider-funder','Provider Funding','api','{}','funded','funded-confirm','funded-attempt',1,'[]','{"documentIds":[]}','[]',?,?,?)`).run(ids.workspace, ids.deal, ids.user, now, now)
+  const offer = await createOffer(admin, { dealId: ids.deal, submissionId: "funded-job", funderId: "provider-funder", funderName: "Provider Funding", source: "api", externalId: "expiry-funded-job-1", terms: { amountCents: 3_000_000, factorRate: 1.2 } })
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.deal, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_ineligible",
+  )
+  const live = await createOffer(admin, { dealId: ids.deal, submissionId: "funded-job", funderId: "provider-funder", funderName: "Provider Funding", source: "api", externalId: "expiry-funded-job-2", terms: { amountCents: 3_100_000, factorRate: 1.2 } })
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET state = 'sent' WHERE id = 'funded-job'").run()
+  await selectOfferRevision(admin, { dealId: ids.deal, offerId: live.id, revisionId: live.currentRevisionId, selected: true })
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET state = 'funded' WHERE id = 'funded-job'").run()
+  await assert.rejects(
+    () => confirmOfferFunding(admin, { dealId: ids.deal, offerId: live.id, offerRevisionId: live.currentRevisionId, idempotencyKey: "fund-funded-job", fundedAt: "2026-01-02" }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_revision_ineligible",
+  )
 })

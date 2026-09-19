@@ -141,13 +141,13 @@ async function seed() {
     VALUES ('offer-harbor',?,?, 'job-harbor-north-1',?,'North Capital','email','rev-harbor-3',?,?)`).run(
     ids.workspace, ids.harbor, ids.north, "2026-01-16T15:00:00.000Z", "2026-01-16T15:00:00.000Z",
   )
-  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,created_at)
-    VALUES ('rev-harbor-1',?,'offer-harbor',1,'superseded',3500000,?,?),
-           ('rev-harbor-2',?,'offer-harbor',2,'superseded',3800000,?,?),
-           ('rev-harbor-3',?,'offer-harbor',3,'funded',4000000,?,?)`).run(
-    ids.workspace, "2026-01-16T15:00:00.000Z", "2026-01-16T15:00:00.000Z",
-    ids.workspace, "2026-01-17T15:00:00.000Z", "2026-01-17T15:00:00.000Z",
-    ids.workspace, "2026-01-18T15:00:00.000Z", "2026-01-18T15:00:00.000Z",
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,expires_at,created_at)
+    VALUES ('rev-harbor-1',?,'offer-harbor',1,'superseded',3500000,?,?,?),
+           ('rev-harbor-2',?,'offer-harbor',2,'superseded',3800000,?,?,?),
+           ('rev-harbor-3',?,'offer-harbor',3,'funded',4000000,?,?,?)`).run(
+    ids.workspace, "2026-01-16T15:00:00.000Z", "2026-01-30T15:00:00.000Z", "2026-01-16T15:00:00.000Z",
+    ids.workspace, "2026-01-17T15:00:00.000Z", "2026-01-31T15:00:00.000Z", "2026-01-17T15:00:00.000Z",
+    ids.workspace, "2026-01-18T15:00:00.000Z", "2026-02-01T15:00:00.000Z", "2026-01-18T15:00:00.000Z",
   )
   await db.prepare(`INSERT INTO mca_offer_selections (id,workspace_id,deal_id,offer_id,offer_revision_id,active,selected_at)
     VALUES ('sel-harbor',?,?,'offer-harbor','rev-harbor-3',1,?)`).run(ids.workspace, ids.harbor, "2026-01-18T15:00:00.000Z")
@@ -173,8 +173,8 @@ async function seed() {
     VALUES ('offer-unknown',?,?, 'job-unknown-south',?,'South Advance','api','rev-unknown',?,?)`).run(
     ids.workspace, ids.unknown, ids.south, "2026-01-21T15:00:00.000Z", "2026-01-21T15:00:00.000Z",
   )
-  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,incomplete_fields_json,effective_at,created_at)
-    VALUES ('rev-unknown',?,'offer-unknown',1,'active',NULL,'["amountCents"]',?,?)`).run(ids.workspace, "2026-01-21T15:00:00.000Z", "2026-01-21T15:00:00.000Z")
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,incomplete_fields_json,effective_at,expires_at,created_at)
+    VALUES ('rev-unknown',?,'offer-unknown',1,'active',NULL,'["amountCents"]',?,?,?)`).run(ids.workspace, "2026-01-21T15:00:00.000Z", "2026-02-04T15:00:00.000Z", "2026-01-21T15:00:00.000Z")
 
   await insertDeal({ id: ids.december, name: "December Cohort Inc", requested: 12_000, createdAt: "2025-12-15T15:00:00.000Z", status: "submitted" })
   await insertJob({ id: "job-december-west", dealId: ids.december, funderId: ids.west, name: "West Funding", routeKind: "email", at: "2026-01-05T15:00:00.000Z" })
@@ -188,8 +188,8 @@ async function seed() {
     VALUES ('offer-latepay',?,?, 'job-latepay-east',?,'East Partners','api','rev-latepay',?,?)`).run(
     ids.workspace, ids.latepay, ids.east, "2026-01-24T18:00:00.000Z", "2026-01-24T18:00:00.000Z",
   )
-  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,created_at)
-    VALUES ('rev-latepay',?,'offer-latepay',1,'funded',1000000,?,?)`).run(ids.workspace, "2026-01-24T18:00:00.000Z", "2026-01-24T18:00:00.000Z")
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,expires_at,created_at)
+    VALUES ('rev-latepay',?,'offer-latepay',1,'funded',1000000,?,?,?)`).run(ids.workspace, "2026-01-24T18:00:00.000Z", "2026-02-07T18:00:00.000Z", "2026-01-24T18:00:00.000Z")
   await db.prepare(`INSERT INTO mca_advances (id,workspace_id,funding_event_id,deal_id,offer_id,offer_revision_id,funded_at,principal_cents,commission_cents,source,status,created_at,updated_at)
     VALUES ('adv-latepay',?,'event-latepay',?,'offer-latepay','rev-latepay','2026-01-25T15:00:00.000Z',1000000,80000,'live','active',?,?)`).run(ids.workspace, ids.latepay, now, now)
   await db.prepare(`INSERT INTO mca_funding_events (id,workspace_id,deal_id,offer_id,offer_revision_id,advance_id,idempotency_key,funded_at,amount_cents,commission_cents,source,state,created_at)
@@ -205,8 +205,8 @@ async function seed() {
     VALUES ('offer-reversed',?,?, 'job-reversed-south',?,'South Advance','api','rev-reversed',?,?)`).run(
     ids.workspace, ids.reversed, ids.south, "2026-01-27T15:00:00.000Z", "2026-01-27T15:00:00.000Z",
   )
-  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,created_at)
-    VALUES ('rev-reversed',?,'offer-reversed',1,'funded',900000,?,?)`).run(ids.workspace, "2026-01-27T15:00:00.000Z", "2026-01-27T15:00:00.000Z")
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,effective_at,expires_at,created_at)
+    VALUES ('rev-reversed',?,'offer-reversed',1,'funded',900000,?,?,?)`).run(ids.workspace, "2026-01-27T15:00:00.000Z", "2026-02-10T15:00:00.000Z", "2026-01-27T15:00:00.000Z")
   await db.prepare(`INSERT INTO mca_advances (id,workspace_id,funding_event_id,deal_id,offer_id,offer_revision_id,funded_at,principal_cents,commission_cents,source,status,reversed_at,created_at,updated_at)
     VALUES ('adv-reversed',?,'event-reversed',?,'offer-reversed','rev-reversed','2026-01-27T15:00:00.000Z',900000,0,'live','reversed','2026-01-28T15:00:00.000Z',?,?)`).run(ids.workspace, ids.reversed, now, now)
   await db.prepare(`INSERT INTO mca_funding_events (id,workspace_id,deal_id,offer_id,offer_revision_id,advance_id,idempotency_key,funded_at,amount_cents,source,state,reversed_at,created_at)

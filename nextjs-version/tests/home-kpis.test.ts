@@ -161,8 +161,8 @@ async function fundDeal(input: {
     (id, workspace_id, deal_id, funder_name, source, current_revision_id, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'manual', ?, ?, ?)`).run(offerId, workspace, input.dealId, funderName, revisionId, input.fundedAt, input.fundedAt)
   await db.prepare(`INSERT INTO mca_offer_revisions
-    (id, workspace_id, offer_id, revision_number, state, amount_cents, effective_at, created_at)
-    VALUES (?, ?, ?, 1, 'funded', ?, ?, ?)`).run(revisionId, workspace, offerId, input.amountCents, input.fundedAt, input.fundedAt)
+    (id, workspace_id, offer_id, revision_number, state, amount_cents, effective_at, expires_at, created_at)
+    VALUES (?, ?, ?, 1, 'funded', ?, ?, ?, ?)`).run(revisionId, workspace, offerId, input.amountCents, input.fundedAt, new Date(Date.parse(input.fundedAt) + 14 * 86_400_000).toISOString(), input.fundedAt)
   await db.prepare(`INSERT INTO mca_advances
     (id, workspace_id, funding_event_id, deal_id, offer_id, offer_revision_id, funded_at, principal_cents,
      commission_cents, fee_cents, source, calculation_snapshot_json, status, created_at, updated_at)

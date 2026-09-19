@@ -7,7 +7,7 @@ import { getDealForDocument } from "../deals/service"
 import { persistInstallments } from "../deals/remittance"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
-import { assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing } from "../offers/service"
+import { assertLinkedSubmissionNotFunded, assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing } from "../offers/service"
 import { insertDealSubmissionCache } from "../submissions/repository"
 import type { ConfirmFundingInput, FundingAccountingWriter, FundingResult, FundingSplitInput } from "./contracts"
 
@@ -106,12 +106,19 @@ export async function confirmOfferFunding(
       if (replay.offer_revision_id !== input.offerRevisionId) throw new AppError(409, "funding_key_conflict", "This funding key already belongs to another offer revision.")
       return rowResult(replay, true)
     }
-    const revision = await database.prepare<{ state: string; factor_rate_millionths: number | null; term_months: number | null; payment_amount_cents: number | null; payment_frequency: string | null }>(
-      "SELECT state, factor_rate_millionths, term_months, payment_amount_cents, payment_frequency FROM mca_offer_revisions WHERE workspace_id = ? AND offer_id = ? AND id = ? FOR UPDATE",
+    const revision = await database.prepare<{ state: string; effective_at: string; expires_at: string; factor_rate_millionths: number | null; term_months: number | null; payment_amount_cents: number | null; payment_frequency: string | null }>(
+      "SELECT state, effective_at, expires_at, factor_rate_millionths, term_months, payment_amount_cents, payment_frequency FROM mca_offer_revisions WHERE workspace_id = ? AND offer_id = ? AND id = ? FOR UPDATE",
     ).get(actor.workspaceId, input.offerId, input.offerRevisionId)
     const selection = await database.prepare<{ id: string }>("SELECT id FROM mca_offer_selections WHERE workspace_id = ? AND deal_id = ? AND offer_id = ? AND offer_revision_id = ? AND active = 1").get(actor.workspaceId, input.dealId, input.offerId, input.offerRevisionId)
     if (!revision || !selection || !["active", "superseded"].includes(revision.state)) throw new AppError(409, "offer_revision_ineligible", "The exact selected offer revision is no longer eligible for funding.")
-    assertOfferRevisionEligibleForClosing({ ...snapshot, state: revision.state as typeof snapshot.state, selected: Boolean(selection) })
+    await assertLinkedSubmissionNotFunded(database, actor.workspaceId, lockedOffer.submission_id ?? undefined)
+    assertOfferRevisionEligibleForClosing({
+      ...snapshot,
+      state: revision.state as typeof snapshot.state,
+      selected: Boolean(selection),
+      effectiveAt: revision.effective_at,
+      expiresAt: revision.expires_at,
+    })
     const alreadyFunded = await database.prepare<{ id: string }>("SELECT id FROM mca_funding_events WHERE workspace_id = ? AND offer_revision_id = ? AND state = 'committed'").get(actor.workspaceId, input.offerRevisionId)
     if (alreadyFunded) throw new AppError(409, "offer_already_funded", "This offer revision already has a committed funding event. Retry with its original confirmation key.")
     if (input.correctionOfEventId) {
