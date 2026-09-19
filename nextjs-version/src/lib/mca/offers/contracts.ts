@@ -45,6 +45,14 @@ export function offerRevisionValidity(
   return "active"
 }
 
+export function isOfferRevisionOpenForMerchantPreview(
+  revision: { state: string; selected?: boolean; effectiveAt?: string; expiresAt: string },
+  now: string,
+): boolean {
+  const inState = revision.state === "active" || (revision.state === "superseded" && Boolean(revision.selected))
+  return inState && offerRevisionValidity(revision, now) === "active"
+}
+
 export function isSplitFundProduct(product?: string | null): boolean {
   return typeof product === "string" && /^split[\s_-]*fund$/i.test(product.trim())
 }

@@ -126,12 +126,7 @@ export async function selectOfferRevision(actor: DealActor, input: { dealId: str
       assertOfferRevisionValidity(revision)
       await assertLinkedSubmissionNotFunded(database, actor.workspaceId, offer.submissionId)
       if (!offer.selectedRevisionIds.includes(revision.id)) {
-        const other = await database.prepare<{ offer_id: string }>(
-          "SELECT offer_id FROM mca_offer_selections WHERE workspace_id = ? AND deal_id = ? AND active = 1 AND offer_id != ?",
-        ).get(actor.workspaceId, input.dealId, input.offerId)
-        if (other && !isSplitFundProduct(revision.product)) {
-          throw new AppError(409, "offer_selection_conflict", "This deal already has a selected offer revision.")
-        }
+        await assertAdditionalOfferSelectionAllowed(database, actor.workspaceId, input.dealId, input.offerId, revision.product)
       }
     }
     await setSelection({ workspaceId: actor.workspaceId, dealId: input.dealId, offerId: input.offerId, revisionId: input.revisionId, selected: input.selected, actorUserId: actor.userId, reason: input.reason?.trim() || undefined }, database)
@@ -189,7 +184,33 @@ function closingSnapshot(offer: OfferRecord, revision: OfferRevision): OfferRevi
   }
 }
 
-function assertOfferRevisionValidity(revision: { effectiveAt?: string; expiresAt: string }, at = nowIso()): void {
+async function assertAdditionalOfferSelectionAllowed(
+  database: DbExecutor,
+  workspaceId: string,
+  dealId: string,
+  offerId: string,
+  incomingProduct: string | undefined,
+): Promise<void> {
+  const selected = await database.prepare<{ product: string | null }>(
+    `SELECT r.product FROM mca_offer_selections s
+     JOIN mca_offer_revisions r ON r.workspace_id = s.workspace_id AND r.id = s.offer_revision_id
+     WHERE s.workspace_id = ? AND s.deal_id = ? AND s.active = 1 AND s.offer_id != ?`,
+  ).all(workspaceId, dealId, offerId)
+  const committed = await database.prepare<{ product: string | null }>(
+    `SELECT r.product FROM mca_funding_events e
+     JOIN mca_offer_revisions r ON r.workspace_id = e.workspace_id AND r.id = e.offer_revision_id
+     WHERE e.workspace_id = ? AND e.deal_id = ? AND e.state = 'committed'`,
+  ).all(workspaceId, dealId)
+  if (selected.length === 0) return
+  const incomingSplit = isSplitFundProduct(incomingProduct)
+  const allSelectedSplit = selected.every((row) => isSplitFundProduct(row.product))
+  const hasCommittedSplit = committed.some((row) => isSplitFundProduct(row.product))
+  if (incomingSplit && allSelectedSplit) return
+  if (incomingSplit && hasCommittedSplit && allSelectedSplit) return
+  throw new AppError(409, "offer_selection_conflict", "This deal already has a selected offer revision.")
+}
+
+export function assertOfferRevisionValidity(revision: { effectiveAt?: string; expiresAt: string }, at = nowIso()): void {
   const validity = offerRevisionValidity(revision, at)
   if (validity === "expired") throw new AppError(409, "offer_revision_expired", "This offer revision has expired.")
   if (validity === "not_yet_effective") throw new AppError(409, "offer_revision_not_yet_effective", "This offer revision is not yet effective.")

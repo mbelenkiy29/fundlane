@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import type { DealActor } from "../src/lib/mca/deals/schema"
-import { isSplitFundProduct, offerRevisionValidity } from "../src/lib/mca/offers/contracts"
+import { isOfferRevisionOpenForMerchantPreview, isSplitFundProduct, offerRevisionValidity } from "../src/lib/mca/offers/contracts"
 import { assertOfferRevisionEligibleForClosing, createOffer, getOfferRevisionForClosing, reviseOffer, selectOfferRevision } from "../src/lib/mca/offers/service"
 import { approveManualSubmission, createManualSubmission } from "../src/lib/mca/offers/manual-submissions"
 import { confirmOfferFunding, reverseFundingEvent } from "../src/lib/mca/funding/service"
@@ -98,6 +98,7 @@ test("MIC-109 selection retries are no-ops and stale deselection preserves the n
 })
 
 test("MIC-118 concurrent confirmation creates one advance and ledger set, and rollback is atomic", async () => {
+  await clearActiveSelections()
   const offer = await createOffer(admin, { dealId: ids.deal, submissionId: "provider-job", funderId: "provider-funder", funderName: "Provider Funding", source: "api", externalId: "funding-1", terms: { product: "split-fund", amountCents: 7_000_000, factorRate: 1.25, paymentAmountCents: 350_000, paymentFrequency: "weekly", commissionCents: 560_000, feeCents: 20_000 } })
   await selectOfferRevision(admin, { dealId: ids.deal, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true })
   const input = { dealId: ids.deal, offerId: offer.id, offerRevisionId: offer.currentRevisionId, idempotencyKey: "fund-double-click", fundedAt: "2025-05-03", feeCents: 20_000, expectedCommissionAt: "2025-05-10", expectedFeeAt: "2025-05-08", paymentCount: 20, paymentFrequency: "weekly" as const, calendarConvention: "calendar_days" as const, splits: [{ recipientMembershipId: ids.member, percentageBasisPoints: 10000 }] }
@@ -288,6 +289,70 @@ test("second non-split select on a deal returns offer_selection_conflict; split-
     [ids.secondDeal],
   )
   assert.deepEqual(active.map((row) => row.offer_id).sort(), [splitA.id, splitB.id].sort())
+})
+
+test("mixed MCA and split-fund cannot both stay selected; additional split-fund is allowed after a committed split advance", async () => {
+  await clearActiveSelections(ids.secondDeal)
+  const mca = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Mixed MCA",
+    externalId: "select-mixed-mca",
+    terms: { product: "MCA", amountCents: 1_200_000, factorRate: 1.22 },
+  })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: mca.id, revisionId: mca.currentRevisionId, selected: true })
+  const mixedSplit = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Mixed Split",
+    externalId: "select-mixed-split",
+    terms: { product: "split-fund", amountCents: 400_000, factorRate: 1.18 },
+  })
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: mixedSplit.id, revisionId: mixedSplit.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_selection_conflict",
+  )
+  const mixedActive = await queryRows<{ offer_id: string }>(
+    "SELECT offer_id FROM mca_offer_selections WHERE deal_id=$1 AND active=1",
+    [ids.secondDeal],
+  )
+  assert.deepEqual(mixedActive.map((row) => row.offer_id), [mca.id])
+
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: mca.id, revisionId: mca.currentRevisionId, selected: false })
+  const fundedSplit = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Committed Split",
+    externalId: "select-committed-split",
+    terms: { product: "split-fund", amountCents: 700_000, factorRate: 1.17 },
+  })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: fundedSplit.id, revisionId: fundedSplit.currentRevisionId, selected: true })
+  await confirmOfferFunding(admin, {
+    dealId: ids.secondDeal,
+    offerId: fundedSplit.id,
+    offerRevisionId: fundedSplit.currentRevisionId,
+    idempotencyKey: "fund-committed-split",
+    fundedAt: "2026-01-02",
+  })
+
+  const followOnSplit = await createOffer(admin, {
+    dealId: ids.secondDeal,
+    funderName: "Follow-on Split",
+    externalId: "select-follow-on-split",
+    terms: { product: "split fund", amountCents: 250_000, factorRate: 1.14 },
+  })
+  await selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: followOnSplit.id, revisionId: followOnSplit.currentRevisionId, selected: true })
+  await assert.rejects(
+    () => selectOfferRevision(admin, { dealId: ids.secondDeal, offerId: mca.id, revisionId: mca.currentRevisionId, selected: true }),
+    (error: { status?: number; code?: string }) => error.status === 409 && error.code === "offer_selection_conflict",
+  )
+})
+
+test("isOfferRevisionOpenForMerchantPreview excludes expired and not-yet-effective revisions", () => {
+  const now = "2026-01-15T00:00:00.000Z"
+  const base = { effectiveAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-29T00:00:00.000Z" }
+  assert.equal(isOfferRevisionOpenForMerchantPreview({ ...base, state: "active" }, now), true)
+  assert.equal(isOfferRevisionOpenForMerchantPreview({ ...base, state: "superseded", selected: true }, now), true)
+  assert.equal(isOfferRevisionOpenForMerchantPreview({ ...base, state: "superseded", selected: false }, now), false)
+  assert.equal(isOfferRevisionOpenForMerchantPreview({ ...base, state: "active", expiresAt: "2026-01-15T00:00:00.000Z" }, now), false)
+  assert.equal(isOfferRevisionOpenForMerchantPreview({ ...base, state: "active", effectiveAt: "2026-01-20T00:00:00.000Z" }, now), false)
 })
 
 test("createOffer defaults expiresAt to createdAt plus 14 days", async () => {

@@ -16,8 +16,8 @@ import { getDocument, getDocumentContent, listDocuments, storeDocument } from ".
 import { assertSenderUsable } from "../senders/service"
 import { getSmsConsent, listSmsAccounts, normalizeSmsRecipient, resolveSmsRoute } from "../sms/service"
 import type { TwilioSmsTransport } from "../sms/twilio"
-import { assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing, listOfferRevisionsForClosing } from "../offers/service"
-import type { OfferRevisionForClosing } from "../offers/contracts"
+import { assertOfferRevisionEligibleForClosing, assertOfferRevisionValidity, getOfferRevisionForClosing, listOfferRevisionsForClosing } from "../offers/service"
+import { isOfferRevisionOpenForMerchantPreview, type OfferRevisionForClosing } from "../offers/contracts"
 import { pickHighestMerchantOffer } from "../offers/rank"
 import { closingTransport, contentHash, deliveryCorrelationId, postmarkConnectionConfigured } from "./delivery"
 import type { ClosingTransport, ClosingTransportRequest } from "./delivery"
@@ -638,12 +638,18 @@ export async function previewMerchantOffers(actor: DealActor, input: { dealId: s
     senderId = route.accountId
   }
   let offers = await listOfferRevisionsForClosing(actor, { dealId: input.dealId })
-  offers = offers.filter((offer) => offer.state === "active" || (offer.state === "superseded" && offer.selected))
-  if (input.revisionId) offers = offers.filter((offer) => offer.revisionId === input.revisionId)
-  if (input.selectionMode === "selected") offers = offers.filter((offer) => offer.selected)
-  if (input.selectionMode === "highest" && offers.length) offers = [pickHighestMerchantOffer(offers)]
+  const at = nowIso()
+  if (input.selectionMode === "selected") {
+    offers = offers.filter((offer) => offer.state === "active" || (offer.state === "superseded" && offer.selected))
+    if (input.revisionId) offers = offers.filter((offer) => offer.revisionId === input.revisionId)
+    offers = offers.filter((offer) => offer.selected)
+  } else {
+    offers = offers.filter((offer) => isOfferRevisionOpenForMerchantPreview(offer, at))
+    if (input.selectionMode === "highest" && offers.length) offers = [pickHighestMerchantOffer(offers)]
+  }
   if (!offers.length) throw new AppError(422, "offer_preview_empty", "No eligible offer revisions match this preview mode.")
   if (input.selectionMode === "selected") for (const offer of offers) assertOfferRevisionEligibleForClosing(offer)
+  else for (const offer of offers) assertOfferRevisionValidity(offer, at)
   const subject = input.channel === "email" ? `Funding options for ${deal.dbaName || deal.legalName || deal.displayId}` : undefined
   const body = `Hello ${deal.contactName || "there"},\n\nHere ${offers.length === 1 ? "is your funding option" : "are your funding options"}:\n\n${offers.map((offer) => `• ${renderOfferLine(offer)}`).join("\n")}\n\nReply to your representative with questions or to discuss next steps.`
   const primary = offers[0], revisionIds = offers.map((offer) => offer.revisionId), hash = contentHash({ selectionMode: input.selectionMode, revisionIds, channel: input.channel, senderId, recipient, subject, body })

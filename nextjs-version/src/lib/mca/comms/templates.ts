@@ -14,7 +14,7 @@ import { requestCorrelationId } from "../http"
 import { listMemberships } from "../memberships"
 import type { MembershipSummary } from "../types"
 import { listOfferRevisionsForClosing } from "../offers/service"
-import type { OfferRevisionForClosing } from "../offers/contracts"
+import { isOfferRevisionOpenForMerchantPreview, type OfferRevisionForClosing } from "../offers/contracts"
 import { pickHighestMerchantOffer } from "../offers/rank"
 import { canManageWorkspace } from "../policy"
 import { MESSAGE_CHANNELS, type MessageChannel } from "./contracts"
@@ -498,7 +498,8 @@ function dealUrl(origin: string, dealId: string): string {
 }
 
 function eligibleOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClosing[] {
-  return offers.filter((offer) => offer.state === "active" || (offer.state === "superseded" && offer.selected))
+  const at = nowIso()
+  return offers.filter((offer) => isOfferRevisionOpenForMerchantPreview(offer, at))
 }
 
 function sortOffers(offers: OfferRevisionForClosing[]): OfferRevisionForClosing[] {

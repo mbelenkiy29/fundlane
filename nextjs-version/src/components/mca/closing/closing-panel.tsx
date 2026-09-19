@@ -114,7 +114,7 @@ export function ClosingPanel({ dealId, onChanged }: { dealId: string; onChanged?
   }
   async function saveOfferPreview() {
     const scope = "offer-preview"
-    const result = await run(scope, () => requestJson<OfferMessagePreview>("/api/mca/closing/offers/preview", { method: "POST", body: JSON.stringify({ dealId, selectionMode, ...(revisionId ? { revisionId } : {}), channel: merchantChannel, senderId: merchantChannel === "email" ? senderId : smsAccountId, ...(merchantRecipient ? { recipient: merchantRecipient } : {}), ...(overrideReason.trim() ? { overrideReason: overrideReason.trim() } : {}), idempotencyKey: retryKey(scope) }) }), `Merchant ${merchantChannel === "email" ? "email" : "text"} preview saved. Review it before sending.`)
+    const result = await run(scope, () => requestJson<OfferMessagePreview>("/api/mca/closing/offers/preview", { method: "POST", body: JSON.stringify({ dealId, selectionMode, ...(selectionMode === "selected" && revisionId ? { revisionId } : {}), channel: merchantChannel, senderId: merchantChannel === "email" ? senderId : smsAccountId, ...(merchantRecipient ? { recipient: merchantRecipient } : {}), ...(overrideReason.trim() ? { overrideReason: overrideReason.trim() } : {}), idempotencyKey: retryKey(scope) }) }), `Merchant ${merchantChannel === "email" ? "email" : "text"} preview saved. Review it before sending.`)
     if (result) setPreview(result)
   }
   async function sendPreview() {

@@ -322,6 +322,25 @@ test("MIC-147: typed variables render offers, scoped uploads, and omit commissio
   assert.ok(forbidden.forbidden.includes("commission_cents"))
 })
 
+test("highestOffer template values skip expired revisions even when state is active", async () => {
+  const expiredHigh = await createOffer(actor(), {
+    dealId: dealAId,
+    funderName: "Expired Summit",
+    terms: { amountCents: 20_000_000, termMonths: 12, paymentAmountCents: 800_000, paymentFrequency: "weekly" },
+  })
+  await getDatabase().prepare("UPDATE mca_offer_revisions SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", expiredHigh.currentRevisionId)
+  const preview = await previewMessageTemplate(actor(), {
+    body: "HIGHEST {{highest_offer_funding_amount}} {{highest_offer_all_details}} ALL {{all_offers_all_details}}",
+    channel: "email",
+    scope: "merchant",
+    dealId: dealAId,
+    origin: "http://localhost",
+  })
+  assert.match(preview.text, /HIGHEST \$100,000/)
+  assert.equal(preview.text.includes("$200,000"), false)
+  assert.equal(preview.text.includes("Expired Summit"), false)
+})
+
 test("MIC-147: unknown variables block publish, drafts keep identity, and versions are retained", async () => {
   templateCounter += 1
   const created = await templatesPost(cookieRequest("/api/mca/comms/templates", "admin-session-token", {

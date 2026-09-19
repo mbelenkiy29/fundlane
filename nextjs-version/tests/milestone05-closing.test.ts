@@ -526,6 +526,60 @@ test("highest merchant preview picks lower factor on equal amount", async () => 
   assert.notEqual(worse.currentRevisionId, better.currentRevisionId)
 })
 
+test("highest and all merchant previews rank without picker lock and skip expired revisions", async () => {
+  const expired = await createOffer(actor(), {
+    dealId,
+    funderName: "Expired Mega Capital",
+    externalId: "rank-expired-1",
+    terms: { amountCents: 12_000_000, factorRate: 1.05, termMonths: 10, paymentAmountCents: 300000, paymentFrequency: "weekly" },
+  })
+  await getDatabase().prepare("UPDATE mca_offer_revisions SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", expired.currentRevisionId)
+  const live = await createOffer(actor(), {
+    dealId,
+    funderName: "Live Rank Capital",
+    externalId: "rank-live-1",
+    terms: { amountCents: 8_000_000, factorRate: 1.2, termMonths: 10, paymentAmountCents: 300000, paymentFrequency: "weekly" },
+  })
+
+  const highest = await previewMerchantOffers(actor(), {
+    dealId,
+    revisionId: selectedRevisionId,
+    selectionMode: "highest",
+    channel: "email",
+    senderId: "merchant-sender",
+    recipient: "mira@example.test",
+    idempotencyKey: "rank-highest-ignores-picker-and-expired",
+  })
+  assert.equal(highest.offer.revisionId, live.currentRevisionId)
+  assert.match(highest.body, /Live Rank Capital/)
+  assert.equal(highest.body.includes("Expired Mega Capital"), false)
+  assert.equal(highest.body.includes("Northstar Capital"), false)
+
+  const all = await previewMerchantOffers(actor(), {
+    dealId,
+    revisionId: selectedRevisionId,
+    selectionMode: "all",
+    channel: "email",
+    senderId: "merchant-sender",
+    recipient: "mira@example.test",
+    idempotencyKey: "rank-all-skips-expired",
+  })
+  assert.match(all.body, /Live Rank Capital/)
+  assert.match(all.body, /Harbor Funding/)
+  assert.equal(all.body.includes("Expired Mega Capital"), false)
+})
+
+test("closing panel ranks highest/all without picker lock and keeps revisionId on accept, pitch, and PSF", async () => {
+  const source = readFileSync(resolve(process.cwd(), "src/components/mca/closing/closing-panel.tsx"), "utf8")
+  const previewFn = source.slice(source.indexOf("async function saveOfferPreview"), source.indexOf("async function sendPreview"))
+  assert.match(previewFn, /selectionMode === "selected"/)
+  assert.match(previewFn, /revisionId/)
+  assert.equal(previewFn.includes("...(revisionId ? { revisionId } : {})"), false)
+  assert.match(source, /\/api\/mca\/closing\/contracts"[\s\S]*revisionId/)
+  assert.match(source, /\/api\/mca\/closing\/pitches"[\s\S]*revisionId/)
+  assert.match(source, /const psfBody = \(\) => \(\{ dealId, revisionId/)
+})
+
 test("production gates stay qualified and closing UI renders all four lines", async () => {
   const snapshot = await getClosingSnapshot(actor(), dealId)
   const gates = snapshot.productionGates
