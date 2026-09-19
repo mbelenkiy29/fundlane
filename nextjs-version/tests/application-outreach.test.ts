@@ -294,11 +294,12 @@ test("production without invitation email enabled disables Send and tells users 
   assert.equal(body.invitationEmailEnabled, invitationEmailEnabled())
   assert.equal(typeof body.invitationEmailEnabled, "boolean")
 
-  const originalNodeEnv = process.env.NODE_ENV
+  const env = process.env as { NODE_ENV?: string }
+  const originalNodeEnv = env.NODE_ENV
   const originalFlag = process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
   const originalWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
   try {
-    process.env.NODE_ENV = "production"
+    env.NODE_ENV = "production"
     process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
     delete process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
     assert.equal(invitationEmailEnabled(), false)
@@ -309,7 +310,7 @@ test("production without invitation email enabled disables Send and tells users 
     delete process.env.MCA_EMAIL_WEBHOOK_URL
     assert.equal(invitationEmailEnabled(), false)
   } finally {
-    process.env.NODE_ENV = originalNodeEnv
+    env.NODE_ENV = originalNodeEnv
     if (originalFlag === undefined) delete process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
     else process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = originalFlag
     if (originalWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
