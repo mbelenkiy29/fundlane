@@ -13,6 +13,7 @@ import {
   buildScoringInputs,
   evaluateFunderScore,
   getDealScores,
+  naicsPrefixMatch,
   rankScores,
   requireScoreActor,
   resolveDefaultFlag,
@@ -43,13 +44,15 @@ function fitRules(): EligibilityRule[] {
     { id: "r-tib", funderId: "", field: "time_in_business", operator: "min", unit: "months", value: 12, unspecified: false },
     { id: "r-pos", funderId: "", field: "positions", operator: "max", unit: "count", value: 3, unspecified: false },
     { id: "r-amt", funderId: "", field: "requested_amount", operator: "max", unit: "usd", value: 250_000, unspecified: false },
+    { id: "r-term", funderId: "", field: "term", operator: "max", unit: "months", value: 12, unspecified: false },
     { id: "r-adb", funderId: "", field: "average_daily_balance", operator: "min", unit: "usd", value: 5_000, unspecified: false },
+    { id: "r-dep", funderId: "", field: "deposit_count", operator: "min", unit: "count", value: 6, unspecified: false },
     { id: "r-nsf", funderId: "", field: "nsf", operator: "max", unit: "count", value: 4, unspecified: false },
     { id: "r-neg", funderId: "", field: "negative_days", operator: "max", unit: "days", value: 4, unspecified: false },
     { id: "r-def", funderId: "", field: "default_status", operator: "eq", unit: "boolean", value: false, unspecified: false },
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
-    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["713210"], unspecified: false },
+    { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
   ]
 }
 
@@ -132,11 +135,11 @@ async function seedAggregate(workspaceId: string, dealId: string, extra: { stale
   const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 0.95, text: String(value) })
   await exec(
     `INSERT INTO mca_underwriting_aggregates
-      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'fixture', ?)
+      (workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, deposit_count, worst_month_nsf, position_count, stale, source_fingerprint, computed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'fixture', ?)
      ON CONFLICT (workspace_id, deal_id) DO UPDATE SET
-      version = excluded.version, monthly_revenue = excluded.monthly_revenue, stale = excluded.stale, computed_at = excluded.computed_at`,
-    workspaceId, dealId, extra.version ?? 1, metric(extra.revenue ?? 20_000), metric(8_000), metric(1), metric(0), extra.stale ? 1 : 0, extra.stale ? new Date().toISOString() : "2026-09-08T00:00:00.000Z",
+      version = excluded.version, monthly_revenue = excluded.monthly_revenue, deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, stale = excluded.stale, computed_at = excluded.computed_at`,
+    workspaceId, dealId, extra.version ?? 1, metric(extra.revenue ?? 20_000), metric(8_000), metric(1), metric(0), metric(12), metric(1), extra.stale ? 1 : 0, extra.stale ? new Date().toISOString() : "2026-09-08T00:00:00.000Z",
   )
 }
 
@@ -152,6 +155,7 @@ async function merchantDeal(workspaceId: string, key: string, extra: { ficoScore
     monthlyRevenue: 20_000,
     ...(extra.ficoScore === null ? {} : { ficoScore: extra.ficoScore ?? 680 }),
     requestedAmount: 50_000,
+    requestedTermMonths: 12,
     fundingPurpose: "working capital",
   })
   await seedAggregate(workspaceId, created.deal.id)
@@ -260,6 +264,99 @@ test("MIC-163 missing inputs are unknown, never a fake pass; unspecified rules a
   assert.equal(open.reasons.some((reason) => reason.ruleId === "hard.fico"), false)
   assert.equal(open.eligible, true)
   assert.notEqual(open.grade, "DQ")
+})
+
+function assertHardDq(score: { eligible: boolean; grade: string; score: number; reasons: Array<{ ruleId: string; result: string }> }, ruleId: string, result: "fail" | "unknown" = "fail") {
+  assert.equal(score.eligible, false)
+  assert.equal(score.grade, "DQ")
+  assert.equal(score.score, 0)
+  assert.equal(score.reasons.some((reason) => reason.ruleId === ruleId && reason.result === result), true)
+  assert.equal(score.reasons.some((reason) => reason.ruleId.startsWith("soft.")), false)
+}
+
+test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pass", async () => {
+  const workspaceId = "workspace-score-hard-extras"
+  const rules = fitRules()
+  const funder = (id: string, name: string) => funderRecord(id, workspaceId, name)
+
+  const adbDq = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, averageDailyBalance: 1_000 }, funder("adb-dq", "Thin ADB"), rules)
+  assertHardDq(adbDq, "hard.average_daily_balance")
+
+  const amountDq = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, requestedAmount: 300_000 }, funder("amt-dq", "Thin Amount"), rules)
+  assertHardDq(amountDq, "hard.requested_amount")
+
+  const termDq = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths: 18 }, funder("term-dq", "Thin Term"), rules)
+  assertHardDq(termDq, "hard.term")
+
+  const depositDq = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, depositCount: 2 }, funder("dep-dq", "Thin Deposits"), rules)
+  assertHardDq(depositDq, "hard.deposit_count")
+
+  const unknownAdb = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, averageDailyBalance: undefined, adbUnknown: true }, funder("adb-unk", "Unknown ADB"), rules)
+  assertHardDq(unknownAdb, "hard.average_daily_balance", "unknown")
+
+  const unknownAmount = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, requestedAmount: undefined }, funder("amt-unk", "Unknown Amount"), rules)
+  assertHardDq(unknownAmount, "hard.requested_amount", "unknown")
+
+  const unknownTerm = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths: undefined }, funder("term-unk", "Unknown Term"), rules)
+  assertHardDq(unknownTerm, "hard.term", "unknown")
+
+  const unknownDeposit = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, depositCount: undefined, depositUnknown: true }, funder("dep-unk", "Unknown Deposits"), rules)
+  assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
+})
+
+test("industry not_in 7132 fails NAICS prefix 713210", async () => {
+  assert.equal(naicsPrefixMatch("7132", "713210"), true)
+  assert.equal(naicsPrefixMatch("713210", "7132"), true)
+  assert.equal(naicsPrefixMatch("7132", "722511"), false)
+  const workspaceId = "workspace-score-naics-prefix"
+  const restricted = await evaluateFunderScore(
+    actor(workspaceId),
+    { ...harborInputs, industry: "casinos", naics: "713210" },
+    funderRecord("naics-block", workspaceId, "No Gambling"),
+    fitRules(),
+  )
+  assertHardDq(restricted, "hard.industry")
+
+  const allowed = await evaluateFunderScore(
+    actor(workspaceId),
+    harborInputs,
+    funderRecord("naics-ok", workspaceId, "Restaurants Ok"),
+    fitRules(),
+  )
+  assert.equal(allowed.eligible, true)
+  assert.equal(allowed.grade, "A")
+  assert.equal(allowed.reasons.some((reason) => reason.ruleId === "hard.industry" && reason.result === "pass"), true)
+})
+
+test("soft NSF uses worst-month; hard NSF uses window unique days", async () => {
+  const workspaceId = "workspace-score-nsf-split"
+  const windowDq = await evaluateFunderScore(
+    actor(workspaceId),
+    { ...harborInputs, nsfCount: 5, nsfUnknown: false, worstMonthNsf: 1 },
+    funderRecord("nsf-window", workspaceId, "Window NSF"),
+    fitRules(),
+  )
+  assertHardDq(windowDq, "hard.nsf")
+
+  const worstMonthSoft = await evaluateFunderScore(
+    actor(workspaceId),
+    { ...harborInputs, nsfCount: 1, nsfUnknown: false, worstMonthNsf: 4 },
+    funderRecord("nsf-worst", workspaceId, "Worst Month NSF"),
+    fitRules(),
+  )
+  assert.equal(worstMonthSoft.eligible, true)
+  const nsfSoft = worstMonthSoft.reasons.find((reason) => reason.ruleId === "soft.nsf")
+  assert.equal(nsfSoft?.result, "pass")
+  assert.match(nsfSoft?.detail ?? "", /Worst-month NSF 4 scores 0 against maximum 4/)
+
+  const unknownWorst = await evaluateFunderScore(
+    actor(workspaceId),
+    { ...harborInputs, nsfCount: 1, nsfUnknown: false, worstMonthNsf: undefined },
+    funderRecord("nsf-unk", workspaceId, "Unknown Worst Month"),
+    fitRules(),
+  )
+  assert.equal(unknownWorst.eligible, true)
+  assert.equal(unknownWorst.reasons.find((reason) => reason.ruleId === "soft.nsf")?.result, "unknown")
 })
 
 test("MIC-163 criteria or underwriting version change marks snapshots stale and reanalyze refreshes", async () => {

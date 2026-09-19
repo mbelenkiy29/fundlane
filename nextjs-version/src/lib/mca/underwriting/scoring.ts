@@ -288,6 +288,24 @@ function membership(actual: string, items: string[], contains: boolean): boolean
   return contains ? present : !present
 }
 
+function asNaics(value: string | undefined): string | undefined {
+  const digits = text(value)
+  return /^\d{2,6}$/.test(digits) ? digits : undefined
+}
+
+/** Digit-prefix NAICS match: `7132` matches `713210`. */
+export function naicsPrefixMatch(left?: string, right?: string): boolean {
+  const a = asNaics(left)
+  const b = asNaics(right)
+  if (!a || !b) return false
+  return a.startsWith(b) || b.startsWith(a)
+}
+
+function industryNaicsCodes(item: { name: string; naics?: string }, extra?: string): string[] {
+  const codes = [asNaics(item.naics), asNaics(item.name), asNaics(extra)].filter((code): code is string => Boolean(code))
+  return [...new Set(codes)]
+}
+
 async function normalizeIndustryValue(actor: DealActor, raw: string): Promise<{ name: string; naics?: string }> {
   const input = text(raw)
   if (!input) return { name: "" }
@@ -323,8 +341,10 @@ async function evaluateListRule(actor: DealActor, rule: EligibilityRule, actual:
   const dealIndustry = await normalizeIndustryValue(actor, actual.industry ?? actual.naics ?? "")
   const funderItems = await Promise.all(items.map((item) => normalizeIndustryValue(actor, item)))
   const names = new Set(funderItems.map((item) => item.name.toLowerCase()).filter(Boolean))
-  const codes = new Set(funderItems.map((item) => item.naics).filter((code): code is string => Boolean(code)))
-  const matched = names.has(dealIndustry.name.toLowerCase()) || Boolean(dealIndustry.naics && codes.has(dealIndustry.naics)) || Boolean(actual.naics && codes.has(actual.naics))
+  const dealCodes = industryNaicsCodes(dealIndustry, actual.naics)
+  const funderCodes = funderItems.flatMap((item) => industryNaicsCodes(item))
+  const codeMatched = dealCodes.some((deal) => funderCodes.some((code) => naicsPrefixMatch(deal, code)))
+  const matched = names.has(dealIndustry.name.toLowerCase()) || codeMatched
   const ok = contains ? matched : !matched
   return ok
     ? comparePass(rule, `Industry ${dealIndustry.name || actual.naics || "unknown"} ${contains ? "is allowed" : "is not restricted"}.`)
@@ -402,6 +422,30 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
         continue
       }
+      if (field === "average_daily_balance") {
+        reasons.push(inputs.adbUnknown || inputs.averageDailyBalance == null
+          ? compareUnknown(rule, "Average daily balance is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.averageDailyBalance, "Average daily balance", String(inputs.averageDailyBalance)))
+        continue
+      }
+      if (field === "requested_amount") {
+        reasons.push(inputs.requestedAmount == null
+          ? compareUnknown(rule, "Requested amount is unknown, so the funder's maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.requestedAmount, "Requested amount", String(inputs.requestedAmount)))
+        continue
+      }
+      if (field === "term") {
+        reasons.push(inputs.termMonths == null
+          ? compareUnknown(rule, "Term is unknown, so the funder's maximum cannot pass.")
+          : evaluateNumeric(rule, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
+        continue
+      }
+      if (field === "deposit_count") {
+        reasons.push(inputs.depositUnknown || inputs.depositCount == null
+          ? compareUnknown(rule, "Deposit count is unknown, so the funder's minimum cannot pass.")
+          : evaluateNumeric(rule, inputs.depositCount, "Deposit count", String(inputs.depositCount)))
+        continue
+      }
     }
   }
   return reasons
@@ -443,12 +487,12 @@ function softReasonsAndScore(inputs: ScoringInputs, rules: EligibilityRule[]): {
   }
 
   let nsf = 0
-  if (inputs.nsfUnknown || inputs.nsfCount == null) {
-    reasons.push({ ruleId: "soft.nsf", result: "unknown", detail: "NSF count is unknown, so NSF fit contributes 0." })
+  if (inputs.worstMonthNsf == null) {
+    reasons.push({ ruleId: "soft.nsf", result: "unknown", detail: "Worst-month NSF is unknown, so NSF fit contributes 0." })
   } else {
     const scale = maxNsf && maxNsf > 0 ? maxNsf : DEFAULT_NSF_SCALE
-    nsf = intScore(Math.max(0, scale - inputs.nsfCount), scale)
-    reasons.push({ ruleId: "soft.nsf", result: "pass", detail: `NSF count ${inputs.nsfCount} scores ${nsf} against maximum ${scale}.` })
+    nsf = intScore(Math.max(0, scale - inputs.worstMonthNsf), scale)
+    reasons.push({ ruleId: "soft.nsf", result: "pass", detail: `Worst-month NSF ${inputs.worstMonthNsf} scores ${nsf} against maximum ${scale}.` })
   }
 
   let positions = 0
