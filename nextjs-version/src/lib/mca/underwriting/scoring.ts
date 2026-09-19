@@ -627,7 +627,8 @@ async function loadAggregate(actor: DealActor, dealId: string): Promise<Underwri
   try {
     const row = await getDatabase().prepare<{
       deal_id: string; version: number; monthly_revenue: string; average_daily_balance: string
-      nsf_count: string; negative_days: string; position_count: number; stale: number | boolean; computed_at: string
+      nsf_count: string; negative_days: string; deposit_count: string; worst_month_nsf: string; warnings_json: string
+      position_count: number; stale: number | boolean; computed_at: string
     }>(`SELECT * FROM mca_underwriting_aggregates WHERE workspace_id = ? AND deal_id = ?`).get(actor.workspaceId, dealId)
     if (!row) return null
     const metric = (raw: string): MetricEvidence => parseJson<MetricEvidence>(raw, { value: null, unknown: true, confidence: 0 })
@@ -638,6 +639,9 @@ async function loadAggregate(actor: DealActor, dealId: string): Promise<Underwri
       averageDailyBalance: metric(row.average_daily_balance),
       nsfCount: metric(row.nsf_count),
       negativeDays: metric(row.negative_days),
+      depositCount: metric(row.deposit_count ?? '{"value":null,"unknown":true,"confidence":0}'),
+      worstMonthNsf: metric(row.worst_month_nsf ?? '{"value":null,"unknown":true,"confidence":0}'),
+      warnings: parseJson<string[]>(row.warnings_json ?? "[]", []),
       positionCount: Number(row.position_count),
       stale: Boolean(row.stale),
       computedAt: String(row.computed_at),

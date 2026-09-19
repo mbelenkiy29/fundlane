@@ -119,7 +119,7 @@ function extraction() {
     extractionCalls++
     const period = Buffer.from(input.bytes).toString().match(/PERIOD:(\d{4}-\d{2})/)?.[1] ?? periods[0]
     const metric = (value: number) => ({ value, unknown: false, confidence: 0.99 })
-    return { provider: "intake-fixture", period, accountKind: "checking", accountSuffix: "0123", deposits: metric(142000), depositCount: metric(50), averageDailyBalance: metric(30000), nsfCount: metric(0), negativeDays: metric(0), endingBalance: metric(35000), positions: [], warnings: [] }
+    return { provider: "intake-fixture", period, accountKind: "checking", accountSuffix: "0123", deposits: metric(142000), depositCount: metric(50), averageDailyBalance: metric(30000), nsfCount: metric(0), negativeDays: metric(0), endingBalance: metric(35000), nsfDates: [], negativeDates: [], positions: [], warnings: [] }
   } })
 }
 const attachmentOptions = {

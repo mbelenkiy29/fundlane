@@ -97,6 +97,8 @@ function extraction(input: {
     nsfCount: input.nsfCount ?? known(1, "1 NSF"),
     negativeDays: input.negativeDays ?? known(2, "2 negative days"),
     endingBalance: input.endingBalance ?? known(3_500, "Ending 3500"),
+    nsfDates: [],
+    negativeDates: [],
     positions: input.positions ?? [{ label: "Rapid Capital", estimatedPayment: 1_200, evidence: "ACH Rapid Capital 1200" }],
     warnings: [],
     provider: "fixture-corrections",

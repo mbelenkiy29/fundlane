@@ -8,9 +8,11 @@ import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { listDocuments, getDocumentContent } from "../documents/service"
 import { requestCorrelationId } from "../http"
-import type { ExistingPositionCandidate, MetricEvidence, StatementAccountKind, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
+import { STATEMENT_ACCOUNT_KINDS, type ExistingPositionCandidate, type MetricEvidence, type StatementAccountKind, type StatementMonthRecord, type UnderwritingAggregate } from "./contracts"
 import {
+  normalizeIsoDates,
   normalizeMetric,
+  normalizeWarnings,
   setStatementExtractionProviderForTests,
   statementExtractionProvider,
   type StatementExtraction,
@@ -86,7 +88,9 @@ function periodValue(value?: string): string {
 }
 
 function accountKind(value: string): StatementAccountKind {
-  return value === "checking" ? "checking" : "unsupported"
+  return (STATEMENT_ACCOUNT_KINDS as readonly string[]).includes(value)
+    ? value as StatementAccountKind
+    : "unsupported"
 }
 
 function fingerprintFor(documentIds: string[]): string {
@@ -138,6 +142,43 @@ function sumMetrics(months: StatementMonthRecord[], pick: (month: StatementMonth
   return { value: sum, unknown: false, confidence, text }
 }
 
+function worstMonthMetric(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
+  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
+  const byPeriod = new Map<string, StatementMonthRecord[]>()
+  for (const month of months) {
+    const group = byPeriod.get(month.period) ?? []
+    group.push(month)
+    byPeriod.set(month.period, group)
+  }
+  let worst: number | null = null
+  let confidence = 1
+  for (const group of byPeriod.values()) {
+    let sum = 0
+    for (const month of group) {
+      const metric = pick(month)
+      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
+      sum += metric.value
+      confidence = Math.min(confidence, metric.confidence)
+    }
+    worst = worst == null ? sum : Math.max(worst, sum)
+  }
+  return worst == null ? { ...UNKNOWN_METRIC, text } : { value: worst, unknown: false, confidence, text }
+}
+
+function collectWarnings(months: StatementMonthRecord[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const month of months) {
+    if (month.duplicateOfId) continue
+    for (const warning of month.warnings) {
+      if (seen.has(warning)) continue
+      seen.add(warning)
+      out.push(warning)
+    }
+  }
+  return out
+}
+
 function isDuplicateOf(canonical: StatementMonthRecord, candidate: StatementMonthRecord): boolean {
   if (canonical.period !== candidate.period) return false
   const left = accountSuffix(canonical.accountSuffix) ?? ""
@@ -175,6 +216,9 @@ function computeAggregate(dealId: string, months: StatementMonthRecord[], positi
     averageDailyBalance: averagePeriodTotals(unique, (month) => month.averageDailyBalance, "Average of unique checking months' ADB; accounts in the same period are summed first."),
     nsfCount: sumMetrics(unique, (month) => month.nsfCount, "Sum of NSF counts from unique checking statements."),
     negativeDays: sumMetrics(unique, (month) => month.negativeDays, "Sum of negative days from unique checking statements."),
+    depositCount: averagePeriodTotals(unique, (month) => month.depositCount, "Average of unique checking months' deposit counts; accounts in the same period are summed first."),
+    worstMonthNsf: worstMonthMetric(unique, (month) => month.nsfCount, "Worst-month NSF count across unique checking statements."),
+    warnings: collectWarnings(months),
     positionCount: positions.length,
     stale: false,
     computedAt,
@@ -201,7 +245,10 @@ function monthFromExtraction(input: {
     averageDailyBalance: normalizeMetric(input.extraction.averageDailyBalance),
     nsfCount: normalizeMetric(input.extraction.nsfCount),
     negativeDays: normalizeMetric(input.extraction.negativeDays),
+    nsfDates: normalizeIsoDates(input.extraction.nsfDates),
+    negativeDates: normalizeIsoDates(input.extraction.negativeDates),
     endingBalance: normalizeMetric(input.extraction.endingBalance),
+    warnings: normalizeWarnings(input.extraction.warnings),
     extractionVersion: input.extractionVersion,
     corrected: false,
     originalExtraction: JSON.stringify(input.extraction),

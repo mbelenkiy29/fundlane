@@ -69,7 +69,10 @@ function extraction(input: {
   nsfCount?: MetricEvidence
   negativeDays?: MetricEvidence
   endingBalance?: MetricEvidence
+  nsfDates?: string[]
+  negativeDates?: string[]
   positions?: StatementExtraction["positions"]
+  warnings?: string[]
 }): StatementExtraction {
   return {
     accountKind: input.accountKind ?? "checking",
@@ -81,8 +84,10 @@ function extraction(input: {
     nsfCount: input.nsfCount ?? known(1, "1 NSF"),
     negativeDays: input.negativeDays ?? known(2, "2 negative days"),
     endingBalance: input.endingBalance ?? known(3_500, "Ending 3500"),
+    nsfDates: input.nsfDates ?? [],
+    negativeDates: input.negativeDates ?? [],
     positions: input.positions ?? [{ label: "Rapid Capital", estimatedPayment: 1_200, evidence: "ACH Rapid Capital 1200" }],
-    warnings: [],
+    warnings: input.warnings ?? [],
     provider: "fixture-statements",
     requestId: "statement-fixture",
   }
@@ -190,7 +195,7 @@ test("MIC-179 uncertain extraction stays unknown in the aggregate and is never p
   assert.equal(result.aggregate.negativeDays.value, null)
 })
 
-test("MIC-179 savings is classified unsupported and excluded from revenue", async () => {
+test("MIC-179 savings keeps kind savings and is excluded from checking revenue", async () => {
   const deal = (await createDeal(actor(), { idempotencyKey: "savings-deal", legalName: "Mixed Accounts LLC" })).deal
   await uploadStatement(actor(), deal.id, "checking-aug.pdf", "savings-checking", extraction({
     accountKind: "checking", accountSuffix: "1111", deposits: known(8_000, "Checking 8000"), nsfCount: known(0, "0 NSF"),
@@ -204,9 +209,50 @@ test("MIC-179 savings is classified unsupported and excluded from revenue", asyn
   const checking = result.months.find((month) => month.accountKind === "checking")
   assert.ok(savings)
   assert.ok(checking)
-  assert.equal(savings.accountKind, "unsupported")
+  assert.equal(savings.accountKind, "savings")
   assert.equal(result.aggregate.monthlyRevenue.value, 8_000)
   assert.equal(result.aggregate.monthlyRevenue.unknown, false)
+})
+
+test("MIC-179 credit_card and loan kinds are persisted without collapsing to unsupported", async () => {
+  const deal = (await createDeal(actor(), { idempotencyKey: "kinds-deal", legalName: "Mixed Kinds LLC" })).deal
+  await uploadStatement(actor(), deal.id, "checking-aug.pdf", "kinds-checking", extraction({
+    accountKind: "checking", accountSuffix: "1111", deposits: known(9_000, "Checking 9000"), nsfCount: known(0, "0 NSF"), positions: [],
+  }))
+  await uploadStatement(actor(), deal.id, "card-aug.pdf", "kinds-card", extraction({
+    accountKind: "credit_card", accountSuffix: "3333", deposits: known(1_000, "Card 1000"), nsfCount: known(0, "0 NSF"), positions: [],
+  }))
+  await uploadStatement(actor(), deal.id, "loan-aug.pdf", "kinds-loan", extraction({
+    accountKind: "loan", accountSuffix: "4444", deposits: known(2_000, "Loan 2000"), nsfCount: known(0, "0 NSF"), positions: [],
+  }))
+  const result = await analyzeDealStatements(actor(), deal.id)
+  assert.equal(result.months.find((month) => month.accountSuffix === "3333")?.accountKind, "credit_card")
+  assert.equal(result.months.find((month) => month.accountSuffix === "4444")?.accountKind, "loan")
+  assert.equal(result.aggregate.monthlyRevenue.value, 9_000)
+})
+
+test("statement extraction persists NSF and negative dates without changing deposit totals", async () => {
+  const deal = (await createDeal(actor(), { idempotencyKey: "dates-deal", legalName: "Dated NSF LLC" })).deal
+  await uploadStatement(actor(), deal.id, "dated-aug.pdf", "dates-a", extraction({
+    deposits: known(12_500, "Total deposits 12500"),
+    nsfCount: known(2, "2 NSF"),
+    negativeDays: known(3, "3 negative days"),
+    nsfDates: ["2026-08-04", "2026-08-19"],
+    negativeDates: ["2026-08-05", "2026-08-06", "2026-08-20"],
+    warnings: ["transfer: Wire from savings 2500", "mca_credit: Rapid Capital advance 8000"],
+    positions: [],
+  }))
+  const result = await analyzeDealStatements(actor(), deal.id)
+  const month = result.months[0]
+  assert.ok(month)
+  assert.deepEqual(month.nsfDates, ["2026-08-04", "2026-08-19"])
+  assert.deepEqual(month.negativeDates, ["2026-08-05", "2026-08-06", "2026-08-20"])
+  assert.equal(month.deposits.value, 12_500)
+  assert.equal(result.aggregate.monthlyRevenue.value, 12_500)
+  assert.ok(result.aggregate.warnings.some((warning) => warning.startsWith("transfer:")))
+  assert.ok(result.aggregate.warnings.some((warning) => warning.startsWith("mca_credit:")))
+  assert.equal(result.aggregate.depositCount.value, 12)
+  assert.equal(result.aggregate.depositCount.unknown, false)
 })
 
 test("MIC-179 unique checking accounts in the same period are summed before the monthly average", async () => {

@@ -2,7 +2,7 @@ import "server-only"
 
 import { getDatabase, nowIso, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
 import type { ExistingPositionCandidate, MetricEvidence, StatementAccountKind, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
-import { normalizeMetric } from "./statement-extraction"
+import { normalizeIsoDates, normalizeMetric, normalizeWarnings } from "./statement-extraction"
 
 export interface StatementMonthRow extends StatementMonthRecord {
   workspaceId: string
@@ -30,7 +30,8 @@ export interface UnderwritingAggregateRow extends UnderwritingAggregate {
 type MonthSqlRow = {
   id: string; workspace_id: string; deal_id: string; document_id: string; account_kind: string; period: string
   account_suffix: string | null; deposits: string; deposit_count: string; average_daily_balance: string
-  nsf_count: string; negative_days: string; ending_balance: string; duplicate_of_id: string | null
+  nsf_count: string; negative_days: string; nsf_dates: string; negative_dates: string; ending_balance: string
+  duplicate_of_id: string | null
   extraction_version: number; corrected: number; correction_reason: string | null; corrected_by_user_id: string | null
   corrected_at: string | null; original_extraction: string; created_at: string; updated_at: string
 }
@@ -44,7 +45,8 @@ type PositionSqlRow = {
 
 type AggregateSqlRow = {
   workspace_id: string; deal_id: string; version: number; monthly_revenue: string; average_daily_balance: string
-  nsf_count: string; negative_days: string; position_count: number; stale: number; source_fingerprint: string; computed_at: string
+  nsf_count: string; negative_days: string; deposit_count: string; worst_month_nsf: string; warnings_json: string
+  position_count: number; stale: number; source_fingerprint: string; computed_at: string
 }
 
 function db() { return getDatabase() }
@@ -68,6 +70,7 @@ function metricFromJson(value: string): MetricEvidence {
 }
 
 function fromMonthRow(row: MonthSqlRow): StatementMonthRow {
+  const original = parseJson<{ warnings?: string[] }>(row.original_extraction, {})
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -81,7 +84,10 @@ function fromMonthRow(row: MonthSqlRow): StatementMonthRow {
     averageDailyBalance: metricFromJson(row.average_daily_balance),
     nsfCount: metricFromJson(row.nsf_count),
     negativeDays: metricFromJson(row.negative_days),
+    nsfDates: normalizeIsoDates(parseJson<string[]>(row.nsf_dates, [])),
+    negativeDates: normalizeIsoDates(parseJson<string[]>(row.negative_dates, [])),
     endingBalance: metricFromJson(row.ending_balance),
+    warnings: normalizeWarnings(original.warnings),
     ...(row.duplicate_of_id ? { duplicateOfId: row.duplicate_of_id } : {}),
     extractionVersion: row.extraction_version,
     corrected: Boolean(row.corrected),
@@ -122,6 +128,9 @@ function fromAggregateRow(row: AggregateSqlRow): UnderwritingAggregateRow {
     averageDailyBalance: metricFromJson(row.average_daily_balance),
     nsfCount: metricFromJson(row.nsf_count),
     negativeDays: metricFromJson(row.negative_days),
+    depositCount: metricFromJson(row.deposit_count),
+    worstMonthNsf: metricFromJson(row.worst_month_nsf),
+    warnings: normalizeWarnings(parseJson<string[]>(row.warnings_json, [])),
     positionCount: row.position_count,
     stale: Boolean(row.stale),
     sourceFingerprint: row.source_fingerprint,
@@ -189,9 +198,9 @@ export async function persistStatementAnalysis(input: {
 
     const monthSql = database.prepare(`INSERT INTO mca_statement_months (
       id, workspace_id, deal_id, document_id, account_kind, period, account_suffix, deposits, deposit_count,
-      average_daily_balance, nsf_count, negative_days, ending_balance, duplicate_of_id, extraction_version,
+      average_daily_balance, nsf_count, negative_days, nsf_dates, negative_dates, ending_balance, duplicate_of_id, extraction_version,
       corrected, correction_reason, corrected_by_user_id, corrected_at, original_extraction, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(workspace_id, document_id) DO UPDATE SET
       account_kind = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.account_kind ELSE excluded.account_kind END,
       period = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.period ELSE excluded.period END,
@@ -201,6 +210,8 @@ export async function persistStatementAnalysis(input: {
       average_daily_balance = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.average_daily_balance ELSE excluded.average_daily_balance END,
       nsf_count = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.nsf_count ELSE excluded.nsf_count END,
       negative_days = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.negative_days ELSE excluded.negative_days END,
+      nsf_dates = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.nsf_dates ELSE excluded.nsf_dates END,
+      negative_dates = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.negative_dates ELSE excluded.negative_dates END,
       ending_balance = CASE WHEN ${replace} = 0 AND mca_statement_months.corrected = 1 THEN mca_statement_months.ending_balance ELSE excluded.ending_balance END,
       duplicate_of_id = excluded.duplicate_of_id, extraction_version = excluded.extraction_version,
       original_extraction = CASE WHEN ${replace} = 1 THEN excluded.original_extraction WHEN mca_statement_months.original_extraction IS NOT NULL AND mca_statement_months.original_extraction != '{}' THEN mca_statement_months.original_extraction ELSE excluded.original_extraction END,
@@ -214,7 +225,8 @@ export async function persistStatementAnalysis(input: {
       await monthSql.run(
         month.id, input.workspaceId, input.dealId, month.documentId, month.accountKind, month.period, month.accountSuffix ?? null,
         JSON.stringify(month.deposits), JSON.stringify(month.depositCount), JSON.stringify(month.averageDailyBalance),
-        JSON.stringify(month.nsfCount), JSON.stringify(month.negativeDays), JSON.stringify(month.endingBalance),
+        JSON.stringify(month.nsfCount), JSON.stringify(month.negativeDays),
+        JSON.stringify(month.nsfDates), JSON.stringify(month.negativeDates), JSON.stringify(month.endingBalance),
         month.duplicateOfId ?? null, month.extractionVersion, month.corrected ? 1 : 0, month.correctionReason ?? null,
         month.correctedByUserId ?? null, month.correctedAt ?? null, month.originalExtraction, month.createdAt, month.updatedAt,
       )
@@ -243,14 +255,18 @@ export async function persistStatementAnalysis(input: {
     }
 
     await database.prepare(`INSERT INTO mca_underwriting_aggregates (
-      workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days,
+      deposit_count, worst_month_nsf, warnings_json, position_count, stale, source_fingerprint, computed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(workspace_id, deal_id) DO UPDATE SET
       version = excluded.version, monthly_revenue = excluded.monthly_revenue, average_daily_balance = excluded.average_daily_balance,
-      nsf_count = excluded.nsf_count, negative_days = excluded.negative_days, position_count = excluded.position_count,
+      nsf_count = excluded.nsf_count, negative_days = excluded.negative_days,
+      deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, warnings_json = excluded.warnings_json,
+      position_count = excluded.position_count,
       stale = excluded.stale, source_fingerprint = excluded.source_fingerprint, computed_at = excluded.computed_at`).run(
       input.workspaceId, input.dealId, input.aggregate.version, JSON.stringify(input.aggregate.monthlyRevenue),
       JSON.stringify(input.aggregate.averageDailyBalance), JSON.stringify(input.aggregate.nsfCount), JSON.stringify(input.aggregate.negativeDays),
+      JSON.stringify(input.aggregate.depositCount), JSON.stringify(input.aggregate.worstMonthNsf), JSON.stringify(input.aggregate.warnings),
       input.aggregate.positionCount, input.aggregate.stale ? 1 : 0, input.aggregate.sourceFingerprint, input.aggregate.computedAt,
     )
 
@@ -359,6 +375,43 @@ function sumMetrics(months: StatementMonthRecord[], pick: (month: StatementMonth
   return { value: sum, unknown: false, confidence, text }
 }
 
+function worstMonthMetric(months: StatementMonthRecord[], pick: (month: StatementMonthRecord) => MetricEvidence, text: string): MetricEvidence {
+  if (months.length === 0) return { ...UNKNOWN_METRIC, text }
+  const byPeriod = new Map<string, StatementMonthRecord[]>()
+  for (const month of months) {
+    const group = byPeriod.get(month.period) ?? []
+    group.push(month)
+    byPeriod.set(month.period, group)
+  }
+  let worst: number | null = null
+  let confidence = 1
+  for (const group of byPeriod.values()) {
+    let sum = 0
+    for (const month of group) {
+      const metric = pick(month)
+      if (metric.unknown || metric.value == null || !Number.isFinite(metric.value)) return { ...UNKNOWN_METRIC, text }
+      sum += metric.value
+      confidence = Math.min(confidence, metric.confidence)
+    }
+    worst = worst == null ? sum : Math.max(worst, sum)
+  }
+  return worst == null ? { ...UNKNOWN_METRIC, text } : { value: worst, unknown: false, confidence, text }
+}
+
+function collectWarnings(months: StatementMonthRecord[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const month of months) {
+    if (month.duplicateOfId) continue
+    for (const warning of month.warnings) {
+      if (seen.has(warning)) continue
+      seen.add(warning)
+      out.push(warning)
+    }
+  }
+  return out
+}
+
 export function computeUnderwritingAggregateFromMonths(
   dealId: string,
   months: StatementMonthRecord[],
@@ -375,6 +428,9 @@ export function computeUnderwritingAggregateFromMonths(
     averageDailyBalance: averagePeriodTotals(unique, (month) => month.averageDailyBalance, "Average of unique checking months' ADB; accounts in the same period are summed first."),
     nsfCount: sumMetrics(unique, (month) => month.nsfCount, "Sum of NSF counts from unique checking statements."),
     negativeDays: sumMetrics(unique, (month) => month.negativeDays, "Sum of negative days from unique checking statements."),
+    depositCount: averagePeriodTotals(unique, (month) => month.depositCount, "Average of unique checking months' deposit counts; accounts in the same period are summed first."),
+    worstMonthNsf: worstMonthMetric(unique, (month) => month.nsfCount, "Worst-month NSF count across unique checking statements."),
+    warnings: collectWarnings(months),
     positionCount: positions.length,
     stale,
     computedAt,
@@ -387,14 +443,19 @@ function metricsDiffer(left: MetricEvidence, right: MetricEvidence): boolean {
 
 async function writeAggregateRow(row: UnderwritingAggregateRow): Promise<void> {
   await db().prepare(`INSERT INTO mca_underwriting_aggregates (
-    workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days, position_count, stale, source_fingerprint, computed_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    workspace_id, deal_id, version, monthly_revenue, average_daily_balance, nsf_count, negative_days,
+    deposit_count, worst_month_nsf, warnings_json, position_count, stale, source_fingerprint, computed_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(workspace_id, deal_id) DO UPDATE SET
     version = excluded.version, monthly_revenue = excluded.monthly_revenue, average_daily_balance = excluded.average_daily_balance,
-    nsf_count = excluded.nsf_count, negative_days = excluded.negative_days, position_count = excluded.position_count,
+    nsf_count = excluded.nsf_count, negative_days = excluded.negative_days,
+    deposit_count = excluded.deposit_count, worst_month_nsf = excluded.worst_month_nsf, warnings_json = excluded.warnings_json,
+    position_count = excluded.position_count,
     stale = excluded.stale, source_fingerprint = excluded.source_fingerprint, computed_at = excluded.computed_at`).run(
     row.workspaceId, row.dealId, row.version, JSON.stringify(row.monthlyRevenue), JSON.stringify(row.averageDailyBalance),
-    JSON.stringify(row.nsfCount), JSON.stringify(row.negativeDays), row.positionCount, row.stale ? 1 : 0, row.sourceFingerprint, row.computedAt,
+    JSON.stringify(row.nsfCount), JSON.stringify(row.negativeDays),
+    JSON.stringify(row.depositCount), JSON.stringify(row.worstMonthNsf), JSON.stringify(row.warnings),
+    row.positionCount, row.stale ? 1 : 0, row.sourceFingerprint, row.computedAt,
   )
 }
 
@@ -454,7 +515,10 @@ async function reconcileReviewedAggregate(
     && !metricsDiffer(recomputed.averageDailyBalance, persisted.aggregate.averageDailyBalance)
     && !metricsDiffer(recomputed.nsfCount, persisted.aggregate.nsfCount)
     && !metricsDiffer(recomputed.negativeDays, persisted.aggregate.negativeDays)
+    && !metricsDiffer(recomputed.depositCount, persisted.aggregate.depositCount)
+    && !metricsDiffer(recomputed.worstMonthNsf, persisted.aggregate.worstMonthNsf)
     && recomputed.positionCount === persisted.aggregate.positionCount
+    && JSON.stringify(recomputed.warnings) === JSON.stringify(persisted.aggregate.warnings)
   ) {
     return persisted
   }
@@ -464,6 +528,9 @@ async function reconcileReviewedAggregate(
     averageDailyBalance: recomputed.averageDailyBalance,
     nsfCount: recomputed.nsfCount,
     negativeDays: recomputed.negativeDays,
+    depositCount: recomputed.depositCount,
+    worstMonthNsf: recomputed.worstMonthNsf,
+    warnings: recomputed.warnings,
     positionCount: recomputed.positionCount,
     stale: true,
     computedAt: nowIso(),
