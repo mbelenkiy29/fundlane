@@ -1,7 +1,7 @@
 import "server-only"
 
 import { newId } from "../db"
-import type { JobState, SubmissionJob } from "./contracts"
+import type { AttemptState, JobState, SubmissionJob } from "./contracts"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
 import {
@@ -18,6 +18,10 @@ import {
 function clip(value: string | undefined, max = 2_000): string | undefined {
   if (!value) return undefined
   return value.length > max ? value.slice(0, max) : value
+}
+
+function isCompletedAttempt(state: AttemptState): boolean {
+  return state === "sent" || state === "failed" || state === "skipped"
 }
 
 async function refreshCache(job: SubmissionJob): Promise<void> {
@@ -39,25 +43,27 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  if (existing) {
+  if (existing && isCompletedAttempt(existing.state)) {
     const current = await findJobById(job.workspaceId, job.id)
     await markOutboxProcessed(job.id)
     return current ?? job
   }
 
-  await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
-  const reserved = await insertAttempt({
-    workspaceId: job.workspaceId,
-    jobId: job.id,
-    attemptKey: job.attemptKey,
-    transport: job.routeKind,
-    state: "sending",
-    correlationId: newId(),
-  })
-  if (!reserved.created) {
-    const current = await findJobById(job.workspaceId, job.id)
-    await markOutboxProcessed(job.id)
-    return current ?? job
+  if (!existing) {
+    await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
+    const reserved = await insertAttempt({
+      workspaceId: job.workspaceId,
+      jobId: job.id,
+      attemptKey: job.attemptKey,
+      transport: job.routeKind,
+      state: "sending",
+      correlationId: newId(),
+    })
+    if (!reserved.created && isCompletedAttempt(reserved.attempt.state)) {
+      const current = await findJobById(job.workspaceId, job.id)
+      await markOutboxProcessed(job.id)
+      return current ?? job
+    }
   }
 
   try {
