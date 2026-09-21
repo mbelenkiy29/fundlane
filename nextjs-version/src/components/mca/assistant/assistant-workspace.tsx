@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { AssistantChat, type AssistantDeal } from "./chatkit-session"
 import { DealContextBar, searchDealEntities } from "./deal-context-bar"
 import { NativeChat } from "./native-chat"
+import { ChatMessages } from "./chat-messages"
 import { useAssistantSession } from "./assistant-panel"
 import { threadFromSearch, threadHref } from "@/lib/mca/assistant/chatkit-ui"
 
@@ -15,6 +16,7 @@ export function AssistantWorkspace() {
   const [initialThread] = useState(() => threadFromSearch(search.toString()))
   const [deal, setDeal] = useState<AssistantDeal>(null)
   const [includedDealId, setIncludedDealId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<{ channel: "sms" | "email"; dealId: string; body: string } | null>(null)
   const [chatAttempt, setChatAttempt] = useState(0)
   useEffect(() => {
     session?.requestChatkit()
@@ -47,6 +49,7 @@ export function AssistantWorkspace() {
           showIncludeToggle={false}
           initialThread={initialThread}
           onThreadChange={onThreadChange}
+          onDraft={setDraft}
         />
       ) : !session.domainKey ? (
         <p className="p-4 text-sm" role="status">
@@ -73,6 +76,9 @@ export function AssistantWorkspace() {
         <p className="p-4 text-sm" role="status">
           Loading assistant…
         </p>
+      )}
+      {includedDealId && deal?.id === includedDealId && (
+        <ChatMessages dealId={deal.id} surface="page" draft={draft} />
       )}
     </div>
   )

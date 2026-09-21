@@ -19,6 +19,15 @@ export type NativeChatEvent =
   | { type: "delta"; text: string }
   | { type: "complete"; threadId: string; itemId: string }
   | { type: "error"; code: string; message: string }
+  | {
+      type: "draft"
+      channel: "sms" | "email"
+      dealId: string
+      body: string
+      merchantName?: string
+      recipient?: string | null
+      note?: string
+    }
 
 /** Reads both legacy ChatKit text blocks and the application-owned message format. */
 export function messageText(item: Record<string, unknown>): string {

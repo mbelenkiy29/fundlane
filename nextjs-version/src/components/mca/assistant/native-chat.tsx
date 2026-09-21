@@ -37,6 +37,7 @@ export function NativeChat({
   showIncludeToggle = true,
   initialThread = null,
   onThreadChange,
+  onDraft,
 }: {
   deal: AssistantDeal
   surface?: ChatKitSurface
@@ -45,6 +46,7 @@ export function NativeChat({
   showIncludeToggle?: boolean
   initialThread?: string | null
   onThreadChange?: (threadId: string | null) => void
+  onDraft?: (draft: { channel: "sms" | "email"; dealId: string; body: string }) => void
 }) {
   const [threads, setThreads] = useState<Item[]>([])
   const [threadId, setThreadId] = useState<string | null>(initialThread)
@@ -186,6 +188,8 @@ export function NativeChat({
           setItems((old) => [...old.filter((item) => item.id !== replyId), { id: replyId, type: "assistant_message", text: "" }])
         } else if (event.type === "delta")
           setItems((old) => old.map((item) => (item.id === replyId ? { ...item, text: messageText(item) + event.text } : item)))
+        else if (event.type === "draft")
+          onDraft?.({ channel: event.channel, dealId: event.dealId, body: event.body })
         else if (event.type === "complete") complete = true
         else if (event.type === "error") throw new Error(event.message)
       }

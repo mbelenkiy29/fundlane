@@ -3,7 +3,7 @@ import type { ChatKitOptions, StartScreenPrompt, ThemeOption } from "@openai/cha
 export type ChatKitSurface = "page" | "drawer"
 
 export const CHATKIT_DISCLAIMER =
-  "Reads deals and underwriting. Does not send messages or change records."
+  "Reads deals and underwriting. Drafts merchant messages for your review; nothing is sent until you approve it in the messaging panel."
 
 export const CHATKIT_START_PROMPTS: StartScreenPrompt[] = [
   { label: "Summarize my pipeline", prompt: "Summarize my current pipeline by status.", icon: "analytics" },
