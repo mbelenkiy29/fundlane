@@ -122,6 +122,7 @@ export async function ingestProviderDelivery(input: {
       schemaVersion: 1,
       provider: input.provider,
       eventId: normalized.eventId,
+      answers: normalized.answers,
       application: priorRecord?.dealId ? { ...application, assignments: priorRecord.application.assignments } : application,
       sourceReference: normalized.sourceReference,
       initialStatus: integration.initialStatus,

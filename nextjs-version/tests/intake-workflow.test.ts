@@ -250,7 +250,7 @@ test("visibility, explicit retries, inactive reps, and paused integration author
   await exec("UPDATE mca_background_jobs SET state='failed' WHERE id=?",job.id)
   assert.equal((await intakeProgress(ids.workspace,result.intakeId))?.state,"paused")
   await exec("UPDATE memberships SET status='deactivated' WHERE id=?",ids.repAMember)
-  const d=await configureIntegration(adminContext,{ provider:"custom",displayName:"Legacy unassigned",formId:newId() })
+  const d=await configureIntegration(adminContext,{ provider:"custom",displayName:"Legacy unassigned",formId:newId(),automaticProcessing:false })
   const unassigned=await deliver(d,"no-rep",false)
   assert.equal((await getDeal(adminActor,unassigned.dealId!)).assignments.length,0)
   assert.ok((await findIntake(ids.workspace,unassigned.intakeId))?.warnings.some(w=>w.startsWith("Assignment needed:")))
@@ -286,7 +286,7 @@ test("expired private credentials and quarantined files never produce ready matc
 
 test("existing connections keep manual defaults; new automation requires a fallback and preserves historical deals", async () => {
   await assert.rejects(()=>configureIntegration(adminContext,{provider:"custom",displayName:"No fallback",formId:newId(),automaticProcessing:true}),(error:{code:string})=>error.code==="assignment_required")
-  const c=await configureIntegration(adminContext,{provider:"custom",displayName:"Existing form",formId:newId()})
+  const c=await configureIntegration(adminContext,{provider:"custom",displayName:"Existing form",formId:newId(),automaticProcessing:false})
   assert.equal(c.status.automaticProcessing,false)
   const old=await deliver(c,"historical")
   await configureIntegration(adminContext,{id:c.status.id,provider:"custom",displayName:c.status.displayName,formId:c.status.binding!,automaticProcessing:true,assignmentPool:[ids.repAMember]})
@@ -294,4 +294,95 @@ test("existing connections keep manual defaults; new automation requires a fallb
   assert.equal(await intakeProgress(ids.workspace,old.intakeId),undefined)
   const generic=await ingestApplication(adminActor,{schemaVersion:1,provider:"custom",eventId:"generic-retry",application:{legalName:"Generic"}})
   assert.equal((await ingestApplication(adminActor,{schemaVersion:1,provider:"custom",eventId:"generic-retry",application:{legalName:"Generic"}})).dealId,generic.dealId)
+})
+
+
+test("native applications bind automation, encrypt original answers, and generate one unsigned application", async () => {
+  const { brokerIntakeLink, submitNativeApply, uploadNativeApplyDocument } = await import("../src/lib/mca/intake/native-apply")
+  const { listDocuments } = await import("../src/lib/mca/documents/service")
+  const link = await brokerIntakeLink(adminActor, "https://mca.example.test", ids.repAMember)
+  const token = new URL(link.url).pathname.split("/").pop()!
+  const body = { legalName: "Native capture merchant", requestedAmount: 40000, owners: [{ firstName: "Native", identityLast4: "4321" }] }
+  const result = await submitNativeApply(token, body)
+  const foreign = await ingestApplication(adminActor, { schemaVersion: 1, provider: "custom", eventId: "native-upload-denied", application: { legalName: "Other source" } })
+  await assert.rejects(() => uploadNativeApplyDocument({ token, dealId: foreign.dealId!, category: "statement", filename: "statement.pdf", mimeType: "application/pdf", bytes: identityPdf, idempotencyKey: "denied" }), (error: { code: string }) => error.code === "intake_not_found")
+  const record = (await findIntake(ids.workspace, result.intakeId))!
+  assert.ok(record.integrationId)
+  assert.equal(record.answers?.find(answer => answer.key === "legalName")?.value, "Native capture merchant")
+  assert.ok(!record.answers?.some(answer => answer.key === "assignments"))
+  const row = await getDatabase().prepare<{ answers_cipher: string }>("SELECT answers_cipher FROM intake_events WHERE id=?").get(result.intakeId)
+  assert.ok(row?.answers_cipher && !row.answers_cipher.includes("Native capture merchant"))
+  await scheduleIntakeProcessing(100); await drain()
+  const generated = (await listDocuments(adminActor, result.dealId)).filter(document => document.category === "api_application")
+  assert.equal(generated.length, 1)
+  const generation = await getDatabase().prepare<{ contact_mode: string; signed_on_behalf: number }>("SELECT contact_mode,signed_on_behalf FROM mca_pdf_generations WHERE document_id=?").get(generated[0].id)
+  assert.equal(generation?.contact_mode, "real")
+  assert.equal(generation?.signed_on_behalf, 0)
+  await retryIntakeProcessing(adminActor, result.intakeId); await drain()
+  assert.equal((await listDocuments(adminActor, result.dealId)).filter(document => document.category === "api_application").length, 1)
+  assert.equal((await submitNativeApply(token, body)).dealId, result.dealId)
+})
+
+
+test("new Fillout and DocuSeal connections automatically prepare application PDFs", async () => {
+  const { createHmac } = await import("node:crypto")
+  const { listDocuments } = await import("../src/lib/mca/documents/service")
+  for (const provider of ["fillout", "docuseal"] as const) {
+    const c = await configureIntegration(adminContext, { provider, displayName: `${provider} defaults`, formId: "new-form", templateId: "new-template", assignmentPool: [ids.repAMember] })
+    assert.equal(c.status.automaticProcessing, true)
+    const rawBody = JSON.stringify(provider === "fillout"
+      ? { formId: "new-form", submissionId: "new-event", questions: [{ id: "business", name: "legalName", value: "Fillout merchant" }] }
+      : { event_type: "submission.completed", data: { id: "new-event", template_id: "new-template", submitters: [{ values: [{ field: "legalName", value: "DocuSeal merchant" }] }] } })
+    const timestamp = Math.floor(Date.now() / 1000)
+    const headers: Record<string, string> = provider === "fillout" ? { authorization: `Bearer ${c.admissionSecret}` } : { "x-docuseal-signature": `${timestamp}.${createHmac("sha256", c.admissionSecret!).update(`${timestamp}.${rawBody}`).digest("hex")}` }
+    const result = await ingestProviderDelivery({ provider, integrationId: c.status.id, rawBody, request: new Request("https://mca.example.test/hook", { method: "POST", headers, body: rawBody }) })
+    await scheduleIntakeProcessing(100); await drain()
+    assert.equal((await listDocuments(adminActor, result.dealId!)).filter(document => document.category === "api_application").length, 1)
+    assert.equal((await intakeProgress(ids.workspace, result.intakeId))?.stages.documents.state, "complete")
+  }
+})
+
+test("connected application flows from notification and real matches through preview to one explicit portal handoff", async () => {
+  const { getApplicationReview } = await import("../src/lib/mca/intake/review")
+  const { listApplicationNotifications } = await import("../src/lib/mca/intake/notifications")
+  const { prepareApplicationSubmission, sendApplicationSubmission } = await import("../src/lib/mca/intake/submission-review")
+  const { listJobsForDeal } = await import("../src/lib/mca/submissions/repository")
+  extraction()
+  const funderId = await seedFunder(ids.workspace, "connected-portal-funder", fitRules())
+  await exec("UPDATE mca_funders SET routes=? WHERE id=?", JSON.stringify([{
+    id: newId(), kind: "manual_portal", label: "Controlled portal", destination: "https://portal.example.test/submit", documentExceptions: [], active: true,
+  }]), funderId)
+  const c = await connection("custom")
+  const received = await deliver(c, "connected-full-review")
+  const rep = repActor(ids.repAMember, ids.repAUser)
+  const notices = await listApplicationNotifications(rep)
+  const notice = notices.notifications.find(item => item.intakeId === received.intakeId)
+  assert.ok(notice, "the assigned rep receives a durable application notification")
+  assert.equal(notice.readAt, null)
+  await seedReadyIdentity(received.dealId!)
+  await scheduleIntakeProcessing(100)
+  await drain()
+  const review = await getApplicationReview(rep, notice.intakeId)
+  assert.equal(review.progress?.state, "ready_for_review", JSON.stringify(review.progress))
+  assert.equal(review.canPrepare, true, JSON.stringify(review.summary))
+  assert.equal(review.originalAnswersAvailable, true)
+  assert.equal(review.answers.find(answer => answer.key === "legalName")?.value, "Bayside Diner")
+  assert.equal(review.summary.statementMonthlyRevenue, 142000)
+  assert.deepEqual(review.summary.missing, [])
+  assert.ok(review.candidates.some(candidate => candidate.id === funderId && candidate.eligible && ["A", "B", "C"].includes(candidate.grade)))
+  assert.equal(review.documents.filter(document => document.category === "statement").length, periods.length)
+  assert.equal((await getCompleteness(rep, received.dealId!))?.ready, true)
+  assert.equal((await listJobsForDeal(ids.workspace, received.dealId!)).length, 0)
+  const preview = await prepareApplicationSubmission(rep, received.intakeId, [funderId])
+  assert.equal(preview.destinations.length, 1)
+  assert.equal(preview.destinations[0].method, "manual_portal")
+  assert.equal(preview.destinations[0].destination, "https://portal.example.test/submit")
+  assert.ok(preview.destinations[0].documents.length >= periods.length + 1)
+  assert.equal((await listJobsForDeal(ids.workspace, received.dealId!)).length, 0, "preview cannot create delivery jobs")
+  const sent = await sendApplicationSubmission(rep, received.intakeId, preview.id)
+  assert.equal(sent.jobs.length, 1)
+  assert.equal(sent.jobs[0].state, "pending_portal")
+  const repeated = await sendApplicationSubmission(rep, received.intakeId, preview.id)
+  assert.deepEqual(repeated.jobs, sent.jobs)
+  assert.equal((await listJobsForDeal(ids.workspace, received.dealId!)).length, 1, "repeated Send cannot duplicate a handoff")
 })

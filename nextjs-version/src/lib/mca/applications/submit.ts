@@ -1,5 +1,6 @@
 import "server-only"
 
+import { captureIntakeAnswers } from "../intake/providers"
 import { actorForDeals } from "../deals/service"
 import type { AuthContext } from "../types"
 import { AppError } from "../errors"
@@ -63,6 +64,7 @@ export async function submitFundlaneApplication(token: string): Promise<Applicat
       provider: "fundlane",
       eventId,
       application: answers,
+      answers: captureIntakeAnswers({ ...session.answers, contactEmail: session.contactEmail }),
       sourceReference: `fundlane:invitation:${row.id}`,
       initialStatus: integration.initialStatus,
     }, undefined, integration.id)

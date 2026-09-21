@@ -38,7 +38,7 @@ type PortalTask = {
   reason?: string
   portalUrl: string
   assignedOperator: { userId: string | null; name: string }
-  packageDocuments: Array<{ documentId: string; filename: string; category: string; checksum: string }>
+  packageDocuments: Array<{ documentId: string; filename: string; category: string; checksum: string; downloadUrl?: string }>
   attempts: AttemptLog[]
   externalRef?: string
   confirmationKey: string
@@ -160,7 +160,12 @@ export function PortalPanel({ dealId }: { dealId: string }) {
     }
   }
 
-  async function downloadDocument(documentId: string) {
+  async function downloadDocument(document: PortalTask["packageDocuments"][number]) {
+    const { documentId } = document
+    if (document.downloadUrl) {
+      window.location.assign(document.downloadUrl)
+      return
+    }
     setBusy(`download:${documentId}`)
     setError(undefined)
     try {
@@ -241,7 +246,7 @@ export function PortalPanel({ dealId }: { dealId: string }) {
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => void downloadDocument(document.documentId)}
+                                onClick={() => void downloadDocument(document)}
                                 disabled={Boolean(busy)}
                                 aria-label={`Download ${document.filename}`}
                               >

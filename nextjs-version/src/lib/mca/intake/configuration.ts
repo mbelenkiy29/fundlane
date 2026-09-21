@@ -21,7 +21,7 @@ import {
   verifiedUsesendDomain,
 } from "./usesend"
 
-export const INTAKE_PROVIDERS = ["fundlane", "jotform", "highlevel", "fillout", "custom", "zoho", "docuseal", "email"] as const
+export const INTAKE_PROVIDERS = ["fundlane", "native", "jotform", "highlevel", "fillout", "custom", "zoho", "docuseal", "email"] as const
 export type IntakeProvider = (typeof INTAKE_PROVIDERS)[number]
 export const EMAIL_GATEWAYS = ["usesend", "postmark", "custom"] as const
 export type EmailGateway = (typeof EMAIL_GATEWAYS)[number]
@@ -140,8 +140,8 @@ export async function configureIntegration(actor: MembershipContext, input: Inte
     if (member.status !== "active") throw new AppError(422, "inactive_assignee", "Assignment pools may contain only active workspace members.")
   }
   if (input.automaticProcessing !== undefined && typeof input.automaticProcessing !== "boolean") throw new AppError(422, "integration_validation_failed", "Automatic processing must be enabled or disabled.")
-  const automaticProcessing = input.automaticProcessing ?? previous?.automaticProcessing ?? false
-  if ((automaticProcessing || (input.enabled === true && !previous?.enabled)) && !(input.assignmentPool ?? previous?.assignmentPool)?.length) throw new AppError(422, "assignment_required", "Select a fallback rep or team before enabling automatic processing.")
+  const automaticProcessing = input.automaticProcessing ?? previous?.automaticProcessing ?? (input.provider !== "email" && input.enabled !== false && !(input.provider === "zoho" && input.contractKey && input.contractKey !== ZOHO_CONTRACT_KEY))
+  if (input.provider !== "native" && (input.automaticProcessing === true || (input.enabled === true && !previous?.enabled)) && !(input.assignmentPool ?? previous?.assignmentPool)?.length) throw new AppError(422, "assignment_required", "Select a fallback rep or team before enabling automatic processing.")
   const generatedSecret = input.admissionSecret ?? (!previous && input.provider !== "highlevel" ? createOpaqueToken() : undefined)
   const contractKey = input.provider === "zoho" ? input.contractKey ?? previous?.contractKey ?? ZOHO_CONTRACT_KEY : undefined
   const emailGateway = input.provider === "email" ? input.emailGateway ?? previous?.emailGateway ?? "usesend" : undefined

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto"
 import { getDatabase, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
 import { actorForDeals, getDeal } from "../deals/service"
 import type { DealActor } from "../deals/schema"
+import { generateApplicationPdf } from "../documents/pdf"
 import { listDocuments, retryDocumentScan } from "../documents/service"
 import { listFunders } from "../funders/directory"
 import { AppError } from "../errors"
@@ -23,7 +24,7 @@ interface Checkpoint {
   intake_id: string; workspace_id: string; fingerprint: string | null; generation: number
   job_id: string | null; progress_json: string; checked_at: string; updated_at: string
 }
-const supported = new Set(["jotform", "highlevel", "zoho", "custom", "fundlane"])
+const supported = new Set(["jotform", "highlevel", "zoho", "custom", "fundlane", "native", "fillout", "docuseal"])
 
 /** Integration authority is re-resolved for every stage; it is never a browser session or fabricated API key. */
 async function authority(workspaceId: string, intakeId: string, integrationId?: string) {
@@ -85,7 +86,7 @@ export async function scheduleIntakeProcessing(limit = 25): Promise<number> {
     JOIN intake_integrations i ON i.id=e.integration_id AND i.workspace_id=e.workspace_id
     LEFT JOIN intake_processing p ON p.intake_id=e.id
     WHERE i.enabled=1 AND i.automatic_processing=1 AND i.approval_state='approved'
-      AND i.provider IN ('jotform','highlevel','zoho','custom','fundlane') AND e.deal_id IS NOT NULL
+      AND i.provider IN ('jotform','highlevel','zoho','custom','fundlane','native','fillout','docuseal') AND e.deal_id IS NOT NULL
       AND (e.created_at>=i.automatic_since OR p.intake_id IS NOT NULL)
     ORDER BY p.checked_at ASC NULLS FIRST,e.created_at,e.id LIMIT ?`).all(limit)
   let queued = 0
@@ -157,6 +158,13 @@ export async function processIntakeJob(job: BackgroundJob, attachmentOptions: Pa
     }
     ;({ actor, intake } = await guard())
     let documents = await listDocuments(actor, intake.dealId!)
+    const attachmentJobs = await listAttachmentJobs(actor.workspaceId, intake.intakeId)
+    if (attachmentJobs.every(file => file.state === "stored") && !documents.some(document => ["application", "api_application"].includes(document.category))) {
+      await guard()
+      const deal = await getDeal(actor, intake.dealId!)
+      await generateApplicationPdf(actor, { dealId: deal.id, idempotencyKey: `intake:${intake.intakeId}:v${deal.version}`, contactMode: "real", signedOnBehalf: false })
+      documents = await listDocuments(actor, intake.dealId!)
+    }
     for (const document of documents) {
       if (["pending_scan", "scan_failed", "pending_upload", "upload_failed"].includes(document.processingState)) { await guard(); await retryDocumentScan(actor, document.id) }
     }

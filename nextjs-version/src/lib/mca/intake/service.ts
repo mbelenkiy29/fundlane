@@ -12,6 +12,7 @@ import type { DealActor, DealDetail, DealStatus } from "../deals/schema"
 import type { AuthContext } from "../types"
 import type { DocumentCategory, DocumentSummary } from "../documents/contracts"
 import { storeDocument } from "../documents/service"
+import { captureIntakeAnswers, sanitizeIntakeAnswers } from "./providers"
 import type { IntakeResult, NormalizedIntakeInput } from "./contracts"
 import {
   claimAttachmentJob,
@@ -61,6 +62,7 @@ function validateInput(input: NormalizedIntakeInput): void {
   if (!input.application || typeof input.application !== "object" || Array.isArray(input.application)) {
     fieldErrors.application = ["Provide an application object."]
   }
+  if (input.answers !== undefined && (!Array.isArray(input.answers) || input.answers.some(answer => !answer || typeof answer.key !== "string" || typeof answer.label !== "string" || typeof answer.value !== "string"))) fieldErrors.answers = ["Provide question keys, labels, and answer values as strings."]
   if (input.sourceReference && input.sourceReference.length > 500) fieldErrors.sourceReference = ["Source references are limited to 500 characters."]
   if (Object.keys(fieldErrors).length) throw new AppError(422, "intake_validation_failed", "Review the intake fields.", fieldErrors)
 }
@@ -103,6 +105,7 @@ async function applyInitialStatus(actor: DealActor, deal: DealDetail, target: De
 
 export async function ingestApplication(actor: DealActor, input: NormalizedIntakeInput, checkpoint?: DealTransactionCheckpoint, integrationId?: string): Promise<IntakeResult> {
   validateInput(input)
+  input = { ...input, answers: input.answers ? sanitizeIntakeAnswers(input.answers) : ["native", "fundlane", "jotform", "highlevel", "zoho", "custom", "fillout", "docuseal"].includes(input.provider) ? captureIntakeAnswers(input.application) : undefined }
   const checksum = intakePayloadChecksum(input)
   const reserved = await reserveIntake(actor.workspaceId, input, checksum, integrationId)
   if (reserved.record.payloadChecksum !== checksum) {
@@ -110,6 +113,7 @@ export async function ingestApplication(actor: DealActor, input: NormalizedIntak
   }
   if (reserved.record.dealId && ["created", "file_pending"].includes(reserved.record.state)) {
     await getDeal(actor, reserved.record.dealId)
+    await (await import("./notifications")).syncApplicationNotifications(actor.workspaceId, reserved.record.intakeId)
     return {
       intakeId: reserved.record.intakeId,
       dealId: reserved.record.dealId,
@@ -135,6 +139,7 @@ export async function ingestApplication(actor: DealActor, input: NormalizedIntak
       dealId: status.deal.id,
       warnings,
     })
+    await (await import("./notifications")).syncApplicationNotifications(actor.workspaceId, final.intakeId)
     await recordAuditEvent({
       context: actor,
       action: "intake.created",
@@ -170,6 +175,7 @@ export async function replayIntake(actor: DealActor, intakeId: string, appOrigin
     provider: record.provider,
     eventId: record.eventId,
     application: record.application,
+    answers: record.answers,
     sourceReference: record.sourceReference,
     initialStatus: record.initialStatus,
   }, undefined, record.eventNamespace)
