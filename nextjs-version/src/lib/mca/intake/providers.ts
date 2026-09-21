@@ -3,6 +3,7 @@ import "server-only"
 import { createHash, createHmac, createPublicKey, timingSafeEqual, verify } from "node:crypto"
 import { AppError } from "../errors"
 import { hashOpaqueToken } from "../crypto"
+import type { IntakeAnswer } from "./contracts"
 import type { DealWriteInput } from "../deals/schema"
 import type { DocumentCategory } from "../documents/contracts"
 import type { IntegrationRecord } from "./repository"
@@ -18,6 +19,7 @@ export interface ProviderAttachment {
 }
 
 export interface ProviderApplication {
+  answers: IntakeAnswer[]
   eventId: string
   sourceReference: string
   application: DealWriteInput
@@ -113,6 +115,64 @@ function valueAt(source: unknown, path: string): unknown {
     else return undefined
   }
   return current
+}
+
+// Snapshots contain submitted answers only. Routing and credential fields never belong in review.
+const excludedAnswerKeys = new Set([
+  "formid", "submissionid", "entryid", "eventid", "webhookid", "locationid", "eventtype", "sourcereference",
+  "mcarep", "mcainvite", "attributiontoken", "invitationtoken", "assignedrep", "assignedto", "assigneduserid",
+  "assignments", "fieldsource", "idempotencykey", "ip", "ipaddress", "useragent", "webhookurl", "callbackurl",
+  "id", "timestamp", "headers", "query", "queryparams", "urlparameters", "submitter", "submission", "form",
+  "createdat", "updatedat", "submittedat", "submissiondate", "type", "action", "event", "formtitle",
+])
+function credentialAnswerKey(key: string): boolean {
+  return /token|secret|password|credential|authorization|apikey|signature/.test(key.replace(/[^a-z0-9]/gi, "").toLowerCase())
+}
+function excludedAnswerKey(key: string): boolean {
+  const normalized = key.replace(/^q\d+_/i, "").replace(/[^a-z0-9]/gi, "").toLowerCase()
+  return excludedAnswerKeys.has(normalized) || credentialAnswerKey(normalized)
+}
+function answerValue(value: unknown, files: ProviderAttachment[] = []): unknown {
+  if (Array.isArray(value)) return value.map(item => answerValue(item, files))
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([key]) => !credentialAnswerKey(key) && !["mcarep", "mcainvite"].includes(key.replace(/[^a-z0-9]/gi, "").toLowerCase())).map(([key, item]) => [key, answerValue(item, files)]))
+  if (typeof value === "string") {
+    // File links may be signed bearer URLs. Actual files are retrieved into private documents separately.
+    return value.replace(/https?:\/\/[^\s<>"']+/gi, raw => {
+      const file = files.find(item => item.url === raw)
+      if (file) return `[File: ${file.filename}; attachment ${file.id}]`
+      try {
+        const url = new URL(raw)
+        const privateUrl = url.username || url.password || [...url.searchParams.keys()].some(key => credentialAnswerKey(key) || /^(sig|key|auth|jwt|policy)$/i.test(key))
+          || /\.(pdf|png|jpe?g|docx?|xlsx?)(?:$|\/)/i.test(url.pathname)
+          || /\/(uploads|download)\//i.test(url.pathname) || ["drive.google.com", "www.googleapis.com"].includes(url.hostname)
+        return privateUrl ? "[File link omitted; see private documents]" : raw
+      } catch { return "[Invalid link omitted]" }
+    })
+  }
+  return value
+}
+export function captureIntakeAnswers(source: object, files: ProviderAttachment[] = []): IntakeAnswer[] {
+  return Object.entries(source).filter(([key, value]) => !excludedAnswerKey(key) && value !== undefined).map(([key, value]) => ({
+    key, label: key, value: typeof value === "string" ? String(answerValue(value, files)) : JSON.stringify(answerValue(value, files)) ?? "",
+  }))
+}
+export function sanitizeIntakeAnswers(answers: IntakeAnswer[]): IntakeAnswer[] {
+  return answers.filter(answer => !excludedAnswerKey(answer.key) && !excludedAnswerKey(answer.label)).map(answer => {
+    let value: unknown = answer.value
+    try { value = JSON.parse(answer.value) } catch { /* Plain text answer. */ }
+    const sanitized = answerValue(value)
+    return { key: String(answerValue(answer.key)), label: String(answerValue(answer.label)), value: typeof sanitized === "string" ? sanitized : JSON.stringify(sanitized) }
+  })
+}
+function questionAnswers(questions: unknown[], keyField: string, labelField: string, valueField: string, files: ProviderAttachment[] = []): IntakeAnswer[] {
+  return questions.flatMap(question => {
+    const item = object(question)
+    const key = text(item[keyField]) ?? text(item.key) ?? text(item[labelField])
+    const label = text(item[labelField]) ?? key
+    if (!key || !label || excludedAnswerKey(key) || excludedAnswerKey(label)) return []
+    const answer = captureIntakeAnswers({ [key]: item[valueField] }, files)[0]
+    return answer ? [{ ...answer, label }] : []
+  })
 }
 
 function numeric(value: unknown): number | undefined {
@@ -254,9 +314,11 @@ function jotform(payload: Record<string, unknown>, integration: IntegrationRecor
     try { raw = object(JSON.parse(payload.rawRequest)) } catch { throw new AppError(400, "provider_payload_invalid", "Jotform rawRequest must contain valid JSON.") }
   }
   const uploads = Object.values(raw).filter((value) => typeof value === "string" && value.startsWith("https://www.jotform.com/uploads/"))
+  const files = categorizedAttachments(raw, integration, attachments([...(Array.isArray(payload.attachments) ? payload.attachments : []), ...uploads]))
   return {
+    answers: captureIntakeAnswers(raw, files),
     eventId, sourceReference: `jotform:submission:${eventId}`, application: withDefaultMapping(raw, integration),
-    attachments: categorizedAttachments(raw, integration, attachments([...(Array.isArray(payload.attachments) ? payload.attachments : []), ...uploads])),
+    attachments: files,
     invitationToken: raw.mca_invite !== undefined ? String(raw.mca_invite) : payload.mca_invite !== undefined ? String(payload.mca_invite) : undefined,
     attributionToken: text(raw.mca_rep) ?? text(payload.mca_rep), receiptRecipient: text(raw.contactEmail),
     externalAssignee: text(raw.assignedRep) ?? text(raw.assigned_rep),
@@ -279,9 +341,11 @@ function fillout(payload: Record<string, unknown>, integration: IntegrationRecor
     const item = object(parameter); const name = text(item.name)
     if (name) flat[name] = item.value
   }
+  const files = attachments(fileValues)
   return {
+    answers: questionAnswers(Array.isArray(payload.questions) ? payload.questions : [], "id", "name", "value", files),
     eventId, sourceReference: `fillout:submission:${eventId}`, application: withDefaultMapping(flat, integration),
-    attachments: attachments(fileValues), attributionToken: text(flat.mca_rep), receiptRecipient: text(flat.contactEmail),
+    attachments: files, attributionToken: text(flat.mca_rep), receiptRecipient: text(flat.contactEmail),
     externalAssignee: text(flat.assignedRep) ?? text(flat.assigned_rep),
   }
 }
@@ -298,9 +362,11 @@ function highlevel(payload: Record<string, unknown>, integration: IntegrationRec
     if (name) customFields[name] = item.value
   }
   source.customFields = customFields
+  const files = categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : []))
   return {
+    answers: [...captureIntakeAnswers(Object.fromEntries(Object.entries(payload).filter(([key]) => !["customFields", "attachments"].includes(key))), files), ...questionAnswers(Array.isArray(payload.customFields) ? payload.customFields : [], "id", "name", "value", files)],
     eventId, sourceReference: `highlevel:webhook:${eventId}`, application: withDefaultMapping(source, integration),
-    attachments: categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : [])), receiptRecipient: text(payload.email),
+    attachments: files, receiptRecipient: text(payload.email),
     externalAssignee: text(payload.assignedTo) ?? text(payload.assignedUserId),
   }
 }
@@ -311,10 +377,12 @@ function custom(payload: Record<string, unknown>, integration: IntegrationRecord
   const eventId = text(payload.eventId)
   if (!eventId) throw new AppError(422, "provider_event_missing", "Custom webhook eventId is required.")
   const source = object(payload.application)
+  const files = categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : []))
   return {
+    answers: captureIntakeAnswers(source, files),
     eventId, sourceReference: text(payload.sourceReference) ?? `custom:event:${eventId}`,
-    application: Object.keys(integration.mapping).length ? mappedApplication(source, integration.mapping) : source as DealWriteInput,
-    attachments: categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : [])),
+    application: withDefaultMapping(source, integration),
+    attachments: files,
     attributionToken: text(payload.attributionToken), receiptRecipient: text(source.contactEmail),
     externalAssignee: text(payload.assignedRep),
   }
@@ -354,6 +422,7 @@ function zoho(payload: Record<string, unknown>, integration: IntegrationRecord):
     })
   }
   return {
+    answers: captureIntakeAnswers(payload),
     eventId, sourceReference: `zoho:entry:${eventId}`, application: withDefaultMapping(payload, integration),
     attachments: [
       ...driveFiles(payload.applicationFile, "applicationFile", "application"),
@@ -383,6 +452,10 @@ function docuseal(payload: Record<string, unknown>, integration: IntegrationReco
     }
   }
   return {
+    answers: (Array.isArray(data.submitters) ? data.submitters : []).flatMap(submitter => {
+      const values = object(submitter).values
+      return questionAnswers(Array.isArray(values) ? values : [], "field", "name", "value")
+    }),
     eventId, sourceReference: `docuseal:submission:${eventId}`, application: withDefaultMapping(flat, integration),
     attachments: attachments(Array.isArray(data.documents) ? data.documents : [], "application"),
     receiptRecipient: text(object((data.submitters as unknown[])?.[0]).email),

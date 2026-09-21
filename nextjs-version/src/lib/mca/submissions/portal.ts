@@ -1,5 +1,7 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
+import { getOutgoingDocumentBytes } from "./compress"
 import { getDatabase, newId, recordAuditEvent } from "../db"
 import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
@@ -25,6 +27,7 @@ export interface PortalOperator {
 }
 
 export interface PortalPackageDocument {
+  downloadUrl?: string
   documentId: string
   filename: string
   category: string
@@ -156,6 +159,15 @@ async function operatorsByJob(workspaceId: string, dealId: string): Promise<Map<
 }
 
 function packageFor(job: SubmissionJob, documents: Array<{ id: string; displayFilename: string; category: string; checksum: string }>): PortalPackageDocument[] {
+  if (job.approvedPackage) {
+    const approved = job.approvedPackage
+    return approved.documents.map((document) => ({
+      documentId: document.documentId, filename: approved.filenames[document.originalDocumentId] ?? "Document",
+      category: approved.originalVersions.find((original) => original.documentId === document.originalDocumentId)?.category ?? "other_stip",
+      checksum: document.checksum,
+      downloadUrl: `/api/mca/submissions/portal/${encodeURIComponent(job.dealId)}/documents/${encodeURIComponent(job.id)}/${encodeURIComponent(document.documentId)}`,
+    }))
+  }
   const byId = new Map(documents.map((document) => [document.id, document]))
   return job.packageDocumentIds.map((documentId) => {
     const live = byId.get(documentId)
@@ -318,4 +330,20 @@ export async function completePortalTask(actor: DealActor, dealId: string, input
     correlationId: actor.correlationId,
   })
   return { ok: true, jobId: saved.id, state: saved.state, externalRef }
+}
+
+/** Download only bytes in the confirmed package, including transformed vault derivatives. */
+export async function downloadApprovedPortalDocument(actor: DealActor, dealId: string, jobId: string, documentId: string): Promise<{ bytes: Uint8Array; filename: string }> {
+  const job = await findJobById(actor.workspaceId, jobId)
+  if (!job || job.dealId !== dealId || job.routeKind !== "manual_portal" || !job.approvedPackage || !["pending_portal", "sent"].includes(job.state)) {
+    throw new AppError(404, "portal_document_not_found", "The approved portal document was not found.")
+  }
+  await getDealForDocument(actor, job.dealId)
+  const document = job.approvedPackage.documents.find((item) => item.documentId === documentId)
+  if (!document) throw new AppError(404, "portal_document_not_found", "The approved portal document was not found.")
+  const bytes = await getOutgoingDocumentBytes(document)
+  if (createHash("sha256").update(bytes).digest("hex") !== document.checksum) {
+    throw new AppError(409, "approved_package_changed", "The approved document changed. Prepare a new preview.")
+  }
+  return { bytes, filename: job.approvedPackage.filenames[document.originalDocumentId] ?? "Document" }
 }

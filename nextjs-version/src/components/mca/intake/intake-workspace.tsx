@@ -16,7 +16,7 @@ export async function intakeRequest<T>(url: string, init?: RequestInit): Promise
   if (!response.ok) throw new Error(body.error?.message ?? "Could not load applications. Please retry.")
   return body as T
 }
-export const providerNames: Record<string, string> = { jotform: "Jotform", highlevel: "GoHighLevel", zoho: "Zoho", custom: "Custom form", fillout: "Fillout", docuseal: "DocuSeal", email: "Email" }
+export const providerNames: Record<string, string> = { fundlane: "Fundlane", native: "Fundlane", jotform: "Jotform", highlevel: "GoHighLevel", zoho: "Zoho", custom: "Custom form", fillout: "Fillout", docuseal: "DocuSeal", email: "Email" }
 const stateNames: Record<IntakeProgress["state"], string> = { queued: "Queued", running: "Processing", needs_attention: "Needs attention", ready_for_review: "Ready for review", no_matches: "No matching funders", failed: "Processing failed", paused: "Paused" }
 const steps = [{ key: "deal", label: "Deal created" }, { key: "documents", label: "Documents secured" }, { key: "underwriting", label: "Statements analyzed" }, { key: "matches", label: "Funders matched" }] as const
 function StageIcon({ state }: { state: IntakeStageState }) {
@@ -74,7 +74,7 @@ export function IntakeWorkspace({ canManage }: { canManage: boolean }) {
               })}</ol>
               {(progress?.message || item.errorMessage) && <p className="max-w-3xl text-sm text-muted-foreground">{progress?.message ?? item.errorMessage}</p>}
               {!progress && item.warnings.length > 0 && <p className="text-sm text-muted-foreground">{item.warnings.join(" ")}</p>}
-              <div className="mt-4 flex flex-wrap items-center gap-3">{item.dealId && <Button variant="outline" size="sm" asChild><Link href={`/deals?deal=${encodeURIComponent(item.dealId)}`}>Open deal<ArrowUpRight className="size-4" /></Link></Button>}{item.canRetry && !["queued", "running"].includes(progress?.state ?? "") && <Button variant="ghost" size="sm" disabled={busy === item.intakeId} onClick={() => void retry(item)}>{busy === item.intakeId ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Retry processing</Button>}{progress?.matchedCount != null && <span className="text-xs text-muted-foreground">{progress.matchedCount} eligible funder{progress.matchedCount === 1 ? "" : "s"} · Rep approval required to send</span>}</div>
+              <div className="mt-4 flex flex-wrap items-center gap-3"><Button variant="outline" size="sm" asChild><Link href={`/intake/${encodeURIComponent(item.intakeId)}`}>Open application<ArrowUpRight className="size-4" /></Link></Button>{item.dealId && <Button variant="outline" size="sm" asChild><Link href={`/deals?deal=${encodeURIComponent(item.dealId)}`}>Open deal<ArrowUpRight className="size-4" /></Link></Button>}{item.canRetry && !["queued", "running"].includes(progress?.state ?? "") && <Button variant="ghost" size="sm" disabled={busy === item.intakeId} onClick={() => void retry(item)}>{busy === item.intakeId ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Retry processing</Button>}{progress?.matchedCount != null && <span className="text-xs text-muted-foreground">{progress.matchedCount} eligible funder{progress.matchedCount === 1 ? "" : "s"} · Rep approval required to send</span>}</div>
             </article>
           })}</div>}
       </TabsContent>

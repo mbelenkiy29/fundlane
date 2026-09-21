@@ -90,8 +90,8 @@
     "semantic_hash": "b94bcf436f10e5edfaf14fe0656843f6"
   },
   "nextjs-version/drizzle/meta/_journal.json": {
-    "mtime": 1789801911.043662,
-    "ast_hash": "e5d938999f7881d7410d71c5a916816b",
+    "mtime": 1790020976.2251723,
+    "ast_hash": "ee08675ada40aa186ea8064c34038ba9",
     "semantic_hash": ""
   },
   "nextjs-version/eslint.config.mjs": {
@@ -1820,8 +1820,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/db/schema.ts": {
-    "mtime": 1789792714.4804988,
-    "ast_hash": "f3a263ad3293f20ceb1f6c4709da6279",
+    "mtime": 1790020976.2258227,
+    "ast_hash": "afd22f27aaca6e0338706846bc5f0419",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/deals/acceptance.test.ts": {
@@ -2025,14 +2025,14 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/configuration.ts": {
-    "mtime": 1789754367.5554857,
-    "ast_hash": "717a7e77d29ae751e2c7c390f5d2c9c3",
+    "mtime": 1790020950.256833,
+    "ast_hash": "351ca93247e66b0479bbb11272b36fd0",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/contracts.ts": {
-    "mtime": 1788874102.5093412,
-    "ast_hash": "965c2a8d26c57650c857e2e6c506ffc5",
-    "semantic_hash": "965c2a8d26c57650c857e2e6c506ffc5"
+    "mtime": 1790020834.376044,
+    "ast_hash": "66113cce904de14e7254875527137f0d",
+    "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/email.ts": {
     "mtime": 1789754367.5556934,
@@ -2040,23 +2040,23 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/ingress.ts": {
-    "mtime": 1789754367.555821,
-    "ast_hash": "b19c2abbfce68d65b2f6f174eaa29310",
+    "mtime": 1790020834.3774078,
+    "ast_hash": "a74f2d0e728f62dc67170b5b869e88a9",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/providers.ts": {
-    "mtime": 1789754367.55697,
-    "ast_hash": "daac85c022434cd2eedc2f31f0c0b3ce",
+    "mtime": 1790021314.5649443,
+    "ast_hash": "ed6f7a5bdbd644d5474dadea1778e458",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/repository.ts": {
-    "mtime": 1789754367.5571175,
-    "ast_hash": "c9fec9913155705c661771bd02e0cab0",
+    "mtime": 1790020834.3767204,
+    "ast_hash": "dcfefe822740214df503a0bb96705c76",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/service.ts": {
-    "mtime": 1789754367.5572562,
-    "ast_hash": "2a41571d15d62bebfa8014f885f16c1c",
+    "mtime": 1790020985.0971715,
+    "ast_hash": "541b9251ef7cfcceb300c7ee61e98197",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/worker-auth.ts": {
@@ -2115,8 +2115,8 @@
     "semantic_hash": "4137efc0adb7287ac2fc273272b69263"
   },
   "nextjs-version/src/lib/mca/submissions/adapters/framework.ts": {
-    "mtime": 1789792780.7458417,
-    "ast_hash": "142f6b1535dfd47df92085e4c0a1a211",
+    "mtime": 1790021660.8429615,
+    "ast_hash": "f3d8f22f4848a73952c4e0d231d8cd6f",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/adapters/registry.ts": {
@@ -2135,8 +2135,8 @@
     "semantic_hash": "cc992a817987d68ff8c4787954193553"
   },
   "nextjs-version/src/lib/mca/submissions/contracts.ts": {
-    "mtime": 1789793419.0868187,
-    "ast_hash": "376f3d6005175cfe4900e969a4813373",
+    "mtime": 1790021660.84165,
+    "ast_hash": "2cdd85194e3f48d286b08d382d27b713",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/deliver.ts": {
@@ -2150,8 +2150,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/email-templates.ts": {
-    "mtime": 1789797039.9216673,
-    "ast_hash": "1b40f16f6fe28732ab4a7da7117c50c0",
+    "mtime": 1790021358.563036,
+    "ast_hash": "8b6b8e566a88da8aec2791f79c6c78a4",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/package.ts": {
@@ -2160,9 +2160,9 @@
     "semantic_hash": "a207798d85a905f09a8fe4d470ad9248"
   },
   "nextjs-version/src/lib/mca/submissions/portal.ts": {
-    "mtime": 1788896601.7751608,
-    "ast_hash": "158a1d440af10a2f7882b966aaac96bc",
-    "semantic_hash": "158a1d440af10a2f7882b966aaac96bc"
+    "mtime": 1790021787.716422,
+    "ast_hash": "4efafa585febdd7defbe4d54fa44f954",
+    "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/ports.ts": {
     "mtime": 1788893382.0517123,
@@ -2400,7 +2400,7 @@
     "semantic_hash": ""
   },
   "nextjs-version/tsconfig.json": {
-    "mtime": 1789589382.4698277,
+    "mtime": 1789821164.920324,
     "ast_hash": "302f271393295c814f65d1795b8ade20",
     "semantic_hash": ""
   },
@@ -2435,8 +2435,8 @@
     "semantic_hash": ""
   },
   "WORKSPACE_NAVIGATION.md": {
-    "mtime": 1789754367.4339166,
-    "ast_hash": "514ba09e8df8fddb62b3b55cdab8eca7",
+    "mtime": 1790021802.0502973,
+    "ast_hash": "e51982422db94ec788cadbe2c969e0c4",
     "semantic_hash": ""
   },
   "nextjs-version/README.md": {
@@ -3020,9 +3020,9 @@
     "semantic_hash": "501e50a39ff448d3c9841c6197510bc2"
   },
   "nextjs-version/src/components/mca/submissions/portal-panel.tsx": {
-    "mtime": 1788896571.9530678,
-    "ast_hash": "294453ec9d0ff67c72627b3a1c81926a",
-    "semantic_hash": "294453ec9d0ff67c72627b3a1c81926a"
+    "mtime": 1790021787.7172914,
+    "ast_hash": "2a5b145bcc168c8569013b8d6ded36f7",
+    "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/submissions/selection-panel.tsx": {
     "mtime": 1789308776.248324,
@@ -3160,8 +3160,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/outbox.ts": {
-    "mtime": 1789797393.8212852,
-    "ast_hash": "60e6be6a0cabc31da062aa9f4421b8a3",
+    "mtime": 1790021660.842217,
+    "ast_hash": "e1b4b35c3918e8336a55a0c4a6c04276",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/preflight.ts": {
@@ -3170,13 +3170,13 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/queue.ts": {
-    "mtime": 1789794994.8625255,
-    "ast_hash": "3f23a540915e8dbda51a37a7fbe3fb87",
+    "mtime": 1790021473.3675997,
+    "ast_hash": "5934dc530da0a1794a79f7b95cb09ba7",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/repository.ts": {
-    "mtime": 1789792679.7951818,
-    "ast_hash": "210b79b94e7bec586f8c8bde4b3bf4f6",
+    "mtime": 1790020961.9480786,
+    "ast_hash": "499361b770c2fc8f50db3a9bf34adc41",
     "semantic_hash": ""
   },
   "nextjs-version/tests/submissions-core.test.ts": {
@@ -6270,8 +6270,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/assistant/notification-bell.tsx": {
-    "mtime": 1789308848.881294,
-    "ast_hash": "8c32e0c1da755224ff1c612b7634594b",
+    "mtime": 1790021313.8963118,
+    "ast_hash": "75be90839718dac398baeb9c9fd977cd",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/assistant/alerts.ts": {
@@ -7270,8 +7270,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/intake/native-apply-form.tsx": {
-    "mtime": 1789754367.5378125,
-    "ast_hash": "67bdf99d328114d63f97250212d48cac",
+    "mtime": 1790021239.4800177,
+    "ast_hash": "b66017fb6bfdbc9c1f9e9cac156f0ae2",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/submissions/insights-panel.tsx": {
@@ -7285,8 +7285,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/native-apply.ts": {
-    "mtime": 1789754367.5563931,
-    "ast_hash": "f95d314dea2f15da311936cf7fb97c5b",
+    "mtime": 1790021239.4796746,
+    "ast_hash": "b0aa501548a8d3aea8fc27caa284624b",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/submissions/insights-query.ts": {
@@ -7470,8 +7470,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/intake/intake-workspace.tsx": {
-    "mtime": 1789754367.5377243,
-    "ast_hash": "98c5e5e36f7f106df0b70fe325f7eba3",
+    "mtime": 1790021313.8960073,
+    "ast_hash": "b716a43ef671d7c62c771ac90ad6ea9a",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/processing-contracts.ts": {
@@ -7480,18 +7480,18 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/intake/processing.ts": {
-    "mtime": 1789754367.5568058,
-    "ast_hash": "dcc9ace19a51250e08c4c94555e17615",
+    "mtime": 1790020834.3776627,
+    "ast_hash": "966a2c9ce18e107f9283b19d5b29c703",
     "semantic_hash": ""
   },
   "nextjs-version/tests/intake-workflow.test.ts": {
-    "mtime": 1789791032.9256818,
-    "ast_hash": "a37d9b79e74a06a3599a62849aa78ecd",
+    "mtime": 1790021779.8669922,
+    "ast_hash": "69a177f3fb29dca445e3875bd77df4df",
     "semantic_hash": ""
   },
   "nextjs-version/docs/application-intake.md": {
-    "mtime": 1789754367.5000927,
-    "ast_hash": "a592dec058e91ed4af2896a0a624cde0",
+    "mtime": 1790021963.5638833,
+    "ast_hash": "bef541431629f76ff484a14bea0287f1",
     "semantic_hash": ""
   },
   "nextjs-version/drizzle/0035_application_outreach.sql": {
@@ -8010,8 +8010,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/applications/submit.ts": {
-    "mtime": 1789754367.5419102,
-    "ast_hash": "2a7565fd30dc44f1cfa8fffec4bc3b8d",
+    "mtime": 1790021229.1763086,
+    "ast_hash": "8550a615a06e2139a08baf887be9d042",
     "semantic_hash": ""
   },
   "nextjs-version/src/lib/mca/assistant/calendar-plan-service.ts": {
@@ -8372,6 +8372,96 @@
   "nextjs-version/src/app/api/mca/deals/book/[advanceId]/receipts/[receiptId]/route.ts": {
     "mtime": 1789808125.1987422,
     "ast_hash": "8b62905611ee3ab1e9dd1ea5d112d8f7",
+    "semantic_hash": ""
+  },
+  "nextjs-version/drizzle/0046_application_review.sql": {
+    "mtime": 1790021229.1766472,
+    "ast_hash": "c1c3610ceaaa7b1294987125cc4f8bf3",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/intake/review-ui-smoke.mjs": {
+    "mtime": 1790021513.0622728,
+    "ast_hash": "a418637aeb1770c7e549d036f547935b",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/(dashboard)/intake/[intakeId]/page.tsx": {
+    "mtime": 1790021131.1200511,
+    "ast_hash": "fda2daf384376f01f8c888c594e4e7d1",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/intake/[intakeId]/review/preview/route.ts": {
+    "mtime": 1790021322.3815827,
+    "ast_hash": "179df00cfb31d096744b0cd52b7a39ab",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/intake/[intakeId]/review/route.ts": {
+    "mtime": 1790021322.3812976,
+    "ast_hash": "27bb534db6ecb4c69f42fb52658fd381",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/intake/[intakeId]/review/send/route.ts": {
+    "mtime": 1790021322.3818243,
+    "ast_hash": "9b3ace635ae4b0cbfd6a35e7f1570748",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/intake/notifications/route.ts": {
+    "mtime": 1790021322.3820539,
+    "ast_hash": "e4b3effdff46a4149e9144c3cb1f8ad9",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/app/api/mca/submissions/portal/[dealId]/documents/[jobId]/[documentId]/route.ts": {
+    "mtime": 1790021787.7241204,
+    "ast_hash": "050d0ddcbc87aa002abeaa8df86331c4",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/mca/intake/application-review.tsx": {
+    "mtime": 1790021530.1577241,
+    "ast_hash": "ff21cb2f9311bafca9bf862024432c34",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/intake/notifications.ts": {
+    "mtime": 1790021184.3600755,
+    "ast_hash": "60bdbbc0dd1f4a01ae4e456728127ff4",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/intake/review-contracts.ts": {
+    "mtime": 1790020975.9113557,
+    "ast_hash": "92a2c39e1551f1ce636fa4a9157e4fdf",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/intake/review.ts": {
+    "mtime": 1790021916.89048,
+    "ast_hash": "5b621c16e93b492fe2e79db824329d38",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/mca/intake/submission-review.ts": {
+    "mtime": 1790021660.8419516,
+    "ast_hash": "f9552b50ece035d2f5f8291fd9bbbf15",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/application-review.test.ts": {
+    "mtime": 1790021916.8907917,
+    "ast_hash": "2e2af24130677627c83e0d1d46827489",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/application-submission-review.test.ts": {
+    "mtime": 1790021829.6834714,
+    "ast_hash": "0d99e53fd400947b142b3524a77278f6",
+    "semantic_hash": ""
+  },
+  "nextjs-version/tests/intake-answers.test.ts": {
+    "mtime": 1790021148.0505254,
+    "ast_hash": "17d18f444891b3ae2db5b13582f8b0bf",
+    "semantic_hash": ""
+  },
+  "nextjs-version/docs/superpowers/plans/2026-09-21-application-review.md": {
+    "mtime": 1790021963.5636165,
+    "ast_hash": "d746b802390709363b4823391988257f",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/intake/record-review.mjs": {
+    "mtime": 1790022962.9297519,
+    "ast_hash": "9a9ab15db2e120ed2493f4d474171e4d",
     "semantic_hash": ""
   }
 }

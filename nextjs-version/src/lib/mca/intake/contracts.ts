@@ -1,9 +1,16 @@
 import type { DealStatus, DealWriteInput } from "../deals/schema"
 
+export interface IntakeAnswer {
+  key: string
+  label: string
+  value: string
+}
+
 export interface NormalizedIntakeInput {
   schemaVersion: 1
   provider: string
   eventId: string
+  answers?: IntakeAnswer[]
   application: DealWriteInput
   sourceReference?: string
   initialStatus?: DealStatus

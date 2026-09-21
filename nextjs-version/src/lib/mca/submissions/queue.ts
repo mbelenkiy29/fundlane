@@ -2,7 +2,7 @@ import "server-only"
 
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { listChecks } from "../datamerch/repository"
-import { newId, recordAuditEvent } from "../db"
+import { newId, recordAuditEvent, withTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
@@ -164,6 +164,8 @@ async function queueDestination(input: {
   analysisRunId?: string
   privilegedRetry?: boolean
   privilegedReason?: string
+  approvedPackage?: SubmissionJob["approvedPackage"]
+  deferDelivery?: boolean
   dealVersion: number
   dealEin?: string | null
   merchantId?: string | null
@@ -219,14 +221,15 @@ async function queueDestination(input: {
     dealId: input.dealId,
     funderId: funder.id,
     displayFunderName: preflight.displayName,
-    routeKind: preflight.route.kind,
-    route: preflight.route,
+    routeKind: (input.approvedPackage?.route ?? preflight.route).kind,
+    route: input.approvedPackage?.route ?? preflight.route,
     state,
     confirmationKey: input.confirmationKey,
     attemptKey: input.confirmationKey,
     analysisRunId: input.analysisRunId,
     dealVersion: input.dealVersion,
-    documentVersions: freezeDocumentVersions(input.documents),
+    approvedPackage: input.approvedPackage,
+    documentVersions: input.approvedPackage?.originalVersions ?? freezeDocumentVersions(input.documents),
     packageDocumentIds: preflight.originals.map((document) => document.documentId),
     preflightErrors: preflight.errors,
     merchantIdentityKey,
@@ -238,6 +241,10 @@ async function queueDestination(input: {
   await audit(input.actor, saved.job, saved.created)
   if (!saved.created) return toQueuedSummary(saved.job)
   if (saved.job.state !== "queued") return toQueuedSummary(saved.job)
+  if (input.deferDelivery) {
+    if (backgroundJobsEnabled()) await enqueueSubmissionDelivery(saved.job)
+    return toQueuedSummary(saved.job)
+  }
   if (backgroundJobsEnabled()) {
     await enqueueSubmissionDelivery(saved.job)
     return toQueuedSummary(saved.job)
@@ -257,10 +264,12 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
   const jobs: QueuedJobSummary[] = []
   for (const funderId of uniqueIds(input.funderIds)) {
     try {
-      jobs.push(await queueDestination({
+      const enqueue = () => queueDestination({
         actor: input.actor,
         dealId: deal.id,
         funderId,
+        approvedPackage: input.approvedPackages?.[funderId],
+        deferDelivery: input.deferDelivery,
         confirmationKey: input.confirmationKey,
         analysisRunId: input.analysisRunId,
         privilegedRetry: input.privilegedRetry,
@@ -271,8 +280,36 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
         documents,
         sender,
         dataMerch,
-      }))
+      })
+      jobs.push(input.deferDelivery ? await withTransaction(async (db) => {
+        await db.execute("SAVEPOINT application_destination")
+        try {
+          const result = await enqueue()
+          await db.execute("RELEASE SAVEPOINT application_destination")
+          return result
+        } catch (error) {
+          await db.execute("ROLLBACK TO SAVEPOINT application_destination")
+          await db.execute("RELEASE SAVEPOINT application_destination")
+          throw error
+        }
+      }) : await enqueue())
     } catch (error) {
+      const approved = input.approvedPackages?.[funderId]
+      if (input.deferDelivery && approved) {
+        const saved = await persistNewDestination({
+          workspaceId: input.actor.workspaceId, dealId: deal.id, funderId,
+          displayFunderName: approved.email?.funderName ?? (await loadFunderForDestination(input.actor, funderId))?.legalName ?? funderId,
+          routeKind: approved.route.kind, route: approved.route, state: "failed",
+          confirmationKey: input.confirmationKey, attemptKey: input.confirmationKey, analysisRunId: input.analysisRunId,
+          dealVersion: deal.version, documentVersions: approved.originalVersions,
+          packageDocumentIds: approved.documents.map((document) => document.originalDocumentId), approvedPackage: approved,
+          preflightErrors: [], merchantIdentityKey: submissionMerchantIdentityKey({workspaceId: input.actor.workspaceId, ein: deal.ein, merchantId: deal.merchantId, dealId: deal.id}),
+          packageFingerprint: packageFingerprint(approved.documents.map((document) => document.checksum)),
+          reason: independentReason(error), createdByUserId: input.actor.userId, actor: input.actor,
+        })
+        jobs.push(toQueuedSummary(saved.job))
+        continue
+      }
       jobs.push({
         jobId: newId(),
         funderId,

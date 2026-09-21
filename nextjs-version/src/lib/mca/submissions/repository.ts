@@ -1,5 +1,6 @@
 import "server-only"
 
+import { encryptSensitive, decryptSensitive } from "../crypto"
 import { getDatabase, newId, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealActor } from "../deals/schema"
 import type { FunderRoute, FunderRouteKind } from "../funders/contracts"
@@ -28,6 +29,7 @@ type JobRow = {
   preflight_errors_json: string
   merchant_identity_key: string
   package_fingerprint: string
+  approved_package_cipher: string | null
   reason: string | null
   created_by_user_id: string | null
   created_at: string
@@ -77,6 +79,7 @@ export interface JobInsert {
   preflightErrors: Array<{ field: string; message: string }>
   merchantIdentityKey: string
   packageFingerprint: string
+  approvedPackage?: SubmissionJob["approvedPackage"]
   reason?: string
   createdByUserId: string | null
   actor?: DealActor
@@ -120,6 +123,7 @@ function fromJobRow(row: JobRow): SubmissionJob {
     preflightErrors: parseJson(row.preflight_errors_json, []),
     merchantIdentityKey: row.merchant_identity_key,
     packageFingerprint: row.package_fingerprint,
+    approvedPackage: row.approved_package_cipher ? JSON.parse(decryptSensitive(row.approved_package_cipher, row.workspace_id)) : undefined,
     reason: row.reason ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -185,8 +189,8 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
   const row = await executor.prepare<{ id: string }>(`INSERT INTO mca_submission_jobs
     (id, workspace_id, deal_id, funder_id, display_funder_name, route_kind, route_json, state, confirmation_key, attempt_key,
      analysis_run_id, deal_version, document_versions_json, package_json, preflight_errors_json, merchant_identity_key, package_fingerprint,
-     reason, created_by_user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     reason, created_by_user_id, created_at, updated_at, approved_package_cipher)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (workspace_id, confirmation_key, funder_id) DO NOTHING
     RETURNING id`).get(
     id,
@@ -210,6 +214,7 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
     input.createdByUserId,
     now,
     now,
+    input.approvedPackage ? encryptSensitive(JSON.stringify(input.approvedPackage), input.workspaceId) : null,
   )
   if (!row) {
     const existing = await findJobByConfirmation(input.workspaceId, input.confirmationKey, input.funderId, executor)

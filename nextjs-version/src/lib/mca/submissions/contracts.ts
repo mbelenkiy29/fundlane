@@ -1,5 +1,6 @@
 import "server-only"
 
+import type { RenderedSubmissionEmail } from "./email-templates"
 import type { DealActor } from "../deals/schema"
 import type { FunderRoute, FunderRouteKind } from "../funders/contracts"
 
@@ -45,6 +46,8 @@ export interface QueueSubmissionsInput {
   funderIds: string[]
   analysisRunId?: string
   confirmationKey: string
+  approvedPackages?: Record<string, ApprovedSubmissionPackage>
+  deferDelivery?: boolean
   privilegedRetry?: boolean
   privilegedReason?: string
 }
@@ -59,6 +62,14 @@ export interface QueuedJobSummary {
 export interface QueueSubmissionsResult {
   ok: true
   jobs: QueuedJobSummary[]
+}
+
+export interface ApprovedSubmissionPackage {
+  route: FunderRoute
+  originalVersions: SubmissionJob["documentVersions"]
+  filenames: Record<string, string>
+  documents: OutgoingDocument[]
+  email?: RenderedSubmissionEmail
 }
 
 export interface SubmissionJob {
@@ -76,6 +87,7 @@ export interface SubmissionJob {
   dealVersion: number
   documentVersions: Array<{ documentId: string; checksum: string; category: string }>
   packageDocumentIds: string[]
+  approvedPackage?: ApprovedSubmissionPackage
   preflightErrors: Array<{ field: string; message: string }>
   merchantIdentityKey: string
   packageFingerprint: string

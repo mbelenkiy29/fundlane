@@ -31,7 +31,7 @@ All paths below are relative to `nextjs-version/`.
 | Company billing | `src/lib/mca/billing.ts`, `/api/billing`, `/api/webhooks/stripe`, `docs/supabase-billing.md` |
 | Deals and pipeline | `src/lib/mca/deals/` |
 | Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
-| Intake, documents and imports | `src/lib/mca/intake/`, `documents/`, `imports/` |
+| Intake, application review, documents and imports | `src/lib/mca/intake/` (`review.ts`, `notifications.ts`, `submission-review.ts`), `src/components/mca/intake/application-review.tsx`, `documents/`, `imports/`, `docs/application-intake.md` |
 | Underwriting and funder matching | `src/lib/mca/underwriting/`, `funders/`, `datamerch/` |
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | In-app email conversations and worker | `src/lib/mca/email-conversations/`, `src/components/mca/email/`, `src/app/api/mca/email/`, `scripts/messaging/`, `docs/email-conversations.md` |

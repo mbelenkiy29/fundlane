@@ -1,7 +1,7 @@
 import "server-only"
 
 import { hashOpaqueToken, hmacScopedToken } from "../crypto"
-import { newId } from "../db"
+import { getDatabase, newId, nowIso } from "../db"
 import { actorForDeals } from "../deals/service"
 import type { DealActor, DealWriteInput, EntityType } from "../deals/schema"
 import { ENTITY_TYPES } from "../deals/schema"
@@ -19,6 +19,7 @@ import {
   resolveNativeAttributionToken,
   saveIntegration,
 } from "./repository"
+import { captureIntakeAnswers } from "./providers"
 import { ingestApplication } from "./service"
 import { sendUsesendEmail } from "./usesend"
 
@@ -127,6 +128,8 @@ async function ensureNativeIntegration(workspaceId: string) {
     assignmentPool: [],
     initialStatus: "new_application",
     enabled: true,
+    automaticProcessing: true,
+    automaticSince: nowIso(),
     approvalState: "approved",
   })
 }
@@ -214,13 +217,14 @@ export async function submitNativeApply(token: string, body: unknown): Promise<I
     schemaVersion: 1,
     provider: NATIVE_APPLY_PROVIDER,
     eventId,
+    answers: captureIntakeAnswers(application),
     application: {
       ...application,
       assignments: [{ membershipId: attribution.membershipId, kind: "originator", isPrimary: true }],
     },
     sourceReference: `native-apply:${attribution.membershipId}`,
     initialStatus: "new_application",
-  })
+  }, undefined, attribution.integrationId)
   if (!result.dealId) throw new AppError(500, "intake_deal_missing", "The application was received but a deal was not created.")
   return { ...result, dealId: result.dealId }
 }
@@ -235,6 +239,11 @@ export async function uploadNativeApplyDocument(input: {
   idempotencyKey: string
 }) {
   const attribution = await requireNativeToken(input.token)
+  const intake = await getDatabase().prepare<{ id: string }>(`SELECT id FROM intake_events
+    WHERE workspace_id=? AND deal_id=? AND provider='native' AND integration_id=? AND source_reference=?`).get(
+    attribution.workspaceId, input.dealId, attribution.integrationId, `native-apply:${attribution.membershipId}`,
+  )
+  if (!intake) throw new AppError(404, "intake_not_found", "This application was not submitted through this link.")
   const category = UPLOAD_CATEGORIES[input.category as keyof typeof UPLOAD_CATEGORIES]
   if (!category) throw new AppError(422, "invalid_category", "Upload a bank statement, ID, or voided check.")
   const actor = await actorForNativeWorkspace(attribution.workspaceId, attribution.membershipId)
