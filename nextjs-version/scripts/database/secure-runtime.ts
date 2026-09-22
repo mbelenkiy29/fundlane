@@ -36,10 +36,13 @@ async function main() {
       if (!available.has(table)) throw new Error(`Apply migrations before securing ${table}.`);
       policies.push(`REVOKE ALL ON TABLE ${qualified} FROM PUBLIC${browserRoles.length ? ', '+browserRoles.join(',') : ''}`);
       policies.push(`ALTER TABLE ${qualified} ENABLE ROW LEVEL SECURITY`);
-      policies.push(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${qualified} TO mca_app`);
+      policies.push(`REVOKE ALL ON TABLE ${qualified} FROM mca_app`);
+      policies.push(`GRANT ${table === 'platform_admin_grants' ? 'SELECT' : 'SELECT, INSERT, UPDATE, DELETE'} ON TABLE ${qualified} TO mca_app`);
       policies.push(`DROP POLICY IF EXISTS mca_server_access ON ${qualified}`);
       // Only our server role has this policy. Every browser goes through MCA authorization.
-      policies.push(`CREATE POLICY mca_server_access ON ${qualified} TO mca_app USING (true) WITH CHECK (true)`);
+      policies.push(table === 'platform_admin_grants'
+        ? `CREATE POLICY mca_server_access ON ${qualified} FOR SELECT TO mca_app USING (true)`
+        : `CREATE POLICY mca_server_access ON ${qualified} TO mca_app USING (true) WITH CHECK (true)`);
     }
     await client.query(policies.join(';\n'));
     const sequences = await client.query<{name:string}>(`SELECT DISTINCT s.relname name FROM pg_class s JOIN pg_depend d ON d.objid=s.oid JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace n ON n.oid=s.relnamespace WHERE s.relkind='S' AND n.nspname='public' AND t.relname=ANY($1::text[])`, [applicationTables()]);

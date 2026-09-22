@@ -22,8 +22,13 @@ import { documentScanner } from "../documents/scanner"
 import { processQueuedEmail, replayEmailIntake } from "../intake/email"
 import { replayIntake } from "../intake/service"
 import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-service"
+import { assertCompanyOperational, getCompanyAccess } from "../company-access"
+import { assertOutboundFresh } from "../outbound-freshness"
+import { withOutboundApproval } from "../outbound-approval"
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
+  await assertCompanyOperational(job.workspace_id)
+  if (["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
   if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   if (job.kind === "application_invitation_reminder") return (await import("../applications/reminders")).processInvitationReminder(job)
   if (job.kind === "document_scan") {
@@ -78,6 +83,7 @@ export async function recoverSubmissionOutbox(): Promise<number> {
     AND NOT EXISTS (SELECT 1 FROM mca_background_jobs b WHERE b.kind='submission_delivery' AND b.resource_id=j.id) ORDER BY o.created_at LIMIT 20`).all()
   let enqueued = 0
   for (const row of rows) {
+    if (!(await getCompanyAccess(row.workspace_id)).allowed) continue
     const payload = parseJson<Record<string, unknown>>(row.payload_json, {})
     const actor = payload.actor
     const actorWorkspaceId = actor && typeof actor === "object" && !Array.isArray(actor)
@@ -104,7 +110,8 @@ export async function runNextBackgroundJob(): Promise<boolean> {
   if (!job) return false
   const heartbeat = setInterval(() => { void heartbeatBackgroundJob(job).catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
-    const result = await runAsBackgroundWorker(() => dispatch(job))
+    const outbound = ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
+    const result = await runAsBackgroundWorker(() => outbound ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job))
     await completeBackgroundJob(job, result)
     console.info(JSON.stringify({ event: "worker_job_completed", jobId: job.id, kind: job.kind }))
   } catch (error) {

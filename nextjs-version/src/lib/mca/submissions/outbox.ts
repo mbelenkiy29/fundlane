@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { getOutgoingDocumentBytes } from "./compress"
 import { newId } from "../db"
 import { AppError } from "../errors"
+import { assertCompanyOperational } from "../company-access"
 import type { AttemptState, DeliverResult, JobState, SubmissionJob } from "./contracts"
 import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
@@ -49,6 +50,7 @@ async function refreshCache(job: SubmissionJob): Promise<void> {
 }
 
 export async function processJobDelivery(job: SubmissionJob): Promise<SubmissionJob> {
+  await assertCompanyOperational(job.workspaceId)
   if (job.state !== "queued" && job.state !== "sending") {
     await markOutboxProcessed(job.id)
     return job
@@ -112,6 +114,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     }
     const delivered = await deliverSubmission(sending, packaged.documents)
+    if (delivered.errorCode === "company_paused" || delivered.errorCode === "company_outbound_reapproval_required") throw new AppError(delivered.errorCode === "company_paused" ? 402 : 409, delivered.errorCode, "Review this submission after company recovery.")
     assertProductionDeliveryNotPreview(delivered)
     const nextState: JobState = delivered.state
     const reason = clip(delivered.errorMessage) ?? (delivered.ok ? undefined : "Delivery failed.")
@@ -141,6 +144,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
     const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason: message ?? "Delivery failed." })
     await refreshCache(saved)
     await markOutboxProcessed(job.id, message ?? null)
+    if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) throw error
     return saved
   }
 }

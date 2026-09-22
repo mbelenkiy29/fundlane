@@ -4,6 +4,7 @@ import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken 
 import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
+import { assertCompanyOperational } from "../company-access"
 import type { GoogleConnectionView } from "./contracts"
 
 const GOOGLE_API="https://www.googleapis.com/calendar/v3"
@@ -32,6 +33,7 @@ async function tokenRequest(values:Record<string,string>):Promise<Record<string,
   return response.json()
 }
 export async function googleRequest<T>(connection:Connection,path:string,init:RequestInit={}):Promise<T> {
+  await assertCompanyOperational(connection.workspace_id)
   const credential=JSON.parse(decryptSensitive(connection.credential_cipher,connection.workspace_id)) as Credential
   if(credential.expiresAt<Date.now()+60000) {
     const refreshed=await tokenRequest({grant_type:"refresh_token",refresh_token:credential.refreshToken})
@@ -41,6 +43,7 @@ export async function googleRequest<T>(connection:Connection,path:string,init:Re
     connection.credential_cipher=encryptSensitive(JSON.stringify(credential),connection.workspace_id)
     await getDatabase().prepare("UPDATE mca_calendar_connections SET credential_cipher=? WHERE id=?").run(connection.credential_cipher,connection.id)
   }
+  await assertCompanyOperational(connection.workspace_id)
   const response=await transport(GOOGLE_API+path,{...init,headers:{"content-type":"application/json",...init.headers,authorization:`Bearer ${credential.accessToken}`},signal:AbortSignal.timeout(12000),redirect:"error"})
   if(!response.ok) throw new GoogleCalendarError(response.status)
   if(response.status===204) return undefined as T

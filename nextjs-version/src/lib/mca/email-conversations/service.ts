@@ -528,9 +528,11 @@ export async function retryEmail(inputActor: DealActor, messageId: string) {
         "email_retry_not_allowed",
         "Only a definitively failed email can be retried."
       )
+    await (await import("../company-access")).assertCompanyOutboundAllowed(actor.workspaceId, nowIso())
     await recordAuditEvent({
       context: actor,
       action: "email.retry_queued",
+      executor: db,
       resourceType: "email_message",
       resourceId: message.id,
       metadata: { conversationId: row.id },

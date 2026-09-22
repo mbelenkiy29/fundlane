@@ -140,6 +140,15 @@ export function extractionProviderStatus(): { configured: boolean; provider: str
   return { configured, provider: provider ?? "unconfigured", ...(configured ? {} : { action: "Set MCA_DOCUMENT_AI_PROVIDER=openai, OPENAI_API_KEY, and MCA_DOCUMENT_AI_MODEL." }) }
 }
 
-export function extractApplication(actor: DealActor, input: ExtractionFileInput): Promise<ApplicationExtraction> { return configuredProvider().extractApplication(actor, input) }
-export function suggestFieldMapping(actor: DealActor, input: { headers: string[]; samples: string[][]; allowedFields: string[] }): Promise<FieldMappingSuggestion> { return configuredProvider().suggestFieldMapping(actor, input) }
-export function extractStatementMetadata(actor: DealActor, input: ExtractionFileInput): Promise<StatementMetadataExtraction> { return configuredProvider().extractStatementMetadata(actor, input) }
+export async function extractApplication(actor: DealActor, input: ExtractionFileInput): Promise<ApplicationExtraction> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  return configuredProvider().extractApplication(actor, input)
+}
+export async function suggestFieldMapping(actor: DealActor, input: { headers: string[]; samples: string[][]; allowedFields: string[] }): Promise<FieldMappingSuggestion> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  return configuredProvider().suggestFieldMapping(actor, input)
+}
+export async function extractStatementMetadata(actor: DealActor, input: ExtractionFileInput): Promise<StatementMetadataExtraction> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  return configuredProvider().extractStatementMetadata(actor, input)
+}

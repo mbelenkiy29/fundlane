@@ -409,6 +409,8 @@ async function defaultTransport(message: DigestDeliveryMessage): Promise<{ deliv
 }
 
 async function deliverDigest(message: DigestDeliveryMessage): Promise<{ delivery: DigestDelivery; error?: string }> {
+  await (await import("../company-access")).assertCompanyOperational(message.workspaceId)
+  await (await import("../outbound-approval")).assertOutboundDispatch(message.workspaceId, message.windowEnd)
   const transport = transportOverride ?? defaultTransport
   try {
     const result = await transport(message)
@@ -812,7 +814,7 @@ async function processSubscription(
     }
   }
 
-  if (subscription.status !== "active") {
+  if (subscription.status !== "active" || !(await (await import("../company-access")).getCompanyAccess(subscription.workspace_id)).allowed) {
     return skipDelivery({
       workspaceId: subscription.workspace_id,
       membershipId: subscription.membership_id,
@@ -903,7 +905,13 @@ async function processSubscription(
     correlationId: claimed.row.correlation_id,
     groups: payload.groups,
   }
-  const delivered = await deliverDigest(message)
+  let delivered: Awaited<ReturnType<typeof deliverDigest>>
+  try { delivered = await deliverDigest(message) }
+  catch (error) {
+    if (!(error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code))) throw error
+    await markDelivery(claimed.row, "skipped")
+    return { membershipId: subscription.membership_id, windowStart: window.windowStart, windowEnd: window.windowEnd, state: "skipped", reason: "suspended", deliveryId: claimed.row.id, correlationId: claimed.row.correlation_id }
+  }
   const accepted = delivered.delivery === "sent" || delivered.delivery === "preview"
   const row = await markDelivery(claimed.row, accepted ? "sent" : "failed")
   await recordAuditEvent({

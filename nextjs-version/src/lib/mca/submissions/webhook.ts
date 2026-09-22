@@ -215,6 +215,8 @@ export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult>
 
   const hostSafe = await assertSafeWebhookHost(new URL(resolved.target.url).hostname, resolver())
   if (!hostSafe.ok) return failed(correlationId, "provider_unavailable", hostSafe.message)
+  await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
+  await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
 
   try {
     const response = await http()(resolved.target.url, {

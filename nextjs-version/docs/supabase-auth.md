@@ -6,12 +6,25 @@ Fundlane uses Supabase Auth for verified email/password identities. The server-o
 
 Configure `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, the restricted runtime `DATABASE_URL`, and the environment's exact `MCA_APP_ORIGIN`. Use different Auth projects for staging and production. Configure production SMTP in Supabase; ordinary previews must never send using production credentials.
 
-Set the Supabase Site URL to the environment's public origin and allow exactly its `/auth/callback` URL. The built-in PKCE email redirect works when the email is opened in the same browser that requested it. For links that work across devices, configure confirmation and recovery email templates to send a token hash to the application callback:
+Set the Supabase Site URL to the environment's public origin (without a trailing slash). Allow that exact host's `/auth/callback` and its continuation query variants in Auth redirect settings; the historical fixed-query allowlist below is insufficient for invitation flows. The built-in PKCE email redirect works when the email is opened in the same browser that requested it. For links that work across devices, configure these **Supabase Go HTML email templates**:
 
-- Confirmation: `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=signup&next=/onboarding`
-- Recovery: `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password`
+Confirmation:
+```html
+<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=signup&amp;redirect_to={{ .RedirectTo | urlquery }}">Confirm your email</a>
+```
 
-If the email template includes `{{ .Token }}`, the verification screen also accepts that code. Only confirmation and recovery token types are accepted; callback destinations are restricted to onboarding or password setup. Require verified email and a minimum 12-character password in project Auth settings. Signup and password reset also validate password length on the application server.
+Recovery:
+```html
+<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=recovery&amp;redirect_to={{ .RedirectTo | urlquery }}">Reset your password</a>
+```
+
+`urlquery` is the Go template function: encode the entire `.RedirectTo` as **one query value**. Do not append `?token_hash` to `.RedirectTo`, which already contains `?next=...`, or hardcode `next=/onboarding`. HTML `&amp;` separators become `&` when the link is followed. These links supply the actual `.TokenHash` to `verifyOtp`; they do not need a PKCE `code`, browser verifier, or `.ConfirmationURL`. Do not substitute `.Token` for `.TokenHash`.
+
+The application creates `.RedirectTo` using its canonical origin and sanitized continuation. The callback independently validates the encoded URL's exact origin and `/auth/callback` path, extracts `next`, and applies its destination allowlist again. It never redirects to `.RedirectTo` itself. Untrusted or absent values fall back to onboarding (through password setup for recovery). Carrying this non-authorizing destination in the URL supports cross-device verification; no server-stored continuation identifier is required. Possession of an invitation token still requires the matching verified identity and explicit server-side acceptance.
+
+Recovery requests wrap the final destination in `/reset-password?next=...`. Both PKCE and token-hash callbacks preserve that destination through password setup; success returns to the invitation or other allowed final destination. Expired recovery links return to the recovery request screen with that same sanitized destination. Migrated identities still use the existing server-only `allowPasswordSetup` gate and metadata-clearing process.
+
+If the email template includes `{{ .Token }}`, the verification screen also accepts that code. Only email/signup and recovery token types are accepted; callback destinations are explicitly allowlisted. Require verified email and a minimum 12-character password in project Auth settings. Signup and password reset also validate password length on the application server.
 
 Company invitations use the existing `MCA_EMAIL_WEBHOOK_URL` business-email integration. They contain a server-generated, hashed, 72-hour application invitation token. The invitee must also authenticate with a verified matching Supabase email. Resends rotate the token while preserving the invitation identity and reserved seat. Deactivation or acceptance invalidates outstanding links. Delivery failures preserve pending reservations for an administrator to retry; development-only delivery previews are returned when no business email provider is configured.
 
@@ -24,6 +37,33 @@ The `mca_workspace` HTTP-only cookie only selects a workspace. Every request joi
 Signout records an immediate local revocation before calling Supabase signout. Password reset signs out other provider sessions. Delegated ChatKit callbacks recheck the live Supabase session, mapped identity, current membership, and existing signed request state. Local deactivation removes in-flight ChatKit requests and prevents every subsequent membership-authorized action without waiting for JWT expiry.
 
 ## Identity migration
+
+### Company ownership and platform authorization
+
+Migration `0046_company_ownership.sql` adds explicit `workspace_owners` and separate
+`platform_admin_grants`. New company onboarding records the creator's membership as
+owner in the same transaction. Existing companies remain unassigned until an operator
+confirms their owner; no ownership or platform privileges are inferred from old roles.
+
+`POST /api/workspace/ownership` accepts `{ "membershipId": "..." }` from the current
+owner's authenticated session. It requires an active same-company successor, promotes
+that successor to company admin if necessary, and records the transfer atomically in
+the audit log. The previous owner remains an admin. Member edits and deactivation use
+the same workspace lock so they cannot race a transfer or remove the current owner.
+
+The company role named `super_admin` is **not** a platform administrator. Platform
+handlers must use `requirePlatformAdmin()`, which requires a live Supabase identity,
+an unrevoked database grant, and signed `aal2` claims belonging to the same session.
+This is the authorization foundation; console screens and MFA enrollment/challenge
+screens are subsequent implementation work.
+
+Platform grants are provisioned only through the trusted database operator connection,
+using the immutable local user ID and recording `granted_at`, `granted_by`, and `reason`.
+Revoke with `revoked_at`; the next authorization check rejects the grant. Never expose
+grant writes through company settings or user-editable Supabase metadata. Run
+`pnpm db:secure` after migrations: the runtime role receives SELECT only on this table,
+and browser roles receive no access. Existing-company ownership assignment must also
+validate an active administrative membership in the same company before insertion.
 
 Apply migration `0025_supabase_auth.sql` and run the checked identity import tooling. Preserve local user/workspace IDs and historical Clerk columns. Each migrated identity has a unique `users.supabase_user_id` and trusted admin metadata `mca_user_id` and `mca_migration_pending: true`. Do not put those values in editable `user_metadata`.
 

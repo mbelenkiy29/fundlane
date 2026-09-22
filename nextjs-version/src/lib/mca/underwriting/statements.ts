@@ -212,6 +212,7 @@ export async function analyzeDealStatements(
     for (const document of missing) {
       await options?.beforeStep?.()
       const content = await getDocumentContent(actor, document.id)
+      await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
       extracted.push({
         documentId: document.id,
         createdAt: document.createdAt,

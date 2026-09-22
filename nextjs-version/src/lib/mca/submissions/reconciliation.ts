@@ -6,6 +6,7 @@ import type { DealActor } from "../deals/schema"
 import type { AdapterStatusResult, SubmissionJob } from "./contracts"
 import { nowIso } from "./clock"
 import { displayCacheStatus, insertAttempt, insertDealSubmissionCache, updateJobRecord } from "./repository"
+import { retainReceiptIfPaused } from "../paused-receipts"
 
 export const STATUS_MAPPING_VERSION = 1 as const
 
@@ -124,7 +125,7 @@ export interface ReconcileProviderStatusResult {
   funderId: string
   duplicate: boolean
   ignored: boolean
-  ignoredReason?: "funded_terminal" | "stale_rank" | "replay"
+  ignoredReason?: "funded_terminal" | "stale_rank" | "replay" | "company_paused"
   unknown: boolean
   rawStatus: string
   normalized: NormalizedProviderStatus
@@ -401,6 +402,9 @@ function resultOf(input: {
 export async function reconcileProviderStatus(input: ReconcileProviderStatusInput): Promise<ReconcileProviderStatusResult> {
   const mapped = mapProviderStatus(input.status.rawStatus, input.status)
   const eventKey = input.eventKey?.trim() || (input.status.eventId ? `${input.source}:${input.status.eventId}` : undefined)
+  if (await retainReceiptIfPaused({ workspaceId: input.job.workspaceId, kind: "submission_status", resourceId: input.job.id, payload: { status: input.status, eventKey, source: input.source } })) {
+    return { ok: true, jobId: input.job.id, dealId: input.job.dealId, funderId: input.job.funderId, duplicate: false, ignored: true, ignoredReason: "company_paused", unknown: mapped.unknown, rawStatus: mapped.rawStatus, normalized: mapped.normalized, mappingVersion: mapped.mappingVersion, submissionStatus: input.job.state, correlationId: input.status.correlationId, eventId: input.status.eventId }
+  }
 
   return withTransaction(async (executor) => {
     const submission = await submissionForJob(input.job, executor)

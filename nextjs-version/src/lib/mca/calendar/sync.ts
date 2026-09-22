@@ -6,6 +6,7 @@ import { getSessionResponse } from "../sessions"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
+import { getCompanyAccess } from "../company-access"
 import { activitySchema, type CalendarEvent } from "./contracts"
 import { type ActivityRow, canEditActivity } from "./service"
 import { connectionFor, eventPath, googleEnabled, googleRequest, GoogleCalendarError, type Connection, type GoogleEvent } from "./google"
@@ -145,6 +146,8 @@ async function syncActivities(c:Connection,actor:DealActor) {
     let link=links.find(l=>l.activity_id===row.id)
     if(!link) {
       if(row.status!=="scheduled") continue
+      // Do not create historical events/reminders after a worker or company pause.
+      if(Date.parse(row.ends_at)<=Date.now()) continue
       link={connection_id:c.id,activity_id:row.id,event_id:stableEventId(c.id,row.id),etag:null,local_version:0,baseline_json:null,conflict_json:null,resolution:null}
       await db.prepare("INSERT INTO mca_calendar_event_links (connection_id,activity_id,event_id) VALUES (?,?,?) ON CONFLICT DO NOTHING").run(c.id,row.id,link.event_id)
     }
@@ -198,6 +201,10 @@ export async function syncConnection(id:string):Promise<void> {
       if(!lock?.locked) return
       const c=await db.prepare<Connection>("SELECT * FROM mca_calendar_connections WHERE id=? FOR UPDATE").get(id)
       if(!c || c.status==="reconnect") return
+      if(!(await getCompanyAccess(c.workspace_id)).allowed) {
+        await db.prepare("UPDATE mca_calendar_connections SET next_sync_at=? WHERE id=?").run(new Date(Date.now()+300000).toISOString(),id)
+        return
+      }
       attemptedCredential=c.credential_cipher
       const actor=await connectionActor(c)
       if(!actor) {
@@ -217,6 +224,7 @@ export async function syncConnection(id:string):Promise<void> {
       await db.prepare("UPDATE mca_calendar_connections SET status=?,last_sync_at=?,next_sync_at=?,error=NULL,failures=0 WHERE id=?").run(Number(conflicts?.count)?"conflict":"connected",nowIso(),new Date(Date.now()+300000).toISOString(),id)
     })
   } catch(error) {
+    if(error instanceof AppError && error.code==="company_paused") return
     const reconnect=error instanceof GoogleCalendarError && [401,403].includes(error.status)
     await getDatabase().prepare(`UPDATE mca_calendar_connections SET status=?,error=?,failures=failures+1,next_sync_at=? WHERE id=? AND credential_cipher=?`).run(reconnect?"reconnect":"error",reconnect?"Google access expired or a calendar permission was removed. Reconnect to continue.":"Calendar synchronization failed. It will retry automatically; you can also retry now.",new Date(Date.now()+300000).toISOString(),id,attemptedCredential??null)
     console.error(JSON.stringify({event:"calendar_sync_failed",connectionId:id,code:error instanceof GoogleCalendarError?error.status:"internal"}))

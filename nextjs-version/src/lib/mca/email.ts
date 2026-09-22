@@ -3,6 +3,7 @@ import "server-only";
 
 import { AppError } from "./errors";
 import { newId } from "./db";
+import { sendUsesendEmail } from "./intake/usesend";
 
 interface EmailMessage {
   recipient: string;
@@ -18,11 +19,13 @@ export function assertEmailDeliveryConfigured(): void {
   }
 }
 
-export async function deliverEmail(message: EmailMessage, options?: {correlationId?: string}): Promise<{
+export async function deliverEmail(message: EmailMessage, options?: {correlationId?: string; workspaceId?: string; approvedAt?: string}): Promise<{
   delivery: "sent" | "preview";
   correlationId: string;
   previewUrl?: string;
 }> {
+  if (options?.workspaceId) await (await import("./company-access")).assertCompanyOperational(options.workspaceId);
+  if (options?.workspaceId) await (await import("./outbound-approval")).assertOutboundDispatch(options.workspaceId, options.approvedAt ?? new Date().toISOString());
   const correlationId = options?.correlationId ?? newId();
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL;
   if (!webhook) {
@@ -34,4 +37,48 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
   const response = await sendTransactionalWebhook(webhook, process.env.MCA_EMAIL_WEBHOOK_TOKEN, message, correlationId);
   if (!response.ok) throw new AppError(502, response.status >= 500 ? "email_delivery_uncertain" : "email_delivery_failed", "The email provider did not accept the message.");
   return { delivery: "sent", correlationId };
+}
+
+export interface BillingEmailMessage {
+  recipient: string; actionUrl: string; expiresAt: string; data: Record<string, unknown>;
+  transport: "webhook" | "usesend"; from?: string; retryUntil?: string;
+  content?: { subject:string; text:string; html:string };
+}
+/** Billing recovery is allowed while paused. Only this explicit helper has the UseSend fallback. */
+export async function deliverBillingEmail(message: BillingEmailMessage, correlationId: string): Promise<void> {
+  if (message.transport === "webhook") {
+    if (!process.env.MCA_EMAIL_WEBHOOK_URL) throw new AppError(503,"billing_email_unconfigured","The original billing webhook transport is unavailable.")
+    const result = await deliverEmail({ ...message, template:"operations_alert" },{correlationId})
+    if (result.delivery !== "sent") throw new AppError(503,"billing_email_unconfigured","Billing email requires a real delivery transport.")
+    return
+  }
+  const key = process.env.MCA_USESEND_API_KEY?.trim()
+  if (message.retryUntil && Date.parse(message.retryUntil) <= Date.now()) throw new AppError(503,"billing_delivery_review_required","UseSend's deduplication window has ended. Check provider delivery before reissuing this notification.")
+  const from = message.from
+  if (!key || !from) throw new AppError(503,"billing_email_unconfigured","Configure MCA_USESEND_API_KEY and MCA_USESEND_FROM for billing notifications.")
+  const url = new URL(message.actionUrl)
+  if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["localhost","127.0.0.1"].includes(url.hostname))) throw new AppError(503,"billing_origin_invalid","Billing recovery links require HTTPS.")
+  await sendUsesendEmail({apiKey:key,from,to:message.recipient,...(message.content??renderBillingEmailContent(message)),idempotencyKey:correlationId})
+}
+
+/** Freeze this output in the outbox so a deployment cannot change a retry's provider body. */
+export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"data"|"actionUrl">) {
+  const subjects: Record<string,string> = {
+    renewal_payment_failed:"Action needed: Fundlane renewal payment", billing_paused:"Your Fundlane company access is paused",
+    billing_recovered:"Fundlane billing payment received", trial_ending:"Your Fundlane trial ends soon", trial_ended:"Your Fundlane trial has ended",
+  }
+  const kind = String(message.data.kind)
+  const subject = subjects[kind]
+  if (!subject) throw new AppError(422,"billing_notification_unknown","Unknown billing notification kind.")
+  const descriptions: Record<string,string> = {
+    renewal_payment_failed:"Your company renewal payment has not completed. Update your payment method and pay all outstanding invoices before your grace period ends to keep company access. Monthly fees continue during suspension until the subscription’s effective cancellation date. Open Plans & Billing to review outstanding invoices, pay or cancel. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation.",
+    billing_paused:"Company operations are paused because a renewal remains unpaid. Monthly fees continue during suspension until the subscription’s effective cancellation date. Outstanding invoices, including missed months, remain due even after cancellation. Plans & Billing remains available to review outstanding invoices, pay or cancel. All applicable overdue invoices must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation. Separate administrative suspensions remain in effect.",
+    billing_recovered:"All applicable overdue invoices have been verified paid. Billing suspension has been cleared. Any separate administrative suspension remains in effect. Payment does not restart a canceled subscription.",
+    trial_ending:"Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
+    trial_ended:"Your trial has ended and company operations are paused. Your data remains available for recovery. Choose your paid subscription in Plans & Billing.",
+  }
+  const deadline = message.data.graceEndsAt ?? message.data.trialEndsAt
+  const text = [descriptions[kind], typeof deadline === "string" ? `Deadline: ${deadline}` : "", `Plans & Billing: ${message.actionUrl}`].filter(Boolean).join("\n\n")
+  const escape = (value:string) => value.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]!)
+  return {subject,text,html:`<p>${escape(descriptions[kind])}</p>${typeof deadline==="string"?`<p>Deadline: ${escape(deadline)}</p>`:""}<p><a href="${escape(message.actionUrl)}">Open Plans &amp; Billing</a></p>`}
 }

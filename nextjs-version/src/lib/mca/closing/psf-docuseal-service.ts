@@ -26,6 +26,7 @@ export interface DocuSealPsfConnection extends DocuSealProviderConfig {
 }
 
 export interface DocuSealPsfRecord extends DocuSealPsfSubmissionInput {
+  createdAt: string
   state: "pending" | "delivered" | "failed" | "signed"
   externalRequestId?: string
   correlationId: string
@@ -65,7 +66,7 @@ export type DocuSealPsfDispatchResult =
   | { state: "signed"; requestId: string; submissionId: string }
 
 export interface DocuSealPsfCompletionResult {
-  state: "signed"
+  state: "signed" | "retained"
   requestId: string
   submissionId: string
   signedDocumentIds: string[]
@@ -161,6 +162,7 @@ function systemActor(request: Pick<DocuSealPsfRecord, "workspaceId" | "correlati
 function requestFromRow(row: Row, workspaceId: string): DocuSealPsfRecord {
   return {
     requestId: String(row.id),
+    createdAt: String(row.created_at),
     workspaceId,
     dealId: String(row.deal_id),
     offerRevisionId: String(row.offer_revision_id),
@@ -258,9 +260,11 @@ function errorDetails(error: unknown): { code: string; message: string } {
 }
 
 export async function deliverPsfRequestWithDocuSeal(actor: DealActor, requestId: string, dependencies: DocuSealPsfServiceDependencies = {}): Promise<DocuSealPsfDispatchResult> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const repo = repository(dependencies)
   const request = await repo.findRequest(actor.workspaceId, requestId)
   if (!request) throw new AppError(404, "psf_request_not_found", "The PSF request was not found.")
+  await (await import("../outbound-approval")).assertOutboundDispatch(actor.workspaceId, request.createdAt)
   if (request.state === "signed") {
     if (!request.externalRequestId) throw new AppError(409, "psf_state_conflict", "The signed PSF request has no provider identity.")
     return { state: "signed", requestId, submissionId: request.externalRequestId }
@@ -273,7 +277,14 @@ export async function deliverPsfRequestWithDocuSeal(actor: DealActor, requestId:
   }
   if (request.externalRequestId && request.externalRequestId !== reservation.externalId) throw new AppError(409, "docuseal_provider_conflict", "This PSF request is already bound to a different delivery provider identity.")
   try {
-    const identity = await reconcileOrCreateDocuSealPsfSubmission(config, request, reservation.inserted ? "never_attempted" : "reconcile_only", dependencies.provider)
+    const identity = await reconcileOrCreateDocuSealPsfSubmission(config, request, reservation.inserted ? "never_attempted" : "reconcile_only", {
+      ...dependencies.provider,
+      beforeRequest: async () => {
+        await dependencies.provider?.beforeRequest?.()
+        await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+        await (await import("../outbound-approval")).assertOutboundDispatch(actor.workspaceId, request.createdAt)
+      },
+    })
     if (!identity) {
       await repo.markPending(request, reservation.id, "docuseal_outcome_unknown", "DocuSeal has not exposed a submission for the reserved request. Reconciliation will not create another submission.")
       return { state: "pending_reconciliation", requestId, errorCode: "docuseal_outcome_unknown" }
@@ -341,6 +352,10 @@ export async function recordDocuSealPsfWebhook(workspaceId: string, rawBody: str
   if (!request) throw new AppError(404, "psf_request_not_found", "No enabled PSF request matches this DocuSeal submission.")
   if (request.state === "signed") return { state: "signed", requestId: request.requestId, submissionId: webhook.submissionId, ...(await storedEvidence(request, webhook.submissionId, dependencies)), replayed: true }
   if (request.state !== "delivered" || request.externalRequestId !== webhook.submissionId) throw new AppError(409, "psf_state_conflict", "The DocuSeal completion does not match a delivered PSF request.")
+  if (await (await import("../paused-receipts")).retainReceiptIfPaused({ workspaceId, kind: "docuseal_completion", resourceId: request.requestId, payload: webhook })) {
+    await repo.markCompletionPending(request, "company_paused", "Authenticated signing receipt retained. Restore company access and refresh provider evidence.")
+    return { state: "retained", requestId: request.requestId, submissionId: webhook.submissionId, signedDocumentIds: [], replayed: false }
+  }
   const completion = await getVerifiedDocuSealCompletedSubmission(config, { submissionId: webhook.submissionId, requestId: request.requestId, signerEmail: request.signerEmail, signerRole: config.signerRole }, dependencies.provider)
   await repo.markCompletionPending(request, "completed_pending_artifact", "DocuSeal completed signing; signed documents and the audit log are being verified and stored.")
   const signedDocumentIds: string[] = []

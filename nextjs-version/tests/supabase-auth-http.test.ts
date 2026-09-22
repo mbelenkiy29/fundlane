@@ -7,11 +7,12 @@ import { authErrorMessage } from "../src/lib/mca/auth-navigation"
 let providerError: AuthApiError | AuthWeakPasswordError | null = null
 let hasIdentity = true
 let migrationPending = true
+let recoveryRedirect = ""
 const calls: string[] = []
 const client = { auth: {
   signUp: async () => { calls.push("signup"); return { data: { session: null }, error: providerError } },
   updateUser: async () => { calls.push("password"); return { error: providerError } },
-  resetPasswordForEmail: async () => ({ error: providerError }),
+  resetPasswordForEmail: async (_email: string, options: { redirectTo: string }) => { recoveryRedirect = options.redirectTo; return { error: providerError } },
   signOut: async ({ scope }: { scope: string }) => { calls.push(`signout:${scope}`); return { error: null } },
   refreshSession: async () => { calls.push("refresh"); return { error: null } },
 } }
@@ -46,6 +47,22 @@ function request(action: Action, body: unknown = input) {
   return handleSupabaseAuth(new Request("http://localhost/api/auth/test", { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body) }), action)
 }
 beforeEach(() => { providerError = null; hasIdentity = true; migrationPending = true; calls.length = 0 })
+
+test("recovery request encodes a safe invitation destination through password setup", async () => {
+  const invitation = `/accept-invite?token=${"c".repeat(64)}`
+  assert.equal((await request("recovery-request", { email: input.email, next: invitation })).status, 200)
+  const callback = new URL(recoveryRedirect)
+  assert.equal(callback.pathname, "/auth/callback")
+  assert.equal(callback.searchParams.getAll("next").length, 1)
+  const reset = new URL(callback.searchParams.get("next")!, callback.origin)
+  assert.equal(reset.pathname, "/reset-password")
+  assert.equal(reset.searchParams.get("next"), invitation)
+  for (const next of ["https://evil.test", "//evil.test", "/\\evil.test", "/reset-password?next=//evil.test"]) {
+    assert.equal((await request("recovery-request", { email: input.email, next })).status, 200)
+    const redirect = new URL(recoveryRedirect)
+    assert.equal(new URL(redirect.searchParams.get("next")!, redirect.origin).searchParams.get("next"), "/onboarding")
+  }
+})
 
 for (const action of ["company-signup", "recovery-reset"] as const) {
   for (const reasons of [["pwned"], ["length", "pwned"], ["length"], ["characters"], []] as Array<Array<"pwned" | "length" | "characters">>) {

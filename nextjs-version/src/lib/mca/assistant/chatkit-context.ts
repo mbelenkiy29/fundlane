@@ -9,6 +9,7 @@ import { bodyHash, type Delegation } from "./security"
 import type { MembershipContext, Role } from "../types"
 
 export async function assistantContext(context: MembershipContext) {
+  await (await import("../company-access")).assertCompanyOperational(context.workspaceId)
   const settings = await getWorkspaceSettings(context.workspaceId)
   const pages = effectivePageVisibility(context.role, settings.pageVisibility, settings.featureFlags)
   if (!pages.deals) throw new AppError(403, "assistant_access_denied", "Deal access is required to use the assistant.")

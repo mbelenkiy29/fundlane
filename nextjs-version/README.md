@@ -22,7 +22,7 @@ Run the document worker with `node --conditions=react-server --import tsx script
 
 ## Billing and integrations
 
-[Stripe billing](docs/supabase-billing.md) preserves Free/1 seat, Starter/$49 monthly/5 seats, and Team/$99 monthly/20 seats. The Stripe Sync Engine owns the separate `stripe` schema; application entitlements are reconciled from verified subscriptions. Historical Clerk billing rows remain available. Production charges are disabled initially.
+[Stripe billing](docs/supabase-billing.md) offers a no-card 14-day trial (five users) and one $399/month plan including the first user, with graduated additional seats. Migration 0047 explicitly exempts existing companies until paid conversion. Stripe test/live mode is configured explicitly; verified provider reads, local time-based gates, renewal grace and retryable notifications manage access. Historical Clerk billing rows remain available.
 
 Application invitations and business messages use the existing transactional delivery adapter. Supabase Auth uses separately configured SMTP. Company SMS, signature providers, sender OAuth, and assistant credit packs retain their individual activation requirements:
 

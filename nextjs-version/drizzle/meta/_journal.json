@@ -309,6 +309,34 @@
       "when": 1790010000046,
       "tag": "0046_application_review",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1790035200000,
+      "tag": "0046_company_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1790035200001,
+      "tag": "0047_company_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1790035200002,
+      "tag": "0048_billing_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790035200003,
+      "tag": "0049_application_review_catchup",
+      "breakpoints": true
     }
   ]
 }

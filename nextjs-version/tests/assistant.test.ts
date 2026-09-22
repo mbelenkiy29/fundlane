@@ -1,6 +1,7 @@
 import "./helpers/business-auth"
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
+import { PDFDocument } from "pdf-lib"
 import {
   Usage,
   type Model,
@@ -56,6 +57,11 @@ import { createSmsAccount, recordSmsConsent } from "../src/lib/mca/sms/service"
 import { persistInbound } from "../src/lib/mca/sms/inbox"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { storeDocument } from "../src/lib/mca/documents/service"
+import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+import { getSubmissionSelection } from "../src/lib/mca/submissions/queue"
+import { checkCompleteness, getRequiredStatementMonths } from "../src/lib/mca/underwriting/completeness"
+import { closedLookbackMonths } from "../src/lib/mca/underwriting/lookback"
 import { setReminderTransportForTests } from "../src/lib/mca/comms/reminders"
 import { updateAnalysisSettings } from "../src/lib/mca/underwriting/analysis"
 import { GET, POST } from "../src/app/api/mca/assistant/route"
@@ -166,6 +172,7 @@ before(async () => {
   ).id
 })
 after(async () => {
+  setDocumentScannerForTests(undefined)
   await closeDatabaseForTests()
   await fixture?.close()
 })
@@ -643,6 +650,36 @@ test("analysis tool overrides automatic-send workspace settings", async () => {
 
 test("funder submission and reminder approvals show exact content and use existing services", async () => {
   const f = await setup("Submit to the selected funder")
+  const documentBytes = async (label: string) => {
+    const pdf = await PDFDocument.create()
+    pdf.addPage().drawText(`Synthetic ${label}`)
+    return pdf.save()
+  }
+  setDocumentScannerForTests({
+    name: "fixture-clean",
+    async scan() { return { status: "clean", provider: "fixture-clean", evidence: { engineVerified: true } } },
+  })
+  for (const category of ["application", "driver_license", "voided_check"] as const) {
+    await storeDocument(f.actor, {
+      dealId: f.deal.id, idempotencyKey: newId(), filename: `${category}.pdf`,
+      mimeType: "application/pdf", bytes: await documentBytes(category),
+      category, source: "test",
+    })
+  }
+  for (const period of closedLookbackMonths(await getRequiredStatementMonths(f.actor), "America/New_York")) {
+    const statement = await storeDocument(f.actor, {
+      dealId: f.deal.id, idempotencyKey: newId(), filename: `statement-${period}.pdf`,
+      mimeType: "application/pdf", bytes: await documentBytes(period),
+      category: "statement", source: "test",
+    })
+    await sql(`INSERT INTO mca_statement_months
+      (id, workspace_id, deal_id, document_id, account_kind, period, deposits, deposit_count,
+       average_daily_balance, nsf_count, negative_days, ending_balance, extraction_version,
+       corrected, original_extraction, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'checking', ?, '0', '0', '0', '0', '0', '0', 1, 0, '{}', ?, ?)`,
+    newId(), workspace, f.deal.id, statement.id, period, nowIso(), nowIso())
+  }
+  assert.equal((await checkCompleteness(f.actor, f.deal.id)).ready, true)
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   const senderRecord = await createSender(f.actor, {
     provider: "smtp",
@@ -674,6 +711,8 @@ test("funder submission and reminder approvals show exact content and use existi
       ],
     })
   ).funder
+  const selection = await getSubmissionSelection(f.actor, f.deal.id)
+  assert.deepEqual(selection.funders.find(item => item.id === funder.id)?.preflightErrors, [])
   const events: AssistantEvent[] = []
   await runDealAgent(
     f.ctx,

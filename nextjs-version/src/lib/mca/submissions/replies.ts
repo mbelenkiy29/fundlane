@@ -1027,6 +1027,7 @@ export async function reviewReply(actor: DealActor, id: string, input: ReviewRep
 }
 
 export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInput = {}): Promise<RunReplyIngestResult> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const enabled = asEnabled(input.enabled)
   const senderId = input.senderId == null || input.senderId === "" ? undefined : asSenderId(input.senderId)
   const stored = await listSendersByWorkspace(actor.workspaceId)

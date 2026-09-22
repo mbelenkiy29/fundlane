@@ -11,6 +11,7 @@ import { requireLiveSupabaseSession } from "../supabase-auth"
 import { API_KEY_SCOPES, type ApiKeyScope, type Role } from "../types"
 import { usesSupabaseStorage } from "../documents/storage"
 import { artifactChecksum, putPrivateArtifact } from "./artifacts"
+import { assertCompanyOperational, getCompanyAccess } from "../company-access"
 
 const execution = new AsyncLocalStorage<boolean>()
 export function inBackgroundWorker(): boolean { return execution.getStore() === true }
@@ -84,6 +85,7 @@ export function backgroundJobView(job: BackgroundJob): { jobId: string; state: B
 }
 
 export async function currentJobActor(actor: DealActor): Promise<DealActor> {
+  await assertCompanyOperational(actor.workspaceId)
   if (actor.source === "api_key") {
     if (!actor.apiKeyId) throw new AppError(403, "job_permission_revoked", "The original API key identity is unavailable; an authorized user must requeue this operation.")
     const key = await getDatabase().prepare<{ scopes: string }>("SELECT scopes FROM api_keys WHERE workspace_id=? AND id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)").get(actor.workspaceId, actor.apiKeyId, nowIso())
@@ -109,12 +111,26 @@ export async function currentJobActor(actor: DealActor): Promise<DealActor> {
 
 export async function claimBackgroundJob(): Promise<BackgroundJob | undefined> {
   const now = nowIso()
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts>=3").run(now, now)
+  const companies = await getDatabase().prepare<{ workspace_id: string }>("SELECT DISTINCT workspace_id FROM mca_background_jobs WHERE state IN ('queued','running')").all()
+  const allowed: string[] = []
+  for (const company of companies) {
+    if ((await getCompanyAccess(company.workspace_id)).allowed) allowed.push(company.workspace_id)
+    else {
+      // Outbound intent is not replayed after recovery. Keep the idempotency row and
+      // require a fresh reviewed request; never consume an attempt for a pause.
+      await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='company_paused',updated_at=?
+        WHERE workspace_id=? AND state='queued' AND kind IN ('submission_delivery','application_invitation_email','application_invitation_reminder')`).run(now, company.workspace_id)
+      await getDatabase().prepare(`UPDATE mca_submission_jobs SET state='failed',reason='Company paused. Review and submit again after recovery.',updated_at=?
+        WHERE workspace_id=? AND state='queued' AND id IN (SELECT resource_id FROM mca_background_jobs WHERE workspace_id=? AND kind='submission_delivery' AND state='failed' AND error_code='company_paused')`).run(now, company.workspace_id, company.workspace_id)
+    }
+  }
+  if (!allowed.length) return undefined
+  await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts>=3 AND workspace_id IN (${allowed.map(() => "?").join(",")})`).run(now, now, ...allowed)
   return getDatabase().prepare<BackgroundJob>(`WITH candidate AS (
-    SELECT id FROM mca_background_jobs WHERE ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3
+    SELECT id FROM mca_background_jobs WHERE ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3 AND workspace_id IN (${allowed.map(() => "?").join(",")})
     ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
   ) UPDATE mca_background_jobs j SET state='running',attempts=attempts+1,lease_token=?,lease_expires_at=?,updated_at=?
-    FROM candidate c WHERE j.id=c.id RETURNING j.*`).get(now, now, newId(), new Date(Date.now() + 600_000).toISOString(), now)
+    FROM candidate c WHERE j.id=c.id RETURNING j.*`).get(now, now, ...allowed, newId(), new Date(Date.now() + 600_000).toISOString(), now)
 }
 
 export async function heartbeatBackgroundJob(job: BackgroundJob): Promise<void> {
@@ -136,6 +152,12 @@ export async function completeBackgroundJob(job: BackgroundJob, result: unknown)
 }
 
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {
+  if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
+    const outbound = ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
+    await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,attempts=GREATEST(0,attempts-1),error_code='company_paused',available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
+      .run(outbound ? "failed" : "queued", new Date(Date.now() + 60_000).toISOString(), nowIso(), job.id, job.lease_token)
+    return
+  }
   const permanent = error instanceof AppError && error.status < 500
   const state = permanent || job.attempts >= 3 ? "failed" : "queued"
   const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,error_code=?,available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")

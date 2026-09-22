@@ -111,6 +111,10 @@ export async function ingestApplication(actor: DealActor, input: NormalizedIntak
   if (reserved.record.payloadChecksum !== checksum) {
     throw new AppError(409, "intake_event_conflict", "This provider event ID was already used for a different application.")
   }
+  if (!(await (await import("../company-access")).getCompanyAccess(actor.workspaceId)).allowed) {
+    const retained = await updateIntake({ workspaceId: actor.workspaceId, intakeId: reserved.record.intakeId, state: "error", errorCode: "company_paused", errorMessage: "Application retained. Restore company access and replay intake to process it." })
+    return { intakeId: retained.intakeId, dealId: retained.dealId, created: false, state: retained.state, warnings: retained.warnings }
+  }
   if (reserved.record.dealId && ["created", "file_pending"].includes(reserved.record.state)) {
     await getDeal(actor, reserved.record.dealId)
     await (await import("./notifications")).syncApplicationNotifications(actor.workspaceId, reserved.record.intakeId)
@@ -394,6 +398,7 @@ async function actorForIntegration(integration: IntegrationRecord): Promise<Deal
 }
 
 export async function processAttachmentJob(job: AttachmentJob, options: { fetchImpl?: typeof fetch; lookupImpl?: LookupAll } = {}): Promise<AttachmentJob> {
+  if (!(await (await import("../company-access")).getCompanyAccess(job.workspaceId)).allowed) return job
   const claim = await claimAttachmentJob(job.workspaceId, job.id)
   if (!claim.acquired || !claim.job.leaseToken) return claim.job
   const claimed = claim.job
@@ -403,6 +408,7 @@ export async function processAttachmentJob(job: AttachmentJob, options: { fetchI
   const integration = await getIntegration(job.workspaceId, intake.integrationId, true)
   if (!integration || !integration.enabled) return (await completeAttachmentJob(claimed.workspaceId, claimed.id, leaseToken, { state: "failed", lastError: "Integration is disabled or missing." })).job
   try {
+    await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
     const bytes = await fetchPrivateAttachment(claimed, integration, { fetchImpl: options.fetchImpl, lookupImpl: options.lookupImpl })
     const live = await getIntegration(job.workspaceId, integration.id)
     if (!live?.enabled || live.approvalState !== "approved" || live.credentialVersion !== integration.credentialVersion) throw new AppError(403, "integration_changed", "The connection changed during file retrieval. Retry with its current settings.")
@@ -415,6 +421,9 @@ export async function processAttachmentJob(job: AttachmentJob, options: { fetchI
     return completed.job
   } catch (error) {
     const attempts = claimed.attemptCount
+    if (error instanceof AppError && error.code === "company_paused") {
+      return (await completeAttachmentJob(claimed.workspaceId, claimed.id, leaseToken, { state: "retryable", nextAttemptAt: new Date(Date.now() + 60_000).toISOString(), lastError: "company_paused", paused: true })).job
+    }
     const final = attempts >= 5
     const delay = Math.min(60, 2 ** attempts) * 60_000
     const message = error instanceof Error ? error.message.slice(0, 500) : "Attachment retrieval failed."

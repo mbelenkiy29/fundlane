@@ -1,4 +1,5 @@
 import "server-only"
+import { assertOutboundDispatch, withOutboundApproval } from "../outbound-approval"
 
 import { isDocumentReady } from "../documents/contracts"
 
@@ -319,7 +320,9 @@ async function persistRequestPreview(actor: DealActor, input: { dealId: string; 
 }
 
 async function attemptDelivery(actor: DealActor, input: { dealId: string; kind: string; recordId: string; attemptKey: string; channel: "email" | "sms" | "webhook"; recipient?: string; payloadHash: string; senderId?: string; sender?: { fromName: string; fromAddress: string }; subject?: string; body?: string; payload?: Record<string, unknown>; attachments?: Array<{ id: string; version: number; checksum: string; url: string; expiresAt: string; filename?: string; mimeType?: string; bytes?: Uint8Array }>; endpoint?: string; authorizationToken?: string }, transportOverride?: ClosingTransport): Promise<ClosingDelivery> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const key = idempotency(input.attemptKey), now = nowIso(), id = newId(), correlationId = deliveryCorrelationId()
+  await assertOutboundDispatch(actor.workspaceId, now)
   const transport = transportOverride ?? closingTransport()
   const reservation = await withImmediateTransaction(async (database) => {
     if (input.kind === "psf_request") {
@@ -357,6 +360,8 @@ async function attemptDelivery(actor: DealActor, input: { dealId: string; kind: 
     await recordAuditEvent({ context: actor, action: "closing.delivery_reconciled", resourceType: input.kind, resourceId: input.recordId, metadata: { channel: input.channel, state: recovered.state, payloadHash: input.payloadHash, externalIdPresent: Boolean(recovered.external_id) }, correlationId: String(reservation.row.correlation_id) })
     return delivery(recovered)
   }
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  await assertOutboundDispatch(actor.workspaceId, now)
   const result = await transport.deliver({ workspaceId: actor.workspaceId, kind: input.kind as "stipulation_request" | "contract_request" | "repricing_request" | "offer_message" | "psf_request", channel: input.channel, endpoint: input.endpoint, authorizationToken: input.authorizationToken, senderId: input.senderId, sender: input.sender, recipient: input.recipient ?? "configured-webhook", subject: input.subject, body: input.body, payload: input.payload, attachments: input.attachments, correlationId, recordId: input.recordId, attemptKey: key, payloadHash: input.payloadHash })
   const updated = await getDatabase().prepare<Row>("UPDATE mca_closing_deliveries SET state=?,external_id=?,error_code=?,error_message=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *").get(result.state, result.externalId ?? null, result.errorCode ?? null, result.errorMessage ?? null, nowIso(), actor.workspaceId, reservation.row.id)
   await recordAuditEvent({ context: actor, action: "closing.delivery_attempted", resourceType: input.kind, resourceId: input.recordId, metadata: { channel: input.channel, state: result.state, errorCode: result.errorCode, payloadHash: input.payloadHash, externalIdPresent: Boolean(result.externalId) }, correlationId })
@@ -432,6 +437,7 @@ export async function previewContractAction(actor: DealActor, input: { workflowI
 export async function sendRequestPreview(actor: DealActor, previewId: string, attemptKey: string): Promise<ClosingDelivery> {
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_closing_previews WHERE workspace_id=? AND id=?").get(actor.workspaceId, previewId)
   if (!row) throw new AppError(404, "closing_preview_not_found", "The request preview was not found.")
+  await assertOutboundDispatch(actor.workspaceId, String(row.created_at))
   await getDealForDocument(actor, String(row.deal_id))
   const channel = String(row.channel) as "email" | "sms", senderId = row.sender_id ? String(row.sender_id) : undefined
   let emailSender: { fromName: string; fromAddress: string } | undefined
@@ -453,7 +459,7 @@ export async function sendRequestPreview(actor: DealActor, previewId: string, at
     const token = issueClosingArtifactToken(current)
     return { ...ref, url: `${closingArtifactOrigin()}/api/mca/closing/artifacts/${token.token}`, expiresAt: token.expiresAt, filename: content.document.displayFilename, mimeType: content.document.mimeType, bytes: content.bytes }
   }))
-  const result = await attemptDelivery(actor, { dealId: String(row.deal_id), kind: String(row.kind), recordId: String(row.record_id), attemptKey, channel, recipient, payloadHash: pinnedHash, senderId, sender: emailSender, subject, body, attachments })
+  const result = await withOutboundApproval(actor.workspaceId, String(row.created_at), () => attemptDelivery(actor, { dealId: String(row.deal_id), kind: String(row.kind), recordId: String(row.record_id), attemptKey, channel, recipient, payloadHash: pinnedHash, senderId, sender: emailSender, subject, body, attachments }))
   await getDatabase().prepare("UPDATE mca_closing_previews SET state=?,updated_at=? WHERE workspace_id=? AND id=?").run(result.state === "sent" ? "sent" : "failed", nowIso(), actor.workspaceId, previewId)
   if (result.state === "sent" && row.kind === "contract_request") await getDatabase().prepare("UPDATE mca_contract_workflows SET state='contract_sent',contract_sent_at=?,updated_at=? WHERE workspace_id=? AND id=? AND state='contract_requested'").run(nowIso(), nowIso(), actor.workspaceId, row.record_id)
   return result
@@ -575,7 +581,7 @@ export async function confirmPsfRequest(actor: DealActor, input: { dealId: strin
       if (directAttempt) attempt = delivery(directAttempt)
     } else {
       const config = await psfConfigForUse(actor)
-      attempt = await attemptDelivery(actor, { dealId: input.dealId, kind: "psf_request", recordId: String(row.id), attemptKey: input.attemptKey ?? key, channel: "webhook", payloadHash: hash, payload: clearPayload, endpoint: config.endpoint, authorizationToken: config.secret })
+      attempt = await withOutboundApproval(actor.workspaceId, String(row.created_at), () => attemptDelivery(actor, { dealId: input.dealId, kind: "psf_request", recordId: String(row.id), attemptKey: input.attemptKey ?? key, channel: "webhook", payloadHash: hash, payload: clearPayload, endpoint: config.endpoint, authorizationToken: config.secret }))
       if (attempt.state === "sent" && !attempt.externalId) {
         await getDatabase().prepare("UPDATE mca_closing_deliveries SET state='failed',error_code='provider_ack_missing',error_message='The PSF provider did not return an external request identity.',updated_at=? WHERE workspace_id=? AND id=?").run(nowIso(), actor.workspaceId, attempt.id)
         attempt = { ...attempt, state: "failed", errorCode: "provider_ack_missing", errorMessage: "The PSF provider did not return an external request identity." }
@@ -588,7 +594,7 @@ export async function confirmPsfRequest(actor: DealActor, input: { dealId: strin
   return { request: await psf(current!, actor), delivery: attempt }
 }
 
-export async function recordPsfWebhook(workspaceId: string, rawBody: string, signatureHeader: string | null): Promise<{ requestId: string; state: "signed" }> {
+export async function recordPsfWebhook(workspaceId: string, rawBody: string, signatureHeader: string | null): Promise<{ requestId: string; state: "signed" | "retained" }> {
   const config = await getDatabase().prepare<Row>("SELECT * FROM mca_psf_config WHERE workspace_id=? AND enabled<>0").get(workspaceId)
   if (!config?.signing_secret_cipher) throw new AppError(404, "psf_webhook_unavailable", "PSF webhook processing is unavailable.")
   const [timestamp, supplied] = (signatureHeader ?? "").split(".", 2), epoch = Number(timestamp)
@@ -604,6 +610,7 @@ export async function recordPsfWebhook(workspaceId: string, rawBody: string, sig
     AND NOT EXISTS (SELECT 1 FROM mca_closing_deliveries d WHERE d.workspace_id=r.workspace_id AND d.record_id=r.id AND d.kind='psf_docuseal')`).get(workspaceId, payload.externalRequestId.trim())
   if (!existing || !["delivered", "signed"].includes(String(existing.state))) throw new AppError(404, "psf_request_not_found", "No delivered PSF request matches this external identity.")
   if (existing.state === "signed") return { requestId: String(existing.id), state: "signed" }
+  if (await (await import("../paused-receipts")).retainReceiptIfPaused({ workspaceId, kind: "psf_completion", resourceId: String(existing.id), payload })) return { requestId: String(existing.id), state: "retained" }
   const now = nowIso(), row = await getDatabase().prepare<Row>("UPDATE mca_psf_requests SET state='signed',signed_at=?,updated_at=? WHERE workspace_id=? AND id=? AND state='delivered' RETURNING *").get(now, now, workspaceId, existing.id)
   if (!row) throw new AppError(409, "psf_state_conflict", "The PSF request state changed while processing this event.")
   await recordAuditEvent({ context: { workspaceId, userId: null, source: "system" }, action: "closing.psf_signed", resourceType: "psf_request", resourceId: String(row.id), metadata: { externalRequestIdPresent: true, evidenceId: typeof payload.evidenceId === "string" ? payload.evidenceId.slice(0, 300) : undefined }, correlationId: newId() })
@@ -665,6 +672,7 @@ export async function previewMerchantOffers(actor: DealActor, input: { dealId: s
 export async function sendMerchantOfferPreview(actor: DealActor, previewId: string, attemptKey: string, smsTransport?: TwilioSmsTransport): Promise<{ preview: OfferMessagePreview; delivery: ClosingDelivery; pitched: boolean }> {
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_offer_message_previews WHERE workspace_id=? AND id=?").get(actor.workspaceId, previewId)
   if (!row) throw new AppError(404, "offer_preview_not_found", "The merchant offer preview was not found.")
+  await assertOutboundDispatch(actor.workspaceId, String(row.created_at))
   await getDealForDocument(actor, String(row.deal_id))
   const channel = String(row.channel) as "email" | "sms", senderId = row.sender_id ? String(row.sender_id) : undefined
   let emailSender: { fromName: string; fromAddress: string } | undefined
@@ -680,7 +688,7 @@ export async function sendMerchantOfferPreview(actor: DealActor, previewId: stri
   const recipient = decryptSensitive(String(row.recipient_cipher), actor.workspaceId), subject = row.subject_cipher ? decryptSensitive(String(row.subject_cipher), actor.workspaceId) : undefined, body = decryptSensitive(String(row.body_cipher), actor.workspaceId), revisionIds = json<string[]>(row.offer_revision_ids_json, [String(row.offer_revision_id)])
   const hash = contentHash({ selectionMode: row.selection_mode, revisionIds, channel, senderId, recipient, subject, body })
   if (hash !== row.content_hash) throw new AppError(409, "preview_integrity_failed", "The saved preview no longer matches its immutable content hash.")
-  const sent = await attemptDelivery(actor, { dealId: String(row.deal_id), kind: "offer_message", recordId: previewId, attemptKey, channel, recipient, payloadHash: hash, senderId, sender: emailSender, subject, body }, channel === "sms" ? createMerchantOfferSmsTransport(actor, String(row.deal_id), smsTransport) : undefined)
+  const sent = await withOutboundApproval(actor.workspaceId, String(row.created_at), () => attemptDelivery(actor, { dealId: String(row.deal_id), kind: "offer_message", recordId: previewId, attemptKey, channel, recipient, payloadHash: hash, senderId, sender: emailSender, subject, body }, channel === "sms" ? createMerchantOfferSmsTransport(actor, String(row.deal_id), smsTransport) : undefined))
   const state = sent.state === "sent" ? "sent" : "failed", now = nowIso()
   await getDatabase().prepare("UPDATE mca_offer_message_previews SET state=?,updated_at=? WHERE workspace_id=? AND id=?").run(state, now, actor.workspaceId, previewId)
   let pitched = false

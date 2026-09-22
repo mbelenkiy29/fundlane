@@ -1,0 +1,16 @@
+{
+  "title": "Billing recovery completion",
+  "phase": "implementation",
+  "completed_tasks": ["1.1", "1.2", "1.3", "2.1", "3.1", "3.2", "4.1"],
+  "next_task": "4.2",
+  "approvals": {
+    "requirements": true,
+    "design": true,
+    "tasks": true
+  },
+  "approval_evidence": {
+    "requirements": "User approved the recommended seven-day policy with the bounded processing exception.",
+    "design": "User: yes i approve",
+    "tasks": "User: yes i approve (following the task checklist)"
+  }
+}

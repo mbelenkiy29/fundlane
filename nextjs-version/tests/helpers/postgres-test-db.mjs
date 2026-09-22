@@ -53,6 +53,7 @@ export async function createPostgresTestDatabase(label = "suite") {
     env(overrides = {}) {
       return { ...process.env, DATABASE_URL: databaseUrl, DATABASE_URL_UNPOOLED: databaseUrlUnpooled, MCA_DB_POOL_MAX: "4", MCA_DOCUMENT_STORAGE_PROVIDER: "filesystem", ...overrides };
     },
+    /** @param {string} text @param {unknown[]} values */
     query(text, values = []) { return queryPool.query(text, values); },
     async close() {
       if (closed) return;

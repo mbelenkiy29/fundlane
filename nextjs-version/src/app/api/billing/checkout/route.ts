@@ -3,12 +3,15 @@ import { z } from "zod"
 import { assertTrustedMutation, requireMembershipAccess } from "@/lib/mca/auth"
 import { createBillingCheckout } from "@/lib/mca/billing"
 import { apiError } from "@/lib/mca/errors"
-const input = z.object({ planSlug: z.enum(["mca_starter_test", "mca_team_test"]), onboarding: z.boolean().optional() }).strict()
+import { recordAuditEvent } from "@/lib/mca/db"
+const input = z.object({ selectedSeats: z.number().int().min(1).max(100000), onboarding: z.boolean().optional() }).strict()
 export async function POST(request: Request) {
   try {
     assertTrustedMutation(request)
     const context = await requireMembershipAccess(request, ["admin", "super_admin"])
     const payload = input.parse(await request.json())
-    return NextResponse.json(await createBillingCheckout(context.workspaceId, payload.planSlug, payload.onboarding))
+    const result = await createBillingCheckout(context.workspaceId, payload.selectedSeats, payload.onboarding)
+    await recordAuditEvent({ context, action: "billing.checkout_opened", resourceType: "workspace", resourceId: context.workspaceId, metadata: { selectedSeats: payload.selectedSeats } })
+    return NextResponse.json(result)
   } catch (error) { return apiError(error) }
 }

@@ -9,6 +9,7 @@ import { AuthShell } from "@/components/mca/auth-shell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { GoogleButton } from "@/components/mca/auth/google-button"
 
 export default function SignInPage() {
   const flow = useSignInFlow()
@@ -43,6 +44,7 @@ export default function SignInPage() {
       description="Sign in to continue to your brokerage workspace."
     >
       <form onSubmit={submit} className="space-y-5">
+        <GoogleButton disabled={loading} />
         {error && (
           <div
             role="alert"

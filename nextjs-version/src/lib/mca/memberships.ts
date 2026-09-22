@@ -277,6 +277,9 @@ export async function updateMembership(
     if (!member) throw new AppError(404, "membership_not_found", "Team member not found.");
     if (member.role === "super_admin" && context.role !== "super_admin") throw new AppError(403, "permission_denied", "Only a super administrator can manage that member.");
     if (patch.role) assertRoleAssignment(context.role, patch.role);
+    if (patch.role && patch.role !== member.role && await database.prepare("SELECT workspace_id FROM workspace_owners WHERE workspace_id=? AND membership_id=?").get(context.workspaceId, membershipId)) {
+      throw new AppError(409, "owner_protected", "Transfer company ownership before changing the owner's role.");
+    }
     await validateManager(database, context.workspaceId, patch.managerMembershipId, membershipId);
     if (member.role === "super_admin" && patch.role && patch.role !== "super_admin") {
       const remaining = await database.prepare<{ count: number }>(`SELECT count(*)::int count FROM memberships
@@ -311,6 +314,9 @@ export async function deactivateMembership(context: MembershipContext, membershi
   if (membershipId === context.membershipId) throw new AppError(409, "cannot_deactivate_self", "Ask another administrator to deactivate your account.");
   await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
+    if (await database.prepare("SELECT workspace_id FROM workspace_owners WHERE workspace_id=? AND membership_id=?").get(context.workspaceId, membershipId)) {
+      throw new AppError(409, "owner_protected", "Transfer company ownership before deactivating the owner.");
+    }
     const member = await database.prepare<{ user_id: string; role: Role }>("SELECT user_id, role FROM memberships WHERE id = ? AND workspace_id = ? FOR UPDATE").get(membershipId, context.workspaceId);
     if (!member) throw new AppError(404, "membership_not_found", "Team member not found.");
     if (member.role === "super_admin") {

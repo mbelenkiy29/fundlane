@@ -6,6 +6,7 @@ import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction 
 import { AppError } from "./errors"
 import type { MembershipContext, Role } from "./types"
 import { DEFAULT_ACTION_VISIBILITY, DEFAULT_FEATURE_FLAGS, DEFAULT_PAGE_VISIBILITY } from "./workspaces"
+import { initializeCompanyTrial } from "./company-access"
 
 export const WORKSPACE_COOKIE = "mca_workspace"
 export type SupabaseIdentity = { user: User; email: string; sessionId: string }
@@ -102,20 +103,25 @@ export async function listSupabaseWorkspaces(identity: SupabaseIdentity) {
     WHERE u.supabase_user_id=? AND m.status='active' ORDER BY w.name,w.id`).all(identity.user.id)
 }
 
-export async function completeCompanyOnboarding(name: string) {
+export async function completeCompanyOnboarding(name: string, selectedSeats = 1) {
   const identity = await supabaseIdentity()
   if (!identity) throw new AppError(401, "authentication_required", "Verify your email and sign in before continuing.")
   const workspaceId = await withImmediateTransaction(async db => {
     await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`supabase-company:${identity.user.id}`)
     const userId = await linkSupabaseUser(identity)
     // A stable per-form idempotency is provided by reuse of the owner's normalized company name.
-    const existing = await db.prepare<{ id: string }>(`SELECT w.id FROM workspaces w JOIN memberships m ON m.workspace_id=w.id
-      WHERE m.user_id=? AND m.role='admin' AND m.status='active' AND lower(w.name)=lower(?)`).get(userId,name)
+    const existing = await db.prepare<{ id: string }>(`SELECT w.id FROM workspaces w
+      JOIN workspace_owners o ON o.workspace_id=w.id
+      JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=w.id
+      WHERE m.user_id=? AND m.status='active' AND lower(w.name)=lower(?)`).get(userId,name)
     if (existing) return existing.id
     const id = newId(), now = nowIso()
     await db.prepare(`INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
       VALUES (?,?,'America/New_York',1,?,?,?,?,?)`).run(id,name,JSON.stringify(DEFAULT_FEATURE_FLAGS),JSON.stringify(DEFAULT_PAGE_VISIBILITY),JSON.stringify(DEFAULT_ACTION_VISIBILITY),now,now)
-    await db.prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)`).run(newId(),id,userId,now,now)
+    const membershipId = newId()
+    await db.prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)`).run(membershipId,id,userId,now,now)
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(id,membershipId,now)
+    await initializeCompanyTrial(id, selectedSeats, db)
     await db.prepare("INSERT INTO sms_companies (workspace_id,owner_user_id,email_verified_at,created_at,updated_at) VALUES (?,?,?,?,?)").run(id,userId,now,now,now)
     await recordAuditEvent({ context: { workspaceId:id,userId },action:"company.signup",resourceType:"workspace",resourceId:id,executor:db })
     return id

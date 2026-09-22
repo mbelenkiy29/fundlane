@@ -365,6 +365,37 @@ test("OAuth rejects mismatched connected address and reconnect readiness checks 
     code: "email_reconnect_required",
   })
 })
+test("company pause halts queued mail without attempts or a recovery burst", async () => {
+  const id = await sender("google"), queued = await queueEmail(rep, input(id))
+  await db().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,updated_at) VALUES(?,1,1,?)").run(ws, nowIso())
+  try {
+    await runMessagingWorkerOnce()
+    assert.equal(calls, 0)
+    const row = await db().prepare<{ state: string; attempts: number }>("SELECT state,attempts FROM mca_email_messages WHERE conversation_id=?").get(queued.conversationId)
+    assert.deepEqual(row, { state: "failed", attempts: 0 })
+    await db().prepare("UPDATE company_subscription_state SET manual_paused=0 WHERE workspace_id=?").run(ws)
+    await runMessagingWorkerOnce()
+    assert.equal(calls, 0)
+  } finally { await db().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(ws) }
+})
+
+test("offline pause recovery requires reviewed retry and keeps provider idempotency identity", async () => {
+  const id = await sender("google"), queued = await queueEmail(rep, input(id))
+  const original = await db().prepare("SELECT request_key,internet_message_id FROM mca_email_messages WHERE id=?").get(queued.id)
+  await db().prepare("UPDATE mca_email_messages SET created_at=? WHERE id=?").run(new Date(Date.now() - 2000).toISOString(), queued.id)
+  await db().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,last_paused_at,updated_at) VALUES(?,1,0,?,?)").run(ws, new Date(Date.now() - 1000).toISOString(), nowIso())
+  try {
+    await runMessagingWorkerOnce()
+    assert.equal(calls, 0)
+    assert.equal((await emailMessages(rep, queued.conversationId)).messages[0].state, "failed")
+    await retryEmail(rep, queued.id)
+    await runMessagingWorkerOnce()
+    assert.equal(calls, 1)
+    assert.equal((await emailMessages(rep, queued.conversationId)).messages[0].state, "sent")
+    assert.deepEqual(await db().prepare("SELECT request_key,internet_message_id FROM mca_email_messages WHERE id=?").get(queued.id), original)
+  } finally { await db().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(ws) }
+})
+
 for (const provider of ["google", "microsoft"] as const)
   test(`${provider}: sends, threads replies, deduplicates, and isolates unrelated mail`, async () => {
     const id = await sender(provider),
@@ -598,6 +629,22 @@ test("expiring OAuth is refreshed and encrypted before sending", async () => {
   assert.ok(row?.credentialCipher)
   assert.ok(!row.credentialCipher.includes("refreshed"))
 })
+test("a pause during OAuth refresh is rechecked before any message dispatch", async () => {
+  const id = await sender(), queued = await queueEmail(rep, input(id))
+  await db().prepare("UPDATE mca_email_senders SET credential_cipher=? WHERE id=?").run(encryptSenderCredential(ws, {
+    kind: "oauth", accessToken: "old", refreshToken: "refresh", email: from, expiresAt: "2000-01-01", scope: GOOGLE_SENDER_SCOPES.join(" "),
+  }), id)
+  setSenderOAuthFetchForTests(async () => {
+    await db().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,updated_at) VALUES(?,1,1,?) ON CONFLICT(workspace_id) DO UPDATE SET manual_paused=1").run(ws, nowIso())
+    return Response.json({ access_token: "refreshed", refresh_token: "refresh", expires_in: 3600, scope: GOOGLE_SENDER_SCOPES.join(" ") })
+  })
+  try {
+    await runMessagingWorkerOnce()
+    assert.equal(calls, 0)
+    assert.deepEqual(await db().prepare("SELECT state,attempts FROM mca_email_messages WHERE conversation_id=?").get(queued.conversationId), { state: "failed", attempts: 0 })
+  } finally { await db().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(ws) }
+})
+
 test("read markers do not consume later replies and message history paginates", async () => {
   const id = await sender(),
     q = await queueEmail(rep, input(id))

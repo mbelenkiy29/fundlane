@@ -4,7 +4,8 @@ import { createContext, useContext, useEffect, useRef, useState } from "react"
 import * as Dialog from "@radix-ui/react-dialog"
 import Script from "next/script"
 import { MessageSquare, X } from "lucide-react"
-import { NativeChat } from "./native-chat"
+import { NativeChat, type AssistantDraft } from "./native-chat"
+import { ChatMessages } from "./chat-messages"
 import { AssistantChat, type AssistantDeal } from "./chatkit-session"
 import { Button } from "@/components/ui/button"
 
@@ -68,6 +69,7 @@ export function AssistantProvider({
   const [scriptError, setScriptError] = useState(false)
   const [chatAttempt, setChatAttempt] = useState(0)
   const [includedDeal, setIncludedDeal] = useState<string | null>(null)
+  const [draft, setDraft] = useState<AssistantDraft | null>(null)
   const [mobile, setMobile] = useState(false)
   const loadScript = mounted || scriptRequested
   useEffect(() => {
@@ -149,7 +151,14 @@ export function AssistantProvider({
                 </Dialog.Close>
               </div>
               {runtime === "supabase" ? (
-                <NativeChat surface="drawer" deal={deal} />
+                <NativeChat
+                surface="drawer"
+                deal={deal}
+                onDraft={setDraft}
+                onDraftDismissed={(id) =>
+                  setDraft((current) => (current?.id === id ? null : current))
+                }
+              />
               ) : !domainKey ? (
                 <p className="p-4 text-sm" role="status">
                   The assistant is awaiting configuration.
@@ -173,6 +182,9 @@ export function AssistantProvider({
                 <p className="p-4 text-sm" role="status">
                   Loading assistant…
                 </p>
+              )}
+              {includedDeal && deal?.id === includedDeal && (
+                <ChatMessages dealId={deal.id} surface="drawer" draft={draft} />
               )}
             </Dialog.Content>
           </Dialog.Portal>

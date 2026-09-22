@@ -362,6 +362,7 @@ export async function scanFunderCriteria(actor: DealActor, input: { funderId: st
   if (!ALLOWED_MIME_TYPES.has(document.mimeType)) {
     throw new AppError(415, "unsupported_document_type", "Scan a clean PDF, PNG, or JPEG criteria sheet.")
   }
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const extraction = await criteriaScanProvider().extractCriteria(actor, {
     filename: document.originalFilename,
     mimeType: document.mimeType,

@@ -1,6 +1,8 @@
 import { recordActivity } from "./operations/telemetry";
 import "server-only";
 import { authenticateSupabaseSession } from "./supabase-auth";
+import { assertCompanyOperational } from "./company-access";
+import { isCompanyRecoveryApi } from "./company-recovery";
 
 import { AppError } from "./errors";
 import { nowIso, parseJson, withImmediateTransaction } from "./db";
@@ -14,6 +16,8 @@ interface AccessOptions {
   scopes?: readonly ApiKeyScope[];
   anyScopes?: readonly ApiKeyScope[];
   sessionOnly?: boolean;
+  /** Recovery handlers only. This does not bypass membership, role or scope checks. */
+  allowPaused?: boolean;
 }
 
 /** Legacy cookies are deliberately rejected after the Supabase cutover. */
@@ -77,12 +81,15 @@ export async function requireWorkspaceAccess(request: Request, options: AccessOp
   if (options.anyScopes?.length && context.authType === "api_key" && !options.anyScopes.some((scope) => context.scopes.includes(scope))) {
     throw new AppError(403, "scope_required", "The API key does not have a required scope.");
   }
+  const recovery = context.authType === "session" && (options.allowPaused === true ||
+    (isCompanyRecoveryApi(new URL(request.url).pathname) && ["admin", "super_admin"].includes(context.role ?? "")));
+  if (!recovery) await assertCompanyOperational(context.workspaceId);
   if (context.authType === "session" && context.userId) recordActivity(request, context.userId);
   return context;
 }
 
-export async function requireMembershipAccess(request: Request, roles?: readonly Role[]): Promise<MembershipContext> {
-  const context = await requireWorkspaceAccess(request, { sessionOnly: true, roles });
+export async function requireMembershipAccess(request: Request, roles?: readonly Role[], options: Pick<AccessOptions, "allowPaused"> = {}): Promise<MembershipContext> {
+  const context = await requireWorkspaceAccess(request, { ...options, sessionOnly: true, roles });
   return context as MembershipContext;
 }
 

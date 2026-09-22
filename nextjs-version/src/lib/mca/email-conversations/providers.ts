@@ -251,6 +251,8 @@ export class Mailbox {
     )
       throw new Error("Invalid email provider pagination URL.")
     let response: Response
+    await (await import("../company-access")).assertCompanyOperational(this.sender.workspaceId)
+    if (sending) await (await import("../outbound-approval")).assertOutboundDispatch(this.sender.workspaceId, new Date().toISOString())
     try {
       response = await (testFetch ?? fetch)(url, {
         ...init,

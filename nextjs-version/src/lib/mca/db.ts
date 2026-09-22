@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
+import { assertExecutionActive, executionFence } from "./jobs/execution";
 import { postgresConnection } from "./db-connection";
 import { assertHostedSupabaseConfig } from "./hosted-config";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
@@ -28,7 +29,8 @@ interface Queryable {
   query<Row extends QueryResultRow = QueryResultRow>(sql: string, values?: readonly unknown[]): Promise<{ rows: Row[]; rowCount: number | null }>;
 }
 
-const transactionContext = new AsyncLocalStorage<DbExecutor>();
+interface TransactionOptions { onRollback?: () => Promise<void> }
+const transactionContext = new AsyncLocalStorage<{ executor: DbExecutor; rollbackCallbacks: Array<() => Promise<void>> }>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
 
 function databaseUrl(): string {
@@ -129,7 +131,23 @@ export function postgresPlaceholders(sql: string): string {
 function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
   let queryTail: Promise<void> = Promise.resolve();
   const runQuery = <Row extends QueryResultRow>(sql: string, values: readonly unknown[]) => {
-    const invoke = () => queryable.query<Row>(postgresPlaceholders(sql), values);
+    const invoke = async () => {
+      assertExecutionActive();
+      const fence = executionFence();
+      if (serialize && fence) {
+        // Hold the control/lease locks through the statement's transaction so a
+        // generation revocation cannot race a checked write. Use the raw client
+        // here to avoid recursively fencing the fence check itself.
+        const active = await queryable.query(`SELECT e.token
+          FROM mca_private.worker_executions e
+          JOIN mca_private.worker_controls c ON c.subsystem=e.subsystem
+          WHERE e.token=$1 AND e.subsystem=$2 AND e.generation=$3
+            AND c.generation=e.generation AND c.enabled AND e.expires_at>clock_timestamp()
+          FOR SHARE OF c, e`, [fence.token, fence.subsystem, fence.generation]);
+        if (!active.rows.length) throw new AppError(503, "worker_execution_fenced", "The worker execution generation is no longer active.");
+      }
+      return queryable.query<Row>(postgresPlaceholders(sql), values);
+    };
     if (!serialize) return invoke();
     const pending = queryTail.then(invoke, invoke);
     queryTail = pending.then(() => undefined, () => undefined);
@@ -157,31 +175,59 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
 
 const poolExecutor = createExecutor({
   query: <Row extends QueryResultRow = QueryResultRow>(sql: string, values?: readonly unknown[]) =>
-    getPool().query<Row>(sql, values as unknown[] | undefined),
+    executionFence()
+      ? withTransaction(database => database.query<Row>(sql, values))
+      : getPool().query<Row>(sql, values as unknown[] | undefined),
 });
 
-export function getDatabase(): DbExecutor { return transactionContext.getStore() ?? poolExecutor; }
+export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
 export function statement<Row extends QueryResultRow = QueryResultRow>(sql: string): AsyncStatement<Row> { return getDatabase().prepare<Row>(sql); }
 export async function query<Row extends QueryResultRow = QueryResultRow>(sql: string, values: readonly unknown[] = []): Promise<Row[]> { return (await getDatabase().query<Row>(sql, values)).rows; }
 export function queryOne<Row extends QueryResultRow = QueryResultRow>(sql: string, values: readonly unknown[] = []): Promise<Row | undefined> { return getDatabase().queryOne<Row>(sql, values); }
 export function execute(sql: string, values: readonly unknown[] = []): Promise<number> { return getDatabase().execute(sql, values); }
 
-export async function withTransaction<T>(operation: (database: DbExecutor) => Promise<T>): Promise<T> {
+/** Nested rollback callbacks belong to the outer transaction, even if the nested
+ * operation succeeds. They run detached, after rollback and connection release. */
+export async function withTransaction<T>(operation: (database: DbExecutor) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
   const existing = transactionContext.getStore();
-  if (existing) return operation(existing);
-  const client: PoolClient = await getPool().connect();
-  // A checked-out pg client cannot execute concurrent wire queries safely. Repository
-  // callbacks may use Promise.all, so serialize only this transaction's command stream.
-  const executor = createExecutor(client, true);
+  if (existing) {
+    if (options.onRollback) existing.rollbackCallbacks.push(options.onRollback);
+    return operation(existing.executor);
+  }
+  const rollbackCallbacks = options.onRollback ? [options.onRollback] : [];
+  let rolledBack = false;
+  let discardClient = false;
+  // Also report failures to acquire a connection: no transaction was started.
+  let connected = false;
   try {
-    await client.query("BEGIN");
-    const result = await transactionContext.run(executor, () => operation(executor));
-    await client.query("COMMIT");
-    return result;
+    const client: PoolClient = await getPool().connect();
+    connected = true;
+    // A checked-out pg client cannot execute concurrent wire queries safely. Repository
+    // callbacks may use Promise.all, so serialize only this transaction's command stream.
+    const executor = createExecutor(client, true);
+    try {
+      await client.query("BEGIN");
+      const result = await transactionContext.run({ executor, rollbackCallbacks }, () => operation(executor));
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); rolledBack = true; }
+      catch { discardClient = true; }
+      throw error;
+    } finally { client.release(discardClient); }
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch { /* preserve the operation error */ }
+    // Do not borrow another pool connection while the failed transaction still
+    // holds a client or FK locks. run() has restored the outside async context.
+    if (rolledBack || !connected) {
+      for (const callback of rollbackCallbacks) {
+        try { await transactionContext.exit(callback); }
+        catch { await recordOperationalError("database", "transaction_rollback_callback_failed").catch(() => undefined); }
+      }
+    } else {
+      await recordOperationalError("database", "transaction_rollback_failed").catch(() => undefined);
+    }
     throw error;
-  } finally { client.release(); }
+  }
 }
 
 export const withImmediateTransaction = withTransaction;

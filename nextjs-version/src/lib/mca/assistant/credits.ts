@@ -12,7 +12,9 @@ import { AppError } from "../errors"
 export const CREDIT_ALLOWANCES: Record<string, number> = {
   free_org: 10,
   mca_starter_test: 100,
-  mca_team_test: 250
+  mca_team_test: 250,
+  // Preserve the existing highest-tier included allowance for the unified plan.
+  fundlane: 250
 }
 export interface CreditOwner {
   workspace_id: string

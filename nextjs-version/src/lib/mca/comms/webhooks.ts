@@ -902,6 +902,8 @@ async function recordDelivery(input: {
 }
 
 async function postEnvelope(input: {
+  workspaceId: string
+  approvedAt: string
   destinationUrl: string
   secret: string
   body: string
@@ -918,6 +920,8 @@ async function postEnvelope(input: {
   }
   const timestamp = String(Math.floor((Number.isFinite(Date.parse(input.nowIso)) ? Date.parse(input.nowIso) : Date.now()) / 1000))
   const signature = signWorkflowWebhookBody(input.secret, timestamp, input.body)
+  await (await import("../company-access")).assertCompanyOperational(input.workspaceId)
+  await (await import("../outbound-approval")).assertOutboundDispatch(input.workspaceId, input.approvedAt)
   try {
     const response = await http()(destination, {
       method: "POST",
@@ -952,6 +956,10 @@ async function finishOutbox(row: OutboxRow, input: { state: WorkflowWebhookOutbo
 }
 
 async function deliverOutboxRow(actor: DealActor, row: OutboxRow, nowIsoValue: string, options?: { force?: boolean }): Promise<WorkflowWebhookRunResult["outcomes"][number]> {
+  if (!(await (await import("../company-access")).getCompanyAccess(actor.workspaceId)).allowed) {
+    await finishOutbox(row, { state: "failed", lastError: "Company paused. Review and explicitly replay this event after recovery." })
+    return { outboxId: row.id, eventId: row.event_id, state: "failed", error: "company_paused" }
+  }
   const claimed = options?.force
     ? await db().prepare<OutboxRow>(
       `UPDATE mca_workflow_webhook_outbox
@@ -984,15 +992,16 @@ async function deliverOutboxRow(actor: DealActor, row: OutboxRow, nowIsoValue: s
     return { outboxId: claimed.id, eventId: claimed.event_id, state: "failed", error: failed.last_error ?? undefined }
   }
   const secret = decryptSensitive(endpoint.signing_secret_cipher, actor.workspaceId)
-  const posted = await postEnvelope({
-    destinationUrl: endpoint.destination_url,
-    secret,
-    body: claimed.payload_json,
-    eventId: claimed.event_id,
-    eventType: claimed.event_type,
-    correlationId: actor.correlationId,
-    nowIso: nowIsoValue,
-  })
+  let posted: Awaited<ReturnType<typeof postEnvelope>>
+  try {
+    posted = await postEnvelope({ workspaceId: actor.workspaceId, approvedAt: options?.force ? nowIsoValue : row.created_at, destinationUrl: endpoint.destination_url, secret,
+      body: claimed.payload_json, eventId: claimed.event_id, eventType: claimed.event_type, correlationId: actor.correlationId, nowIso: nowIsoValue })
+  } catch (error) {
+    if (!(error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code))) throw error
+    await db().prepare("UPDATE mca_workflow_webhook_outbox SET state='failed',attempts=GREATEST(0,attempts-1),last_error='company_paused',updated_at=? WHERE workspace_id=? AND id=?")
+      .run(nowIso(), actor.workspaceId, claimed.id)
+    return { outboxId: claimed.id, eventId: claimed.event_id, state: "failed", error: "company_paused" }
+  }
   const attempts = asInt(claimed.attempts)
   const succeeded = posted.ok
   const nextState: WorkflowWebhookOutboxState = succeeded ? "delivered" : attempts >= WORKFLOW_WEBHOOK_MAX_ATTEMPTS ? "failed" : "pending"
@@ -1077,6 +1086,8 @@ export async function testWorkflowWebhookEndpoint(actor: DealActor, endpointId: 
   const secret = decryptSensitive(endpoint.signing_secret_cipher, actor.workspaceId)
   const posted = await postEnvelope({
     destinationUrl: endpoint.destination_url,
+    workspaceId: actor.workspaceId,
+    approvedAt: nowIsoValue,
     secret,
     body,
     eventId: `webhook.test:${endpoint.id}`,

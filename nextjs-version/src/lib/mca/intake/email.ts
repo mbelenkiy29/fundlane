@@ -6,7 +6,7 @@ import { encryptSensitive, decryptSensitive } from "../crypto"
 import { backgroundJobView, enqueueBackgroundJob, inBackgroundWorker } from "../jobs/queue"
 import { documentScanner } from "../documents/scanner"
 import { usesSupabaseStorage } from "../documents/storage"
-import { withImmediateTransaction } from "../db"
+import { getDatabase, nowIso, withImmediateTransaction } from "../db"
 import { AppError } from "../errors"
 import { actorForDeals } from "../deals/service"
 import type { DealActor, DealWriteInput } from "../deals/schema"
@@ -252,6 +252,7 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
   if (!/^[^@\s]+@[^@\s]+$/.test(sender)) throw new AppError(422, "email_sender_invalid", "A valid sender email is required.")
   const actor = await actorForEmail(integration.workspaceId)
   const genuine = (email.attachments ?? []).filter((file) => !isSignatureGraphic(file))
+  const company = await (await import("../company-access")).getCompanyAccess(integration.workspaceId)
   const decoded = new Map<InboundAttachment, Uint8Array>()
   let aggregateBytes = 0
   for (const file of genuine) {
@@ -261,7 +262,7 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
     if (aggregateBytes > 25 * 1024 * 1024) throw new AppError(413, "email_attachments_too_large", "Decoded inbound attachments must total at most 25 MiB.")
     decoded.set(file, bytes)
   }
-  if (usesSupabaseStorage()) {
+  if (usesSupabaseStorage() && company.allowed) {
     if (!inBackgroundWorker()) throw new AppError(503, "email_worker_required", "Email processing must run on the background worker.")
     for (const [file, bytes] of decoded) {
       const result = await documentScanner().scan(bytes, file.filename ?? "attachment")
@@ -283,6 +284,8 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
       const failed = await updateIntake({ workspaceId: actor.workspaceId, intakeId: prior.intakeId, state: "error", errorCode: code, errorMessage: message, warnings: ["Review the email intake and retry when the issue is resolved."] })
       return { intakeId: failed.intakeId, dealId: null, created: false, state: "error", warnings: failed.warnings }
     }
+    if (!company.allowed) return recordError("company_paused", "Email retained. Restore company access and replay intake to process it.")
+    await (await import("../company-access")).assertCompanyOperational(integration.workspaceId)
     if (!senderAllowed(sender, integration.senderRules)) return recordError("sender_not_allowed", "The sender is not permitted by this intake route.")
     if (email.forwardingConfirmationReview || email.forwardingConfirmation) return recordError("forwarding_confirmation_review", "A forwarding-confirmation message requires review in the source mailbox; MCA does not follow links automatically.")
   const applicationFile = genuine.find((file) => file.mimeType === "application/pdf" && (file.category === "application" || /application/i.test(file.filename ?? "")))
@@ -373,6 +376,11 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
   const results: ReceiptRecord[] = []
   let unconfigured = 0
   for (const receipt of await listPendingReceipts(options.workspaceId)) {
+    if (!(await (await import("../company-access")).getCompanyAccess(receipt.workspaceId)).allowed) {
+      await getDatabase().prepare("UPDATE intake_receipts SET state='failed',last_error='company_paused_review_required',updated_at=? WHERE workspace_id=? AND id=? AND (lease_token IS NULL OR lease_expires_at<=?)")
+        .run(nowIso(), receipt.workspaceId, receipt.id, nowIso())
+      continue
+    }
     const usesend = await usesendReceiptTransport(receipt.workspaceId, receipt.intakeId)
     if (!usesend && !endpoint) {
       unconfigured += 1
@@ -383,6 +391,8 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
     const claimed = claim.receipt
     const leaseToken = claimed.leaseToken!
     try {
+      await (await import("../company-access")).assertCompanyOperational(claimed.workspaceId)
+      await (await import("../outbound-approval")).assertOutboundDispatch(claimed.workspaceId, claimed.createdAt)
       if (usesend) {
         const content = receiptEmailContent({ dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings })
         const sent = await sendUsesendEmail({
@@ -401,6 +411,11 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
       const body = await response.json().catch(() => ({})) as { id?: string }
       results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "sent", providerMessageId: body.id })).receipt)
     } catch (error) {
+      if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
+        await getDatabase().prepare("UPDATE intake_receipts SET state='failed',attempt_count=GREATEST(0,attempt_count-1),last_error='company_paused_review_required',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE workspace_id=? AND id=? AND lease_token=?")
+          .run(nowIso(), claimed.workspaceId, claimed.id, leaseToken)
+        continue
+      }
       if (error instanceof AppError && error.code === "receipt_delivery_unconfigured") throw error
       if (error instanceof AppError && error.code === "usesend_receipt_unconfigured") throw error
       results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "failed", lastError: error instanceof Error ? error.message.slice(0, 300) : "Receipt delivery failed." })).receipt)

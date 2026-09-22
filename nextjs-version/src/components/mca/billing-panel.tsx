@@ -1,48 +1,66 @@
 "use client"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { SeatSelector } from "./seat-selector"
 import { requestJson } from "@/lib/mca/client"
-import { BILLING_PLANS, type PaidBillingPlanSlug } from "@/lib/mca/billing-catalog"
+import { formatBillingMoney, validSelectedSeats, type BillingRecovery } from "@/lib/mca/billing-display"
+import { monthlyPriceCents } from "@/lib/mca/billing-catalog"
+import type { CompanyAccess } from "@/lib/mca/company-access"
 
-type BillingResponse = { enabled: boolean; testMode: boolean; occupiedSeats: number; canManagePayment: boolean; billing: null | { subscriptionId: string | null; planSlug: string; planName: string; status: string; seatLimit: number; paymentPastDue: number; syncedAt: string } }
+type BillingResponse = { enabled: boolean; testMode: boolean; occupiedSeats: number; activeSeats:number;pendingInvitationSeats:number; canManagePayment: boolean; access: CompanyAccess; recovery: BillingRecovery; state: null | {selected_seats:number;pending_seats:number|null;pending_seats_at:string|null}; billing: null | { subscriptionId: string | null; status: string; seatLimit: number; paymentPastDue: number; periodEnd:string|null } }
+const date = (value:string) => new Date(value).toLocaleString()
+export function BillingCancellation({ enabled, busy, onCancel }: { enabled:boolean;busy:boolean;onCancel:()=>void }) {
+  return <div className="space-y-2"><Button variant="outline" disabled={!enabled||busy} onClick={onCancel}>Cancel at period end</Button><p className="text-sm text-muted-foreground">Cancellation remains available while company access is paused, including when a seat reduction is scheduled. Cancellation replaces the pending reduction. Monthly fees continue until the effective cancellation date. Outstanding invoices and administrative suspensions remain in effect.</p></div>
+}
+export function BillingRecoveryDetails({ recovery }: { recovery: BillingRecovery }) {
+  if (!recovery.paymentRequired && !recovery.verificationPending && !recovery.invoices.length) return null
+  return <Card><CardHeader><CardTitle>Outstanding invoices</CardTitle></CardHeader><CardContent className="space-y-4">
+    <p>Outstanding balance: {formatBillingMoney(recovery.overdueAmount)} USD{recovery.verificationPending ? " (verification pending; this balance may be incomplete)" : ""}.</p>
+    <p>Monthly fees continue during suspension until the subscription’s effective cancellation date. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access can resume. Separate administrative suspensions remain in effect; payment does not restart a canceled subscription.</p>
+    {recovery.verificationPending && <p role="status">Verification pending. Invoice details or payment confirmation are not yet fully verified. If you have paid, use Refresh billing to check again; returning from payment does not restore access.</p>}
+    <ul className="space-y-4">{recovery.invoices.map(invoice => <li key={invoice.id} className="rounded-lg border p-4 space-y-2">
+      <p className="font-medium break-all">Invoice {invoice.id}</p>
+      <p>Period: {invoice.periodStart ? date(invoice.periodStart) : "Verification pending"} – {invoice.periodEnd ? date(invoice.periodEnd) : "Verification pending"}</p>
+      <p>Remaining: {formatBillingMoney(invoice.amountRemaining)} USD · Status: {invoice.status.replaceAll("_", " ")}</p>
+      {invoice.hostedInvoiceUrl ? <Button asChild variant="outline"><a href={invoice.hostedInvoiceUrl} aria-label={`Review and pay invoice ${invoice.id}`}>Review and pay invoice</a></Button> : <p role="status">Payment link unavailable — verification pending. Refresh billing or open payment settings for help.</p>}
+    </li>)}</ul>
+    <p className="text-sm text-muted-foreground">Already paid? Payment verification is pending until billing is refreshed and all required payments are confirmed. Use Refresh billing to check; returning from payment does not restore access. Stripe confirms payment for each invoice. Payment settings and cancellation remain available while company access is paused.</p>
+  </CardContent></Card>
+}
 export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: boolean; onContinue?: () => void }) {
-  const [state, setState] = useState<BillingResponse | null>(null)
-  const [error, setError] = useState("")
-  const [busy, setBusy] = useState(false)
-  const inFlight = useRef(false)
-  const mounted = useRef(false)
-  const sync = useCallback(async () => {
-    if (inFlight.current) return
-    inFlight.current = true
-    if (mounted.current) setError("")
-    try {
-      const current = await requestJson<BillingResponse>("/api/billing/sync", { method: "POST" })
-      if (mounted.current) setState(current)
-    } catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : "Billing could not be loaded.") }
-    finally { inFlight.current = false }
-  }, [])
-  useEffect(() => { mounted.current = true; void sync(); return () => { mounted.current = false } }, [sync])
-  useEffect(() => { const onFocus = () => void sync(); window.addEventListener("focus", onFocus); return () => window.removeEventListener("focus", onFocus) }, [sync])
-  async function openPayment(planSlug?: PaidBillingPlanSlug) {
-    setBusy(true); setError("")
-    try {
-      const portal = !planSlug || Boolean(state?.billing?.subscriptionId) || state?.billing?.status === "incomplete"
-      const result = await requestJson<{ url: string }>(portal ? "/api/billing/portal" : "/api/billing/checkout", { method: "POST", body: JSON.stringify({ ...(portal ? {} : { planSlug }), onboarding }) })
-      window.location.assign(result.url)
-    } catch (e) { setError(e instanceof Error ? e.message : "Payment settings could not be opened."); setBusy(false) }
+  const [state,setState]=useState<BillingResponse|null>(null),[seats,setSeats]=useState(1),[busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("")
+  const hasSubscription=Boolean(state?.billing?.subscriptionId&&!['canceled','incomplete_expired'].includes(state.billing.status))
+  const load=useCallback(async()=>{ const result=await requestJson<BillingResponse>("/api/billing");setState(result);setSeats(result.state?.selected_seats??result.billing?.seatLimit??1) },[])
+  useEffect(()=>{void load().catch(e=>setError(e instanceof Error?e.message:"Billing could not be loaded."))},[load])
+  async function action(kind:"checkout"|"portal"|"seats"|"sync"|"cancel") {
+    setBusy(true);setError("");setNotice("")
+    try {const result=await requestJson<{url?:string;cancelAt?:string|null;alreadyCanceled?:boolean}>(`/api/billing/${kind}`,{method:"POST",body:JSON.stringify(kind==="checkout"?{selectedSeats:seats,onboarding}:kind==="seats"?{selectedSeats:seats}:kind==="portal"?{onboarding}:{})});if(result.url){window.location.assign(result.url);return}await load();setNotice(kind==="cancel"?(result.alreadyCanceled?"Subscription is already canceled. Outstanding invoices remain due.":`Cancellation confirmed for ${result.cancelAt?date(result.cancelAt):"the current period end"}. Outstanding invoices remain due.`):kind==="seats"?"Seat change submitted. Increases activate after payment; reductions take effect at renewal.":"Billing refreshed.")}
+    catch(e){setError(e instanceof Error?e.message:"Billing action failed.")}finally{setBusy(false)}
   }
-  return <div className="space-y-6">
-    <header><h1 className="text-3xl font-bold">{onboarding ? "Choose your company plan" : "Plans & Billing"}</h1><p className="mt-2 text-muted-foreground">Plans cover your whole company, including the owner. You can start on Free and upgrade when you need more seats.</p></header>
-    {state?.testMode && state.enabled && <p className="rounded-lg bg-muted p-3 text-sm">Billing is in test mode. No real payments are collected.</p>}
-    {error && <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm"><p>{error}</p><Button className="mt-3" variant="outline" onClick={() => void sync()}>Retry billing sync</Button></div>}
-    {state?.billing && <Card><CardHeader><CardTitle>{state.billing.planName}</CardTitle></CardHeader><CardContent><p>{state.occupiedSeats} of {state.billing.seatLimit} seats reserved</p>{Boolean(state.billing.paymentPastDue) && <p className="text-destructive">Payment needs attention. Update your payment method before inviting employees.</p>}{state.occupiedSeats > state.billing.seatLimit && <p className="text-muted-foreground">Your existing team keeps access. Upgrade or free seats before inviting more people.</p>}</CardContent></Card>}
-    {!state && !error && <p role="status">Loading company billing…</p>}
-    {state && !state.enabled && <p className="text-muted-foreground">Company billing is not enabled yet.</p>}
-    {state?.enabled && <>
-      <div className="grid gap-4 md:grid-cols-3">{BILLING_PLANS.map(plan => <Card key={plan.slug}><CardHeader><CardTitle>{plan.name}</CardTitle></CardHeader><CardContent className="space-y-4"><p><span className="text-3xl font-semibold">${plan.monthlyUsd}</span> / month</p><p>{plan.seats} {plan.seats === 1 ? "seat" : "seats"}</p>{plan.slug === "free_org" ? <p className="text-sm text-muted-foreground">{state.billing?.subscriptionId ? "Cancel your paid plan in Payment settings to return to Free." : "Included with your company."}</p> : <Button disabled={busy || state.billing?.planSlug === plan.slug} onClick={() => void openPayment(plan.slug)}>{state.billing?.planSlug === plan.slug ? "Current plan" : state.billing?.subscriptionId ? "Change plan" : `Choose ${plan.name}`}</Button>}</CardContent></Card>)}</div>
-      {state.canManagePayment && <Button variant="outline" disabled={busy} onClick={() => void openPayment()}>Payment settings</Button>}
-    </>}
-    {onContinue && <Button onClick={onContinue}>Continue to employee invitations</Button>}
+  return <div className="space-y-6"><header><h1 className="text-3xl font-bold">{onboarding?"Your company trial is ready":"Plans & Billing"}</h1><p className="mt-2 text-muted-foreground">One monthly plan for your company. Active members and pending invitations reserve seats.</p></header>
+    {error&&<p role="alert" className="text-destructive">{error}</p>}{notice&&<p role="status">{notice}</p>}
+    {!state?<Button variant="outline" onClick={()=>void load().catch(e=>setError(e.message))}>Load billing</Button>:<>
+      {state.enabled&&state.testMode&&<p className="rounded-lg bg-muted p-3 text-sm">Test mode — no real payments are collected.</p>}
+      <Card><CardHeader><CardTitle>Company access: {state.access.status.replaceAll("_"," ")}</CardTitle></CardHeader><CardContent className="space-y-2">
+        {!state.access.allowed&&<p role="alert" className="text-destructive">Access is paused: {state.access.reason?.replaceAll("_"," ")}. {state.access.manualPaused?"Contact support to resolve this suspension.":"Review outstanding invoices and subscription status below to resolve billing. Payment must be verified before eligible access resumes."}</p>}
+        {state.access.trialEndsAt&&<p>Trial ends {date(state.access.trialEndsAt)}. No card required; up to 5 trial users.</p>}
+        {state.access.graceEndsAt&&<p>Payment grace ends {date(state.access.graceEndsAt)}. Settle outstanding invoices to keep access.</p>}
+        <p>{state.activeSeats} active members + {state.pendingInvitationSeats} pending invitations = {state.occupiedSeats} seats reserved · Current invitation limit: {state.access.seatLimit}</p>
+        <p>Selected paid seats: {state.state?.selected_seats??1} · Purchased seats: {state.billing?.subscriptionId?state.billing.seatLimit:0}</p>
+        {state.billing?.subscriptionId&&<p>Current monthly price: {formatBillingMoney(monthlyPriceCents(state.billing.seatLimit))} USD · Subscription: {state.billing.status}</p>}
+        {state.state?.pending_seats&&<p>Scheduled seats: {state.state.pending_seats} ({formatBillingMoney(monthlyPriceCents(state.state.pending_seats))}/month), effective {state.state.pending_seats_at?date(state.state.pending_seats_at):"at renewal"}. This lower limit applies to new invitations now.</p>}
+        {state.billing?.periodEnd&&<p>Current period ends {date(state.billing.periodEnd)}.</p>}
+      </CardContent></Card>
+      <BillingRecoveryDetails recovery={state.recovery}/>
+      <Card><CardHeader><CardTitle>Monthly subscription</CardTitle></CardHeader><CardContent className="space-y-4"><SeatSelector value={seats} onChange={setSeats} minimum={Math.max(1,state.occupiedSeats)}/>
+        <p className="text-sm text-muted-foreground">Checkout activates paid access immediately and ends the no-card trial. Seat increases are prorated and activate after payment. Reductions apply at renewal and cannot go below active members plus pending invitations.</p>
+        <div className="flex flex-wrap gap-3"><Button disabled={!state.enabled||busy||!validSelectedSeats(seats)||seats<state.occupiedSeats||state.billing?.status==="incomplete"} onClick={()=>void action(hasSubscription?"seats":"checkout")}>{hasSubscription?"Update paid seats":"Subscribe now"}</Button>{state.canManagePayment&&<Button variant="outline" disabled={busy||!state.enabled} onClick={()=>void action("portal")}>Payment settings & invoices</Button>}<Button variant="outline" disabled={busy} onClick={()=>void action("sync")}>Refresh billing</Button></div>
+        {state.billing?.status==="incomplete"&&<p className="text-sm text-muted-foreground">Your initial payment is incomplete. Resolve it in payment settings before changing seats.</p>}
+        {state.canManagePayment&&<BillingCancellation enabled={state.enabled} busy={busy} onCancel={()=>void action("cancel")}/>}
+        {!state.enabled&&<p className="text-sm text-muted-foreground">Online checkout is not enabled yet. Contact support for subscription help.</p>}
+        <p className="text-sm text-muted-foreground">Use Cancel at period end to stop renewal, or Payment settings &amp; invoices to manage payment. Monthly fees continue during suspension until the effective cancellation date, normally the current period end. Cancellation does not restart a trial or forgive outstanding invoices. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access resumes.</p>
+      </CardContent></Card>
+    </>}{onContinue&&<Button onClick={onContinue}>Continue to employee invitations</Button>}
   </div>
 }
