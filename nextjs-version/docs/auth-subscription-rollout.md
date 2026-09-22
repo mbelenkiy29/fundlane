@@ -6,7 +6,27 @@
 - Full regression confirmation: 968 tests, 967 passed, one skipped, zero failed. Production build from the committed-source snapshot passed.
 - Applied additive migration `0048_billing_recovery`, ledger timestamp `1790035200002`, SHA-256 `d12ce4e1ec6c70ca501f78f025431e51b057d49fa9fe4d5dd0143d1ed4c122c0`.
 - Production readback verified the new marker column, three companies with three legacy exemptions, and two active platform-admin grants.
-- Recovery application deployment remains pending remaining real-provider acceptance. Migration application does not activate Stripe billing or change legacy company access.
+- Recovery application deployed from the isolated `8202a1e` source snapshot as Vercel
+  `FeCKA2FnNUfi1SrRfUu2ZRF32yYX`, immutable URL
+  `https://fundlane-kcl22nj26-michael-belenkiys-projects.vercel.app`, aliased to
+  `https://fundlane.io`. Vercel's production build passed. Deployment metadata records
+  implementation `8202a1e` and acceptance checkpoint `e0e10af`.
+- Post-deploy smoke at **2026-09-22 03:02 UTC**: `/` and `/sign-in` returned 200;
+  `/settings/billing` and `/platform` redirected unauthenticated browsers (307);
+  billing GET/cancel POST, platform-company GET and unauthenticated cron returned 401.
+  Authenticated maintenance returned 200: three scanned, zero reconciliation errors,
+  zero pending notifications. Private evidence: `recovery-production-smoke.json`.
+- Supabase Vault/`pg_net` transport request **299** independently returned 200 with
+  the same maintenance result and no timeout. The ten-minute job remains active.
+  Requests 296–298 returned 404 before this release; the endpoint and transport are
+  now verified. Post-deploy database readback still has all three legacy-exempt,
+  non-manually-paused companies.
+- Core provider run 9 passed **21 checks**, including real settlement retaining manual
+  suspension and outbound reapproval. Signed webhook run 2 passed genuine out-of-order
+  cancellation/older-active delivery. Processing runs 7–8 passed real SCA/processing
+  renewals and total-debt shortfall. See `docs/acceptance/` for evidence and remaining
+  hosted browser acceptance. Live Stripe billing remains unactivated; this deployment
+  does not convert legacy companies or configure external providers.
 
 ## Approved commercial contract
 

@@ -124,7 +124,8 @@ async function main() {
     const { getDatabase, closeDatabaseForTests, nowIso } = await import("../../src/lib/mca/db")
     closeApp = closeDatabaseForTests
     const { createWorkspaceWithAdmin } = await import("../../src/lib/mca/workspaces")
-    const { getCompanyAccess } = await import("../../src/lib/mca/company-access")
+    const { getCompanyAccess, assertCompanyOutboundAllowed } = await import("../../src/lib/mca/company-access")
+    const { setPlatformCompanyAccess } = await import("../../src/lib/mca/billing-operations")
     if (args.includes("--provision-synthetic-prices")) {
       // This sandbox defaults Checkout to Managed Payments, requiring a tax code.
       const product = await stripe.products.create({ name: e.run, metadata, tax_code: "txcd_10103001" }, { idempotencyKey: `${e.run}-product` })
@@ -170,6 +171,8 @@ async function main() {
     const access = () => getCompanyAccess(local.workspaceId)
     await sync(); assert.equal((await access()).status, "active")
     await check("initial_paid_subscription", { subscription: sub.id })
+    const originalApproval = nowIso()
+    await assertCompanyOutboundAllowed(local.workspaceId, originalApproval)
 
     async function fixture(label: string) {
       const workspace = await createWorkspaceWithAdmin({ workspaceName: `${e.run}-${label}`, adminName: "Synthetic owner", adminEmail: `${e.run}-${label}@example.test`, password: randomUUID() + "aA9!", role: "admin" })
@@ -245,6 +248,7 @@ async function main() {
     stage = "cutoff"
     await advance(Date.parse(grace) / 1000)
     await sync(); assert.equal((await access()).allowed, false)
+    await assert.rejects(assertCompanyOutboundAllowed(local.workspaceId, originalApproval), { code: "company_paused" })
     assert.equal((await stripe.invoices.retrieve(renewal.id)).auto_advance, false)
     sub = await stripe.subscriptions.retrieve(sub.id)
     assert.equal(sub.pause_collection?.behavior, "keep_as_draft")
@@ -289,10 +293,23 @@ async function main() {
     await sync(); assert.equal((await access()).allowed, false)
     assert.equal((await access()).graceEndsAt, grace)
     await check("original_invoice_paid_but_missed_month_blocks_access")
+    await setPlatformCompanyAccess(local.workspaceId, local.userId, { manualPaused: true, reason: "Synthetic recovery acceptance" })
     await stripe.invoices.pay(missed.id, { payment_method: good.id })
+    await sync(); assert.equal((await access()).allowed, false)
+    assert.equal((await access()).reason, "manual_suspension")
+    await assert.rejects(assertCompanyOutboundAllowed(local.workspaceId, originalApproval), { code: "company_paused" })
+    await check("full_provider_settlement_preserves_manual_suspension_and_outbound_block")
+    await setPlatformCompanyAccess(local.workspaceId, local.userId, { manualPaused: false, reason: "Synthetic acceptance resume" })
     await sync(); assert.equal((await access()).allowed, true)
     assert.equal((await stripe.subscriptions.retrieve(sub.id)).pause_collection, null)
     await check("all_required_invoices_paid_restores_access")
+    await assert.rejects(assertCompanyOutboundAllowed(local.workspaceId, originalApproval), { code: "company_outbound_reapproval_required" })
+    await advance(frozen + 1)
+    const freshApproval = nowIso()
+    await assertCompanyOutboundAllowed(local.workspaceId, freshApproval)
+    await sync()
+    await assertCompanyOutboundAllowed(local.workspaceId, freshApproval)
+    await check("recovery_rejects_pre_pause_approval_and_preserves_new_approval_after_sync")
 
     stage = "SCA pending seat increase"
     const authenticationRequired = await stripe.paymentMethods.attach("pm_card_authenticationRequired", { customer: customer.id })

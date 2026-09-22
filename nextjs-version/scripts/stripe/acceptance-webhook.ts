@@ -39,6 +39,8 @@ async function main() {
   let route: ((request: Request) => Promise<Response>) | undefined
   let customerId: string | undefined
   const deliveries: Delivery[] = []
+  const held: Array<{ body: string; signature: string; event: Stripe.Event }> = []
+  let hold = false
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== "POST" || request.url !== "/api/webhooks/stripe" || !route) { response.writeHead(404).end(); return }
@@ -46,6 +48,12 @@ async function main() {
       for await (const chunk of request) chunks.push(Buffer.from(chunk))
       const body = Buffer.concat(chunks).toString("utf8")
       const signature = String(request.headers["stripe-signature"] ?? "")
+      const incoming = JSON.parse(body) as Stripe.Event
+      if (hold && (incoming.data.object as { customer?: string }).customer === customerId) {
+        held.push({ body, signature, event: incoming })
+        response.writeHead(200, { "content-type": "application/json" }).end('{"held":true}')
+        return
+      }
       const result = await route(new Request("http://127.0.0.1/api/webhooks/stripe", { method: "POST", headers: { "stripe-signature": signature }, body }))
       const text = await result.text()
       const event = JSON.parse(body) as Stripe.Event
@@ -59,7 +67,7 @@ async function main() {
     const address = server.address()
     assert.ok(address && typeof address !== "string")
     const endpoint = `http://127.0.0.1:${address.port}/api/webhooks/stripe`
-    listener = spawn("stripe", ["listen", "--latest", "--events", "customer.subscription.updated", "--forward-to", endpoint], { env: { ...process.env, STRIPE_API_KEY: key }, stdio: ["ignore", "pipe", "pipe"] })
+    listener = spawn("stripe", ["listen", "--latest", "--events", "customer.subscription.updated,customer.subscription.deleted", "--forward-to", endpoint], { env: { ...process.env, STRIPE_API_KEY: key }, stdio: ["ignore", "pipe", "pipe"] })
     let output = ""
     let listenerError = false
     listener.on("error", () => { listenerError = true })
@@ -136,6 +144,32 @@ async function main() {
     assert.equal(tampered.status, 400)
     assert.deepEqual(await snapshot(), committed)
     await check("tampered raw payload with genuine original signature: HTTP 400; database unchanged")
+    evidence.stage = "out-of-order genuine signed delivery"
+    hold = true
+    await stripe.subscriptions.update(subscription.id, { metadata: { acceptance_order: "older-active" } })
+    for (let i = 0; i < 150 && !held.some(d => d.event.type === "customer.subscription.updated"); i++) await sleep(200)
+    const older = held.find(d => d.event.type === "customer.subscription.updated")
+    assert.ok(older)
+    assert.equal((older.event.data.object as Stripe.Subscription).status, "active")
+    await stripe.subscriptions.cancel(subscription.id)
+    for (let i = 0; i < 150 && !held.some(d => d.event.type === "customer.subscription.deleted"); i++) await sleep(200)
+    const newer = held.find(d => d.event.type === "customer.subscription.deleted")
+    assert.ok(newer)
+    hold = false
+    const { getCompanyAccess } = await import("../../src/lib/mca/company-access")
+    for (const item of [newer, older]) {
+      const response = await fetch(endpoint, { method: "POST", headers: { "stripe-signature": item.signature }, body: item.body })
+      assert.equal(response.status, 200)
+      assert.equal((await response.json()).reconciled, true)
+      assert.equal((await getCompanyAccess(local.workspaceId)).allowed, false)
+      assert.equal((await db.prepare<{status: string}>("SELECT status FROM workspace_billing_entitlements WHERE workspace_id=?").get(local.workspaceId))?.status, "canceled")
+    }
+    evidence.ids.olderEvent = older.event.id
+    evidence.ids.newerEvent = newer.event.id
+    const outOfOrderReceipts = await database.query("SELECT count(*)::int AS count FROM stripe_billing_events WHERE event_id=ANY($1::text[]) AND workspace_id=$2", [[older.event.id, newer.event.id], local.workspaceId])
+    assert.equal(outOfOrderReceipts.rows[0].count, 2)
+    assert.equal(await db.prepare("SELECT workspace_id FROM workspace_billing_entitlements WHERE workspace_id=?").get(other.workspaceId), undefined)
+    await check("genuine signed cancellation delivered before older active event: both HTTP 200 and durable receipts; fresh provider reads keep canceled company blocked and control unchanged")
     evidence.result = "passed"
   } catch (error) {
     evidence.result = "blocked-or-failed"

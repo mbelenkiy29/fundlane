@@ -2,6 +2,18 @@
 
 ## Result: PASS
 
+### Out-of-order extension — 2026-09-22 02:52 UTC
+
+`webhook-delivery-evidence-2.json` passed all original checks plus genuine signed
+out-of-order delivery. Run `fundlane-webhook-89470023-240c-4a9d-a4be-d20b2ce3bc12`
+held CLI-forwarded requests in memory, delivered cancellation
+`evt_1UIJosBP3qJwlwmsMOdglbWW` before older active update
+`evt_1UIJorBP3qJwlwmsfGEWNLEB`, and verified both returned HTTP 200 with independent
+durable receipts. Fresh provider reads kept the entitlement canceled and access
+blocked after each delivery. The control company remained unchanged. Original
+provider signatures were retained; no signatures or event payloads were fabricated.
+All owned resources, listener output and disposable database were cleaned.
+
 Executed **2026-09-22 02:21 UTC** against the explicitly verified FundLane sandbox
 `acct_1UIDeIBP3qJwlwms`, using Stripe CLI **1.51.1** and SDK API version
 `2026-08-26.dahlia`. The supplied sandbox key successfully authorized `stripe listen`;
@@ -53,7 +65,8 @@ verifies the fixed sandbox account before mutations and explicitly sets the CLI'
 `STRIPE_API_KEY` environment override so a different default CLI profile cannot
 select another account. Keys are never CLI arguments or printed.
 
-The listener subscribes only to `customer.subscription.updated` with `--latest`.
+The listener subscribes to `customer.subscription.updated` and
+`customer.subscription.deleted` with `--latest`.
 Its signing secret is captured in process memory; raw CLI output is confined to a
 mode-0600 file inside a private temporary directory and deleted during cleanup.
 The HTTP bridge calls the application's actual POST export and converts its

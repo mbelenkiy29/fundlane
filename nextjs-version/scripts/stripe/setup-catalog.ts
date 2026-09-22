@@ -11,7 +11,7 @@ async function main() {
   const expectedAccount = process.argv.find(value => value.startsWith("--expected-account="))?.split("=")[1]
   if (!expectedAccount || !/^acct_[a-zA-Z0-9]+$/.test(expectedAccount)) throw new Error("Supply --expected-account=acct_... for the intended Fundlane account.")
   const stripe = new Stripe(key, { apiVersion: "2026-08-26.dahlia", timeout: 15000, maxNetworkRetries: 1 })
-  const account = await stripe.accounts.retrieve()
+  const account = await stripe.accounts.retrieve(null)
   if (account.id !== expectedAccount) throw new Error("Stripe account does not match --expected-account.")
   const apply = process.argv.includes("--apply")
   const keys = ["fundlane_v1_base_monthly_usd", "fundlane_v1_additional_monthly_usd"]

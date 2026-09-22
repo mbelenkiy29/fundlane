@@ -9,6 +9,14 @@ open for the gaps below. The supplied restricted test key verified `GET /v1/acco
 against the fixed account; no missing permission was observed. Default CLI credentials
 were never used.
 
+**Run 9 passed 21 checks**, extending the prior run with real-provider full settlement
+while manually suspended and durable outbound reapproval after recovery. Run
+`fundlane-recovery-0d51f443-8465-49a5-866d-576a9a409e78`, evidence
+`recovery-core-real-9.json`, ended `passed-core`, `cleaned=true`. The platform access
+service applied/removes the synthetic manual pause; actual Stripe payment and
+reconciliation cannot remove it. An approval predating the pause receives 409 after
+recovery; a new approval succeeds and remains valid after another provider sync.
+
 ### Real-provider evidence — 2026-09-21
 
 Supplemental evidence is recorded in [stripe-webhook-delivery.md](stripe-webhook-delivery.md)
@@ -217,15 +225,15 @@ failure makes the process exit nonzero even if core checks passed.
 
 | Scenario | Required provider evidence | Current status |
 | --- | --- | --- |
-| Core recovery above | Successful JSON run and reviewed Stripe invoice/status evidence | Passed in runs 7 and 8 |
+| Core recovery above | Successful JSON run and reviewed Stripe invoice/status evidence | Passed in runs 7–9; latest run has 21 checks |
 | Single-invoice partial payment | Remaining invoice cents still block recovery | Stripe rejects partial-amount payment attachments on automatic-collection subscription invoices (provider-enforced constraint). Actual partial aggregate settlement and processing shortfall across two invoices passed. |
-| SCA | Real action-required payment cannot extend grace or grant unpaid seats; complete hosted authentication then verify provider-confirmed recovery | Actual `requires_action` seat-payment gating passed in run 8. Method-replacement payment restored seats. Supplemental processing runner verified no SCA extension and denial at cutoff. Hosted 3DS completion remains unrun. |
+| SCA | Real action-required payment cannot extend grace or grant unpaid seats; complete hosted authentication then verify provider-confirmed recovery | Actual `requires_action` seat-payment gating passed. Supplemental processing runner verified no SCA extension and denial at cutoff. Standalone browser reached the genuine 3DS challenge, but completion stalled; see stripe-hosted-browser.md. |
 | Processing exception | Supported delayed method creates actual per-invoice InvoicePayment allocations covering every unpaid invoice; one pre-cutoff grant capped at grace +48h; failure/retry/shortfall cannot extend it again | Supplemental runs 7–8 passed: $399 processing against $477.89 total debt grants no extension or extra seat; zero-attempt fully covered renewal starts grace and the fixed 48-hour extension; cancellation revokes extension/access and preserves grant marker. Direct zero-attempt SCA renewal starts seven-day grace with no extension and denies access at cutoff. See supplemental report. |
-| Checkout | Hosted flow creates flexible subscription with stable integration identifier and verified catalog | App session creation, price/quantity serialization and reuse passed; hosted completion remains unrun. |
+| Checkout | Hosted flow creates flexible subscription with stable integration identifier and verified catalog | App session creation, price/quantity serialization and reuse passed; application-generated hosted Checkout showed correct two-seat subtotal and reached 3DS. Payment completion remains unverified. |
 | Portal/cancellation | Paused admin can pay/cancel; cancellation works with pending scheduled seat reduction and honors effective date | App Portal session creation for active/paused companies and both app cancellation scenarios passed. Hosted Portal interactions remain unrun. |
-| Webhook HTTP | Real Stripe signature accepted, invalid signature rejected, duplicate/out-of-order delivery safe against current provider reads | Supplemental actual-route HTTP runner passed genuine CLI-forwarded signed event, durable scoped receipt, duplicate no-op and tampered-body rejection. Out-of-order real delivery remains unverified. |
+| Webhook HTTP | Real Stripe signature accepted, invalid signature rejected, duplicate/out-of-order delivery safe against current provider reads | Supplemental actual-route HTTP runner passed genuine CLI-forwarded signed event, durable scoped receipt, duplicate no-op and tampered-body rejection. Second run delivered genuine cancellation before older active update; both acknowledged/receipted, canceled access retained, control unchanged. |
 | Existing classic subscriptions | Paid increases and renewal reductions preserve classic billing mode | Passed with real classic subscription in run 8 |
-| Manual suspension/outbound approval | Full payment cannot bypass manual pause or revive pre-pause outbound approval | Local regression coverage; record isolated provider/runtime evidence |
+| Manual suspension/outbound approval | Full payment cannot bypass manual pause or revive pre-pause outbound approval | Passed real-provider run 9: manual pause survives full payment; outbound blocked during pause, old approval rejected after recovery, new approval preserved through another provider sync. |
 
 Do not forward sandbox events to the production webhook for acceptance. Set up a
 separately reachable isolated runtime with its own disposable database and signing
