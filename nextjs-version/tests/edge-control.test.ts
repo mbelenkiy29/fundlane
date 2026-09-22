@@ -15,7 +15,10 @@ before(async () => {
     IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='mca_app') THEN CREATE ROLE mca_app LOGIN; END IF;
   END $$`)
   await fixture.query(readFileSync("supabase/migrations/20260914133456_edge_worker_foundation.sql", "utf8"))
-  const url = new URL(fixture.databaseUrl); url.username = "mca_app"
+  // Authenticate with the disposable cluster credentials, then exercise the
+  // restricted role. mca_app has no fixture password on SCRAM-enabled CI.
+  const url = new URL(fixture.databaseUrl)
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c role=mca_app`.trim())
   process.env.DATABASE_URL = url.toString()
 })
 after(async () => { await closeDatabaseForTests(); await fixture?.close() })
