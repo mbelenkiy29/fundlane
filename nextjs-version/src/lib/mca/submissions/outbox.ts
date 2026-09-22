@@ -1,5 +1,7 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
+import { getOutgoingDocumentBytes } from "./compress"
 import { newId } from "../db"
 import { AppError } from "../errors"
 import { assertCompanyOperational } from "../company-access"
@@ -55,14 +57,21 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  if (existing && isCompletedAttempt(existing.state)) {
+  if (existing && job.approvedPackage && existing.state === "sending" && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) {
+    const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
+    await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
+    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
+    await refreshCache(saved)
+    await markOutboxProcessed(job.id, reason)
+    return saved
+  }
+  if (existing && (job.approvedPackage || isCompletedAttempt(existing.state))) {
     const current = await findJobById(job.workspaceId, job.id)
-    await markOutboxProcessed(job.id)
+    if (isCompletedAttempt(existing.state)) await markOutboxProcessed(job.id)
     return current ?? job
   }
 
   if (!existing) {
-    await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
     const reserved = await insertAttempt({
       workspaceId: job.workspaceId,
       jobId: job.id,
@@ -71,15 +80,16 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       state: "sending",
       correlationId: newId(),
     })
-    if (!reserved.created && isCompletedAttempt(reserved.attempt.state)) {
+    if (!reserved.created && (job.approvedPackage || isCompletedAttempt(reserved.attempt.state))) {
       const current = await findJobById(job.workspaceId, job.id)
-      await markOutboxProcessed(job.id)
+      if (isCompletedAttempt(reserved.attempt.state)) await markOutboxProcessed(job.id)
       return current ?? job
     }
+    await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
   }
 
   try {
-    const packaged = await prepareOutgoingPackage({
+    const packaged = job.approvedPackage ? { documents: job.approvedPackage.documents } : await prepareOutgoingPackage({
       originals: job.documentVersions.map((document) => ({
         documentId: document.documentId,
         originalDocumentId: document.documentId,
@@ -89,9 +99,18 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       })).filter((document) => job.packageDocumentIds.includes(document.documentId)),
       funderId: job.funderId,
     })
+    if (job.approvedPackage) {
+      for (const document of packaged.documents) {
+        const bytes = await getOutgoingDocumentBytes(document)
+        if (createHash("sha256").update(bytes).digest("hex") !== document.checksum) {
+          throw new AppError(409, "approved_package_changed", "The approved attachment changed. Prepare a new preview.")
+        }
+      }
+    }
     const sending: SubmissionJob = {
       ...job,
       state: "sending",
+      ...(job.approvedPackage ? { documentVersions: packaged.documents.map((document) => ({ documentId: document.documentId, checksum: document.checksum, category: job.approvedPackage!.originalVersions.find((original) => original.documentId === document.originalDocumentId)?.category ?? "other_stip" })) } : {}),
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     }
     const delivered = await deliverSubmission(sending, packaged.documents)

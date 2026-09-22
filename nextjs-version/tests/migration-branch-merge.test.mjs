@@ -1,0 +1,56 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { resolve } from "node:path";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import pg from "pg";
+import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
+
+const applicationReviewHash = "eace840adc50c0b66a4203414cd3c6e123474b4e4715cefe6e50e4028e98c49d";
+const catchupTimestamp = 1790035200003;
+
+async function withFixture(label, run) {
+  const fixture = await createPostgresTestDatabase(label);
+  const pool = new pg.Pool({ connectionString: fixture.databaseUrl, max: 1 });
+  try { await run(fixture, pool); }
+  finally { await pool.end(); await fixture.close(); }
+}
+
+test("merged fresh schema includes both migration branches; catch-up does not replay application-review data updates", async () => {
+  await withFixture("merge_fresh", async (fixture, pool) => {
+    const original = await fixture.query("SELECT hash FROM drizzle.__drizzle_migrations WHERE hash=$1", [applicationReviewHash]);
+    assert.equal(original.rows.length, 1);
+    // A statement-level trigger detects accidental replay even with no intake rows.
+    await fixture.query(`CREATE FUNCTION forbid_review_replay() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'application-review data migration replayed'; END $$;
+      CREATE TRIGGER forbid_review_replay BEFORE UPDATE ON intake_integrations
+      FOR EACH STATEMENT EXECUTE FUNCTION forbid_review_replay();`);
+    await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at=$1", [catchupTimestamp]);
+    await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [catchupTimestamp])).rows[0].n, 1);
+  });
+});
+
+test("auth-first 0048 deployment receives older application-review schema through additive catch-up", async () => {
+  await withFixture("merge_auth_first", async (fixture, pool) => {
+    // Reproduce the production branch divergence: auth ledger already at 0048,
+    // but the older-timestamp migration and its schema never landed.
+    await fixture.query(`DROP TABLE intake_notifications, intake_submission_previews;
+      ALTER TABLE intake_events DROP COLUMN answers_cipher;
+      ALTER TABLE mca_submission_jobs DROP COLUMN approved_package_cipher;`);
+    await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE hash=$1 OR created_at=$2", [applicationReviewHash, catchupTimestamp]);
+    assert.equal(Number((await fixture.query("SELECT max(created_at) n FROM drizzle.__drizzle_migrations")).rows[0].n), 1790035200002);
+    await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
+    const tables = await fixture.query("SELECT relname,relrowsecurity FROM pg_class WHERE oid IN ('intake_notifications'::regclass,'intake_submission_previews'::regclass) ORDER BY relname");
+    assert.deepEqual(tables.rows, [{ relname: "intake_notifications", relrowsecurity: true }, { relname: "intake_submission_previews", relrowsecurity: true }]);
+    const columns = await fixture.query(`SELECT table_name,column_name FROM information_schema.columns WHERE
+      (table_name='intake_events' AND column_name='answers_cipher') OR
+      (table_name='mca_submission_jobs' AND column_name='approved_package_cipher') OR
+      (table_name='company_subscription_state' AND column_name='processing_extension_granted_at')`);
+    assert.equal(columns.rows.length, 3);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE hash=$1", [applicationReviewHash])).rows[0].n, 0, "Drizzle really skipped the older migration");
+    const ledger = (await fixture.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows;
+    await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
+    assert.deepEqual((await fixture.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows, ledger);
+  });
+});

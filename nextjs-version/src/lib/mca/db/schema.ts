@@ -1059,6 +1059,7 @@ export const intake_events = pgTable("intake_events", {
 	legacy_identity: integer().default(0).notNull(),
 	payload_checksum: text().notNull(),
 	application_cipher: text().notNull(),
+	answers_cipher: text(),
 	email_source_cipher: text(),
 	email_source_checksum: text(),
 	source_reference: text(),
@@ -1503,6 +1504,7 @@ export const mca_email_oauth_states = pgTable("mca_email_oauth_states", {
 ]);
 
 export const mca_submission_jobs = pgTable("mca_submission_jobs", {
+	approved_package_cipher: text(),
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),
 	deal_id: text().notNull(),
@@ -1857,3 +1859,25 @@ export const mca_email_reads = pgTable("mca_email_reads", {
 export const mca_email_worker_leases = pgTable("mca_email_worker_leases", {
   sender_id:text().primaryKey().references(() => mca_email_senders.id),workspace_id:text().notNull().references(() => workspaces.id),token:text().notNull(),expires_at:text().notNull(),
 })
+
+export const intake_notifications = pgTable("intake_notifications", {
+  id: text().primaryKey().notNull(),
+  workspace_id: text().notNull().references(() => workspaces.id),
+  intake_id: text().notNull().references(() => intake_events.id, { onDelete: "cascade" }),
+  user_id: text().notNull().references(() => users.id),
+  created_at: text().notNull(),
+  read_at: text(),
+}, table => [unique("intake_notifications_workspace_id_intake_id_user_id_key").on(table.workspace_id, table.intake_id, table.user_id), index("intake_notifications_recipient_idx").on(table.workspace_id, table.user_id, table.created_at)]);
+
+export const intake_submission_previews = pgTable("intake_submission_previews", {
+  id: text().primaryKey().notNull(),
+  workspace_id: text().notNull().references(() => workspaces.id),
+  intake_id: text().notNull().references(() => intake_events.id, { onDelete: "cascade" }),
+  deal_id: text().notNull().references(() => deals.id),
+  created_by_user_id: text().references(() => users.id),
+  snapshot_cipher: text().notNull(),
+  fingerprint: text().notNull(),
+  created_at: text().notNull(),
+  expires_at: text().notNull(),
+  confirmed_at: text(),
+}, table => [index("intake_submission_previews_intake_idx").on(table.workspace_id, table.intake_id, table.created_at)]);

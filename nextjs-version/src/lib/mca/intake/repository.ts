@@ -3,7 +3,7 @@ import "server-only"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealStatus, DealWriteInput } from "../deals/schema"
-import type { IntakeResult, NormalizedIntakeInput } from "./contracts"
+import type { IntakeAnswer, IntakeResult, NormalizedIntakeInput } from "./contracts"
 
 export function intakeDatabase(): DbExecutor { return getDatabase() }
 
@@ -12,6 +12,7 @@ export interface IntakeEventRecord extends IntakeResult {
   provider: string
   eventId: string
   payloadChecksum: string
+  answers?: IntakeAnswer[]
   application: DealWriteInput
   emailSource?: string
   emailSourceChecksum?: string
@@ -36,6 +37,7 @@ function eventFromRow(row: Row): IntakeEventRecord {
     eventId: String(row.provider_event_id),
     payloadChecksum: String(row.payload_checksum),
     application: JSON.parse(decryptSensitive(String(row.application_cipher), workspaceId)) as DealWriteInput,
+    answers: row.answers_cipher ? JSON.parse(decryptSensitive(String(row.answers_cipher), workspaceId)) as IntakeAnswer[] : undefined,
     emailSource: row.email_source_cipher ? decryptSensitive(String(row.email_source_cipher), workspaceId) : undefined,
     emailSourceChecksum: row.email_source_checksum ? String(row.email_source_checksum) : undefined,
     sourceReference: row.source_reference ? String(row.source_reference) : undefined,
@@ -68,9 +70,9 @@ export async function reserveIntake(
     const id = newId()
     const timestamp = nowIso()
     const inserted = await database.prepare<{ id: string }>(`INSERT INTO intake_events
-      (id, workspace_id, provider, provider_event_id, payload_checksum, application_cipher,
+      (id, workspace_id, provider, provider_event_id, payload_checksum, application_cipher, answers_cipher,
        source_reference, initial_status, state, integration_id, event_namespace, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)
       ON CONFLICT (workspace_id, event_namespace, provider, provider_event_id) DO NOTHING
       RETURNING id`).get(
       id,
@@ -79,6 +81,7 @@ export async function reserveIntake(
       input.eventId,
       payloadChecksum,
       encryptSensitive(JSON.stringify(input.application), workspaceId),
+      input.answers ? encryptSensitive(JSON.stringify(input.answers), workspaceId) : null,
       input.sourceReference ?? null,
       input.initialStatus ?? null,
       integrationId ?? null,

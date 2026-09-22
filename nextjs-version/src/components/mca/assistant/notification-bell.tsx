@@ -1,5 +1,7 @@
 "use client"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import type { ApplicationNotice } from "@/lib/mca/intake/review-contracts"
 import { useCallback, useEffect, useState } from "react"
 import { Bell } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -22,12 +24,19 @@ type Notice = {
   emailState: string
 }
 export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
+  const router = useRouter()
+  const [applications, setApplications] = useState<{ unread: number; notifications: ApplicationNotice[] }>({ unread: 0, notifications: [] })
+  const [applicationError, setApplicationError] = useState("")
+  const [opening, setOpening] = useState("")
   const [state, setState] = useState<{
       unread: number
       notifications: Notice[]
     }>({ unread: 0, notifications: [] }),
     [error, setError] = useState("")
   const refresh = useCallback(() => {
+    void assistantJson<{ unread: number; notifications: ApplicationNotice[] }>("/api/mca/intake/notifications")
+      .then(data => { setApplications(data); setApplicationError("") })
+      .catch(() => setApplicationError("Application alerts could not be loaded."))
     if (canManage)
       void assistantJson<typeof state>("/api/mca/assistant/notifications")
         .then((d) => {
@@ -59,6 +68,18 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
       setError("Could not mark this alert as read.")
     }
   }
+  async function openApplication(notice: ApplicationNotice) {
+    setOpening(notice.id)
+    try {
+      await assistantJson("/api/mca/intake/notifications", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: notice.id })
+      })
+      refresh()
+      router.push(`/intake/${encodeURIComponent(notice.intakeId)}`)
+    } catch { setApplicationError("Could not mark this application alert as read. Please retry.") }
+    finally { setOpening("") }
+  }
+  const unread = applications.unread + (canManage ? state.unread : 0)
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -66,12 +87,12 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
           variant="ghost"
           size="icon"
           className="relative"
-          aria-label={`Notifications${state.unread ? `, ${state.unread} unread` : ""}`}
+          aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
         >
           <Bell className="size-4" />
-          {state.unread > 0 && (
+          {unread > 0 && (
             <span className="absolute right-0 top-0 min-w-4 rounded-full bg-primary px-1 text-[10px] text-primary-foreground">
-              {state.unread > 99 ? "99+" : state.unread}
+              {unread > 99 ? "99+" : unread}
             </span>
           )}
         </Button>
@@ -81,20 +102,25 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
         className="max-h-[65vh] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto"
       >
         <h2 className="mb-3 font-medium">Notifications</h2>
-        {error && (
+        {(error || applicationError) && (
           <p role="alert" className="text-sm text-destructive">
-            {error}
+            {error || applicationError}
           </p>
         )}
-        {!state.notifications.length && (
+        {!applications.notifications.length && (!canManage || !state.notifications.length) && (
           <p className="text-sm text-muted-foreground">
-            {canManage
-              ? "No credit alerts yet."
-              : "Company credit alerts are sent to your administrators."}
+            No notifications yet.
           </p>
         )}
         <ul className="divide-y">
-          {state.notifications.map((n) => (
+          {applications.notifications.map(notice => (
+            <li key={`application-${notice.id}`} className="space-y-2 py-3 text-sm">
+              <p className={!notice.readAt ? "font-semibold" : ""}>Application received — {notice.merchantName}</p>
+              <p className="text-xs text-muted-foreground">Application {notice.state.replaceAll("_", " ")} · {new Date(notice.createdAt).toLocaleString()}</p>
+              <Link className="inline-block underline" aria-disabled={opening === notice.id} href={`/intake/${encodeURIComponent(notice.intakeId)}`} onClick={event => { event.preventDefault(); if (!opening) void openApplication(notice) }}>{opening === notice.id ? "Opening…" : "Review application"}</Link>
+            </li>
+          ))}
+          {canManage && state.notifications.map((n) => (
             <li className="space-y-2 py-3 text-sm" key={n.id}>
               <p className={!n.readAt ? "font-semibold" : ""}>
                 {n.userName}{" "}

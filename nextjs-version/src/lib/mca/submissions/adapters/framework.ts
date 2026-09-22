@@ -152,6 +152,9 @@ async function loadRuntime(
     environment,
     adapterSlug: adapterHint?.slug,
   })
+  if (job.approvedPackage && resolved && resolved.adapterSlug !== job.route.destination) {
+    return { correlationId, error: unavailable(correlationId, "The approved adapter route changed. Prepare a new preview.") }
+  }
   const slug = adapterSlugFor(job, resolved)
   const adapter = resolveAdapter(slug)
   if (!resolved) {

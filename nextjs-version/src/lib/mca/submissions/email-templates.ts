@@ -1,5 +1,6 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
 import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess } from "../auth"
 import { getDatabase, newId, nowIso, recordAuditEvent } from "../db"
 import type { DealActor, DealRecord } from "../deals/schema"
@@ -722,6 +723,19 @@ export async function sendSubmissionEmail(job: SubmissionJob, packaged: Outgoing
     return failed(correlationId, "provider_unavailable", `Email transport for ${job.funderId} is not configured yet.`)
   }
   try {
+    if (job.approvedPackage?.email) {
+      const approved = job.approvedPackage.email
+      const sender = await assertSenderUsable(systemActor(job.workspaceId, job.id), approved.senderId, "submission")
+      if (sender.fromAddress !== approved.fromAddress) throw new AppError(409, "approved_sender_changed", "The approved sender changed. Prepare a new preview.")
+      const attachments = await Promise.all(approved.attachments.map(async (attachment) => {
+        const document = packaged.find((item) => item.documentId === attachment.documentId)
+        if (!document) throw new AppError(409, "approved_package_changed", "An approved attachment is missing.")
+        const bytes = await getOutgoingDocumentBytes(document)
+        if (createHash("sha256").update(bytes).digest("hex") !== attachment.checksum) throw new AppError(409, "approved_package_changed", "The approved attachment changed. Prepare a new preview.")
+        return { ...attachment, bytesBase64: Buffer.from(bytes).toString("base64") }
+      }))
+      return await deliverRendered({ ...approved, attachments }, correlationId, job)
+    }
     const deal = await findDealById(job.workspaceId, job.dealId)
     if (!deal) return failed(correlationId, "deal_not_found", "The requested deal was not found.")
     const sender = await resolveJobSender(job)
@@ -930,4 +944,12 @@ export async function requireEmailTemplateAdmin(request: Request, mode: "read" |
 export async function requireEmailPreviewActor(request: Request): Promise<DealActor> {
   const auth = await requireWorkspaceAccess(request, { scopes: ["deals:read"] })
   return { ...await actorForDeals(auth), correlationId: requestCorrelationId(request) }
+}
+
+/** Render exactly the route and transformed attachments shown for approval, without delivery. */
+export async function prepareApprovedSubmissionEmail(actor: DealActor, deal: DealRecord, funder: FunderRecord, route: FunderRoute, documents: DocumentSummary[], packaged: OutgoingDocument[]): Promise<RenderedSubmissionEmail> {
+  const originals = summariesToAttachments(documents)
+  const rendered = await renderEmail({ deal, funderId: funder.id, funderName: displayFunderName(funder), destination: route.destination, route, documents: originals, sender: await resolvePreviewSender(actor) })
+  const attachments = await attachmentsFromPackage(packaged, originals)
+  return { ...rendered, attachments: attachments.map((attachment) => ({ documentId: attachment.documentId, filename: attachment.filename, checksum: attachment.checksum, byteLength: attachment.byteLength, category: attachment.category })) }
 }

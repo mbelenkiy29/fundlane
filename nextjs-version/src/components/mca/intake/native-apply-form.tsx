@@ -23,6 +23,8 @@ export function NativeApplyForm({
   const [error, setError] = React.useState<string>()
   const [busy, setBusy] = React.useState(false)
   const [done, setDone] = React.useState(false)
+  const [savedDealId, setSavedDealId] = React.useState<string>()
+  const completedUploads = React.useRef(new Set<string>())
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -31,58 +33,75 @@ export function NativeApplyForm({
     setBusy(true)
     setError(undefined)
     try {
-      const response = await fetch(`/api/public/apply/${encodeURIComponent(token)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          legalName: data.get("legalName"),
-          dbaName: data.get("dbaName"),
-          ein: data.get("ein"),
-          entityType: data.get("entityType") || undefined,
-          contactName: data.get("contactName"),
-          contactEmail: data.get("contactEmail"),
-          contactPhone: data.get("contactPhone"),
-          industry: data.get("industry"),
-          monthlyRevenue: data.get("monthlyRevenue") ? Number(data.get("monthlyRevenue")) : undefined,
-          requestedAmount: data.get("requestedAmount") ? Number(data.get("requestedAmount")) : undefined,
-          fundingPurpose: data.get("fundingPurpose"),
-          startDate: data.get("startDate") || undefined,
-          address: {
-            line1: data.get("line1"),
-            city: data.get("city"),
-            state: data.get("state"),
-            postalCode: data.get("postalCode"),
-            country: "US",
-          },
-          owners: [
-            {
-              firstName: data.get("ownerFirst"),
-              lastName: data.get("ownerLast"),
-              ownershipPercent: data.get("ownershipPercent") ? Number(data.get("ownershipPercent")) : undefined,
-              identityLast4: data.get("identityLast4"),
-              isPrimary: true,
+      let dealId = savedDealId
+      if (!dealId) {
+        const response = await fetch(`/api/public/apply/${encodeURIComponent(token)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            legalName: data.get("legalName"),
+            dbaName: data.get("dbaName"),
+            ein: data.get("ein"),
+            entityType: data.get("entityType") || undefined,
+            contactName: data.get("contactName"),
+            contactEmail: data.get("contactEmail"),
+            contactPhone: data.get("contactPhone"),
+            industry: data.get("industry"),
+            monthlyRevenue: data.get("monthlyRevenue") ? Number(data.get("monthlyRevenue")) : undefined,
+            requestedAmount: data.get("requestedAmount") ? Number(data.get("requestedAmount")) : undefined,
+            fundingPurpose: data.get("fundingPurpose"),
+            startDate: data.get("startDate") || undefined,
+            address: {
+              line1: data.get("line1"),
+              city: data.get("city"),
+              state: data.get("state"),
+              postalCode: data.get("postalCode"),
+              country: "US",
             },
-          ],
-        }),
-      })
-      const payload = await response.json().catch(() => ({})) as { dealId?: string; error?: { message?: string } }
-      if (!response.ok || !payload.dealId) {
-        throw new RequestError(response.status, payload.error?.message ?? "Could not submit the application.")
+            owners: [
+              {
+                firstName: data.get("ownerFirst"),
+                lastName: data.get("ownerLast"),
+                ownershipPercent: data.get("ownershipPercent") ? Number(data.get("ownershipPercent")) : undefined,
+                identityLast4: data.get("identityLast4"),
+                isPrimary: true,
+              },
+            ],
+          }),
+        })
+        const payload = await response.json().catch(() => ({})) as { dealId?: string; error?: { message?: string } }
+        if (!response.ok || !payload.dealId) {
+          throw new RequestError(response.status, payload.error?.message ?? "Could not submit the application.")
+        }
+        dealId = payload.dealId
+        setSavedDealId(dealId)
       }
+      const failures: string[] = []
       for (const category of CATEGORIES) {
-        const file = data.get(category.key)
-        if (!(file instanceof File) || !file.size) continue
-        const upload = new FormData()
-        upload.set("file", file)
-        upload.set("dealId", payload.dealId)
-        upload.set("category", category.key)
-        upload.set("idempotencyKey", `${payload.dealId}:${category.key}:${file.name}:${file.size}`)
-        const uploaded = await fetch(`/api/public/apply/${encodeURIComponent(token)}/documents`, { method: "POST", body: upload })
-        if (!uploaded.ok) {
-          const body = await uploaded.json().catch(() => ({})) as { error?: { message?: string } }
-          throw new RequestError(uploaded.status, body.error?.message ?? `Could not upload ${category.label.toLowerCase()}.`)
+        for (const file of data.getAll(category.key)) {
+          if (!(file instanceof File) || !file.size) continue
+          const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer())
+          const checksum = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")
+          const uploadKey = `${dealId}:${category.key}:${checksum}`
+          if (completedUploads.current.has(uploadKey)) continue
+          try {
+            const upload = new FormData()
+            upload.set("file", file)
+            upload.set("dealId", dealId)
+            upload.set("category", category.key)
+            upload.set("idempotencyKey", uploadKey)
+            const uploaded = await fetch(`/api/public/apply/${encodeURIComponent(token)}/documents`, { method: "POST", body: upload })
+            if (!uploaded.ok) {
+              const body = await uploaded.json().catch(() => ({})) as { error?: { message?: string } }
+              throw new RequestError(uploaded.status, body.error?.message ?? `Could not upload ${category.label.toLowerCase()}.`)
+            }
+            completedUploads.current.add(uploadKey)
+          } catch (caught) {
+            failures.push(caught instanceof Error ? caught.message : `Could not upload ${file.name}.`)
+          }
         }
       }
+      if (failures.length) throw new Error(`Your application is saved. Retry the remaining uploads: ${failures.join(" ")}`)
       setDone(true)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not submit the application.")
@@ -111,7 +130,7 @@ export function NativeApplyForm({
           <p className="text-sm text-muted-foreground">Assigned to {representativeName}. Upload documents below so they can submit faster.</p>
         </div>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <fieldset disabled={Boolean(savedDealId)} className="grid gap-4 sm:grid-cols-2">
         <Field name="legalName" label="Legal business name" required />
         <Field name="dbaName" label="DBA (optional)" />
         <Field name="ein" label="EIN" />
@@ -142,18 +161,18 @@ export function NativeApplyForm({
         <Field name="ownerLast" label="Owner last name" />
         <Field name="ownershipPercent" label="Ownership %" type="number" />
         <Field name="identityLast4" label="Owner ID last four" maxLength={4} />
-      </div>
+      </fieldset>
       <div className="grid gap-4">
         <p className="text-sm font-medium">Documents</p>
         {CATEGORIES.map((category) => (
           <label key={category.key} className="grid gap-1 text-sm">
             <span>{category.label}</span>
-            <Input name={category.key} type="file" accept={category.accept} />
+            <Input name={category.key} type="file" multiple={category.key === "statement"} accept={category.accept} />
           </label>
         ))}
       </div>
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-      <Button type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit application"}</Button>
+      <Button type="submit" disabled={busy}>{busy ? "Submitting…" : savedDealId ? "Retry uploads" : "Submit application"}</Button>
     </form>
   )
 }
