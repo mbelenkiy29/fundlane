@@ -1,5 +1,13 @@
 # Authentication and company-subscription rollout
 
+## Recovery release checkpoint — 2026-09-21
+
+- Implementation commit `8202a1e` pushed to `mbelenkiy29/redoing-auth`.
+- Full regression confirmation: 968 tests, 967 passed, one skipped, zero failed. Production build from the committed-source snapshot passed.
+- Applied additive migration `0048_billing_recovery`, ledger timestamp `1790035200002`, SHA-256 `d12ce4e1ec6c70ca501f78f025431e51b057d49fa9fe4d5dd0143d1ed4c122c0`.
+- Production readback verified the new marker column, three companies with three legacy exemptions, and two active platform-admin grants.
+- Recovery application deployment remains pending remaining real-provider acceptance. Migration application does not activate Stripe billing or change legacy company access.
+
 ## Approved commercial contract
 
 - Supabase verified email/password and Google sign-in.
