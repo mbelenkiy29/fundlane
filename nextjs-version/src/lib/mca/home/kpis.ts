@@ -476,6 +476,7 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
   const recentActivity = [
     ...committedFundings.map((row) => ({
       id: row.id,
+      dealId: row.dealId,
       kind: "funding" as const,
       title: row.legalName,
       subtitle: row.funderName,
@@ -487,6 +488,7 @@ export async function getHomeKpis(actor: DealActor, query: HomeKpiQuery): Promis
       const deal = visible.get(row.deal_id)
       return {
         id: row.id,
+        dealId: row.deal_id,
         kind: row.type,
         title: deal?.legalName ?? row.deal_id,
         subtitle: row.type === "commission" ? "Commission" : "Fee",

@@ -52,6 +52,7 @@ export interface HomeKpis {
     collectionsByDay: Array<{ day: string; expectedCents: number; receivedCents: number }>
     revenueBreakdown: Array<{ key: "funded" | "commission" | "fees"; amountCents: number }>
     recentActivity: Array<{
+      dealId: string
       id: string
       kind: "funding" | "commission" | "fee"
       title: string

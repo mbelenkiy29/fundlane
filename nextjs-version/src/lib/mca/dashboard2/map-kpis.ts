@@ -34,6 +34,10 @@ export interface Dashboard2RevenueSlice {
 }
 
 export interface Dashboard2ActivityRow {
+  dealId: string
+  kind: string
+  recordedStatus: string
+  at: string
   id: string
   customer: { name: string; email: string }
   amount: string
@@ -405,6 +409,10 @@ export function mapDashboard2(
     },
     activity: source.series.recentActivity.map((row) => ({
       id: row.id,
+      dealId: row.dealId,
+      kind: row.kind,
+      recordedStatus: row.status,
+      at: row.at,
       customer: { name: row.title, email: row.subtitle },
       amount: empty ? formatUsd(0) : row.amountCents == null ? RESTRICTED_LABEL : formatCentsUsd(row.amountCents),
       status: activityStatus(row.status),
@@ -436,3 +444,18 @@ export function mapDashboard2(
 }
 
 export const EMPTY_DASHBOARD2 = mapDashboard2(null)
+
+export function transactionReceipt(row: Dashboard2ActivityRow): string {
+  return [
+    "Fundlane — Transaction summary",
+    "Demo/internal record only. Not a bank receipt or proof of settlement.",
+    "",
+    `Reference: ${row.id}`,
+    `Customer: ${row.customer.name}`,
+    `Description: ${row.customer.email}`,
+    `Type: ${row.kind}`,
+    `Amount: ${row.amount}`,
+    `Status: ${row.recordedStatus}`,
+    `Date: ${row.at}`,
+  ].join("\n")
+}

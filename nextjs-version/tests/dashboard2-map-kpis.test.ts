@@ -13,6 +13,7 @@ import {
   monthWindowForDateRange,
   periodForDateRange,
   salesChartCsv,
+  transactionReceipt,
 } from "../src/lib/mca/dashboard2/map-kpis"
 
 const DUMMY = /54,?230|Olivia Martin|Premium Dashboard|2,350|1,247|3\.24%/
@@ -44,6 +45,7 @@ const sample: HomeKpis = {
     recentActivity: [
       {
         id: "fun-1",
+        dealId: "deal-1",
         kind: "funding",
         title: "Acme LLC",
         subtitle: "Rapid Finance",
@@ -188,4 +190,17 @@ test("sales chart 3m window and approval rate N/A stay numeric-safe", () => {
   assert.equal(formatPercent(null), NA_LABEL)
   assert.equal(formatPercent(0.5), "50%")
   assert.equal(formatRelativeTimestamp("2026-03-15T15:00:00.000Z", "2026-03-15T17:00:00.000Z"), "2 hours ago")
+})
+
+test("transaction actions retain the deal and export exact status without exposing hidden amounts", () => {
+  const row = mapDashboard2(sample).activity[0]!
+  assert.equal(row.dealId, "deal-1")
+  assert.equal(row.at, "2026-03-15T15:00:00.000Z")
+  assert.match(transactionReceipt(row), /Status: committed/)
+  assert.match(transactionReceipt(row), /Amount: \$10,000/)
+  assert.match(transactionReceipt(row), /Not a bank receipt/)
+  const pending = { ...row, recordedStatus: "expected", amount: RESTRICTED_LABEL }
+  assert.match(transactionReceipt(pending), /Status: expected/)
+  assert.ok(transactionReceipt(pending).includes(RESTRICTED_LABEL))
+  assert.ok(!transactionReceipt(pending).includes("$10,000"))
 })
