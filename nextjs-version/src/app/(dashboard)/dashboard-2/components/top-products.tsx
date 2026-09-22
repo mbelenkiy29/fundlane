@@ -62,7 +62,7 @@ export function TopProducts({ funders }: { funders?: Dashboard2FunderRow[] }) {
                   </Badge>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <span className="text-xs text-muted-foreground">Stock: {product.stock}</span>
+                  <span className="text-xs text-muted-foreground">{product.stock}</span>
                   <Progress
                     value={product.stockPercent}
                     className="w-12 h-1"
