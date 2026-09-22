@@ -34,6 +34,7 @@ const admin = (actor: DealActor) => actor.role === "admin" || actor.role === "su
 function invalidLink(): AppError { return new AppError(410, "invitation_inactive", "This application link is expired, completed, or no longer active. Ask your representative for a new link.") }
 
 export async function assertApplicationAccess(actor: DealActor, write = false): Promise<void> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   if (actor.source !== "user" || !actor.role || !actor.membershipId || !actor.userId) throw new AppError(403, "session_required", "Sign in to manage applications.")
   const member = await getDatabase().prepare<{ role: string }>("SELECT role FROM memberships WHERE workspace_id=? AND id=? AND user_id=? AND status='active'").get(actor.workspaceId, actor.membershipId, actor.userId)
   if (!member || member.role !== actor.role) throw new AppError(403, "membership_changed", "Your access changed. Refresh and try again.")
@@ -189,7 +190,7 @@ export async function processInvitationEmail(actor: DealActor, job: BackgroundJo
   const { origin } = JSON.parse(job.payload_json) as { origin: string }
   const result = await deliverEmail({ recipient: decryptSensitive(row.email_cipher, row.workspace_id), template: "application_invitation",
     actionUrl: invitationUrl(row, origin), expiresAt: row.expires_at,
-    data: { clientName: row.client_name, employeeName: row.employee_name, formName: row.form_name } }, { correlationId: job.resource_id })
+    data: { clientName: row.client_name, employeeName: row.employee_name, formName: row.form_name } }, { correlationId: job.resource_id, workspaceId: actor.workspaceId, approvedAt: job.created_at })
   await withTransaction(async () => {
     await getDatabase().prepare("UPDATE mca_application_invitation_deliveries SET delivery=?,accepted_at=? WHERE workspace_id=? AND id=?").run(result.delivery, result.delivery === "sent" ? nowIso() : null, row.workspace_id, job.resource_id)
     if (result.delivery === "sent") await getDatabase().prepare("UPDATE mca_application_invitations SET sent_at=COALESCE(sent_at,?) WHERE workspace_id=? AND id=?").run(nowIso(), row.workspace_id, row.id)

@@ -123,16 +123,22 @@ async function dispatchOutboundSms(input: {
   accountRow: Row
   route: SmsRoute
   messageId: string
+  approvedAt: string
   recipient: string
   body: string
   correlationId: string
   transport?: TwilioSmsTransport
 }): Promise<SmsDeliveryResult> {
+  await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   const provider = asSmsProvider(input.accountRow.provider)
+  await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
   const credentialRef = String(input.accountRow.credential_ref)
   if (input.transport && provider === "twilio") {
     const config = await twilioConfig(input.actor.workspaceId, credentialRef, input.route.senderIdentity)
     if (!config) return { state: "failed", errorCode: "twilio_unconfigured", errorMessage: "Twilio is not configured for this SMS account." }
+    const statusCallbackUrl = await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId)
+    await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
+    await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
     return input.transport.send({
       accountSid: config.accountSid,
       apiKeySid: config.apiKeySid,
@@ -142,20 +148,24 @@ async function dispatchOutboundSms(input: {
       senderIdentity: input.route.senderIdentity,
       recipient: input.recipient,
       body: input.body,
-      statusCallbackUrl: await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId),
+      statusCallbackUrl,
       correlationId: input.correlationId,
     })
   }
   const credentials = provider === "twilio"
     ? await twilioSendCredentials(input.actor.workspaceId, credentialRef, input.route.senderIdentity)
     : await structuredAdapterCredentials(input.actor.workspaceId, provider)
+  const senderAccount = await account(input.accountRow, [])
+  const statusCallbackUrl = provider === "twilio" ? await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId) : ""
+  await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
+  await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   return getSmsAdapter(provider).send({
-    account: await account(input.accountRow, []),
+    account: senderAccount,
     senderKind: input.route.senderKind,
     senderIdentity: input.route.senderIdentity,
     recipient: input.recipient,
     body: input.body,
-    statusCallbackUrl: provider === "twilio" ? await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId) : "",
+    statusCallbackUrl,
     correlationId: input.correlationId,
     credentials,
   })
@@ -353,6 +363,8 @@ function storedResult(row: Row): SmsDeliveryResult {
 }
 
 export async function deliverClosingSms(actor: DealActor, input: { dealId: string; recipient: string; body: string; senderAccountId?: string; idempotencyKey: string; correlationId: string; payloadHash: string; deliveryMode: "never_attempted" | "reconcile_only"; matchDealContact?: boolean }, transport?: TwilioSmsTransport): Promise<SmsDeliveryResult> {
+  const approvedAt = nowIso()
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const matchDealContact = input.matchDealContact !== false
   const recipient = await assertRecipient(actor, input.dealId, input.recipient, { matchDealContact }), body = required(input.body, "body", 1600), key = stableKey(input.idempotencyKey)
   if (input.deliveryMode === "reconcile_only") {
@@ -383,6 +395,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
       ORDER BY effective_at DESC,created_at DESC,id DESC LIMIT 1`).get(actor.workspaceId, input.dealId, recipientHash(actor.workspaceId, recipient))
     if (latestConsent?.state !== "opted_in") throw new AppError(409, latestConsent?.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", latestConsent?.state === "opted_out" ? "This merchant opted out of text messages." : "Record merchant SMS consent before sending.")
     const now = nowIso(), id = newId()
+    await (await import("../outbound-approval")).assertOutboundDispatch(actor.workspaceId, approvedAt)
     await reserveManagedSend(database, actor, route.accountId, id, body, recipient)
     const row = await database.prepare<Row>(`INSERT INTO mca_sms_messages
       (id,workspace_id,deal_id,account_id,provider,sender_identity_cipher,recipient_hash,recipient_cipher,body_cipher,content_hash,payload_hash,state,provider_message_id,provider_status,error_code,error_message,idempotency_key,correlation_id,actor_user_id,accepted_at,delivered_at,created_at,updated_at)
@@ -391,7 +404,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
   })
   if (!prepared.created) return storedResult(prepared.row)
   await rememberOutbound(actor.workspaceId,route.accountId,input.dealId,recipient)
-  const result = await dispatchOutboundSms({ actor, accountRow: prepared.accountRow!, route, messageId: String(prepared.row.id), recipient, body, correlationId: input.correlationId, transport })
+  const result = await dispatchOutboundSms({ actor, accountRow: prepared.accountRow!, route, messageId: String(prepared.row.id), approvedAt, recipient, body, correlationId: input.correlationId, transport })
   const now = nowIso()
   const saved = await getDatabase().prepare<Row>(`UPDATE mca_sms_messages SET state=?,provider_message_id=?,provider_status=?,error_code=?,error_message=?,accepted_at=?,updated_at=?
     WHERE workspace_id=? AND id=? AND state='pending' RETURNING *`).get(result.state, result.externalId ?? null, result.providerStatus ?? null, result.errorCode ?? null, result.errorMessage ?? null, result.state === "accepted" ? now : null, now, actor.workspaceId, prepared.row.id)

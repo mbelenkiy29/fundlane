@@ -9,6 +9,9 @@ import {
 } from "../db"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { AppError } from "../errors"
+import { assertCompanyOperational, getCompanyAccess } from "../company-access"
+import { assertOutboundFresh } from "../outbound-freshness"
+import { assertOutboundDispatch, withOutboundApproval } from "../outbound-approval"
 import { getDealForDocument } from "../deals/service"
 import { findSenderById, type StoredEmailSender } from "../senders/repository"
 import { Mailbox, EmailProviderError, type RemoteEmail } from "./providers"
@@ -68,6 +71,9 @@ async function fenced<T>(
   })
 }
 async function sendPermission(c: ConversationRow, m: MessageRow) {
+  await assertCompanyOperational(c.workspace_id)
+  const retry = await db().prepare<{ approved_at: string | null }>("SELECT max(created_at) approved_at FROM audit_events WHERE workspace_id=? AND resource_type='email_message' AND resource_id=? AND action='email.retry_queued'").get(c.workspace_id, m.id)
+  await assertOutboundDispatch(c.workspace_id, retry?.approved_at ?? m.created_at)
   if (!m.actor_membership_id)
     throw new AppError(
       403,
@@ -165,6 +171,9 @@ async function delivery(
 ) {
   let attempted = false
   try {
+    const retry = await db().prepare<{ approved_at: string | null }>("SELECT max(created_at) approved_at FROM audit_events WHERE workspace_id=? AND resource_type='email_message' AND resource_id=? AND action='email.retry_queued'").get(c.workspace_id, m.id)
+    const approvedAt = retry?.approved_at ?? m.created_at
+    assertOutboundFresh(approvedAt)
     await sendPermission(c, m)
     await mailbox.connect()
     // Recheck live permissions after refreshing credentials and immediately before dispatch.
@@ -177,7 +186,7 @@ async function delivery(
         .run(nowIso(), m.id)
     })
     attempted = true
-    const result = await mailbox.send({
+    const result = await withOutboundApproval(c.workspace_id, approvedAt, () => mailbox.send({
       id: m.id,
       internetId: m.internet_message_id,
       replyTo: m.reply_to_message_id,
@@ -185,7 +194,7 @@ async function delivery(
       to: decryptSensitive(c.recipient_cipher, c.workspace_id),
       subject: decryptSensitive(c.subject_cipher, c.workspace_id),
       body: decryptSensitive(m.body_cipher, c.workspace_id),
-    })
+    }))
     await fenced(c.sender_id, token, async (executor) => {
       await executor
         .prepare(
@@ -199,6 +208,13 @@ async function delivery(
         .run(result.threadId ?? null, nowIso(), nowIso(), c.id)
     })
   } catch (error) {
+    if (error instanceof AppError && ["company_paused", "outbound_review_required", "company_outbound_reapproval_required"].includes(error.code)) {
+      await fenced(c.sender_id, token, async executor => {
+        await executor.prepare("UPDATE mca_email_messages SET state='failed',attempts=GREATEST(0,attempts-?),error=?,updated_at=? WHERE id=?")
+          .run(attempted ? 1 : 0, error.code === "company_paused" ? "Company paused. Review and send a new message after access is restored." : error.message, nowIso(), m.id)
+      })
+      return
+    }
     await expireRejectedCredential(error, mailbox)
     const failure = providerFailure(error)
     const terminalState = await fenced(c.sender_id, token, async (executor) => {
@@ -391,6 +407,14 @@ export async function runMessagingWorkerOnce(
     .all(nowIso(), nowIso())
   for (const candidate of candidates) {
     if (shouldStop()) break
+    if (!(await getCompanyAccess(candidate.workspace_id)).allowed) {
+      // A recovered company must not release old queued messages automatically.
+      // Sending/unknown rows retain their provider-reconciliation identity.
+      await db().prepare("UPDATE mca_email_messages SET state='failed',error='Company paused. Review and send a new message after access is restored.',updated_at=? WHERE workspace_id=? AND state IN ('queued','blocked') AND direction='outbound'")
+        .run(nowIso(), candidate.workspace_id)
+      await db().prepare("UPDATE mca_email_conversations SET next_sync_at=? WHERE workspace_id=?").run(later(60), candidate.workspace_id)
+      continue
+    }
     const token = await lease(candidate.sender_id, candidate.workspace_id)
     if (!token) continue
     try {

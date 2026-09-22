@@ -7,6 +7,9 @@ import { authenticateSupabaseSession, supabaseIdentity } from "@/lib/mca/supabas
 import { getSessionResponse } from "@/lib/mca/sessions"
 import type { PageKey } from "@/lib/mca/types"
 import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
+import { getCompanyAccess } from "@/lib/mca/company-access"
+import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
+import { CompanyPaused } from "@/components/mca/company-paused"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard" || pathname === "/dashboard-2" || pathname.startsWith("/dashboard-2/")) return "dashboard"
@@ -29,6 +32,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const session = await getSessionResponse(context)
   const pathname = headerStore.get("x-mca-pathname") ?? "/dashboard"
   if (pathname.startsWith("/settings/billing") && !["admin", "super_admin"].includes(context.role)) redirect("/errors/forbidden")
+  const access = await getCompanyAccess(context.workspaceId)
+  if (!access.allowed && !isCompanyRecoveryPage(pathname)) {
+    return <CompanyPaused canManage={["admin", "super_admin"].includes(context.role)} />
+  }
   const page = pageForPath(pathname)
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)

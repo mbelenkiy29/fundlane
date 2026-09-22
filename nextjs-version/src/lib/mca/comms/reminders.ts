@@ -377,6 +377,7 @@ async function defaultTransport(message: ReminderDeliveryMessage): Promise<{ del
 }
 
 async function deliverReminder(message: ReminderDeliveryMessage): Promise<{ delivery: ReminderDelivery; error?: string }> {
+  await (await import("../company-access")).assertCompanyOperational(message.workspaceId)
   const transport = transportOverride ?? defaultTransport
   try {
     const result = await transport(message)

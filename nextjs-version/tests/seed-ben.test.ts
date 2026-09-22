@@ -48,7 +48,10 @@ test("Ben seed preserves data, is repeatable, and renders repayment/commission/s
     assert.equal(payments.payments.filter(p => p.status === "partial" && p.receivedAmountCents * 2 === p.expectedAmountCents).length, 30)
     assert.equal(payments.totals!.expectedCents, payments.totals!.collectedCents + payments.totals!.outstandingCents)
     const submissions = await listSubmissionDashboard(actor, new URLSearchParams("q=TEST"))
-    assert.equal(submissions.total, 180)
+    // The dashboard pages businesses, while rows retain individual funder submissions.
+    assert.equal(submissions.total, 100)
+    assert.equal(submissions.rows.length, 180)
+    assert.equal(submissions.deals.length, 25)
     for (const table of ["mca_submission_jobs", "mca_submission_outbox"]) assert.equal((await client.query(`SELECT count(*)::int count FROM ${table}`)).rows[0].count, 0)
     assert.equal((await client.query("SELECT count(*)::int count FROM audit_events WHERE resource_id=$1", [BATCH])).rows[0].count, 1)
   } finally { await client.end(); await closeDatabaseForTests(); await fixture.close() }

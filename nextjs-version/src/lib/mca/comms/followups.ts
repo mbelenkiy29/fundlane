@@ -1,6 +1,7 @@
 import "server-only"
 
 import { z } from "zod"
+import { assertCompanyOperational, getCompanyAccess } from "../company-access"
 import { assertTrustedMutation, consumeRequestRateLimit, clientRateKey, requireWorkspaceAccess } from "../auth"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
 import { DEAL_STATUS_LABELS, DEAL_STATUSES, type DealActor, type DealRecord, type DealStatus } from "../deals/schema"
@@ -24,6 +25,7 @@ export const FOLLOWUP_OCCURRENCE_STATES = ["pending", "sent", "skipped", "failed
 export type FollowupOccurrenceState = (typeof FOLLOWUP_OCCURRENCE_STATES)[number]
 
 export const FOLLOWUP_SKIP_REASONS = [
+  "company_paused",
   "not_due",
   "already_sent",
   "in_flight",
@@ -202,6 +204,7 @@ export interface FollowupTestResult {
 }
 
 export interface FollowupDeliveryMessage {
+  approvedAt: string
   occurrenceId: string
   workspaceId: string
   policyId: string
@@ -664,14 +667,17 @@ async function defaultTransport(message: FollowupDeliveryMessage): Promise<{ del
 }
 
 async function deliverFollowup(message: FollowupDeliveryMessage): Promise<{ delivery: FollowupDelivery; providerMessageId?: string; error?: string }> {
+  await assertCompanyOperational(message.workspaceId)
+  await (await import("../outbound-approval")).assertOutboundDispatch(message.workspaceId, message.approvedAt)
   const transport = transportOverride ?? defaultTransport
   try {
-    const result = await transport(message)
+    const result = await (await import("../outbound-approval")).withOutboundApproval(message.workspaceId, message.approvedAt, () => transport(message))
     if (result.delivery === "failed") {
       return { delivery: "failed", error: result.error ?? "The follow-up could not be delivered.", providerMessageId: result.providerMessageId }
     }
     return { delivery: result.delivery, providerMessageId: result.providerMessageId }
   } catch (error) {
+    if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) throw error
     if (error instanceof AppError) return { delivery: "failed", error: error.message }
     return { delivery: "failed", error: "The follow-up could not be delivered." }
   }
@@ -856,6 +862,10 @@ async function processDeal(input: {
   if (claimed.action === "retry_wait") return alreadyOutcome(input.policy.id, claimed.row, "retry_wait")
   if (claimed.action === "in_flight") return alreadyOutcome(input.policy.id, claimed.row, "in_flight")
   if (claimed.action === "exhausted") return alreadyOutcome(input.policy.id, claimed.row, "max_retries")
+  if (!(await getCompanyAccess(input.actor.workspaceId)).allowed) {
+    const row = await finalizeOccurrence(claimed.row, { state: "skipped", skipReason: "company_paused", nowIsoValue: input.nowIsoValue })
+    return alreadyOutcome(input.policy.id, row, "company_paused")
+  }
 
   let deal: DealRecord
   try {
@@ -920,6 +930,7 @@ async function processDeal(input: {
 
   const message: FollowupDeliveryMessage = {
     occurrenceId: claimed.row.id,
+    approvedAt: input.window.scheduledFor,
     workspaceId: input.actor.workspaceId,
     policyId: input.policy.id,
     dealId: deal.id,
@@ -934,7 +945,13 @@ async function processDeal(input: {
     mode: "live",
     occurrenceKey: input.window.occurrenceKey,
   }
-  const delivered = await deliverFollowup(message)
+  let delivered: Awaited<ReturnType<typeof deliverFollowup>>
+  try { delivered = await deliverFollowup(message) }
+  catch (error) {
+    if (!(error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code))) throw error
+    const row = await finalizeOccurrence(claimed.row, { state: "skipped", skipReason: "company_paused", nowIsoValue: input.nowIsoValue })
+    return alreadyOutcome(input.policy.id, row, "company_paused")
+  }
   const accepted = delivered.delivery === "sent" || delivered.delivery === "preview"
   const attempts = failedAttempts(claimed.row.skip_reason) + 1
   const row = await finalizeOccurrence(claimed.row, {
@@ -978,6 +995,7 @@ function tally(outcomes: FollowupOutcome[]): FollowupRunResult {
   for (const outcome of outcomes) {
     if (
       outcome.reason === "not_due"
+      || outcome.reason === "company_paused"
       || outcome.reason === "already_sent"
       || outcome.reason === "retry_wait"
       || outcome.reason === "in_flight"
@@ -1215,6 +1233,7 @@ export async function testFollowupPolicy(actor: DealActor, policyId: string, inp
   }
   const message: FollowupDeliveryMessage = {
     occurrenceId: `test:${newId()}`,
+    approvedAt: nowIso(),
     workspaceId: actor.workspaceId,
     policyId: policy.id,
     dealId: deal.id,

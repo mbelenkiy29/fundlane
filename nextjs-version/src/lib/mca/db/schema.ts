@@ -63,6 +63,59 @@ export const workspace_billing = pgTable("workspace_billing", {
   synced_at: text().notNull(),
 });
 
+export const company_subscription_state = pgTable("company_subscription_state", {
+  workspace_id: text().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
+  legacy_exempt: integer().notNull().default(0),
+  trial_started_at: text(), trial_ends_at: text(),
+  selected_seats: integer().notNull().default(1), pending_seats: integer(), pending_seats_at: text(), stripe_schedule_id: text(),
+  manual_paused: integer().notNull().default(0), manual_reason: text(), last_paused_at: text(), access_extended_until: text(),
+  delinquent_since: text(), delinquent_invoice_id: text(), grace_ends_at: text(), processing_extension_until: text(), processing_extension_granted_at: text(),
+  collection_paused: integer().notNull().default(0), updated_at: text().notNull(),
+}, table => [
+  check("company_subscription_state_legacy_exempt_check", sql`${table.legacy_exempt} IN (0,1)`),
+  check("company_subscription_state_selected_seats_check", sql`${table.selected_seats} >= 1`),
+  check("company_subscription_state_pending_seats_check", sql`${table.pending_seats} >= 1`),
+  check("company_subscription_state_manual_paused_check", sql`${table.manual_paused} IN (0,1)`),
+  check("company_subscription_state_collection_paused_check", sql`${table.collection_paused} IN (0,1)`),
+]);
+export const company_billing_invoices = pgTable("company_billing_invoices", {
+  stripe_invoice_id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  stripe_subscription_id: text(), status: text().notNull(), billing_reason: text(), currency: text().notNull(),
+  amount_due: bigint({ mode: "number" }).notNull(), amount_paid: bigint({ mode: "number" }).notNull(), amount_remaining: bigint({ mode: "number" }).notNull(),
+  invoice_url: text(), paid_at: text(), period_start: text(), period_end: text(), created_at: text().notNull(), synced_at: text().notNull(),
+}, table => [index("company_billing_invoices_workspace").on(table.workspace_id, table.created_at)]);
+export const company_billing_payments = pgTable("company_billing_payments", {
+  stripe_payment_id: text().primaryKey(), stripe_payment_intent_id: text(), stripe_invoice_id: text().notNull().references(() => company_billing_invoices.stripe_invoice_id, { onDelete: "cascade" }),
+  workspace_id: text().notNull().references(() => workspaces.id, { onDelete: "cascade" }), status: text().notNull(),
+  amount_paid: bigint({ mode: "number" }).notNull(), currency: text().notNull(), synced_at: text().notNull(),
+});
+
+export const workspace_stripe_customers = pgTable("workspace_stripe_customers", {
+  workspace_id: text().primaryKey().references(() => workspaces.id), stripe_customer_id: text().notNull().unique(),
+  checkout_session_id:text(),checkout_plan_slug:text(),created_at:text().notNull(),livemode:integer().notNull().default(0),
+},table=>[check("workspace_stripe_customers_livemode_check",sql`${table.livemode} IN (0,1)`)]);
+export const workspace_billing_entitlements = pgTable("workspace_billing_entitlements", {
+  workspace_id:text().primaryKey().references(()=>workspaces.id),stripe_subscription_id:text().unique(),stripe_price_id:text(),
+  plan_slug:text().notNull(),plan_name:text().notNull(),status:text().notNull(),period_start:text(),period_end:text(),
+  seat_limit:integer().notNull(),payment_past_due:integer().notNull().default(0),source:text().notNull(),synced_at:text().notNull(),
+},table=>[check("workspace_billing_entitlements_seat_limit_check",sql`${table.seat_limit} >= 1`),
+  check("workspace_billing_entitlements_payment_past_due_check",sql`${table.payment_past_due} IN (0,1)`),
+  check("workspace_billing_entitlements_source_check",sql`${table.source} IN ('free','stripe_api','sync_engine')`)]);
+export const company_billing_notifications = pgTable("company_billing_notifications", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text().notNull(), data: text().notNull(), delivery_payload: text(), attempts: integer().notNull().default(0), available_at: text().notNull(),
+  lease_until: text(), delivered_at: text(), last_error: text(), created_at: text().notNull(),
+}, table => [index("company_billing_notifications_due").on(table.available_at).where(sql`${table.delivered_at} IS NULL`)]);
+
+export const company_billing_adjustments = pgTable("company_billing_adjustments", {
+  id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text().notNull(), stripe_charge_id: text().notNull(), stripe_payment_intent_id: text(), status: text().notNull(),
+  amount: bigint({ mode: "number" }).notNull(), currency: text().notNull(), reason: text(), livemode: integer().notNull(),
+  created_at: text().notNull(), synced_at: text().notNull(),
+}, table => [index("company_billing_adjustments_workspace").on(table.workspace_id,table.created_at),
+  check("company_billing_adjustments_kind_check",sql`${table.kind} IN ('refund','dispute')`),
+  check("company_billing_adjustments_livemode_check",sql`${table.livemode} IN (0,1)`)]);
+
 export const memberships = pgTable("memberships", {
 	clerk_membership_id: text().unique(),
 	id: text().primaryKey().notNull(),
@@ -77,6 +130,7 @@ export const memberships = pgTable("memberships", {
 }, (table) => [
 	index("memberships_manager_idx").using("btree", table.workspace_id.asc().nullsLast(), table.manager_membership_id.asc().nullsLast()),
 	index("memberships_workspace_status_idx").using("btree", table.workspace_id.asc().nullsLast(), table.status.asc().nullsLast()),
+	unique("memberships_workspace_id_id_unique").on(table.workspace_id, table.id),
 	foreignKey({
 			columns: [table.manager_membership_id],
 			foreignColumns: [table.id],
@@ -113,6 +167,20 @@ export const users = pgTable("users", {
 	unique("users_application_identifier_key").on(table.application_identifier),
 	unique("users_email_key").on(table.email),
 ]);
+
+export const workspace_owners = pgTable("workspace_owners", {
+  workspace_id: text().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
+  membership_id: text().notNull(),
+  updated_at: text().notNull(),
+}, table => [foreignKey({ columns: [table.workspace_id, table.membership_id], foreignColumns: [memberships.workspace_id, memberships.id] }).onDelete("restrict")]);
+
+export const platform_admin_grants = pgTable("platform_admin_grants", {
+  user_id: text().primaryKey().references(() => users.id, { onDelete: "restrict" }),
+  granted_at: text().notNull(),
+  granted_by: text().notNull(),
+  reason: text().notNull(),
+  revoked_at: text(),
+}, table => [check("platform_admin_grants_reason_check", sql`length(trim(${table.reason})) > 0`)]);
 
 export const sessions = pgTable("sessions", {
 	id: text().primaryKey().notNull(),

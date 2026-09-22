@@ -221,6 +221,7 @@ function mergeOmittedWriteFields(input: CreateDealInput, fields: DealWriteInput)
 }
 
 export async function listDeals(actor: DealActor, filters: DealFilters): Promise<DealListResponse> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const visible = (await listDealRecords(actor.workspaceId, filters)).filter((record) => canActorAccessDeal(actor, record))
   const deals = visible.map(toDealListItem)
   const counts = reconcilePipelineCounts(deals)
@@ -249,6 +250,7 @@ export async function exportDeals(actor: DealActor, filters: DealFilters): Promi
 }
 
 export async function getDeal(actor: DealActor, id: string): Promise<DealDetail> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   return toDealDetail(assertVisible(actor, await findDealById(actor.workspaceId, id)))
 }
 
@@ -258,10 +260,12 @@ export async function getDeal(actor: DealActor, id: string): Promise<DealDetail>
  * the server; browser-facing routes should continue to use `getDeal`.
  */
 export async function getDealForDocument(actor: DealActor, id: string): Promise<DealRecord> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   return assertVisible(actor, await findDealById(actor.workspaceId, id))
 }
 
 export async function createDeal(actor: DealActor, input: CreateDealInput, transactionCheckpoint?: DealTransactionCheckpoint): Promise<{ deal: DealDetail; created: boolean; warnings: string[] }> {
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
   const configuredActions = (await getWorkspaceSettings(actor.workspaceId)).actionVisibility
   const createAllowed = actor.role ? isActionAllowed(actor.role, "createDeal", configuredActions) : configuredActions.createDeal
   if (!createAllowed) throw new AppError(403, "action_disabled", "Creating deals is disabled for this workspace.")

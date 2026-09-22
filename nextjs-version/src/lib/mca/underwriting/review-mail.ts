@@ -523,7 +523,7 @@ export async function sendAnalysisReview(actor: DealActor, dealId: string, optio
       template: "funder_analysis_review",
       actionUrl,
       expiresAt: signed.expiresAt,
-    })
+    }, { workspaceId: actor.workspaceId })
     deliveries.push({
       recipient: recipient.email,
       delivery: result.delivery,

@@ -51,6 +51,7 @@ export default function AccountSettings() {
     <div className="space-y-6 px-4 lg:px-6">
         <div>
           <h1 className="text-3xl font-bold">Account Settings</h1>
+          <Button asChild variant="outline" className="mt-3"><a href="/account-security">Manage multi-factor authentication</a></Button>
           <p className="text-muted-foreground">
             Manage your account settings and preferences.
           </p>

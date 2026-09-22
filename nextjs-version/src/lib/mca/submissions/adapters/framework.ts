@@ -226,6 +226,7 @@ function submitErrorFromUnknown(error: unknown, runtime: AdapterRuntime): Adapte
 }
 
 export async function submitViaAdapter(job: SubmissionJob, options: AdapterExecutionOptions = {}): Promise<AdapterSubmitResult> {
+  await (await import("../../company-access")).assertCompanyOperational(job.workspaceId)
   const loaded = await loadRuntime(job, options)
   if (loaded.error) return loaded.error
   const { adapter, runtime, correlationId } = loaded
@@ -233,6 +234,8 @@ export async function submitViaAdapter(job: SubmissionJob, options: AdapterExecu
     return unavailable(correlationId, `No funder adapter is registered for ${job.displayFunderName}.`)
   }
   if (!adapter.capabilities.submit) return unsupported(correlationId, `${adapter.slug} cannot submit.`)
+  await (await import("../../company-access")).assertCompanyOperational(job.workspaceId)
+  await (await import("../../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   try {
     const result = await runWithAdapterRuntime(runtime, () => adapter.submit(job))
     return sanitizeSubmitResult(result, runtime)

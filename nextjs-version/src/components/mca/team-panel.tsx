@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatRole, requestJson } from "@/lib/mca/client"
+import { OwnershipTransfer } from "@/components/mca/ownership-transfer"
 import {
   assignableRoles,
   canDeactivateMember,
@@ -196,6 +197,7 @@ export default function TeamSettingsPage() {
     )
   return (
     <div ref={rosterRef} className="space-y-6">
+      {billingAdmin && <OwnershipTransfer members={members} onTransferred={()=>void load()}/>}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Team</h2>

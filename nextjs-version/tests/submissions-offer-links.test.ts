@@ -476,7 +476,8 @@ test("MIC-128: private-network and non-https URLs are rejected before fetch", as
   const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-loopback-link")?.id
   assert.ok(replyId)
   const extracted = await persistExtract(replyId)
-  assert.equal(extracted.offer?.amount, null)
+  assert.equal(extracted.offer, undefined)
+  assert.equal(extracted.termsUnknown, true)
   fetchCalls.length = 0
   lookupCalls.length = 0
   const blocked = await linksPost(cookieRequest("/api/mca/submissions/extract/links", "admin-session-token", {
@@ -488,7 +489,7 @@ test("MIC-128: private-network and non-https URLs are rejected before fetch", as
   assert.equal(blockedBody.state, "blocked")
   assert.equal(blockedBody.fetched, false)
   assert.equal(blockedBody.blocked, true)
-  assert.equal(blockedBody.offer?.amount, null)
+  assert.equal(blockedBody.offer, undefined)
   assert.equal(JSON.stringify(blockedBody).includes("25000"), false)
   assert.equal(fetchCalls.length, 0)
   assertNoSecret(blockedBody)
@@ -550,9 +551,8 @@ test("MIC-128: email terms skip fetch; inaccessible portal is manual-review; ret
   const closedReplyId = closedIngested.ingested.find((item) => item.providerMessageId === "alpha-login-wall")?.id
   assert.ok(closedReplyId)
   const closedExtract = await persistExtract(closedReplyId)
-  assert.equal(closedExtract.offer?.amount, null)
-  assert.equal(closedExtract.offer?.termsUnknown, true)
-  const closedOfferId = closedExtract.offer!.id
+  assert.equal(closedExtract.offer, undefined)
+  assert.equal(closedExtract.termsUnknown, true)
   fetchCalls.length = 0
   const incomplete = await linksPost(cookieRequest("/api/mca/submissions/extract/links", "admin-session-token", {
     method: "POST",
@@ -563,8 +563,9 @@ test("MIC-128: email terms skip fetch; inaccessible portal is manual-review; ret
   assert.equal(incompleteBody.state, "incomplete")
   assert.equal(incompleteBody.fetched, true)
   assert.equal(incompleteBody.inaccessible, true)
-  assert.equal(incompleteBody.offer?.id, closedOfferId)
-  assert.equal(incompleteBody.offer?.created, false)
+  assert.ok(incompleteBody.offer?.id)
+  const closedOfferId = incompleteBody.offer.id
+  assert.equal(incompleteBody.offer.created, true)
   assert.equal(incompleteBody.offer?.amount, null)
   assert.equal(incompleteBody.offer?.rate, null)
   assert.equal(incompleteBody.offer?.term, null)
@@ -615,7 +616,8 @@ test("MIC-128: email terms skip fetch; inaccessible portal is manual-review; ret
   const successReplyId = successIngested.ingested.find((item) => item.providerMessageId === "alpha-portal-success")?.id
   assert.ok(successReplyId)
   const successExtract = await persistExtract(successReplyId)
-  const successOfferId = successExtract.offer!.id
+  assert.equal(successExtract.offer, undefined)
+  assert.equal(successExtract.termsUnknown, true)
   fetchCalls.length = 0
   const success = await linksPost(cookieRequest("/api/mca/submissions/extract/links", "admin-session-token", {
     method: "POST",
@@ -624,7 +626,9 @@ test("MIC-128: email terms skip fetch; inaccessible portal is manual-review; ret
   const successBody = await success.json() as LinkBody
   assert.equal(successBody.state, "success")
   assert.equal(successBody.fetched, true)
-  assert.equal(successBody.offer?.id, successOfferId)
+  assert.ok(successBody.offer?.id)
+  const successOfferId = successBody.offer.id
+  assert.equal(successBody.offer.created, true)
   assert.equal(successBody.offer?.amount, 25_000)
   assert.equal(successBody.offer?.rate, 1.35)
   assert.equal(successBody.offer?.term, 10)

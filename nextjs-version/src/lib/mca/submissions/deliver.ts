@@ -1,6 +1,7 @@
 import "server-only"
 
 import { newId } from "../db"
+import { assertCompanyOperational } from "../company-access"
 import { submitViaAdapter } from "./adapters/framework"
 import type { DeliverResult, OutgoingDocument, SubmissionJob } from "./contracts"
 import { sendSubmissionEmail } from "./email-templates"
@@ -8,6 +9,8 @@ import { createPortalTask } from "./portal"
 import { deliverWebhook } from "./webhook"
 
 export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
+  await assertCompanyOperational(job.workspaceId)
+  await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   switch (job.routeKind) {
     case "email":
       return sendSubmissionEmail(job, packaged)

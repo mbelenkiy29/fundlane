@@ -6,6 +6,6 @@ import { getSessionResponse } from "@/lib/mca/sessions";
 
 export async function GET(request: Request) {
   const correlationId = requestCorrelationId(request);
-  try { return NextResponse.json(await getSessionResponse(await requireMembershipAccess(request))); }
+  try { return NextResponse.json(await getSessionResponse(await requireMembershipAccess(request, undefined, { allowPaused: true }))); }
   catch (error) { return apiError(error, correlationId); }
 }

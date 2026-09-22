@@ -488,6 +488,23 @@ test("MIC-115: approval SMS consent, renewal, preview/test mode, and failed send
   assert.equal(jobsReplay.followups.sent, 0)
 })
 
+test("paused follow-up occurrences are skipped durably and are not delivered on recovery", async () => {
+  const configured = await policy({ dealStatus: "missing_documents", channel: "email", templateId: emailTemplateId })
+  const deal = await seedDeal({ legalName: "Paused merchant", status: "missing_documents", email: "paused@example.test" })
+  let sends = 0
+  setFollowupTransportForTests(async () => { sends++; return { delivery: "sent" } })
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,updated_at) VALUES(?,1,1,?)").run(ids.workspace, new Date().toISOString())
+  try {
+    const paused = await runFollowups({ actor: actor(), nowIso: NOW })
+    assert.equal(paused.outcomes.find(item => item.dealId === deal.id && item.policyId === configured.id)?.reason, "company_paused")
+    assert.equal(sends, 0)
+    await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=0 WHERE workspace_id=?").run(ids.workspace)
+    await runFollowups({ actor: actor(), nowIso: NOW })
+    assert.equal(sends, 0)
+    assert.deepEqual(await getDatabase().prepare("SELECT state,skip_reason FROM mca_followup_occurrences WHERE deal_id=? AND policy_id=?").get(deal.id, configured.id), { state: "skipped", skip_reason: "company_paused" })
+  } finally { await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(ids.workspace) }
+})
+
 test("MIC-115: API matches the UI, validation and permissions, secrets stay out of JSON", async () => {
   const source = readFileSync(resolve(process.cwd(), "src/components/mca/comms/followup-panel.tsx"), "utf8")
   assert.match(source, /Loading follow-up policies/)

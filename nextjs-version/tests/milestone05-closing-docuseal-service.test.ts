@@ -1,6 +1,8 @@
-import test from "node:test"
+import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
 import { createHash, createHmac } from "node:crypto"
+import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
+import { getDatabase, nowIso, closeDatabaseForTests } from "../src/lib/mca/db"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import {
   deliverPsfRequestWithDocuSeal,
@@ -13,6 +15,14 @@ import {
 } from "../src/lib/mca/closing/psf-docuseal-service"
 
 const workspaceId = "workspace-docuseal"
+let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
+before(async () => {
+  database = await createPostgresTestDatabase("docuseal_company_access")
+  Object.assign(process.env, database.env())
+  const now = nowIso()
+  await getDatabase().prepare("INSERT INTO workspaces(id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) VALUES(?,?,'UTC',5,'{}','{}','{}',?,?)").run(workspaceId, workspaceId, now, now)
+})
+after(async () => { await closeDatabaseForTests(); await database?.close() })
 const requestId = "psf-request-docuseal"
 const submissionId = "84"
 const pdf = new Uint8Array(Buffer.from("%PDF-1.7\nsynthetic DocuSeal evidence\n%%EOF"))
@@ -53,6 +63,7 @@ const templatePayload = {
 
 function request(overrides: Partial<DocuSealPsfRecord> = {}): DocuSealPsfRecord {
   return {
+    createdAt: new Date().toISOString(),
     requestId,
     workspaceId,
     dealId: "deal-docuseal",
@@ -284,4 +295,22 @@ test("a stored but non-clean DocuSeal artifact leaves the PSF delivered and reco
   assert.equal(repository.record.state, "delivered")
   assert.equal(repository.signedAt, undefined)
   assert.equal(repository.pendingCodes.at(-1), "docuseal_artifact_not_clean")
+})
+
+test("paused DocuSeal dispatch is blocked and authenticated completion receipts are retained once without provider processing", async () => {
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,updated_at) VALUES(?,1,1,?)").run(workspaceId, nowIso())
+  try {
+    const repository = new MemoryRepository(request({ state: "delivered", externalRequestId: submissionId }))
+    let providerCalls = 0
+    const dependencies = { repository, connectionJson, provider: { lookupImpl: publicLookup, fetchImpl: async () => { providerCalls++; throw new Error("must not reach provider") } }, audit: noAudit }
+    await assert.rejects(deliverPsfRequestWithDocuSeal(actor, requestId, dependencies), { code: "company_paused" })
+    const webhook = signedWebhook()
+    for (let i = 0; i < 2; i++) {
+      const receipt = await recordDocuSealPsfWebhook(workspaceId, webhook.body, webhook.signature, dependencies)
+      assert.equal(receipt.state, "retained")
+    }
+    assert.equal(providerCalls, 0)
+    assert.equal(repository.record.state, "delivered")
+    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='company.paused_receipt'").get(workspaceId))?.count, 1)
+  } finally { await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(workspaceId) }
 })

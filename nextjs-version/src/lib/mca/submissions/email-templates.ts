@@ -668,6 +668,8 @@ function failed(correlationId: string, errorCode: string, errorMessage: string):
 }
 
 async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
+  if (job) await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
+  if (job) await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   const messageId = messageIdFor(correlationId)
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL?.trim()
   if (!webhook) {

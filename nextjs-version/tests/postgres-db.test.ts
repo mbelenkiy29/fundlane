@@ -24,6 +24,42 @@ after(async () => {
   await fixture.close();
 });
 
+test("rollback callbacks await the outer rollback and released client, detach context, and preserve errors", { timeout: 20000 }, async (t) => {
+  const { getDatabase, withTransaction, closeDatabaseForTests } = await import("../src/lib/mca/db");
+  await closeDatabaseForTests();
+  process.env.MCA_DB_POOL_MAX = "1";
+  const logs: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => { logs.push(args); });
+  try {
+    await getDatabase().execute("CREATE TABLE rollback_probe (id text PRIMARY KEY)");
+    const original = new Error("original transaction failure");
+    let calls = 0;
+    await assert.rejects(withTransaction(async tx => {
+      await tx.execute("INSERT INTO rollback_probe VALUES ('rolled-back')");
+      await withTransaction(async nested => { assert.equal(nested, tx); }, { onRollback: async () => {
+        calls++;
+        assert.notEqual(getDatabase(), tx);
+        assert.equal(await getDatabase().queryOne("SELECT id FROM rollback_probe WHERE id='rolled-back'"), undefined);
+        await withTransaction(db => db.execute("INSERT INTO rollback_probe VALUES ('callback')"));
+      } });
+      await withTransaction(async () => {}, { onRollback: async () => { throw new Error("callback failed"); } });
+      await withTransaction(async () => {}, { onRollback: async () => { calls++; } });
+      assert.equal(calls, 0);
+      throw original;
+    }), actual => actual === original);
+    assert.equal(calls, 2, "one failed callback does not skip the rest");
+    assert.ok(await getDatabase().queryOne("SELECT id FROM rollback_probe WHERE id='callback'"));
+    assert.ok(logs.some(args => String(args[0]).includes("transaction_rollback_callback_failed")));
+    await withTransaction(async () => {
+      await withTransaction(async () => {}, { onRollback: async () => { calls++; } });
+    }, { onRollback: async () => { calls++; } });
+    assert.equal(calls, 2, "committed transactions discard callbacks");
+  } finally {
+    await closeDatabaseForTests();
+    process.env.MCA_DB_POOL_MAX = "4";
+  }
+});
+
 test("placeholder conversion skips strings, identifiers, dollar quotes, and nested comments", async () => {
   const { postgresPlaceholders } = await import("../src/lib/mca/db");
   const sql = `select ?, '?' literal, "?" identifier, $$?$$ dollar,

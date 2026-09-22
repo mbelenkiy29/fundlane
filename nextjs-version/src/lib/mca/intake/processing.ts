@@ -90,6 +90,7 @@ export async function scheduleIntakeProcessing(limit = 25): Promise<number> {
     ORDER BY p.checked_at ASC NULLS FIRST,e.created_at,e.id LIMIT ?`).all(limit)
   let queued = 0
   for (const row of candidates) {
+    if (!(await (await import("../company-access")).getCompanyAccess(row.workspace_id)).allowed) continue
     try { if (await scheduleOne(row.workspace_id, row.id)) queued++ }
     catch (error) { console.error(JSON.stringify({ event: "intake_schedule_failed", intakeId: row.id, code: error instanceof AppError ? error.code : "processing_unavailable" })) }
   }
@@ -144,6 +145,7 @@ export async function processIntakeJob(job: BackgroundJob, attachmentOptions: Pa
       WHERE workspace_id=? AND intake_id=? AND job_id=?`).run(JSON.stringify(progress), fingerprint ?? null, nowIso(), job.workspace_id, job.resource_id, job.id)
   }
   const guard = async () => {
+    await (await import("../company-access")).assertCompanyOperational(job.workspace_id)
     await heartbeatBackgroundJob(job)
     return authority(job.workspace_id, job.resource_id, payload.integrationId)
   }
@@ -209,6 +211,7 @@ export async function processIntakeJob(job: BackgroundJob, attachmentOptions: Pa
     progress.state = "failed"
     // Never publish provider responses, file URLs, or sensitive document contents.
     progress.message = error instanceof AppError ? ({
+      company_paused: "Company access is paused. Processing will resume after access is restored.",
       intake_automation_paused: "Automatic processing is paused. Enable the connection to continue.",
       provider_unavailable: "Statement extraction is unavailable. Ask an administrator to check the AI provider configuration and retry.",
       provider_timeout: "Statement analysis timed out. Retry processing.",

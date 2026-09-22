@@ -15,10 +15,10 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     assertTrustedMutation(request)
-    const input=await readJson(request,z.union([z.object({ workspaceId:z.uuid() }),z.object({ name:z.string().trim().min(2).max(200) })]))
+    const input=await readJson(request,z.union([z.object({ workspaceId:z.uuid() }),z.object({ name:z.string().trim().min(2).max(200), selectedSeats:z.number().int().min(1).max(100000).default(1) })]))
     const identity=await supabaseIdentity()
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
-    const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name)
+    const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name,input.selectedSeats)
     return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled() })
   } catch(error) { return apiError(error) }
 }

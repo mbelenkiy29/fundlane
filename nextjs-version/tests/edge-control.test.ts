@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import { readFileSync } from "node:fs"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, withTransaction } from "../src/lib/mca/db"
 import { claimWorkerExecution, releaseWorkerExecution } from "../src/lib/mca/jobs/edge-control"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 
@@ -31,8 +31,14 @@ test("concurrent admissions enforce the configured limit and revoked generations
   assert.equal(active.length,4)
   const execution = active[0]!
   await withExecutionDeadline(async () => { assert.equal((await getDatabase().queryOne<{value:number}>("SELECT 1 AS value"))?.value,1) },undefined,90000,execution)
-  await fixture.query("UPDATE mca_private.worker_controls SET generation=generation+1 WHERE subsystem='messaging'")
-  await assert.rejects(withExecutionDeadline(()=>getDatabase().execute("UPDATE mca_private.worker_executions SET expires_at=now()+interval '1 hour' WHERE token=$1",[execution.token]),undefined,90000,execution), /generation/)
+  const before = await fixture.query("SELECT expires_at FROM mca_private.worker_executions WHERE token=$1", [execution.token])
+  await withExecutionDeadline(async () => {
+    await getDatabase().queryOne("SELECT 1")
+    await fixture.query("UPDATE mca_private.worker_controls SET generation=generation+1 WHERE subsystem='messaging'")
+    await assert.rejects(getDatabase().execute("UPDATE mca_private.worker_executions SET expires_at=now()+interval '1 hour' WHERE token=$1",[execution.token]), /generation/)
+    await assert.rejects(withTransaction(db => db.execute("UPDATE mca_private.worker_executions SET expires_at=now()+interval '1 hour' WHERE token=$1",[execution.token])), /generation/)
+  },undefined,90000,execution)
+  assert.deepEqual((await fixture.query("SELECT expires_at FROM mca_private.worker_executions WHERE token=$1", [execution.token])).rows, before.rows)
   await Promise.all(active.map(releaseWorkerExecution))
   assert.ok(await claimWorkerExecution("messaging"))
 })

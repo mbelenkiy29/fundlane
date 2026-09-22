@@ -88,6 +88,7 @@ export const provisionSchema = z.discriminatedUnion("kind", [
   }),
 ])
 type Operation = {
+  created_at: string
   id: string
   workspace_id: string
   kind: string
@@ -367,6 +368,10 @@ export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
     if (!row || ["complete", "failed", "needs_review"].includes(row.state))
       return undefined
     if (row.lease_until && row.lease_until > nowIso()) return undefined
+    if (!(await (await import("../company-access")).getCompanyAccess(row.workspace_id)).allowed) {
+      await db.prepare("UPDATE sms_operations SET state='needs_review',error_code='company_paused',lease_until=NULL,updated_at=? WHERE id=?").run(nowIso(), id)
+      return undefined
+    }
     // A lost response must never cause a second paid creation.
     if (row.state === "running") {
       await db
@@ -384,6 +389,12 @@ export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
     return row
   })
   if (!op) return
+  const providerApi = api
+  api = async (...args) => {
+    await (await import("../company-access")).assertCompanyOperational(op.workspace_id)
+    await (await import("../outbound-approval")).assertOutboundDispatch(op.workspace_id, op.created_at)
+    return providerApi(...args)
+  }
   const c = (await company(op.workspace_id))!,
     input = JSON.parse(
       decryptSensitive(op.payload_cipher, op.workspace_id)

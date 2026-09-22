@@ -150,6 +150,7 @@ export type DocuSealLookup = (
 ) => Promise<Array<{ address: string; family: number }>>
 
 export interface DocuSealProviderDependencies {
+  beforeRequest?: () => Promise<void>
   fetchImpl?: typeof fetch
   lookupImpl?: DocuSealLookup
   nowMs?: () => number
@@ -370,6 +371,7 @@ async function readBounded(response: Response, maxBytes: number, code: string): 
 async function requestJson(config: NormalizedConfig, path: string, init: RequestInit, dependencies: DocuSealProviderDependencies): Promise<unknown> {
   const url = apiUrl(config, path)
   await assertSafeUrl(url, [new URL(config.apiBaseUrl).hostname.toLowerCase()], dependencies.lookupImpl ?? lookup, "docuseal_api_url_denied")
+  await dependencies.beforeRequest?.()
   let response: Response
   try {
     response = await (dependencies.fetchImpl ?? fetch)(url, {

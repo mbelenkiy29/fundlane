@@ -302,6 +302,27 @@
       "when": 1789550000045,
       "tag": "0045_tenancy_ein_hmac",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790035200000,
+      "tag": "0046_company_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1790035200001,
+      "tag": "0047_company_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1790035200002,
+      "tag": "0048_billing_recovery",
+      "breakpoints": true
     }
   ]
 }
