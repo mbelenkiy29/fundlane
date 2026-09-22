@@ -29,6 +29,8 @@ export type ChatMessageDraft = {
   channel: "sms" | "email"
   body: string
   dealId: string
+  /** Set when a draft is held; used to remount the composer per draft. */
+  id?: string
 }
 
 type Channel = "sms" | "email"
@@ -178,12 +180,15 @@ export function ChatMessages({
   const [pendingDraft, setPendingDraft] = useState<ChatMessageDraft | null>(null)
   const [prevDraft, setPrevDraft] = useState<ChatMessageDraft | null>(null)
   // Adjust state when the assistant emits a new draft (render-time pattern).
+  // A null draft means the parent dismissed the draft card → clear the prefill.
   if (draft !== prevDraft) {
     setPrevDraft(draft ?? null)
     if (draft && draft.dealId === dealId) {
       setChannel(draft.channel)
       setOpen(true)
       setPendingDraft(draft)
+    } else if (!draft) {
+      setPendingDraft(null)
     }
   }
   const initialDraft =
@@ -240,8 +245,11 @@ export function ChatMessages({
       </div>
       {open && (
         <div className="border-t px-3 pb-3 pt-2">
+          {/* Key each panel by the held draft id so a new draft remounts and
+              prefills exactly once, and dismissal resets the composer. */}
           {channel === "sms" ? (
             <SmsMessaging
+              key={draft?.id ?? "none"}
               dealId={dealId}
               surface={surface}
               draftBody={initialDraft?.channel === "sms" ? initialDraft.body : null}
@@ -249,6 +257,7 @@ export function ChatMessages({
             />
           ) : (
             <EmailMessaging
+              key={draft?.id ?? "none"}
               dealId={dealId}
               surface={surface}
               draftBody={
@@ -290,6 +299,80 @@ function TabButton({
       {icon}
       {label}
     </button>
+  )
+}
+
+function EmptyState({
+  title,
+  children,
+  href,
+  linkLabel,
+}: {
+  title: string
+  children: React.ReactNode
+  href?: string
+  linkLabel?: string
+}) {
+  return (
+    <div className="grid gap-1 rounded-lg border border-dashed bg-muted/20 px-3 py-3 text-center">
+      <p className="text-xs font-medium text-foreground">{title}</p>
+      <p className="text-xs text-muted-foreground">{children}</p>
+      {href && linkLabel && (
+        <Link
+          href={href}
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {linkLabel}
+        </Link>
+      )}
+    </div>
+  )
+}
+
+function ConversationChips<T extends { id: string; unread: number }>({
+  items,
+  selectedId,
+  onSelect,
+  labelFor,
+}: {
+  items: T[]
+  selectedId: string | null
+  onSelect: (id: string) => void
+  labelFor: (item: T) => string
+}) {
+  if (!items.length) return null
+  return (
+    <div
+      className="flex items-center gap-1.5 overflow-x-auto py-0.5"
+      role="tablist"
+      aria-label="Conversations"
+    >
+      {items.map((item) => {
+        const active = item.id === selectedId
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onSelect(item.id)}
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs",
+              active
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border bg-muted/40 text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <span className="max-w-[9rem] truncate">{labelFor(item)}</span>
+            {item.unread > 0 && (
+              <span className="flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
+                {item.unread}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -545,9 +628,14 @@ function SmsMessaging({
     )
   if (!context?.recipient)
     return (
-      <p className="py-2 text-xs text-muted-foreground">
-        Save a merchant mobile number on this deal to start texting from here.
-      </p>
+      <EmptyState
+        title="No merchant mobile number on this deal"
+        href="/sms"
+        linkLabel="Open SMS inbox"
+      >
+        Save the merchant&apos;s mobile number on the deal to start texting
+        from here.
+      </EmptyState>
     )
 
   const threadMessages = thread
@@ -586,6 +674,13 @@ function SmsMessaging({
           {consent === "loading" ? "…" : consent.replace(/_/g, " ")}
         </Badge>
       </div>
+
+      <ConversationChips
+        items={threads}
+        selectedId={thread?.id ?? null}
+        onSelect={(id) => void openThread(id)}
+        labelFor={(item) => item.recipient}
+      />
 
       <div
         className={cn(
@@ -679,6 +774,12 @@ function SmsMessaging({
           Open inbox
         </Link>
       </div>
+      {!context.accounts.length && (
+        <p className="text-[11px] text-muted-foreground">
+          No texting number is assigned to this workspace yet — assign one in
+          the SMS inbox.
+        </p>
+      )}
 
       <div className="flex items-end gap-2">
         <Textarea
@@ -792,30 +893,40 @@ function EmailMessaging({
     void load()
   }, [load])
 
-  useEffect(() => {
-    if (!threads.length) return
-    const open = async (id: string) => {
-      setSelected(id)
-      setError("")
-      try {
-        const page = await requestJson<MessagePage>(
-          `/api/mca/email/conversations/${encodeURIComponent(id)}`
-        )
-        setDetail(page)
-        const sequence = page.messages.at(-1)?.sequence
-        if (sequence)
-          await requestJson(`/api/mca/email/conversations/${id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ sequence }),
-          })
-        setThreads((old) =>
-          old.map((t) => (t.id === id ? { ...t, unread: 0 } : t))
-        )
-      } catch (caught) {
-        setError(errorText(caught))
-      }
+  const openThread = useCallback(async (id: string) => {
+    setSelected(id)
+    setError("")
+    try {
+      const page = await requestJson<MessagePage>(
+        `/api/mca/email/conversations/${encodeURIComponent(id)}`
+      )
+      setDetail(page)
+      const sequence = page.messages.at(-1)?.sequence
+      if (sequence)
+        await requestJson(`/api/mca/email/conversations/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ sequence }),
+        })
+      // Bail out when the thread is already read so the list reference is
+      // stable and the auto-open effect does not re-fire forever.
+      setThreads((old) =>
+        old.some((thread) => thread.id === id && thread.unread === 0)
+          ? old
+          : old.map((thread) =>
+              thread.id === id ? { ...thread, unread: 0 } : thread
+            )
+      )
+    } catch (caught) {
+      setError(errorText(caught))
     }
-    void open(threads[0].id)
+  }, [])
+
+  // Open the most recent conversation so the thread is already loaded, but
+  // never overwrite a conversation the user selected from the picker.
+  useEffect(() => {
+    if (!threads.length || selected) return
+    void openThread(threads[0].id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads])
 
   useEffect(() => {
@@ -879,8 +990,8 @@ function EmailMessaging({
         setBody("")
         setSubject("")
         setNotice("Email queued. Delivery status will update here.")
-        setSelected(result.conversationId)
         await load()
+        await openThread(result.conversationId)
       }
     } catch (caught) {
       setError(errorText(caught))
@@ -900,15 +1011,28 @@ function EmailMessaging({
   const senders = context?.senders.filter((s) => s.conversationReady) ?? []
   const messages = detail?.messages ?? []
 
+  if (!context?.recipient)
+    return (
+      <EmptyState
+        title="No merchant email saved on this deal"
+        href="/mail"
+        linkLabel="Open email inbox"
+      >
+        Save the merchant&apos;s email address on the deal to message them from
+        here.
+      </EmptyState>
+    )
+
   if (!senders.length)
     return (
-      <p className="py-2 text-xs text-muted-foreground">
-        Connect an email sender in the{" "}
-        <Link href="/mail" className="underline underline-offset-2">
-          email inbox
-        </Link>{" "}
-        to message this merchant from here.
-      </p>
+      <EmptyState
+        title="No connected email sender"
+        href="/mail"
+        linkLabel="Open email inbox"
+      >
+        Connect an email account (Google or Microsoft) in the email inbox to
+        message this merchant from here.
+      </EmptyState>
     )
 
   return (
@@ -934,6 +1058,13 @@ function EmailMessaging({
           {selected ? "reply" : "new message"}
         </Badge>
       </div>
+
+      <ConversationChips
+        items={threads}
+        selectedId={selected}
+        onSelect={(id) => void openThread(id)}
+        labelFor={(item) => item.subject || item.recipient}
+      />
 
       <div
         className={cn(

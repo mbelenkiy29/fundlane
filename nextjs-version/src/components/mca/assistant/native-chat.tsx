@@ -2,14 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
-import { Plus, Send, Square } from "lucide-react"
+import { Plus, Send, Square, Mail, MessageSquareText, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { CHATKIT_DISCLAIMER, CHATKIT_START_PROMPTS, type ChatKitSurface } from "@/lib/mca/assistant/chatkit-ui"
 import { decodeSse, messageText, type NativeChatRequest, type NativeChatEvent } from "@/lib/mca/assistant/native-contract"
+import type { ChatMessageDraft } from "./chat-messages"
 import type { AssistantDeal } from "./chatkit-session"
+
+/** A merchant message the assistant drafted. Shown as a card in the chat and
+ *  forwarded to the messaging panel as a prefill; nothing is sent from here. */
+export type AssistantDraft = ChatMessageDraft & {
+  id: string
+  merchantName?: string
+  recipient?: string | null
+  note?: string
+}
 
 type Item = Record<string, unknown>
 type Page = { data: Item[]; after: string | null; has_more: boolean }
@@ -38,6 +48,7 @@ export function NativeChat({
   initialThread = null,
   onThreadChange,
   onDraft,
+  onDraftDismissed,
 }: {
   deal: AssistantDeal
   surface?: ChatKitSurface
@@ -46,7 +57,8 @@ export function NativeChat({
   showIncludeToggle?: boolean
   initialThread?: string | null
   onThreadChange?: (threadId: string | null) => void
-  onDraft?: (draft: { channel: "sms" | "email"; dealId: string; body: string }) => void
+  onDraft?: (draft: AssistantDraft) => void
+  onDraftDismissed?: (id: string) => void
 }) {
   const [threads, setThreads] = useState<Item[]>([])
   const [threadId, setThreadId] = useState<string | null>(initialThread)
@@ -59,6 +71,7 @@ export function NativeChat({
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [draftCards, setDraftCards] = useState<AssistantDraft[]>([])
   const turn = useRef<AbortController | null>(null)
   const read = useRef<AbortController | null>(null)
   const list = useRef<AbortController | null>(null)
@@ -188,8 +201,19 @@ export function NativeChat({
           setItems((old) => [...old.filter((item) => item.id !== replyId), { id: replyId, type: "assistant_message", text: "" }])
         } else if (event.type === "delta")
           setItems((old) => old.map((item) => (item.id === replyId ? { ...item, text: messageText(item) + event.text } : item)))
-        else if (event.type === "draft")
-          onDraft?.({ channel: event.channel, dealId: event.dealId, body: event.body })
+        else if (event.type === "draft") {
+          const draft: AssistantDraft = {
+            id: event.draftId || crypto.randomUUID(),
+            channel: event.channel,
+            dealId: event.dealId,
+            body: event.body,
+            merchantName: event.merchantName,
+            recipient: event.recipient,
+            note: event.note,
+          }
+          setDraftCards((old) => [...old, draft])
+          onDraft?.(draft)
+        }
         else if (event.type === "complete") complete = true
         else if (event.type === "error") throw new Error(event.message)
       }
@@ -390,6 +414,67 @@ export function NativeChat({
         })}
         <div ref={end} />
       </div>
+      {draftCards.length > 0 && (
+        <div className="max-h-44 shrink-0 space-y-2 overflow-y-auto border-t p-3">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Drafted messages
+          </p>
+          {draftCards.map((draft) => (
+            <article
+              key={draft.id}
+              className="rounded-xl border bg-muted/30 p-3 text-sm"
+              aria-label="Assistant-drafted merchant message"
+            >
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  {draft.channel === "sms" ? (
+                    <MessageSquareText className="size-3.5" />
+                  ) : (
+                    <Mail className="size-3.5" />
+                  )}
+                  {draft.channel === "sms" ? "SMS draft" : "Email draft"}
+                  {draft.recipient && (
+                    <span className="font-normal text-muted-foreground">
+                      · {draft.recipient}
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Dismiss draft"
+                  className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => {
+                    setDraftCards((old) => old.filter((card) => card.id !== draft.id))
+                    onDraftDismissed?.(draft.id)
+                  }}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+              {draft.note && (
+                <p className="mt-1 text-xs text-amber-600">{draft.note}</p>
+              )}
+              <p className="mt-1.5 whitespace-pre-wrap break-words text-sm">
+                {draft.body}
+              </p>
+              <div className="mt-2 flex gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() =>
+                    setDraftCards((old) =>
+                      old.filter((card) => card.id !== draft.id)
+                    )
+                  }
+                >
+                  Review in messenger
+                </Button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
       {composer}
     </div>
   )

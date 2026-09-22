@@ -21,6 +21,7 @@ export type NativeChatEvent =
   | { type: "error"; code: string; message: string }
   | {
       type: "draft"
+      draftId: string
       channel: "sms" | "email"
       dealId: string
       body: string
