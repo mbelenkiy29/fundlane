@@ -13,7 +13,7 @@ import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { permittedAssignmentIds } from "../deals/access-policy"
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from "../documents/contracts"
-import { getDocument, getDocumentContent, listDocuments, storeDocument } from "../documents/service"
+import { getDocument, getDocumentContent, listSubmissionDocuments, storeDocument } from "../documents/service"
 import { assertSenderUsable } from "../senders/service"
 import { getSmsConsent, listSmsAccounts, normalizeSmsRecipient, resolveSmsRoute } from "../sms/service"
 import type { TwilioSmsTransport } from "../sms/twilio"
@@ -402,7 +402,7 @@ export async function acceptOfferForClosing(actor: DealActor, input: { dealId: s
 }
 
 async function validatedClosingDocuments(actor: DealActor, dealId: string, documentIds: string[], exceptions: Record<string, string>): Promise<{ attachments: string[]; missing: string[] }> {
-  const documents = await listDocuments(actor, dealId), clean = new Map(documents.filter((item) => isDocumentReady(item.processingState)).map((item) => [item.id, item]))
+  const documents = await listSubmissionDocuments(actor, dealId), clean = new Map(documents.filter((item) => isDocumentReady(item.processingState)).map((item) => [item.id, item]))
   for (const id of documentIds) if (!clean.has(id)) throw new AppError(422, "attachment_invalid", "Every attachment must be a clean document from this deal.")
   const attachments = [...new Set(documentIds)]
   const missing: string[] = []
@@ -428,7 +428,7 @@ export async function previewContractAction(actor: DealActor, input: { workflowI
   const subject = input.action === "request_contract" ? `Contract request · ${deal.displayId}` : `Repricing request · ${deal.displayId}`
   const body = `${input.action === "request_contract" ? "Please prepare the contract" : "Please review the requested repricing"} for ${deal.legalName || deal.dbaName || deal.displayId}.\n\nOffer revision: ${row.offer_revision_number}\nFunder: ${row.funder_name}${input.action === "request_repricing" ? `\nReason: ${input.reason!.trim()}` : ""}\nAttachments: ${attachments.length}\nOutstanding stipulations: ${openStips.length ? openStips.map((item) => item.label).join(", ") : "None"}`
   const updated = await getDatabase().prepare<Row>(`UPDATE mca_contract_workflows SET state=?,recipient_cipher=?,attached_document_ids_json=?,outstanding_stips_json=?,${input.action === "request_contract" ? "contract_requested_at" : "repricing_requested_at"}=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(state, encryptSensitive(bound.address, actor.workspaceId), JSON.stringify(attachments), JSON.stringify(openStips.map((item) => String(item.label))), now, now, actor.workspaceId, input.workflowId)
-  const documentMap = new Map((await listDocuments(actor, deal.id)).map((item) => [item.id, item]))
+  const documentMap = new Map((await listSubmissionDocuments(actor, deal.id)).map((item) => [item.id, item]))
   const attachmentRefs = attachments.map((id) => { const item = documentMap.get(id)!; return { id, version: item.version, checksum: item.checksum } })
   const preview = await persistRequestPreview(actor, { dealId: deal.id, kind, recordId: input.workflowId, channel: "email", senderId: input.senderId, recipient: bound.address, subject, body, attachmentRefs, idempotencyKey: input.idempotencyKey })
   return { workflow: await contract(updated!, actor), preview }

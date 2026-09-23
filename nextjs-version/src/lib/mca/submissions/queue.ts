@@ -6,7 +6,7 @@ import { newId, recordAuditEvent, withTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
-import { listDocuments } from "../documents/service"
+import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
@@ -258,7 +258,7 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
   }
   const deal = await getDealForDocument(input.actor, input.dealId)
   await assertSubmissionSendGates(input.actor, deal.id)
-  const documents = await listDocuments(input.actor, input.dealId)
+  const documents = await listSubmissionDocuments(input.actor, input.dealId)
   const sender = await probeSubmissionSender(input.actor)
   const dataMerch = await latestDataMerch(input.actor.workspaceId, deal.id)
   const jobs: QueuedJobSummary[] = []
@@ -323,7 +323,7 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
 
 export async function getSubmissionSelection(actor: DealActor, dealId: string): Promise<SubmissionSelection> {
   const deal = await getDealForDocument(actor, dealId)
-  const documents = await listDocuments(actor, dealId)
+  const documents = await listSubmissionDocuments(actor, dealId)
   const funders = await listFunders(actor)
   const sender = await probeSubmissionSender(actor)
   const dataMerch = await latestDataMerch(actor.workspaceId, deal.id)

@@ -24,6 +24,7 @@ import {
 } from "../src/lib/mca/submissions/email-templates"
 import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
 import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
@@ -343,6 +344,26 @@ test("MIC-153: two funders receive separately addressed packages with originator
   assert.equal(alphaAttempt.delivery, "preview")
   assertNoSecret(alphaAttempt)
   assertNoSecret(betaAttempt)
+})
+
+test("route document exclusions remove categories from previews and queued attachments", async () => {
+  const { deal, document } = await seedDeal()
+  const funderId = (await createFunder(actor(), {
+    idempotencyKey: `excluded-document-funder-${dealCounter}`,
+    legalName: "No Statements Capital",
+    routes: [{ kind: "email", label: "Email", destination: "nostatements@example.test", documentExceptions: ["statement"], active: true }],
+  })).funder.id
+  const preview = await previewPost(cookieRequest("/api/mca/submissions/email/preview", "admin-session-token", {
+    method: "POST", body: JSON.stringify({ dealId: deal.id, funderIds: [funderId] }),
+  }))
+  assert.equal(preview.status, 200)
+  const body = await preview.json() as PreviewBody
+  assert.deepEqual(body.previews[0]?.attachments, [])
+  const queued = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [funderId], confirmationKey: `excluded-document-${dealCounter}` })
+  assert.equal(queued.ok, true)
+  const job = (await listJobsForDeal(actor().workspaceId, deal.id)).find((item) => item.funderId === funderId)
+  assert.ok(job)
+  assert.equal(job.packageDocumentIds.includes(document.id), false)
 })
 
 test("MIC-153: prefix or signature change does not rewrite a stored prior attempt", async () => {

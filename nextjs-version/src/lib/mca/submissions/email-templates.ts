@@ -7,7 +7,7 @@ import type { DealActor, DealRecord } from "../deals/schema"
 import { findDealById } from "../deals/repository"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
-import { listDocuments } from "../documents/service"
+import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import type { FunderRecord, FunderRoute } from "../funders/contracts"
 import { getFunder, listFunders } from "../funders/directory"
@@ -840,7 +840,7 @@ export async function previewSubmissionEmails(actor: DealActor, input: PreviewSu
   const dealId = asDealId(input.dealId)
   const deal = await getDealForDocument(actor, dealId)
   const sender = await resolvePreviewSender(actor, asSenderId(input.senderId))
-  const documents = summariesToAttachments(await listDocuments(actor, deal.id))
+  const documents = summariesToAttachments(await listSubmissionDocuments(actor, deal.id))
   const requested = asFunderIds(input.funderIds)
   const funders = requested
     ? await Promise.all(requested.map(async (funderId) => {

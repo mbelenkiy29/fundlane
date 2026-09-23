@@ -13,7 +13,7 @@ import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import type { DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
-import { storeDocument } from "../src/lib/mca/documents/service"
+import { listSubmissionDocuments, storeDocument } from "../src/lib/mca/documents/service"
 import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import { createFunder, getFunder } from "../src/lib/mca/funders/directory"
 import { listFunderCriteria, publishFunderCriteria, upsertIndustryAlias } from "../src/lib/mca/funders/criteria"
@@ -27,7 +27,10 @@ import {
   rollbackCriteriaScan,
   scanFunderCriteria,
   setCriteriaScanProviderForTests,
+  uploadAndScanFunderCriteria,
 } from "../src/lib/mca/funders/criteria-scan"
+import { getSubmissionSelection } from "../src/lib/mca/submissions/queue"
+import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
 import { GET as scanGet, POST as scanPost } from "../src/app/api/mca/funders/scan/route"
 import { GET as scanItemGet } from "../src/app/api/mca/funders/scan/[id]/route"
 import { POST as scanAccept } from "../src/app/api/mca/funders/scan/[id]/accept/route"
@@ -265,6 +268,29 @@ after(async () => {
   setCriteriaScanProviderForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
+})
+
+test("lender criteria sheets stay in the vault but never enter submission documents", async () => {
+  const funder = (await createFunder(actor(), { idempotencyKey: "criteria-vault-funder", legalName: "Criteria Vault Capital" })).funder
+  const deal = (await createDeal(actor(), { idempotencyKey: "criteria-vault-deal", legalName: "Criteria Vault Merchant" })).deal
+  const merchantDocument = await uploadSheet(actor(), deal.id, "merchant-document.pdf", "merchant-document")
+  extraction({ filename: "existing-criteria.pdf", rules: [] })
+  const existing = await uploadSheet(actor(), deal.id, "existing-criteria.pdf", "existing-criteria")
+  await scanFunderCriteria(actor(), { funderId: funder.id, documentId: existing.id })
+  extraction({ filename: "new-criteria.pdf", rules: [] })
+  const uploaded = await uploadAndScanFunderCriteria(actor(), {
+    funderId: funder.id, dealId: deal.id, idempotencyKey: "new-criteria", filename: "new-criteria.pdf",
+    mimeType: "application/pdf", bytes: pdf("new-criteria"),
+  })
+
+  const allowed = await listSubmissionDocuments(actor(), deal.id)
+  assert.deepEqual(allowed.map((document) => document.id), [merchantDocument.id])
+  const selection = await getSubmissionSelection(actor(), deal.id)
+  assert.deepEqual(selection.documents.map((document) => document.id), [merchantDocument.id])
+  await assert.rejects(
+    () => getOutgoingDocumentBytes({ documentId: uploaded.documentId, originalDocumentId: uploaded.documentId, checksum: "", byteLength: 0, stage: "original" }),
+    (error: unknown) => error instanceof Error && error.message === "Lender criteria sheets cannot be sent with deal submissions.",
+  )
 })
 
 test("MIC-194 ambiguous ranges are flagged and unspecified stays unspecified without sentinels", async () => {
