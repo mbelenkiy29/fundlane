@@ -734,6 +734,12 @@ export async function compressSubmissionPackage(actor: DealActor, input: {
 }
 
 export async function getOutgoingDocumentBytes(document: OutgoingDocument): Promise<Uint8Array> {
+  const criteriaSheet = await getDatabase().prepare<{ blocked: number }>(
+    `SELECT 1 AS blocked FROM mca_documents AS d WHERE d.id = ? AND
+      (d.source = 'funder_criteria_scan' OR EXISTS
+        (SELECT 1 FROM mca_funder_criteria_scans AS scan WHERE scan.workspace_id = d.workspace_id AND scan.document_id = d.id))`,
+  ).get(document.originalDocumentId)
+  if (criteriaSheet) throw new AppError(409, "criteria_sheet_not_submittable", "Lender criteria sheets cannot be sent with deal submissions.")
   if (document.stage === COMPRESS_STAGE) {
     const row = await findDerivativeByDocumentId(document.documentId)
     if (!row) throw new AppError(404, "document_not_found", "The requested compress derivative was not found.")

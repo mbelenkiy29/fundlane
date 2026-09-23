@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { DOCUMENT_CATEGORIES, type DocumentCategory } from "@/lib/mca/documents/contracts"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "@/lib/mca/funders/contracts"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
@@ -25,8 +26,25 @@ const routeLabels: Record<FunderRouteKind, string> = {
   custom_webhook: "Custom webhook",
 }
 
+const destinationLabels: Record<FunderRouteKind, string> = {
+  email: "Submission email address",
+  api: "API integration identifier",
+  manual_portal: "Portal URL",
+  custom_webhook: "Webhook URL",
+}
+
+const documentLabels: Record<DocumentCategory, string> = {
+  statement: "Bank statement",
+  application: "Application",
+  api_application: "Generated application",
+  driver_license: "Driver license",
+  voided_check: "Voided check",
+  closing_document: "Closing document",
+  other_stip: "Other stipulation",
+}
+
 type ContactDraft = { key: string; name: string; email: string; phone: string; role: string }
-type RouteDraft = { key: string; kind: FunderRouteKind; label: string; destination: string; documentExceptions: string; active: boolean }
+type RouteDraft = { key: string; kind: FunderRouteKind; label: string; destination: string; documentExceptions: string[]; active: boolean }
 type FunderDraft = {
   legalName: string
   nickname: string
@@ -53,7 +71,7 @@ function routeDraft(route?: FunderRoute): RouteDraft {
     kind: route?.kind ?? "email",
     label: route?.label ?? "",
     destination: route?.destination ?? "",
-    documentExceptions: (route?.documentExceptions ?? []).join(", "),
+    documentExceptions: [...(route?.documentExceptions ?? [])],
     active: route?.active ?? true,
   }
 }
@@ -87,7 +105,7 @@ function payloadFromDraft(draft: FunderDraft, idempotencyKey?: string) {
     contacts: draft.contacts.map((contact) => ({ name: contact.name, email: contact.email, phone: contact.phone, role: contact.role })),
     routes: draft.routes.map((route) => ({
       kind: route.kind, label: route.label, destination: route.destination,
-      documentExceptions: splitList(route.documentExceptions), active: route.active,
+      documentExceptions: route.documentExceptions, active: route.active,
     })),
   }
 }
@@ -236,6 +254,19 @@ export function FunderDirectoryPanel() {
     setGroupFunderIds((current) => checked ? [...current, id] : current.filter((item) => item !== id))
   }
 
+  function setDocumentException(routeKey: string, category: string, checked: boolean) {
+    setDraft((current) => ({
+      ...current,
+      routes: current.routes.map((route) => route.key === routeKey ? {
+        ...route,
+        documentExceptions: [
+          ...route.documentExceptions.filter((item) => item.toLowerCase() !== category.toLowerCase()),
+          ...(checked ? [category] : []),
+        ],
+      } : route),
+    }))
+  }
+
   if (loading) {
     return <Card><CardContent className="flex min-h-40 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="size-4 animate-spin" />Loading funders…</CardContent></Card>
   }
@@ -322,8 +353,24 @@ export function FunderDirectoryPanel() {
                     <Input aria-label={`Route ${index + 1} label`} placeholder="Label" value={route.label} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, label: event.target.value } : item) })} />
                     {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove route ${index + 1}`} onClick={() => setDraft({ ...draft, routes: draft.routes.filter((item) => item.key !== route.key) })}><Trash2 /></Button>}
                   </div>
-                  <Input aria-label={`Route ${index + 1} destination`} placeholder="Destination" value={route.destination} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} />
-                  <Input aria-label={`Route ${index + 1} document exceptions`} placeholder="Document exceptions, comma separated" value={route.documentExceptions} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, documentExceptions: event.target.value } : item) })} />
+                  <Field label={destinationLabels[route.kind]} htmlFor={`route-destination-${route.key}`} error={fieldErrors[`routes.${index}.destination`]?.[0]}>
+                    <Input id={`route-destination-${route.key}`} value={route.destination} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} />
+                  </Field>
+                  <details className="rounded-md border p-3">
+                    <summary className="cursor-pointer text-sm font-medium">Documents not to send (optional){route.documentExceptions.length ? ` · ${route.documentExceptions.length} selected` : ""}</summary>
+                    <p className="mt-2 text-xs text-muted-foreground">Selected document types will be left out of submissions through this route.</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {DOCUMENT_CATEGORIES.map((category) => <div key={category} className="flex items-center gap-2">
+                        <Checkbox id={`route-${route.key}-${category}`} checked={route.documentExceptions.some((item) => item.toLowerCase() === category)} disabled={!canManage} onCheckedChange={(checked) => setDocumentException(route.key, category, checked === true)} />
+                        <Label htmlFor={`route-${route.key}-${category}`} className="font-normal">{documentLabels[category]}</Label>
+                      </div>)}
+                      {route.documentExceptions.filter((item) => !DOCUMENT_CATEGORIES.some((category) => category === item.toLowerCase())).map((item) => <div key={item} className="flex items-center gap-2">
+                        <Checkbox id={`route-${route.key}-${item}`} checked disabled={!canManage} onCheckedChange={(checked) => setDocumentException(route.key, item, checked === true)} />
+                        <Label htmlFor={`route-${route.key}-${item}`} className="font-normal">Saved exclusion: {item}</Label>
+                      </div>)}
+                    </div>
+                    {fieldErrors[`routes.${index}.documentExceptions`]?.[0] && <p className="mt-2 text-xs text-destructive">{fieldErrors[`routes.${index}.documentExceptions`][0]}</p>}
+                  </details>
                   <div className="flex items-center justify-between"><Label htmlFor={`route-active-${route.key}`}>Route active</Label><Switch id={`route-active-${route.key}`} checked={route.active} disabled={!canManage} onCheckedChange={(active) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, active } : item) })} /></div>
                 </div>)}
               </section>

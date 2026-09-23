@@ -66,8 +66,10 @@ export async function findDocumentByIdempotencyKey(workspaceId: string, key: str
   return row ? fromRow(row) : undefined
 }
 
-export async function listDocumentRecords(workspaceId: string, dealId: string): Promise<DocumentRecord[]> {
-  const rows = await db().prepare<DocumentRow>("SELECT * FROM mca_documents WHERE workspace_id = ? AND deal_id = ? ORDER BY created_at DESC").all(workspaceId, dealId)
+export async function listDocumentRecords(workspaceId: string, dealId: string, forSubmission = false): Promise<DocumentRecord[]> {
+  const filter = forSubmission ? `AND d.source <> 'funder_criteria_scan'
+    AND NOT EXISTS (SELECT 1 FROM mca_funder_criteria_scans AS scan WHERE scan.workspace_id = d.workspace_id AND scan.document_id = d.id)` : ""
+  const rows = await db().prepare<DocumentRow>(`SELECT d.* FROM mca_documents AS d WHERE d.workspace_id = ? AND d.deal_id = ? ${filter} ORDER BY d.created_at DESC`).all(workspaceId, dealId)
   return rows.map(fromRow)
 }
 

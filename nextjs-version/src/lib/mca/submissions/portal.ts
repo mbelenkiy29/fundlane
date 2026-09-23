@@ -5,7 +5,7 @@ import { getOutgoingDocumentBytes } from "./compress"
 import { getDatabase, newId, recordAuditEvent } from "../db"
 import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
-import { listDocuments } from "../documents/service"
+import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import type { DeliverResult, JobState, SubmissionAttempt, SubmissionJob } from "./contracts"
 import {
@@ -206,7 +206,7 @@ export async function listPortalBoard(actor: DealActor, dealId: string): Promise
   const deal = await getDealForDocument(actor, dealId)
   const [jobs, documents, operators] = await Promise.all([
     listJobsForDeal(actor.workspaceId, deal.id),
-    listDocuments(actor, deal.id),
+    listSubmissionDocuments(actor, deal.id),
     operatorsByJob(actor.workspaceId, deal.id),
   ])
   const portals: PortalTask[] = []

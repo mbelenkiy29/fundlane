@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { uploadMultipart } from "@/components/mca/documents/upload"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { EligibilityRule } from "@/lib/mca/funders/contracts"
@@ -32,10 +33,9 @@ type Proposal = {
 type ListPayload = {
   proposals: Proposal[]
   currentRules: EligibilityRule[]
-  contacts: Array<{ id: string; name?: string; email?: string }>
-  criteriaVersion: number
-  documents?: Array<{ id: string; originalFilename: string; processingState: string; mimeType: string }>
+  documents?: Array<{ id: string; displayFilename: string; originalFilename: string; processingState: string; mimeType: string }>
 }
+type DealOption = { id: string; legalName: string; dbaName?: string; displayId: string }
 
 function formatValue(value: EligibilityRule["value"]): string {
   if (value == null) return "Unspecified"
@@ -44,8 +44,16 @@ function formatValue(value: EligibilityRule["value"]): string {
   return String(value)
 }
 
+function importStatus(proposal: Proposal): string {
+  if (proposal.rolledBackAt) return "Undone"
+  if (proposal.status === "accepted") return "Applied"
+  if (proposal.status === "rejected") return "Discarded"
+  return "Awaiting review"
+}
+
 export function CriteriaScanPanel({ funderId }: { funderId: string }) {
   const [payload, setPayload] = React.useState<ListPayload>()
+  const [deals, setDeals] = React.useState<DealOption[]>([])
   const [selected, setSelected] = React.useState<Proposal>()
   const [dealId, setDealId] = React.useState("")
   const [documentId, setDocumentId] = React.useState("")
@@ -57,23 +65,29 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
   const [notice, setNotice] = React.useState("")
   const [uploadProgress, setUploadProgress] = React.useState<number>()
   const uploadKeys = React.useRef(new Map<string, string>())
+  const loadVersion = React.useRef(0)
+  const fileInput = React.useRef<HTMLInputElement>(null)
 
   const load = React.useCallback(async () => {
+    const version = ++loadVersion.current
     setLoading(true); setError("")
     try {
       const query = new URLSearchParams({ funderId })
       if (dealId.trim()) query.set("dealId", dealId.trim())
-      const [listed, session] = await Promise.all([
+      const [listed, dealList, session] = await Promise.all([
         requestJson<ListPayload>(`/api/mca/funders/scan?${query.toString()}`),
+        requestJson<{ deals: DealOption[] }>("/api/mca/deals"),
         requestJson<SessionResponse>("/api/auth/session"),
       ])
+      if (version !== loadVersion.current) return
       setPayload(listed)
+      setDeals(dealList.deals)
       setCanManage(Boolean(session.permissions?.canManageWorkspace))
       setSelected((current) => listed.proposals.find((item) => item.id === current?.id) ?? listed.proposals.find((item) => item.status === "proposed") ?? listed.proposals[0])
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Criteria scans could not be loaded.")
+      if (version === loadVersion.current) setError(caught instanceof Error ? caught.message : "Previous imports could not be loaded.")
     } finally {
-      setLoading(false)
+      if (version === loadVersion.current) setLoading(false)
     }
   }, [funderId, dealId])
 
@@ -85,13 +99,13 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
   }
 
   async function scanExisting() {
-    if (!documentId.trim()) { setError("Enter a clean vault document ID."); return }
+    if (!documentId) { setError("Choose a criteria sheet from the selected deal."); return }
     setBusy(true); setError(""); setNotice("")
     try {
       const proposal = await requestJson<Proposal>("/api/mca/funders/scan", { method: "POST", body: JSON.stringify({ funderId, documentId: documentId.trim() }) })
       setSelected(proposal)
-      setNotice("Proposed changeset ready. Review warnings before accepting.")
-      toast.success("Criteria scan proposed")
+      setNotice("Proposed criteria are ready. Review them before applying.")
+      toast.success("Criteria imported for review")
       await load()
     } catch (caught) {
       fail(caught, "The criteria sheet could not be scanned.")
@@ -102,7 +116,7 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
 
   async function uploadAndScan() {
     if (!file) { setError("Choose a PDF, PNG, or JPEG criteria sheet."); return }
-    if (!dealId.trim()) { setError("Enter the vault deal ID that should store this sheet."); return }
+    if (!dealId) { setError("Choose the deal whose vault will store this sheet."); return }
     setBusy(true); setError(""); setNotice("")
     const fingerprint = `${file.name}:${file.size}:${file.lastModified}`
     let key = uploadKeys.current.get(fingerprint)
@@ -115,9 +129,11 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
       form.set("file", file)
       const proposal = await uploadMultipart<Proposal>("/api/mca/funders/scan", form, setUploadProgress)
       uploadKeys.current.delete(fingerprint)
+      setFile(undefined)
+      if (fileInput.current) fileInput.current.value = ""
       setSelected(proposal)
-      setNotice("Proposed changeset ready. Review warnings before accepting.")
-      toast.success("Criteria scan proposed")
+      setNotice("Proposed criteria are ready. Review them before applying.")
+      toast.success("Criteria imported for review")
       await load()
     } catch (caught) {
       fail(caught, "The criteria sheet could not be uploaded.")
@@ -134,8 +150,8 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
       const result = await requestJson<Proposal | { proposal: Proposal }>(`/api/mca/funders/scan/${encodeURIComponent(selected.id)}/${path}`, { method: "POST", body: "{}" })
       const proposal = "proposal" in result && result.proposal ? result.proposal : result as Proposal
       setSelected(proposal)
-      setNotice(path === "accept" ? "Scan accepted. Eligibility rules published." : path === "reject" ? "Scan rejected. Current rules were left unchanged." : "Accepted scan rolled back to the previous rules.")
-      toast.success(path === "accept" ? "Criteria accepted" : path === "reject" ? "Scan rejected" : "Scan rolled back")
+      setNotice(path === "accept" ? "Reviewed criteria applied to this funder." : path === "reject" ? "Proposal discarded. Current rules were left unchanged." : "Previous eligibility rules restored.")
+      toast.success(path === "accept" ? "Criteria applied" : path === "reject" ? "Proposal discarded" : "Import undone")
       await load()
     } catch (caught) {
       fail(caught, "The scan decision could not be saved.")
@@ -145,16 +161,14 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
   }
 
   if (loading && !payload) {
-    return <Card><CardContent className="flex min-h-40 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="size-4 animate-spin" />Loading criteria scans…</CardContent></Card>
+    return <Card><CardContent className="flex min-h-40 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="size-4 animate-spin" />Loading previous imports…</CardContent></Card>
   }
 
   if (error && !payload) {
-    return <Card><CardContent className="flex min-h-40 items-center gap-3 p-6"><AlertCircle className="size-5 text-destructive" /><div className="flex-1"><p className="font-medium">Criteria scans unavailable</p><p className="text-sm text-muted-foreground">{error}</p></div><Button variant="outline" onClick={() => void load()}><RefreshCw />Retry</Button></CardContent></Card>
+    return <Card><CardContent className="flex min-h-40 items-center gap-3 p-6"><AlertCircle className="size-5 text-destructive" /><div className="flex-1"><p className="font-medium">Previous imports unavailable</p><p className="text-sm text-muted-foreground">{error}</p></div><Button variant="outline" onClick={() => void load()}><RefreshCw />Retry</Button></CardContent></Card>
   }
 
   const proposals = payload?.proposals ?? []
-  const contacts = payload?.contacts ?? []
-
   return <div className="space-y-4">
     {(error || notice) && <div className={`rounded-lg border p-4 text-sm ${error ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-emerald-500/30 bg-emerald-500/5"}`} role={error ? "alert" : "status"}>
       <div className="flex items-start gap-2">{error ? <AlertCircle className="mt-0.5 size-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0" />}<p>{error || notice}</p></div>
@@ -162,41 +176,52 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
 
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><ScanText className="size-5" />AI criteria scan {payload && <Badge variant="outline">criteria v{payload.criteriaVersion}</Badge>}</CardTitle>
-        <CardDescription>Scan clean vault PDF, PNG, or JPEG sheets into a proposed changeset. Contacts stay as configured. Unspecified limits stay empty, and broader extracted rules are blocked until you accept a reviewed version.</CardDescription>
+        <CardTitle className="flex items-center gap-2"><ScanText className="size-5" />Import lender criteria</CardTitle>
+        <CardDescription>Choose a lender criteria sheet to propose eligibility rules. Review the proposal before applying it; importing never changes live rules or funder contacts on its own.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="scan-deal">Vault deal ID</Label><Input id="scan-deal" value={dealId} onChange={(event) => setDealId(event.target.value)} placeholder="Deal that stores the sheet" /></div>
-          <div className="space-y-2"><Label htmlFor="scan-document">Existing document ID</Label><Input id="scan-document" value={documentId} onChange={(event) => setDocumentId(event.target.value)} placeholder="Clean PDF/PNG/JPEG document" /></div>
+          <div className="space-y-2">
+            <Label htmlFor="scan-deal">Deal vault</Label>
+            <Select value={dealId || undefined} disabled={busy || !canManage} onValueChange={(value) => { setDealId(value); setDocumentId(""); setPayload((current) => current ? { ...current, documents: [] } : current) }}>
+              <SelectTrigger id="scan-deal"><SelectValue placeholder="Choose a deal" /></SelectTrigger>
+              <SelectContent>{deals.map((deal) => <SelectItem key={deal.id} value={deal.id}>{deal.legalName}{deal.dbaName ? ` (${deal.dbaName})` : ""} · {deal.displayId}</SelectItem>)}</SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">New criteria sheets are stored in this deal’s vault.</p>
+            {!loading && !deals.length && <p className="text-xs text-muted-foreground">No deals available for storing a criteria sheet.</p>}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="scan-document">Existing vault file</Label>
+            <Select value={documentId || undefined} disabled={!canManage || busy || !dealId || loading || !payload?.documents?.length} onValueChange={setDocumentId}>
+              <SelectTrigger id="scan-document"><SelectValue placeholder={dealId ? "Choose a ready PDF or image" : "Choose a deal first"} /></SelectTrigger>
+              <SelectContent>{payload?.documents?.map((document) => <SelectItem key={document.id} value={document.id}>{document.displayFilename || document.originalFilename}</SelectItem>)}</SelectContent>
+            </Select>
+            {dealId && !loading && !payload?.documents?.length && <p className="text-xs text-muted-foreground">No ready PDF, PNG, or JPEG files in this vault. Upload a criteria sheet below.</p>}
+          </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <Input type="file" accept="application/pdf,image/png,image/jpeg" onChange={(event) => setFile(event.target.files?.[0])} />
+          <Input ref={fileInput} type="file" aria-label="New lender criteria sheet" accept="application/pdf,image/png,image/jpeg" disabled={!canManage || busy || !dealId} onChange={(event) => setFile(event.target.files?.[0])} />
           {canManage ? <>
-            <Button type="button" onClick={() => void uploadAndScan()} disabled={busy}><FileSearch className="size-4" />Upload and scan</Button>
-            <Button type="button" variant="outline" onClick={() => void scanExisting()} disabled={busy}>Scan document</Button>
-          </> : <p className="text-sm text-muted-foreground">Only workspace admins can scan or accept criteria sheets.</p>}
+            <Button type="button" onClick={() => void uploadAndScan()} disabled={busy || !dealId || !file}><FileSearch className="size-4" />Import new sheet</Button>
+            <Button type="button" variant="outline" onClick={() => void scanExisting()} disabled={busy || !documentId}>Import selected sheet</Button>
+          </> : <p className="text-sm text-muted-foreground">Only workspace admins can import or apply lender criteria.</p>}
         </div>
         {uploadProgress !== undefined && <p role="status" className="text-sm text-muted-foreground">Uploading: {uploadProgress}%</p>}
-        <div className="rounded-lg border p-3 text-sm">
-          <p className="font-medium">Configured contacts</p>
-          {contacts.length ? <ul className="mt-2 space-y-1 text-muted-foreground">{contacts.map((contact) => <li key={contact.id}>{contact.name || "Contact"}{contact.email ? ` · ${contact.email}` : ""}</li>)}</ul> : <p className="mt-2 text-muted-foreground">No contacts configured. Scans will not invent contact records.</p>}
-        </div>
       </CardContent>
     </Card>
 
     <Card>
       <CardHeader>
-        <CardTitle>Scan history</CardTitle>
-        <CardDescription>Accept publishes the proposed rules, reject leaves the current book unchanged, and rollback restores the previous accepted version.</CardDescription>
+        <CardTitle>Previous imports</CardTitle>
+        <CardDescription>Review a proposal before applying it. Discarding leaves live rules alone; undoing an applied import restores the previous rules.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {!proposals.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No criteria scans yet. Upload a clean PDF, PNG, or JPEG criteria sheet from the vault.</div> : <ul className="space-y-2">
+        {!proposals.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No lender criteria have been imported yet.</div> : <ul className="space-y-2">
           {proposals.map((item) => <li key={item.id}>
             <button type="button" className={`flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left text-sm ${selected?.id === item.id ? "border-primary" : ""}`} onClick={() => setSelected(item)}>
-              <span>Scan v{item.version} · {item.provider}</span>
+              <span>Import {item.version}</span>
               <span className="flex items-center gap-2">
-                <Badge variant={item.status === "accepted" ? "default" : item.status === "rejected" ? "secondary" : "outline"}>{item.status}{item.rolledBackAt ? " · rolled back" : ""}</Badge>
+                <Badge variant={item.status === "accepted" && !item.rolledBackAt ? "default" : item.status === "rejected" ? "secondary" : "outline"}>{importStatus(item)}</Badge>
               </span>
             </button>
           </li>)}
@@ -204,7 +229,7 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
 
         {selected && <div className="space-y-4 rounded-lg border p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge>Proposal v{selected.version}</Badge>
+            <Badge>Import {selected.version}</Badge>
             <Badge variant="outline">{selected.provider}</Badge>
             {selected.contactsPreserved && <Badge variant="secondary">Contacts preserved</Badge>}
             {selected.ambiguousRanges?.length ? <Badge variant="secondary">{selected.ambiguousRanges.length} ambiguous</Badge> : null}
@@ -226,10 +251,10 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
             </div>)}
           </div>}
           {canManage && selected.status === "proposed" && <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => void decide("accept")} disabled={busy}>Accept changeset</Button>
-            <Button type="button" variant="outline" onClick={() => void decide("reject")} disabled={busy}>Reject</Button>
+            <Button type="button" onClick={() => void decide("accept")} disabled={busy}>Apply reviewed criteria</Button>
+            <Button type="button" variant="outline" onClick={() => void decide("reject")} disabled={busy}>Discard proposal</Button>
           </div>}
-          {canManage && selected.status === "accepted" && !selected.rolledBackAt && <Button type="button" variant="outline" onClick={() => void decide("rollback")} disabled={busy}><RotateCcw className="size-4" />Rollback</Button>}
+          {canManage && selected.status === "accepted" && !selected.rolledBackAt && <Button type="button" variant="outline" onClick={() => void decide("rollback")} disabled={busy}><RotateCcw className="size-4" />Undo this import</Button>}
         </div>}
       </CardContent>
     </Card>

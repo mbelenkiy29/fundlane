@@ -7,11 +7,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { RequestError, requestJson } from "@/lib/mca/client"
-import { CRITERIA_OPERATORS, CRITERIA_UNITS, type CriteriaOperator, type CriteriaUnit, type EligibilityRule, type IndustryAlias } from "@/lib/mca/funders/contracts"
+import { CRITERIA_OPERATORS, CRITERIA_UNITS, type CriteriaOperator, type CriteriaUnit, type EligibilityRule } from "@/lib/mca/funders/contracts"
 import type { SessionResponse } from "@/lib/mca/types"
 
 const FIELDS = [
@@ -110,9 +109,7 @@ function yearlyToMonthly(value: string): string {
 
 export function CriteriaPanel({ funderId }: { funderId: string }) {
   const [payload, setPayload] = React.useState<CriteriaPayload>()
-  const [aliases, setAliases] = React.useState<IndustryAlias[]>([])
   const [rules, setRules] = React.useState<RuleDraft[]>([])
-  const [aliasDraft, setAliasDraft] = React.useState({ alias: "", naics: "", normalizedIndustry: "" })
   const [canManage, setCanManage] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
@@ -123,14 +120,12 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
   const load = React.useCallback(async () => {
     setLoading(true); setError("")
     try {
-      const [criteria, aliasList, session] = await Promise.all([
+      const [criteria, session] = await Promise.all([
         requestJson<CriteriaPayload>(`/api/mca/funders/criteria/${encodeURIComponent(funderId)}`),
-        requestJson<{ aliases: IndustryAlias[] }>("/api/mca/funders/criteria/aliases"),
         requestJson<SessionResponse>("/api/auth/session"),
       ])
       setPayload(criteria)
       setRules(criteria.rules.map(fromRule))
-      setAliases(aliasList.aliases)
       setCanManage(Boolean(session.permissions?.canManageWorkspace))
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Eligibility rules could not be loaded.")
@@ -176,45 +171,6 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
       toast.success("Criteria saved")
     } catch (caught) {
       fail(caught, "The eligibility rules could not be published.")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function saveAlias(event: React.FormEvent) {
-    event.preventDefault()
-    if (!canManage) return
-    setBusy(true); setError(""); setNotice(""); setFieldErrors({})
-    try {
-      await requestJson("/api/mca/funders/criteria/aliases", {
-        method: "POST",
-        body: JSON.stringify({
-          alias: aliasDraft.alias,
-          naics: aliasDraft.naics || undefined,
-          normalizedIndustry: aliasDraft.normalizedIndustry,
-        }),
-      })
-      setAliasDraft({ alias: "", naics: "", normalizedIndustry: "" })
-      setNotice("Industry alias saved.")
-      toast.success("Alias saved")
-      const aliasList = await requestJson<{ aliases: IndustryAlias[] }>("/api/mca/funders/criteria/aliases")
-      setAliases(aliasList.aliases)
-    } catch (caught) {
-      fail(caught, "The industry alias could not be saved.")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function removeAlias(id: string) {
-    if (!canManage) return
-    setBusy(true); setError(""); setNotice("")
-    try {
-      await requestJson(`/api/mca/funders/criteria/aliases/${encodeURIComponent(id)}`, { method: "DELETE" })
-      setAliases((current) => current.filter((item) => item.id !== id))
-      setNotice("Industry alias removed.")
-    } catch (caught) {
-      fail(caught, "The industry alias could not be removed.")
     } finally {
       setBusy(false)
     }
@@ -288,39 +244,5 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
       </CardContent>
     </Card>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>Industry aliases</CardTitle>
-        <CardDescription>Normalize free-text industries and NAICS codes used in eligibility rules.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {!aliases.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No industry aliases yet. Map names such as “restaurants” to a NAICS code and normalized industry.</div> : <ul className="space-y-2">
-          {aliases.map((item) => <li key={item.id} className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
-            <span><span className="font-medium">{item.alias}</span><span className="mt-1 block text-xs text-muted-foreground">{item.normalizedIndustry}{item.naics ? ` · NAICS ${item.naics}` : ""}</span></span>
-            {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove alias ${item.alias}`} onClick={() => void removeAlias(item.id)}><Trash2 /></Button>}
-          </li>)}
-        </ul>}
-        {canManage && <form onSubmit={(event) => void saveAlias(event)} className="grid gap-2 sm:grid-cols-[1fr_8rem_1fr_auto]">
-          <Field label="Alias" htmlFor="alias-name" error={fieldErrors.alias?.[0]}>
-            <Input id="alias-name" value={aliasDraft.alias} onChange={(event) => setAliasDraft({ ...aliasDraft, alias: event.target.value })} required />
-          </Field>
-          <Field label="NAICS" htmlFor="alias-naics" error={fieldErrors.naics?.[0]}>
-            <Input id="alias-naics" value={aliasDraft.naics} onChange={(event) => setAliasDraft({ ...aliasDraft, naics: event.target.value })} />
-          </Field>
-          <Field label="Normalized industry" htmlFor="alias-industry" error={fieldErrors.normalizedIndustry?.[0]}>
-            <Input id="alias-industry" value={aliasDraft.normalizedIndustry} onChange={(event) => setAliasDraft({ ...aliasDraft, normalizedIndustry: event.target.value })} required />
-          </Field>
-          <div className="flex items-end"><Button type="submit" disabled={busy}>Save alias</Button></div>
-        </form>}
-      </CardContent>
-    </Card>
-  </div>
-}
-
-function Field({ label, htmlFor, error, children }: { label: string; htmlFor: string; error?: string; children: React.ReactNode }) {
-  return <div className="space-y-2">
-    <Label htmlFor={htmlFor}>{label}</Label>
-    {children}
-    {error && <p className="text-xs text-destructive">{error}</p>}
   </div>
 }

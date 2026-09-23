@@ -204,6 +204,11 @@ export async function listDocuments(actor: DealActor, dealId: string): Promise<D
   return (await listDocumentRecords(actor.workspaceId, dealId)).map(summary)
 }
 
+export async function listSubmissionDocuments(actor: DealActor, dealId: string): Promise<DocumentSummary[]> {
+  await getDealForDocument(actor, dealId)
+  return (await listDocumentRecords(actor.workspaceId, dealId, true)).map(summary)
+}
+
 export async function getDocument(actor: DealActor, id: string): Promise<DocumentRecord> {
   const record = await findDocumentById(actor.workspaceId, id)
   if (!record) throw new AppError(404, "document_not_found", "The requested document was not found.")

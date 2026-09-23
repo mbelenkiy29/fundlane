@@ -5,7 +5,7 @@ import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, withTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
-import { listDocuments } from "../documents/service"
+import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { getFunder } from "../funders/directory"
 import { checkCompleteness } from "../underwriting/completeness"
@@ -65,7 +65,7 @@ async function currentSnapshot(actor: DealActor, intakeId: string, funderIds: st
       throw new AppError(422, "funder_not_eligible", "Select only eligible lenders from the current analysis.")
     }
   }
-  const documents = (await listDocuments(actor, deal.id)).sort((a, b) => a.id.localeCompare(b.id))
+  const documents = (await listSubmissionDocuments(actor, deal.id)).sort((a, b) => a.id.localeCompare(b.id))
   const sender = await probeSubmissionSender(actor)
   const destinations = []
   for (const id of funderIds) {
