@@ -3,7 +3,7 @@ import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { Client } from "pg"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, withTransaction } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import type { DealActor } from "../src/lib/mca/deals/schema"
@@ -19,6 +19,7 @@ import {
   updateFunder,
   updateGroup,
 } from "../src/lib/mca/funders/directory"
+import { listFunderRecords } from "../src/lib/mca/funders/directory-repository"
 import { GET as listFundersGet, POST as listFundersPost } from "../src/app/api/mca/funders/route"
 import { GET as funderGet, PATCH as funderPatch, POST as funderSelect } from "../src/app/api/mca/funders/[id]/route"
 import { GET as groupsGet, POST as groupsPost } from "../src/app/api/mca/funders/groups/route"
@@ -190,6 +191,19 @@ test("MIC-192 create and list are isolated across workspaces", async () => {
   await assert.rejects(getFunder(actor(ids.otherWorkspace), local.id), (error: { status?: number; code?: string }) => error.status === 404 && error.code === "funder_not_found")
   await assert.rejects(getFunder(actor(), remote.id), (error: { status?: number; code?: string }) => error.status === 404 && error.code === "funder_not_found")
   await assert.rejects(createGroup(actor(ids.otherWorkspace), { name: "Stolen", funderIds: [local.id] }), (error: { status?: number; code?: string }) => error.status === 404 && (error.code === "funder_not_found" || error.code === "group_funder_not_found"))
+})
+
+test("funder list reads through the active transaction", async () => {
+  let funderId = ""
+  await assert.rejects(withTransaction(async () => {
+    funderId = (await createFunder(actor(), {
+      idempotencyKey: "transaction-list-visibility",
+      legalName: "Transaction Only Capital",
+    })).funder.id
+    assert.equal((await listFunderRecords(ids.workspace)).some(item => item.id === funderId), true)
+    throw new Error("rollback test")
+  }), /rollback test/)
+  assert.equal((await listFunderRecords(ids.workspace)).some(item => item.id === funderId), false)
 })
 
 test("MIC-192 idempotent create returns the same id and increments profileVersion on updates", async () => {

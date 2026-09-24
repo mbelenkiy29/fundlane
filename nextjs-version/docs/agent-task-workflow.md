@@ -58,6 +58,8 @@ For app/browser tests, use a separate Supabase project with its own Auth identit
 
 Fundlane **already uses Drizzle**, not Prisma:
 
+See [Fundlane database and Drizzle](drizzle-database-guide.md) for the current schema, migration, runtime query flow, and bounded schema audit.
+
 - `src/lib/mca/db/schema.ts` and related files listed in `drizzle.config.ts` describe tables for tooling.
 - `drizzle/` contains the versioned SQL migrations and journal. `pnpm db:generate` generates a candidate migration; inspect and edit it for grants, indexes, RLS, data changes and existing table compatibility.
 - `src/lib/mca/db.ts` uses `pg` through `DbExecutor` and transaction helpers. Much application SQL is hand-written, so a schema model alone does not describe authorization or business behavior.
