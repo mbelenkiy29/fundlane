@@ -20,3 +20,9 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Isolated task workflow
+
+Before implementing a ticket in a new cloud session, worktree or VM, read `nextjs-version/docs/agent-task-workflow.md`. Use a feature branch and disposable PostgreSQL for tests; use only an approved nonproduction Supabase project with synthetic records for hosted Auth/Storage checks. A fresh code VM does not isolate a database. Never use production credentials/data in an agent environment or run hosted migrations as an automatic setup/build step. Explain any required migration, test evidence, preview and remaining hosted acceptance in a PR for human review.
+
+The codebase already uses Drizzle schema and versioned SQL migrations, `pg` for most runtime SQL, and Supabase Auth/Storage. Do not introduce Prisma or another migration owner solely for agent navigation. Trace server permissions and workspace scoping in the existing source.
