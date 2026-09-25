@@ -299,9 +299,13 @@
   .fl-demo-aside { display: none; }
   .fl-demo-card { padding: 25px 22px; }
   .fl-demo-card h2 { font-size: 25px; }
+  .fl-changelog-intro { padding-block: 55px 35px; }
+  .fl-changelog-intro > p:not(.fl-section-label) { font-size: 16px; }
+  .fl-changelog-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .fundlane *, .fundlane *::before, .fundlane *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .fl-timeline-progress { height: 100% !important; opacity: 1 !important; }
 }
 @media (max-width: 380px) {
   .fl-nav { gap: 6px; }
@@ -473,4 +477,80 @@
 @media (max-width: 380px) {
   .fl-metrics { grid-template-columns: minmax(0,1fr); }
   .fl-metrics > div { border-right: 0; border-bottom: 1px solid var(--fl-line); }
+}
+
+/* Changelog page and reusable Timeline. Scoped off the activity-stream bar (span.fl-timeline). */
+.fundlane:has(.fl-changelog) { overflow: visible; }
+div.fl-timeline { height: auto; }
+.fl-timeline-track {
+  background: var(--fl-line);
+  mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+}
+.fl-timeline-progress { background: linear-gradient(to top, transparent, var(--fl-blue)); }
+.fl-timeline-dot > div {
+  width: 8px;
+  height: 8px;
+  background: #999;
+  box-shadow: 0 0 0 3px var(--fl-blue);
+}
+.fl-timeline-title { font-size: clamp(32px, 4vw, 56px); color: var(--fl-muted); }
+.fl-changelog-intro { text-align: center; padding-block: 85px 55px; }
+.fl-changelog-intro h1 { font-size: clamp(42px, 5vw, 68px); }
+.fl-changelog-intro > p:not(.fl-section-label) { max-width: 620px; font-size: 18px; margin: 25px auto 0; }
+.fl-changelog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 36px;
+  font-family: var(--font-marketing-mono), monospace;
+  font-size: 12px;
+  color: var(--fl-muted);
+}
+.fl-changelog-group { margin-bottom: 48px; }
+.fl-changelog-group:last-child { margin-bottom: 0; }
+.fl-changelog-group h3 { font-size: 24px; }
+.fl-changelog-group > p { margin-top: 16px; max-width: 640px; }
+.fl-changelog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 28px;
+}
+.fl-changelog-grid img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--fl-line);
+  border-radius: 0;
+}
+.fl-sign-in-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--fl-muted);
+  text-transform: lowercase;
+}
+.fl-sign-in-divider::before,
+.fl-sign-in-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--fl-line);
+}
+.fl-sign-in-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+.fl-sign-in-label-row label { margin-bottom: 0; }
+.fl-sign-in-label-row .fl-inline-link { font-size: 12px; min-height: 0; }
+@media (max-width: 760px) {
+  .fl-changelog-intro { padding-block: 55px 35px; }
+  .fl-changelog-intro > p:not(.fl-section-label) { font-size: 16px; }
+  .fl-changelog-grid { grid-template-columns: 1fr; }
 }
