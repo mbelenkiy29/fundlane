@@ -222,11 +222,12 @@ test("GET and POST /api/mca/setup require a workspace session and do not store",
 test("setup checklist and empty-state copy stay on existing next steps", () => {
   const root = resolve(process.cwd())
   const checklist = readFileSync(resolve(root, "src/components/mca/setup/setup-checklist.tsx"), "utf8")
+  const copy = readFileSync(resolve(root, "src/lib/mca/setup/contracts.ts"), "utf8")
   const home = readFileSync(resolve(root, "src/components/mca/home/home-empty-state.tsx"), "utf8")
   const pipeline = readFileSync(resolve(root, "src/app/(dashboard)/pipeline/components/pipeline-workspace.tsx"), "utf8")
   const funders = readFileSync(resolve(root, "src/components/mca/funders/funder-directory-panel.tsx"), "utf8")
   assert.match(checklist, /mca-setup-checklist/)
-  assert.match(checklist, /Hide checklist/)
+  assert.match(copy, /Hide checklist/)
   assert.match(home, /Next setup step/)
   assert.match(pipeline, /No deals yet/)
   assert.match(pipeline, /Create your first merchant application to open this pipeline/)
