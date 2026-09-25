@@ -23,6 +23,17 @@ export function allowedTransitions(status: DealStatus): readonly DealStatus[] {
   return allowed[status]
 }
 
+export function pipelineHasFilters(params: { get(name: string): string | null }): boolean {
+  return Boolean(
+    params.get("q")?.trim()
+    || (params.get("status") && params.get("status") !== "all")
+    || (params.get("assignee") && params.get("assignee") !== "all")
+    || params.get("from")
+    || params.get("to")
+    || params.get("funder")?.trim(),
+  )
+}
+
 export function canTransition(from: DealStatus, to: DealStatus): boolean {
   return from === to || allowed[from].includes(to)
 }

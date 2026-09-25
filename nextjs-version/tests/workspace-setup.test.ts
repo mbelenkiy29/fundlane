@@ -1,8 +1,8 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { spawnSync } from "node:child_process"
 import "./helpers/business-auth"
+import { pipelineHasFilters } from "../src/lib/mca/deals/pipeline"
 import { closeDatabaseForTests, getDatabase, nowIso } from "../src/lib/mca/db"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { buildWorkspaceSetup } from "../src/lib/mca/setup/contracts"
@@ -219,17 +219,69 @@ test("GET and POST /api/mca/setup require a workspace session and do not store",
   assert.equal(invalid.status, 400)
 })
 
-test("setup checklist and empty-state copy stay on existing next steps", () => {
-  const root = resolve(process.cwd())
-  const checklist = readFileSync(resolve(root, "src/components/mca/setup/setup-checklist.tsx"), "utf8")
-  const copy = readFileSync(resolve(root, "src/lib/mca/setup/contracts.ts"), "utf8")
-  const home = readFileSync(resolve(root, "src/components/mca/home/home-empty-state.tsx"), "utf8")
-  const pipeline = readFileSync(resolve(root, "src/app/(dashboard)/pipeline/components/pipeline-workspace.tsx"), "utf8")
-  const funders = readFileSync(resolve(root, "src/components/mca/funders/funder-directory-panel.tsx"), "utf8")
-  assert.match(checklist, /mca-setup-checklist/)
-  assert.match(copy, /Hide checklist/)
-  assert.match(home, /Next setup step/)
-  assert.match(pipeline, /No deals yet/)
-  assert.match(pipeline, /Create your first merchant application to open this pipeline/)
-  assert.match(funders, /Add your first funder/)
+function searchParams(entries: Record<string, string | undefined>) {
+  return { get: (name: string) => entries[name] ?? null }
+}
+
+function renderMarkup(source: string) {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "-e", source], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
+test("pipelineHasFilters treats view and create as navigation, not empty-state filters", () => {
+  assert.equal(pipelineHasFilters(searchParams({})), false)
+  assert.equal(pipelineHasFilters(searchParams({ view: "kanban", create: "1", status: "all", assignee: "all" })), false)
+  assert.equal(pipelineHasFilters(searchParams({ q: "  " })), false)
+  assert.equal(pipelineHasFilters(searchParams({ q: "acme" })), true)
+  assert.equal(pipelineHasFilters(searchParams({ status: "lead" })), true)
+  assert.equal(pipelineHasFilters(searchParams({ funder: "iso" })), true)
+})
+
+test("empty states render the unfiltered pipeline and permission-gated funder actions", () => {
+  const pipeline = (filtered: boolean) => renderMarkup(`
+    const React = require('react');
+    const { renderToStaticMarkup } = require('react-dom/server');
+    const { PipelineEmptyState } = require('./src/components/mca/pipeline/pipeline-empty-state.tsx');
+    console.log(renderToStaticMarkup(React.createElement(PipelineEmptyState, { filtered: ${filtered}, onCreate: () => {} })));
+  `)
+  const unfiltered = pipeline(false)
+  assert.match(unfiltered, /data-testid="mca-pipeline-empty"/)
+  assert.match(unfiltered, /No deals yet/)
+  assert.match(unfiltered, /Create your first merchant application to open this pipeline/)
+  assert.match(unfiltered, /Create your first deal/)
+  assert.doesNotMatch(unfiltered, /No deals match this view/)
+
+  const filtered = pipeline(true)
+  assert.match(filtered, /No deals match this view/)
+  assert.match(filtered, /Clear filters or save a partial merchant application/)
+  assert.match(filtered, />New deal</)
+  assert.doesNotMatch(filtered, /No deals yet/)
+  assert.doesNotMatch(filtered, /Create your first deal/)
+
+  const funder = (canManage: boolean, hasFunders = false) => renderMarkup(`
+    const React = require('react');
+    const { renderToStaticMarkup } = require('react-dom/server');
+    const { FunderDirectoryEmpty } = require('./src/components/mca/funders/funder-directory-empty.tsx');
+    console.log(renderToStaticMarkup(React.createElement(FunderDirectoryEmpty, { hasFunders: ${hasFunders}, canManage: ${canManage}, onCreate: () => {} })));
+  `)
+  const manager = funder(true)
+  assert.match(manager, /No funders yet/)
+  assert.match(manager, /Add your first funder/)
+  assert.doesNotMatch(funder(false), /Add your first funder/)
+  assert.match(funder(true, true), /No active funders/)
+  assert.doesNotMatch(funder(true, true), /Add your first funder/)
+
+  const home = renderMarkup(`
+    const React = require('react');
+    const { renderToStaticMarkup } = require('react-dom/server');
+    const { HomeEmptyState } = require('./src/components/mca/home/home-empty-state.tsx');
+    console.log(renderToStaticMarkup(React.createElement(HomeEmptyState, {
+      canCreateDeal: false,
+      onCreate: () => {},
+      nextStep: { id: 'funders', title: 'Add a funder', description: '', href: '/funders', actionLabel: 'Add a funder', complete: false },
+    })));
+  `)
+  assert.match(home, /Next setup step: Add a funder/)
+  assert.match(home, /href="\/funders"/)
 })
