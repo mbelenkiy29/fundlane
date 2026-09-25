@@ -13,6 +13,7 @@ import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, Table
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
+import { isTeamProfitReportEmpty } from "@/lib/mca/reports/team-profit-empty"
 import type { MembershipSummary } from "@/lib/mca/types"
 
 const STAGES = ["created", "submitted", "approved", "funded"] as const
@@ -379,10 +380,7 @@ export function TeamProfit() {
       ])
       setMembers(listed.memberships.filter((item) => item.status === "active"))
       setReport(next)
-      const empty = STAGES.every((stage) => next.company.stages[stage].dealCount === 0)
-        && next.evidence.length === 0
-        && (next.company.distributions.count ?? 0) === 0
-      setStatus(empty ? "empty" : "success")
+      setStatus(isTeamProfitReportEmpty(next) ? "empty" : "success")
     } catch (caught) {
       setStatus("error")
       setMessage(errorText(caught))

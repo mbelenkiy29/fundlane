@@ -47,6 +47,27 @@ export function validateTeamInvitation(input: {
   return errors
 }
 
+export function normalizeTeamInvitationInput(input: {
+  name?: unknown
+  email?: unknown
+  phone?: unknown
+  role?: unknown
+  managerMembershipId?: unknown
+  senderAssociation?: unknown
+}) {
+  const phone = text(input.phone)
+  const sender = text(input.senderAssociation)
+  const manager = typeof input.managerMembershipId === "string" ? input.managerMembershipId.trim() : ""
+  return {
+    name: text(input.name),
+    email: text(input.email),
+    phone: phone || undefined,
+    role: input.role,
+    managerMembershipId: manager || undefined,
+    senderAssociation: sender || undefined,
+  }
+}
+
 export function validateApplicationInvitation(input: {
   clientName?: unknown
   email?: unknown

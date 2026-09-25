@@ -48,4 +48,7 @@ test("reports page contains scrolling, explanations, and empty states", () => {
     assert.match(source, /ReportEmptyState/)
     assert.match(source, /min-w-0/)
   }
+
+  const teamProfit = readFileSync(new URL("../src/components/mca/reports/team-profit.tsx", import.meta.url), "utf8")
+  assert.match(teamProfit, /isTeamProfitReportEmpty/)
 })

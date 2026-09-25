@@ -155,3 +155,38 @@ export function validateGroupName(name: unknown, options: { required?: boolean }
   else if (next) tooLong("name", next, FUNDER_FIELD_LIMITS.groupName, errors)
   return errors
 }
+
+export function firstFieldError(errors: Record<string, string[]>, field: string): string | undefined {
+  if (errors[field]?.[0]) return errors[field][0]
+  const prefix = `${field}.`
+  for (const [key, messages] of Object.entries(errors)) {
+    if (key.startsWith(prefix) && messages[0]) return messages[0]
+  }
+  return undefined
+}
+
+export function remapIndexedFieldErrors(
+  errors: Record<string, string[]>,
+  prefix: string,
+  removedIndex: number,
+): Record<string, string[]> {
+  const next: Record<string, string[]> = {}
+  const dotted = `${prefix}.`
+  for (const [key, messages] of Object.entries(errors)) {
+    if (key === prefix || !key.startsWith(dotted)) {
+      next[key] = messages
+      continue
+    }
+    const rest = key.slice(dotted.length)
+    const match = /^(\d+)(.*)$/.exec(rest)
+    if (!match) {
+      next[key] = messages
+      continue
+    }
+    const index = Number(match[1])
+    if (index === removedIndex) continue
+    const shifted = index > removedIndex ? index - 1 : index
+    next[`${prefix}.${shifted}${match[2]}`] = messages
+  }
+  return next
+}

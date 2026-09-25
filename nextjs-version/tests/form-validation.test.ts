@@ -3,8 +3,9 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { invitationSchema } from "../src/lib/mca/schemas"
 import { invitationInput } from "../src/lib/mca/applications/contracts"
-import { validateApplicationInvitation, validateTeamInvitation } from "../src/lib/mca/invitations-validation"
-import { validateFunderProfile, validateGroupName } from "../src/lib/mca/funders/validation"
+import { normalizeTeamInvitationInput, validateApplicationInvitation, validateTeamInvitation } from "../src/lib/mca/invitations-validation"
+import { firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "../src/lib/mca/funders/validation"
+import { isTeamProfitReportEmpty } from "../src/lib/mca/reports/team-profit-empty"
 
 test("funder create validation requires a legal name and surfaces field errors", () => {
   const empty = validateFunderProfile({}, { requireLegalName: true })
@@ -29,6 +30,13 @@ test("funder create validation requires a legal name and surfaces field errors",
   }, { requireLegalName: true })
   assert.deepEqual(valid, {})
   assert.deepEqual(validateGroupName(""), { name: ["Enter a group name."] })
+
+  const tooManyDomains = validateFunderProfile({
+    legalName: "Harbor Capital",
+    domains: Array.from({ length: 31 }, (_, index) => `funder-${index}.example`),
+  }, { requireLegalName: true })
+  assert.equal(tooManyDomains.domains?.[0], "Use at most 30 values.")
+  assert.equal(firstFieldError(tooManyDomains, "domains"), "Use at most 30 values.")
 })
 
 test("team and application invitation validation matches server messages", () => {
@@ -39,6 +47,27 @@ test("team and application invitation validation matches server messages", () =>
 
   const teamOk = validateTeamInvitation({ name: "Ada Lovelace", email: "ada@example.test", role: "rep" })
   assert.deepEqual(teamOk, {})
+
+  const padded = validateTeamInvitation({ name: " Ada Lovelace ", email: " ada@example.test ", role: "rep" })
+  assert.deepEqual(padded, {})
+  assert.deepEqual(
+    normalizeTeamInvitationInput({
+      name: " Ada Lovelace ",
+      email: " ada@example.test ",
+      phone: " 555-0100 ",
+      role: "rep",
+      managerMembershipId: "",
+      senderAssociation: " Desk ",
+    }),
+    {
+      name: "Ada Lovelace",
+      email: "ada@example.test",
+      phone: "555-0100",
+      role: "rep",
+      managerMembershipId: undefined,
+      senderAssociation: "Desk",
+    },
+  )
 
   const parsed = invitationSchema.safeParse({ name: "", email: "bad", role: "rep" })
   assert.equal(parsed.success, false)
@@ -60,10 +89,16 @@ test("create funder and invitation forms render field-level errors", () => {
   assert.match(funder, /validateFunderProfile/)
   assert.match(funder, /noValidate/)
   assert.match(funder, /aria-invalid/)
+  assert.match(funder, /aria-describedby/)
+  assert.match(funder, /firstFieldError/)
+  assert.match(funder, /remapIndexedFieldErrors/)
+  assert.match(funder, /fieldErrors\.contacts/)
+  assert.match(funder, /fieldErrors\.routes/)
   assert.match(funder, /Review the highlighted fields/)
 
   const team = readFileSync(new URL("../src/components/mca/team-panel.tsx", import.meta.url), "utf8")
   assert.match(team, /validateTeamInvitation/)
+  assert.match(team, /normalizeTeamInvitationInput/)
   assert.match(team, /fieldErrors/)
   assert.match(team, /noValidate/)
   assert.match(team, /Review the highlighted fields/)
@@ -72,4 +107,46 @@ test("create funder and invitation forms render field-level errors", () => {
   assert.match(applications, /validateApplicationInvitation/)
   assert.match(applications, /clientName-error/)
   assert.match(applications, /clientEmail-error/)
+})
+
+test("funder row errors remap after an earlier row is removed", () => {
+  const remapped = remapIndexedFieldErrors({
+    legalName: ["Enter the funder legal name."],
+    contacts: ["Use at most 50 contacts."],
+    "contacts.0.email": ["stale first row"],
+    "contacts.1.email": ["Enter a valid email address."],
+    "contacts.1.name": ["Use at most 120 characters."],
+    "routes.0.label": ["Enter a route label."],
+  }, "contacts", 0)
+  assert.deepEqual(remapped, {
+    legalName: ["Enter the funder legal name."],
+    contacts: ["Use at most 50 contacts."],
+    "contacts.0.email": ["Enter a valid email address."],
+    "contacts.0.name": ["Use at most 120 characters."],
+    "routes.0.label": ["Enter a route label."],
+  })
+})
+
+test("team profit empty state keeps independently calculated operating costs visible", () => {
+  const emptyStages = {
+    created: { dealCount: 0 },
+    submitted: { dealCount: 0 },
+    approved: { dealCount: 0 },
+    funded: { dealCount: 0 },
+  }
+  assert.equal(isTeamProfitReportEmpty({
+    company: { stages: emptyStages, distributions: { count: 0 } },
+    evidence: { length: 0 },
+    otherOperatingCosts: { knownCents: 0, unknownCount: 0 },
+  }), true)
+  assert.equal(isTeamProfitReportEmpty({
+    company: { stages: emptyStages, distributions: { count: 0 } },
+    evidence: { length: 0 },
+    otherOperatingCosts: { knownCents: 50_000, unknownCount: 0 },
+  }), false)
+  assert.equal(isTeamProfitReportEmpty({
+    company: { stages: emptyStages, distributions: { count: 0 } },
+    evidence: { length: 0 },
+    otherOperatingCosts: { knownCents: 0, unknownCount: 1 },
+  }), false)
 })

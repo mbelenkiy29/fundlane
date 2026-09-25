@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatRole, RequestError, requestJson } from "@/lib/mca/client"
-import { validateTeamInvitation } from "@/lib/mca/invitations-validation"
+import { normalizeTeamInvitationInput, validateTeamInvitation } from "@/lib/mca/invitations-validation"
 import { OwnershipTransfer } from "@/components/mca/ownership-transfer"
 import {
   assignableRoles,
@@ -840,15 +840,11 @@ function InviteDialog({
     setError("")
     setFieldErrors({})
     setReserved(false)
+    const payload = normalizeTeamInvitationInput(draft)
     try {
       const result = await requestJson<InvitationResult>("/api/invitations", {
         method: "POST",
-        body: JSON.stringify({
-          ...draft,
-          phone: draft.phone || undefined,
-          managerMembershipId: draft.managerMembershipId || undefined,
-          senderAssociation: draft.senderAssociation || undefined,
-        }),
+        body: JSON.stringify(payload),
       })
       toast.success(
         result.delivery === "preview"
@@ -864,7 +860,7 @@ function InviteDialog({
       const exists = (list ?? members).some(
         (m) =>
           m.status === "pending" &&
-          m.email.toLowerCase() === draft.email.trim().toLowerCase()
+          m.email.toLowerCase() === payload.email.toLowerCase()
       )
       setReserved(exists)
       setFieldErrors(caught instanceof RequestError ? caught.fieldErrors ?? {} : {})
