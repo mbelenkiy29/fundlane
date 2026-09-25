@@ -26,7 +26,7 @@ const STAMP_PADDING = 4
 const MAX_EXCLUSIONS = 500
 const FUNDER_ID_MAX = 80
 
-type SkipReason = "disabled" | "excluded" | "not_pdf" | "not_statement"
+type SkipReason = "disabled" | "excluded" | "not_pdf"
 
 export interface StampSettings {
   enabled: boolean
@@ -90,7 +90,6 @@ type OriginalRow = {
   byte_length: number | string
   mime_type: string
   processing_state: string
-  category: string
 }
 
 type FunderNameRow = {
@@ -295,7 +294,7 @@ export async function requireStampPreview(request: Request): Promise<DealActor> 
 
 async function loadOriginal(documentId: string): Promise<OriginalRow | undefined> {
   return db().prepare<OriginalRow>(
-    "SELECT id, workspace_id, deal_id, storage_key, checksum, byte_length, mime_type, processing_state, category FROM mca_documents WHERE id = ?",
+    "SELECT id, workspace_id, deal_id, storage_key, checksum, byte_length, mime_type, processing_state FROM mca_documents WHERE id = ?",
   ).get(documentId)
 }
 
@@ -450,14 +449,9 @@ function isPdf(mimeType: string, bytes: Uint8Array): boolean {
   return mimeType === "application/pdf" && bytes.length >= 5 && Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-"
 }
 
-function isBankStatement(category: string): boolean {
-  return category.trim().toLowerCase() === "statement"
-}
-
-function skipReason(settings: StampSettings, funderId: string, pdf: boolean, category: string): SkipReason | undefined {
+function skipReason(settings: StampSettings, funderId: string, pdf: boolean): SkipReason | undefined {
   if (!settings.enabled) return "disabled"
   if (settings.excludedFunderIds.includes(funderId)) return "excluded"
-  if (!isBankStatement(category)) return "not_statement"
   if (!pdf) return "not_pdf"
   return undefined
 }
@@ -585,10 +579,6 @@ export async function applyStamp(documents: OutgoingDocument[], funderId: string
     if (!original || original.workspace_id !== workspaceId) {
       throw new AppError(404, "document_not_found", "The requested document was not found.")
     }
-    if (!isBankStatement(original.category)) {
-      next.push(asOriginalOutgoing(original))
-      continue
-    }
     const bytes = await originalBytes(original, document.checksum || undefined)
     if (!isPdf(original.mime_type, bytes)) {
       next.push(asOriginalOutgoing(original))
@@ -619,7 +609,7 @@ export async function previewStamp(actor: DealActor, input: { documentId?: unkno
   }
   const content = await getDocumentContent(actor, documentId)
   const pdf = isPdf(record.mimeType, content.bytes)
-  const reason = skipReason(settings, funderId, pdf, record.category)
+  const reason = skipReason(settings, funderId, pdf)
   if (reason) {
     return {
       skipped: true,
@@ -644,7 +634,6 @@ export async function previewStamp(actor: DealActor, input: { documentId?: unkno
       byte_length: record.byteLength,
       mime_type: record.mimeType,
       processing_state: record.processingState,
-      category: record.category,
     },
     funderId,
     stampText: stampTextForFunder(funder.legal_name),

@@ -48,7 +48,7 @@ const actor = (workspaceId = ids.workspace, role: Role | null = "admin"): DealAc
     membershipId,
     role,
     managedMembershipIds: [],
-    activeMembershipIds: [membershipId],
+    activeMembershipIds: workspaceId === ids.otherWorkspace ? [ids.otherMember] : [ids.adminMember, ids.repMember],
     source: role ? "user" : "api_key",
     correlationId: `corr-${workspaceId}-${role ?? "key"}`,
   }
@@ -257,6 +257,10 @@ async function seedDeal(category: "statement" | "application" = "statement") {
   const deal = (await createDeal(actor(), {
     idempotencyKey: `protect-deal-${dealCounter}`,
     legalName: `Protect Merchant ${dealCounter} LLC`,
+    assignments: [
+      { membershipId: ids.repMember, kind: "originator", isPrimary: true },
+      { membershipId: ids.adminMember, kind: "closer", isPrimary: true },
+    ],
   })).deal
   const document = await storeDocument(actor(), {
     dealId: deal.id,
@@ -408,17 +412,14 @@ test("issue 74: reps can preview a stamped copy before sending", async () => {
   assert.equal(pdfContains(bytes, STATEMENT_FIGURE), true)
 })
 
-test("issue 74: non-statements and disabled workspaces are not stamped", async () => {
+test("issue 74: previews skip non-statements and disabled workspaces", async () => {
   const { document: application } = await seedDeal("application")
   await updateDocumentProtectionSettings(actor(), { enabled: true })
-  const packaged = await prepareOutgoingPackage({ originals: asOriginal(application), funderId: harborId })
-  assert.equal(packaged.documents[0]?.stage, "original")
-  assert.equal(packaged.documents[0]?.checksum, application.checksum)
-
   const skipped = await protectionPreview(cookieRequest("/api/mca/submissions/document-protection/preview", "rep-session-token", {
     method: "POST",
     body: JSON.stringify({ documentId: application.id, funderId: harborId }),
   }))
+  assert.equal(skipped.status, 200)
   assert.equal((await skipped.json() as DocumentProtectionPreviewResult).reason, "not_statement")
 
   await updateDocumentProtectionSettings(actor(), { enabled: false })

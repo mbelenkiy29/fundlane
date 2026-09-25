@@ -4,6 +4,7 @@ import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess 
 import { recordAuditEvent } from "../db"
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
+import { getDocument } from "../documents/service"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { canManageWorkspace } from "../policy"
@@ -163,17 +164,32 @@ export async function previewDocumentProtection(actor: DealActor, input: {
   documentId?: unknown
   funderId?: unknown
 }): Promise<DocumentProtectionPreviewResult> {
+  const documentId = typeof input.documentId === "string" ? input.documentId.trim() : ""
+  const funderId = typeof input.funderId === "string" ? input.funderId.trim() : ""
+  if (!documentId) invalid("documentId", "Choose a document to preview.")
+  if (!funderId) invalid("funderId", "Choose a destination funder.")
+  const record = await getDocument(actor, documentId)
+  if (record.category !== "statement") {
+    return {
+      skipped: true,
+      reason: "not_statement",
+      originalDocumentId: record.id,
+      originalChecksum: record.checksum,
+      funderId,
+      watermarkApplied: false,
+      pages: [],
+      replayed: false,
+    }
+  }
   const stamp = await previewStamp(actor, input)
-  const documentId = stamp.originalDocumentId
-  const funderId = stamp.funderId
   const reason = asStampSkip(stamp)
   if (reason) {
     return {
       skipped: true,
       reason,
-      originalDocumentId: documentId,
+      originalDocumentId: stamp.originalDocumentId,
       originalChecksum: stamp.originalChecksum,
-      funderId,
+      funderId: stamp.funderId,
       funderLegalName: stamp.funderLegalName,
       stampText: stamp.stampText ?? (stamp.funderLegalName ? stampTextForFunder(stamp.funderLegalName) : undefined),
       watermarkApplied: false,
@@ -184,20 +200,20 @@ export async function previewDocumentProtection(actor: DealActor, input: {
   if (!stamp.derivative) {
     throw new AppError(409, "document_protection_preview_failed", "A protected copy could not be prepared.")
   }
-  const watermarked = await applyWatermark([stamp.derivative], funderId)
+  const watermarked = await applyWatermark([stamp.derivative], stamp.funderId)
   const derivative = watermarked[0] ?? stamp.derivative
   return {
     skipped: false,
-    originalDocumentId: documentId,
+    originalDocumentId: stamp.originalDocumentId,
     originalChecksum: stamp.originalChecksum,
-    funderId,
+    funderId: stamp.funderId,
     funderLegalName: stamp.funderLegalName,
     stampText: stamp.stampText,
     watermarkApplied: derivative.stage === "watermark",
     derivative,
     pages: stamp.pages,
     replayed: stamp.replayed,
-    downloadPath: downloadPathFor(documentId, funderId),
+    downloadPath: downloadPathFor(stamp.originalDocumentId, stamp.funderId),
   }
 }
 
