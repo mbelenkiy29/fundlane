@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, CheckCircle2, Loader2, Send } from "lucide-react"
+import { AlertCircle, CheckCircle2, Eye, Loader2, Send } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -66,6 +66,15 @@ type ConfirmPayload = {
   jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string; eligibleAt?: string }>
 }
 
+type ProtectionPreview = {
+  skipped: boolean
+  reason?: string
+  stampText?: string
+  funderLegalName?: string
+  watermarkApplied: boolean
+  downloadPath?: string
+}
+
 const routeLabels: Record<RouteKind, string> = {
   email: "Email",
   api: "API",
@@ -106,6 +115,8 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   const [results, setResults] = React.useState<ConfirmPayload["jobs"]>()
   const [override24h, setOverride24h] = React.useState(false)
   const [overrideReason, setOverrideReason] = React.useState("")
+  const [previewBusy, setPreviewBusy] = React.useState<string>()
+  const [previewNote, setPreviewNote] = React.useState<string>()
   const pendingConfirmation = React.useRef<{ fingerprint: string; key: string } | null>(null)
 
   const load = React.useCallback(async () => {
@@ -181,6 +192,38 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
     }
   }
 
+  async function previewProtected(documentId: string, funderId: string, filename: string) {
+    const key = `${funderId}:${documentId}`
+    setPreviewBusy(key)
+    setError(undefined)
+    setPreviewNote(undefined)
+    try {
+      const preview = await requestJson<ProtectionPreview>("/api/mca/submissions/document-protection/preview", {
+        method: "POST",
+        body: JSON.stringify({ documentId, funderId }),
+      })
+      if (preview.skipped) {
+        setPreviewNote(preview.reason === "disabled"
+          ? "Document protection is off. The stored original would be sent."
+          : preview.reason === "excluded"
+            ? "This funder is excluded from document protection."
+            : preview.reason === "not_statement"
+              ? `${filename} is not a bank statement, so it is not stamped.`
+              : `${filename} cannot be stamped for this destination.`)
+        return
+      }
+      const path = preview.downloadPath ?? `/api/mca/submissions/document-protection/preview/file?documentId=${encodeURIComponent(documentId)}&funderId=${encodeURIComponent(funderId)}`
+      window.open(path, "_blank", "noopener,noreferrer")
+      setPreviewNote(preview.watermarkApplied
+        ? `Opened a protected copy of ${filename}${preview.stampText ? ` (${preview.stampText})` : ""} with the shop logo watermark.`
+        : `Opened a stamped copy of ${filename}${preview.stampText ? ` (${preview.stampText})` : ""}. Originals stay unmodified.`)
+    } catch (caught) {
+      setError(errorMessage(caught, "A stamped preview could not be opened."))
+    } finally {
+      setPreviewBusy(undefined)
+    }
+  }
+
   const funders = payload?.funders ?? []
   const jobs = payload?.jobs ?? []
   const gate = submissionConfirmGate({ loading, selectedIds: selected, funders })
@@ -204,6 +247,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         {!loading && <MissingPrerequisites missing={gate.missing} />}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}
+        {previewNote && <p role="status" className="text-sm text-muted-foreground">{previewNote}</p>}
         <div className="space-y-2 rounded-lg border p-3">
           <div className="flex items-start gap-3">
             <Checkbox
@@ -268,12 +312,32 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                       <ul className="space-y-1 text-xs text-muted-foreground">
                         {funder.checklist.length === 0 ? (
                           <li>No documents on this deal yet.</li>
-                        ) : funder.checklist.map((document) => (
-                          <li key={document.documentId}>
-                            {document.filename} · {document.category} · {document.checksum.slice(0, 12)}
-                            {document.excluded ? " · excluded" : ""}
-                          </li>
-                        ))}
+                        ) : funder.checklist.map((document) => {
+                          const previewKey = `${funder.id}:${document.documentId}`
+                          const canPreview = document.category === "statement" && !document.excluded
+                          return (
+                            <li key={document.documentId} className="flex flex-wrap items-center gap-2">
+                              <span>
+                                {document.filename} · {document.category} · {document.checksum.slice(0, 12)}
+                                {document.excluded ? " · excluded" : ""}
+                              </span>
+                              {canPreview && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2 text-xs"
+                                  disabled={loading || busy || previewBusy === previewKey}
+                                  aria-label={`Preview stamped copy of ${document.filename} for ${funderTitle(funder)}`}
+                                  onClick={() => void previewProtected(document.documentId, funder.id, document.filename)}
+                                >
+                                  {previewBusy === previewKey ? <Loader2 className="size-3 animate-spin" /> : <Eye className="size-3" />}
+                                  Preview stamped copy
+                                </Button>
+                              )}
+                            </li>
+                          )
+                        })}
                       </ul>
                     </div>
                   </div>
