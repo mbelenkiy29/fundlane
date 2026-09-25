@@ -8,6 +8,8 @@ export { initializeCompanyTrial } from "./company-access"
 import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-reconciliation"
 import { webhookVerificationTime } from "./maintenance/replay-clock"
 import { recordOperationalError } from "./operations/telemetry"
+import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern } from "./stripe-checkout-trial"
+export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 // Historical Clerk migration scripts retain their original role mapping.
@@ -28,17 +30,15 @@ export function stripeLiveMode() {
 
 export function getStripeClient(): StripeBillingClient {
   if (!billingEnabled()) throw new AppError(503, "billing_disabled", "Company billing is not enabled in this environment.")
-  const key = process.env.STRIPE_SECRET_KEY?.trim()
-  if (!key || !(stripeLiveMode() ? /^(sk|rk)_live_/ : /^(sk|rk)_test_/).test(key)) throw new AppError(503, "billing_mode_mismatch", "Stripe credentials must match the configured billing mode.")
+  const key = readStripeSecretKey()
+  if (!key || !stripeSecretKeyPattern(stripeLiveMode()).test(key)) throw new AppError(503, "billing_mode_mismatch", "Stripe credentials must match the configured billing mode.")
   return new Stripe(key, { apiVersion: "2026-08-26.dahlia", timeout: 15_000, maxNetworkRetries: 1, httpClient: Stripe.createFetchHttpClient() })
 }
 
 export function priceIds() {
-  const base = process.env.STRIPE_BASE_PRICE_ID?.trim()
-  const seats = process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID?.trim()
-  if (!base || !seats || base === seats || ![base, seats].every(id => /^price_[A-Za-z0-9]+$/.test(id)))
-    throw new AppError(503, "billing_catalog_unconfigured", "The company plan catalog needs administrator configuration.")
-  return { base, seats }
+  const ids = readPriceIds()
+  if (!ids) throw new AppError(503, "billing_catalog_unconfigured", "The company plan catalog needs administrator configuration.")
+  return ids
 }
 
 export async function verifyBillingPrices(client: StripeBillingClient) {
@@ -248,7 +248,7 @@ export async function getWorkspaceBilling(workspaceId: string) {
   const customer = await getDatabase().prepare<{livemode:number;stripe_customer_id:string}>("SELECT livemode,stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id = ?").get(workspaceId)
   const state = await getDatabase().prepare("SELECT * FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
   const recovery = await readBillingRecovery(workspaceId, customer)
-  return { enabled: billingEnabled(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery }
+  return { enabled: billingEnabled(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery, cardRequiredTrial: isStripeCheckoutTrialConfigured() }
 }
 
 async function readBillingRecovery(workspaceId: string, customer: { livemode: number; stripe_customer_id: string } | undefined): Promise<import("./billing-display").BillingRecovery> {

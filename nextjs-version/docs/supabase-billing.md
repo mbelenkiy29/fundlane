@@ -2,11 +2,21 @@
 
 ## Contract and migration
 
-One monthly USD plan: **$399 including the first user**, graduated additional users 2–10 at $79 each, 11–20 at $69 each, 21+ at $59 each. Active and pending memberships reserve seats. The public `monthlyPriceCents(seats)` function quotes the total. New companies create a workspace in a finish-setup state, then enter Stripe Checkout with a card to start a 14-day trial for the selected quantity. Stripe owns the trial end and charges the saved card after it. `MCA_BILLING_TRIAL_DAYS` can override the 14-day default with an integer from 1 to 730. A missing payment method at trial end pauses the subscription by default; the typed setting can be changed to `cancel` in code.
+One monthly USD plan: **$399 including the first user**, graduated additional users 2–10 at $79 each, 11–20 at $69 each, 21+ at $59 each. Active and pending memberships reserve seats. The public `monthlyPriceCents(seats)` function quotes the total. New-company onboarding switches automatically on `isStripeCheckoutTrialConfigured()` / `stripeCheckoutTrialConfiguration()` in `src/lib/mca/stripe-checkout-trial.ts` (re-exported from `src/lib/mca/billing.ts`). Card-first Checkout trial is fully configured only when **all** of these are present and valid (the helper lists missing setting **names**, never values, and makes no network calls):
+
+- `MCA_STRIPE_BILLING_ENABLED` is exactly `true`
+- `MCA_STRIPE_MODE` is `test` or `live`
+- `STRIPE_SECRET_KEY` is present and matches that mode (`sk_`/`rk_` live vs test, same rule as `getStripeClient`)
+- `STRIPE_BASE_PRICE_ID` and `STRIPE_ADDITIONAL_SEAT_PRICE_ID` are distinct valid `price_…` IDs (same rule as `priceIds`)
+- `STRIPE_BILLING_WEBHOOK_SECRET` is present
+
+When any of those are missing, onboarding matches the legacy no-card path: `initializeCompanyTrial` inside company creation (local 14-day app-managed trial, `TRIAL_SEATS` capacity), full access, no `finish_setup` lockout, no Checkout redirect, and no Stripe client. The server logs `[billing] Stripe Checkout trial not fully configured (missing: …); using the legacy no-card 14-day trial`. `GET /api/onboarding` and `GET /api/billing` expose `cardRequiredTrial` from the same helper so UI copy never asks for a card when Checkout is not configured.
+
+When fully configured, new companies create a workspace in a finish-setup state, then enter Stripe Checkout with a card to start a 14-day trial for the selected quantity. Stripe owns the trial end and charges the saved card after it. `MCA_BILLING_TRIAL_DAYS` can override the 14-day default with an integer from 1 to 730. A missing payment method at trial end pauses the subscription by default; the typed setting can be changed to `cancel` in code. Companies already created on the legacy path keep their local trial semantics; card-first companies keep `finish_setup` until Stripe reports `trialing` or `active`. Legacy-exempt behavior is unchanged.
 
 These are the current engineering catalog amounts, not an approved launch pricing decision. All application and Stripe setup price amounts live in `src/lib/mca/billing-catalog.ts`; owner approval is pending in #79. Change the catalog only after that decision is recorded, then provision new Stripe Price objects and update the configured price IDs through a reviewed release.
 
-Onboarding inserts `company_subscription_state` with `legacy_exempt=0` and the selected seats, then opens Checkout. Retrying creation reuses the workspace; Checkout retries reuse an open session, even if seat selection changed. A completed session with an unresolved subscription blocks another Checkout. Subscription trial history prevents a second Stripe trial for the workspace after cancellation. `initializeCompanyTrial` remains only for historical or operator-managed local trials; database triggers protect those original trial dates. Operator extensions use a separate field.
+When Checkout trial is fully configured, onboarding inserts `company_subscription_state` with `legacy_exempt=0` and the selected seats, then opens Checkout. When it is not, onboarding calls `initializeCompanyTrial` instead and does not open Checkout. Retrying creation reuses the workspace; Checkout retries reuse an open session, even if seat selection changed. A completed session with an unresolved subscription blocks another Checkout. Subscription trial history prevents a second Stripe trial for the workspace after cancellation. `initializeCompanyTrial` is also used for historical or operator-managed local trials; database triggers protect those original trial dates. Operator extensions use a separate field.
 
 Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **0048_billing_recovery** before deploying recovery code, plus the existing runtime-security release step. Migration 0047 explicitly backfills all existing companies as `legacy_exempt=1`; it never starts a trial, creates a customer or charges them. Migration 0048 adds the durable processing-extension grant marker and backfills existing extensions. Missing state retains legacy access for older creation paths; production onboarding must initialize trials. Verified paid conversion removes exemption. Historical Clerk/Stripe rows are retained. Unknown historical Stripe prices require an explicit operator migration rather than silent contract conversion.
 
@@ -69,7 +79,7 @@ Optional Supabase Stripe Sync Engine tables are read-only and only used as a mat
 
 Company billing routes use existing session membership authorization and trusted-mutation protection. Keep billing recovery routes reachable during operational suspension.
 
-- `GET /api/billing`: cached billing, occupiedSeats, local `access`, `state` and verified `recovery` balance/invoices/pending status.
+- `GET /api/billing`: cached billing, occupiedSeats, local `access`, `state`, `cardRequiredTrial`, and verified `recovery` balance/invoices/pending status.
 - `POST /api/billing/sync`: live reconciliation plus response above.
 - `POST /api/billing/checkout`: `{ selectedSeats: integer >= 1, onboarding?: boolean }`.
 - `POST /api/billing/seats`: `{ selectedSeats: integer >= 1 }`.

@@ -12,7 +12,7 @@ import { createWorkspaceWithAdmin } from "../src/lib/mca/workspaces"
 import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catalog"
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
-import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
+import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -144,6 +144,31 @@ test("explicit key mode and subscription mode must agree",()=>{
   assert.ok(getStripeClient())
   assert.throws(()=>subscriptionEntitlement(subscription()),/mode/)
   process.env.MCA_STRIPE_MODE="test";process.env.STRIPE_SECRET_KEY="rk_test_fixture"
+})
+function restoreConfiguredStripe(){
+  Object.assign(process.env,{MCA_STRIPE_BILLING_ENABLED:"true",MCA_STRIPE_MODE:"test",STRIPE_SECRET_KEY:"rk_test_fixture",STRIPE_BASE_PRICE_ID:"price_base",STRIPE_ADDITIONAL_SEAT_PRICE_ID:"price_seats",STRIPE_BILLING_WEBHOOK_SECRET:"whsec_fixture"})
+}
+test("stripeCheckoutTrialConfiguration reports each missing setting by name",()=>{
+  restoreConfiguredStripe()
+  assert.deepEqual(stripeCheckoutTrialConfiguration(),{configured:true,missing:[]})
+  assert.equal(isStripeCheckoutTrialConfigured(),true)
+  process.env.MCA_STRIPE_BILLING_ENABLED="false"
+  assert.equal(isStripeCheckoutTrialConfigured(),false)
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["MCA_STRIPE_BILLING_ENABLED"])
+  restoreConfiguredStripe();delete process.env.STRIPE_SECRET_KEY
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_SECRET_KEY"])
+  restoreConfiguredStripe();process.env.STRIPE_SECRET_KEY="sk_live_fixture"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_SECRET_KEY"])
+  restoreConfiguredStripe();delete process.env.STRIPE_BASE_PRICE_ID
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BASE_PRICE_ID"])
+  restoreConfiguredStripe();process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID="not-a-price"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_ADDITIONAL_SEAT_PRICE_ID"])
+  restoreConfiguredStripe();process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID="price_base"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BASE_PRICE_ID","STRIPE_ADDITIONAL_SEAT_PRICE_ID"])
+  restoreConfiguredStripe();delete process.env.STRIPE_BILLING_WEBHOOK_SECRET
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BILLING_WEBHOOK_SECRET"])
+  restoreConfiguredStripe()
+  assert.equal(isStripeCheckoutTrialConfigured(),true)
 })
 for(const mode of ["classic","flexible"]) test(`SDK ${mode} cancellation atomically replaces the reduction with a final current phase`,async()=>{
   const f=await fixture(),http=await createStripeHttpFixture(),url=new URL(http.origin)
