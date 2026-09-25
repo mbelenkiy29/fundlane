@@ -31,6 +31,7 @@ type AdapterCredential = {
   funderId: string
   funderName?: string
   adapterSlug: string
+  readiness: "live" | "sandbox" | "unavailable"
   environment: AdapterEnvironment
   hasCredential: boolean
   capabilities: AdapterCapabilities
@@ -41,7 +42,7 @@ type AdapterCredential = {
 }
 
 type ListPayload = {
-  adapters: Array<{ slug: string; capabilities: AdapterCapabilities }>
+  adapters: Array<{ slug: string; readiness: "live" | "sandbox" | "unavailable"; capabilities: AdapterCapabilities }>
   credentials: AdapterCredential[]
   funders: Array<{ id: string; name: string; adapterSlug?: string; hasApiRoute: boolean }>
   environments: AdapterEnvironment[]
@@ -229,7 +230,7 @@ export function AdapterCredentialsPanel() {
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2">Funder API adapters <ConnectionStatusBadge label={funderStatus.label} /></CardTitle>
         <CardDescription>
-          Store isolated development and production secrets per funder. Production never falls back to test endpoints or another workspace.
+          Configure a funder API route and its workspace credentials. Sandbox runs locally; unavailable adapters have no verified live delivery.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -249,7 +250,7 @@ export function AdapterCredentialsPanel() {
 
         {!loading && credentials.length === 0 && funders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            Not connected. Add an API route on a funder, then save development or production credentials.
+            Not connected. Add an API route on a funder, then select the sandbox adapter for local testing.
           </div>
         )}
 
@@ -264,6 +265,7 @@ export function AdapterCredentialsPanel() {
                   <p className="text-xs text-muted-foreground">{credential.adapterSlug} · {environmentLabel(credential.environment)}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Badge variant={credential.readiness === "live" ? "default" : "outline"}>{credential.readiness}</Badge>
                   <Badge variant={credential.environment === "production" ? "default" : "secondary"}>{environmentLabel(credential.environment)}</Badge>
                   <Badge variant={credential.hasCredential ? "default" : "outline"}>{credential.hasCredential ? "Credential saved" : "No credential"}</Badge>
                   {!credential.active && <Badge variant="destructive">Inactive</Badge>}
@@ -312,7 +314,7 @@ export function AdapterCredentialsPanel() {
                   value={form.funderId}
                   onChange={(event) => {
                     const funder = funders.find((item) => item.id === event.target.value)
-                    setForm((current) => ({ ...current, funderId: event.target.value, adapterSlug: current.adapterSlug || funder?.adapterSlug || "" }))
+                    setForm((current) => ({ ...current, funderId: event.target.value, adapterSlug: funder?.adapterSlug || "" }))
                   }}
                   disabled={Boolean(busy)}
                   required
@@ -322,8 +324,11 @@ export function AdapterCredentialsPanel() {
                 </select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="adapter-slug">Adapter slug</Label>
-                <Input id="adapter-slug" value={form.adapterSlug} onChange={(event) => patchForm("adapterSlug", event.target.value)} disabled={Boolean(busy)} required />
+                <Label htmlFor="adapter-slug">Adapter</Label>
+                <select id="adapter-slug" className="border-input h-9 rounded-md border bg-transparent px-3 text-sm" value={form.adapterSlug} onChange={(event) => patchForm("adapterSlug", event.target.value)} disabled={Boolean(busy)} required>
+                  <option value="">Select an adapter</option>
+                  {payload?.adapters.map((adapter) => <option key={adapter.slug} value={adapter.slug}>{adapter.slug} · {adapter.readiness}</option>)}
+                </select>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="adapter-environment">Environment</Label>
