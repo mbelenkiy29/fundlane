@@ -1,7 +1,7 @@
 import "server-only"
 
 import { AppError } from "../errors"
-import { getDatabase, newId, nowIso, recordAuditEvent, type DbExecutor } from "../db"
+import { newId, nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealTransactionCheckpoint } from "../deals/repository"
 import type { DealActor, DealStatus, DealWriteInput } from "../deals/schema"
 import { DEAL_STATUSES } from "../deals/schema"
@@ -33,13 +33,6 @@ function uniqueViolation(error: unknown): boolean {
   return code === "23505" || cause === "23505" || (error instanceof Error && /unique/i.test(error.message))
 }
 
-async function importRunAuditExists(workspaceId: string, runId: string, action: string): Promise<boolean> {
-  const row = await getDatabase().prepare<{ id: string }>(
-    "SELECT id FROM audit_events WHERE workspace_id = ? AND resource_type = 'import_run' AND resource_id = ? AND action = ? LIMIT 1",
-  ).get(workspaceId, runId, action)
-  return Boolean(row)
-}
-
 async function recordImportRunAudit(
   actor: DealActor,
   action: "import.update_previewed" | "import.update_committed",
@@ -47,7 +40,6 @@ async function recordImportRunAudit(
   metadata: Record<string, unknown>,
   executor?: DbExecutor,
 ): Promise<void> {
-  if (!executor && await importRunAuditExists(actor.workspaceId, runId, action)) return
   await recordAuditEvent({
     context: actor,
     action,
@@ -56,6 +48,17 @@ async function recordImportRunAudit(
     metadata,
     correlationId: actor.correlationId,
     executor,
+  })
+}
+
+async function ensureMissingCommitAudit(actor: DealActor, runId: string, metadata: Record<string, unknown>): Promise<void> {
+  await withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`import.update_committed:${actor.workspaceId}:${runId}`)
+    const existing = await database.prepare<{ id: string }>(
+      "SELECT id FROM audit_events WHERE workspace_id = ? AND resource_type = 'import_run' AND resource_id = ? AND action = 'import.update_committed' LIMIT 1",
+    ).get(actor.workspaceId, runId)
+    if (existing) return
+    await recordImportRunAudit(actor, "import.update_committed", runId, metadata, database)
   })
 }
 async function refreshedActor(actor: DealActor): Promise<DealActor> { return { ...actor, activeMembershipIds: (await listMemberships(actor.workspaceId)).filter((member) => member.status === "active").map((member) => member.id) } }
@@ -318,7 +321,7 @@ export async function commitCsvUpdate(actor:DealActor,input:{runId:string;expect
   const preview=await findUpdatePreview(actor.workspaceId,input.runId);if(!preview)throw new AppError(404,"import_run_not_found","The update run was not found.")
   if(preview.state==="completed"){
     const stored=await storedRunResult(actor.workspaceId,input.runId)??{runId:input.runId,state:"completed" as const,created:0,skipped:0,failed:0,resultsCsv:"row,state,deal_id,message\r\n"}
-    try{await recordImportRunAudit(actor,"import.update_committed",input.runId,{created:stored.created,skipped:stored.skipped,failed:stored.failed,state:stored.state})}catch{/* Deal writes already persisted; retry writes the missing run-level event. */}
+    try{await ensureMissingCommitAudit(actor,input.runId,{created:stored.created,skipped:stored.skipped,failed:stored.failed,state:stored.state})}catch{/* Deal writes already persisted; this retry only fills a missing run-level event. */}
     return stored
   }
   const commitToken=await beginCommit(actor.workspaceId,input.runId,input.expectedPreviewRevision);if(!commitToken){const latest=await findUpdatePreview(actor.workspaceId,input.runId);if(latest?.state==="committing")throw new AppError(409,"import_commit_in_progress","This update still has an active commit lease. Retry after two minutes if its worker stopped.");throw new AppError(409,"import_preview_stale","The update preview changed or was already committed.")}

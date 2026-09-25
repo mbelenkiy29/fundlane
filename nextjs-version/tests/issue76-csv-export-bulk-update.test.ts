@@ -255,6 +255,16 @@ test("issue 76: only admins can preview and commit CSV bulk updates; commits are
   assert.ok(audits.some((row) => row.action === "import.update_committed" && row.resource_id === preview.runId))
   assert.ok(audits.some((row) => row.action === "deal.bulk_updated" && row.resource_id === seeded.visibleDealId))
 
+  const existingCommitAudits = await getDatabase().prepare<{ action: string }>(
+    "SELECT action FROM audit_events WHERE workspace_id = ? AND resource_id = ? AND action = 'import.update_committed'",
+  ).all(ids.workspace, preview.runId)
+  assert.equal(existingCommitAudits.length, 1)
+  const unchanged = await commitCsvUpdate(admin, { runId: preview.runId, expectedPreviewRevision: preview.previewRevision })
+  assert.equal(unchanged.state, "completed")
+  assert.equal((await getDatabase().prepare<{ action: string }>(
+    "SELECT action FROM audit_events WHERE workspace_id = ? AND resource_id = ? AND action = 'import.update_committed'",
+  ).all(ids.workspace, preview.runId)).length, 1)
+
   await getDatabase().prepare(
     "DELETE FROM audit_events WHERE workspace_id = ? AND resource_id = ? AND action = 'import.update_committed'",
   ).run(ids.workspace, preview.runId)
