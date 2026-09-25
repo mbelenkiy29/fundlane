@@ -11,6 +11,7 @@ export {
   type AdapterStatusResult,
   type AdapterSubmitResult,
   type FunderAdapter,
+  type FunderSubmissionAdapter,
 } from "../contracts"
 
 export const ADAPTER_SECRET_FIELDS = [
@@ -59,6 +60,7 @@ export interface AdapterCredentialPublic {
   funderId: string
   funderName?: string
   adapterSlug: string
+  readiness: "live" | "sandbox" | "unavailable"
   environment: AdapterEnvironment
   hasCredential: boolean
   capabilities: AdapterCapabilities
@@ -77,6 +79,7 @@ export interface AdapterFunderOption {
 
 export interface AdapterCatalogEntry {
   slug: string
+  readiness: "live" | "sandbox" | "unavailable"
   capabilities: AdapterCapabilities
 }
 

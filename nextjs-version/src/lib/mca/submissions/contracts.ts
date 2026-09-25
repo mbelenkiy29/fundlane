@@ -167,9 +167,17 @@ export interface AdapterStatusResult {
 
 export interface FunderAdapter {
   slug: string
+  readiness?: "live" | "sandbox" | "unavailable"
   validate(input: unknown): { ok: true } | { ok: false; fields: Record<string, string> }
   submit(job: SubmissionJob): Promise<AdapterSubmitResult>
   getStatus?(job: SubmissionJob): Promise<AdapterStatusResult>
   parseWebhook?(headers: Record<string, string>, body: unknown): Promise<AdapterStatusResult>
   capabilities: AdapterCapabilities
+}
+
+/** Contract for adapters built against a verified provider specification. */
+export interface FunderSubmissionAdapter<Config, Application, Payload> extends FunderAdapter {
+  validateConfig(config: Config): { ok: true } | { ok: false; fields: Record<string, string> }
+  mapSubmission(job: SubmissionJob, application: Application): Payload
+  normalizeStatus(rawStatus: string): AdapterStatusResult["normalized"]
 }

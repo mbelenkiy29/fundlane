@@ -58,11 +58,13 @@ const actor = (workspaceId = ids.workspace, role: Role | null = "admin"): DealAc
 let submitFunderId = ""
 let statusFunderId = ""
 let otherFunderId = ""
+let sandboxFunderId = ""
 const seenSecrets: string[] = []
 const submitCounts = new Map<string, number>()
 
 const submitOnly: FunderAdapter = {
   slug: "fixture-submit-only",
+  readiness: "live",
   capabilities: { submit: true, statusPoll: false, webhooks: false, offers: false },
   validate: () => ({ ok: true }),
   submit: async (job) => {
@@ -79,6 +81,7 @@ const submitOnly: FunderAdapter = {
 
 const statusAdapter: FunderAdapter = {
   slug: "fixture-status",
+  readiness: "live",
   capabilities: { submit: true, statusPoll: true, webhooks: true, offers: true },
   validate: () => ({ ok: true }),
   submit: async (job) => {
@@ -254,6 +257,11 @@ before(async () => {
     legalName: "Other Tenant Capital LLC",
     routes: [{ kind: "api", label: "API", destination: "fixture-submit-only", documentExceptions: [], active: true }],
   })).funder.id
+  sandboxFunderId = (await createFunder(actor(), {
+    idempotencyKey: "sandbox-funder",
+    legalName: "Local Sandbox Funder LLC",
+    routes: [{ kind: "api", label: "Sandbox", destination: "sandbox", documentExceptions: [], active: true }],
+  })).funder.id
 })
 
 beforeEach(async () => {
@@ -267,6 +275,29 @@ after(async () => {
   setAdapterEnvironmentForTests()
   await closeDatabaseForTests()
   await testDatabase.close()
+})
+
+test("sandbox adapter submits and polls with workspace config and no network credentials", async () => {
+  const saved = await upsertAdapterCredential(actor(), {
+    funderId: sandboxFunderId,
+    adapterSlug: "sandbox",
+    environment: "development",
+    secrets: {},
+  })
+  assert.equal(saved.readiness, "sandbox")
+  assert.equal(saved.hasCredential, true)
+  assert.deepEqual((await resolveAdapterSecrets({ workspaceId: ids.workspace, funderId: sandboxFunderId, environment: "development", adapterSlug: "sandbox" }))?.secrets, {})
+  assert.equal(await resolveAdapterSecrets({ workspaceId: ids.otherWorkspace, funderId: sandboxFunderId, environment: "development" }), undefined)
+  const job = jobFor(sandboxFunderId, "sandbox", { attemptKey: "sandbox-attempt" })
+  const result = await submitViaAdapter(job, { environment: "development" })
+  assert.equal(result.ok, true)
+  assert.match(result.externalRef ?? "", /^sandbox-/)
+  const status = await getStatusViaAdapter(job, { environment: "development" })
+  assert.equal(status.normalized, "submitted")
+  assert.equal(status.rawStatus, "accepted")
+  const blocked = await submitViaAdapter(job, { environment: "production" })
+  assert.equal(blocked.ok, false)
+  assert.match(blocked.errorMessage ?? "", /not verified for live delivery/)
 })
 
 test("MIC-124: submit-only adapter cannot status-check", async () => {

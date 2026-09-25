@@ -21,6 +21,7 @@ import { peacSolutionsAdapter } from "./peac-solutions"
 import { plexeAdapter } from "./plexe"
 import { quantumLendsAdapter } from "./quantum-lends"
 import { rapidFinanceAdapter } from "./rapid-finance"
+import { sandboxAdapter } from "./sandbox"
 
 const adapters = new Map<string, FunderAdapter>()
 
@@ -46,7 +47,13 @@ for (const adapter of [
   ondeckAdapter,
   crediblyAdapter,
 ]) {
-  adapters.set(adapter.slug, adapter)
+  // These named implementations use local fixtures and have no verified live delivery.
+  adapters.set(adapter.slug, { ...adapter, readiness: "unavailable" })
+}
+adapters.set(sandboxAdapter.slug, sandboxAdapter)
+
+export function adapterReadiness(slug: string): "live" | "sandbox" | "unavailable" {
+  return adapters.get(slug)?.readiness ?? "unavailable"
 }
 
 export function registerAdapter(adapter: FunderAdapter): void {

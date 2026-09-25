@@ -11,7 +11,7 @@ import { requestCorrelationId } from "../../http"
 import { canManageWorkspace } from "../../policy"
 import { getFunder, listFunders } from "../../funders/directory"
 import { ADAPTER_ENVIRONMENTS, type AdapterCapabilities, type AdapterEnvironment } from "../contracts"
-import { getAdapter, listAdapters } from "./registry"
+import { adapterReadiness, getAdapter, listAdapters } from "./registry"
 import {
   ADAPTER_SECRET_FIELDS,
   type AdapterCatalogEntry,
@@ -328,6 +328,7 @@ export function toPublicAdapterCredential(
     funderId: record.funderId,
     funderName: options.funderName,
     adapterSlug: record.adapterSlug,
+    readiness: adapterReadiness(record.adapterSlug),
     environment: record.environment,
     hasCredential: Boolean(record.credentialCipher),
     capabilities: effectiveAdapterCapabilities(record.adapterSlug, record.capabilities),
@@ -397,7 +398,7 @@ export async function resolveAdapterSecrets(input: {
   if (!payload) return undefined
   if (payload.environment !== environment) return undefined
   if (payload.workspaceId !== input.workspaceId) return undefined
-  if (!hasAnySecret(payload.secrets)) return undefined
+  if (!hasAnySecret(payload.secrets) && record.adapterSlug !== "sandbox") return undefined
   return {
     credentialId: record.id,
     workspaceId: record.workspaceId,
@@ -432,6 +433,7 @@ export async function listAdapterConnections(actor: DealActor): Promise<AdapterC
   ])
   const adapters: AdapterCatalogEntry[] = listAdapters().map((adapter) => ({
     slug: adapter.slug,
+    readiness: adapterReadiness(adapter.slug),
     capabilities: effectiveAdapterCapabilities(adapter.slug),
   }))
   const credentials = records.map((record) => toPublicAdapterCredential(record, { funderName: funders.get(record.funderId)?.name }))
@@ -473,15 +475,25 @@ export async function upsertAdapterCredential(actor: DealActor, input: UpsertAda
   assertAdmin(actor)
   const funderId = asFunderId(input.funderId)
   const adapterSlug = asSlug(input.adapterSlug)
+  const adapter = getAdapter(adapterSlug)
+  if (!adapter) invalid("adapterSlug", "Select a registered adapter.")
   const environment = asEnvironment(input.environment)
   const patch = parseAdapterSecrets(input.secrets ?? {})
+  if ("validateConfig" in adapter && typeof adapter.validateConfig === "function") {
+    const checked = adapter.validateConfig(patch)
+    if (!checked.ok) throw new AppError(422, "validation_failed", "Review the highlighted fields.", Object.fromEntries(Object.entries(checked.fields).map(([key, message]) => [`secrets.${key}`, [String(message)]])))
+  }
+  if (adapterSlug === "sandbox" && environment !== "development") invalid("environment", "Sandbox is available only in development.")
   const funder = await getFunder(actor, funderId)
+  if (!funder.routes.some((route) => route.kind === "api" && route.active && route.destination === adapterSlug)) {
+    invalid("adapterSlug", "Select the adapter on this funder's active API route.")
+  }
   const capabilities = effectiveAdapterCapabilities(adapterSlug)
   const now = new Date().toISOString()
   const stored = await withTransaction(async (executor) => {
     const current = await findAdapterCredentialByScope(actor.workspaceId, funderId, environment, executor)
     if (!current) {
-      if (!hasAnySecret(patch)) invalid("secrets", "Enter at least one credential field for this environment.")
+      if (!hasAnySecret(patch) && adapterSlug !== "sandbox") invalid("secrets", "Enter at least one credential field for this environment.")
       const id = newId()
       await executor.prepare(`INSERT INTO mca_adapter_credentials
         (id, workspace_id, funder_id, adapter_slug, environment, credential_cipher, capabilities_json, active, updated_by_user_id, updated_at)
@@ -506,10 +518,10 @@ export async function upsertAdapterCredential(actor: DealActor, input: UpsertAda
       : undefined
     const existing = existingPayload?.environment === current.environment ? existingPayload.secrets : undefined
     const merged = mergeAdapterSecrets(existing, patch)
-    if (Object.keys(patch).length && !hasAnySecret(merged) && !current.credentialCipher) {
+    if (Object.keys(patch).length && !hasAnySecret(merged) && !current.credentialCipher && adapterSlug !== "sandbox") {
       invalid("secrets", "Enter at least one credential field for this environment.")
     }
-    const nextCipher = hasAnySecret(merged)
+    const nextCipher = hasAnySecret(merged) || adapterSlug === "sandbox"
       ? encryptAdapterCredential(actor.workspaceId, environment, merged)
       : current.credentialCipher ?? null
     await executor.prepare(`UPDATE mca_adapter_credentials SET

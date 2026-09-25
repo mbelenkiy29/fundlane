@@ -157,6 +157,9 @@ async function loadRuntime(
   }
   const slug = adapterSlugFor(job, resolved)
   const adapter = resolveAdapter(slug)
+  if (adapter && environment === "production" && adapter.readiness !== "live") {
+    return { adapter, correlationId, error: unavailable(correlationId, "This funder adapter is not verified for live delivery.") }
+  }
   if (!resolved) {
     return {
       adapter,
@@ -293,6 +296,9 @@ export async function parseWebhookViaAdapter(
     throw new AppError(409, "capability_unsupported", "This adapter cannot ingest webhooks.")
   }
   const environment = resolveAdapterEnvironment(options.environment)
+  if (environment === "production" && adapter.readiness !== "live") {
+    throw new AppError(503, "provider_unavailable", "This funder adapter is not verified for live delivery.")
+  }
   const resolved = options.workspaceId && options.funderId
     ? await resolveAdapterSecrets({
       workspaceId: options.workspaceId,
