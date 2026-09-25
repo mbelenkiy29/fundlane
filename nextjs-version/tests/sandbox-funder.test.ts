@@ -19,6 +19,7 @@ import {
   SANDBOX_FUNDER_IDEMPOTENCY_KEY,
   SANDBOX_LEGAL_NAME,
   SANDBOX_NICKNAME,
+  SANDBOX_PRODUCT,
   SANDBOX_ROUTE_DESTINATION,
 } from "../src/lib/mca/sandbox/labels"
 import { getSandboxFunderStatus, setSandboxFunderEnabled } from "../src/lib/mca/sandbox/service"
@@ -250,11 +251,26 @@ test("regular create/update cannot impersonate or relabel the sandbox funder", a
   const sandboxSaved = await updateFunder(actor(), status.funder!.id, {
     website: "https://sandbox.fundlane.invalid/docs",
     contacts: [{ name: "Sandbox desk", email: "sandbox@fundlane.invalid" }],
+    products: [SANDBOX_PRODUCT, "Demo extra product"],
   })
   assert.equal(sandboxSaved.website, "https://sandbox.fundlane.invalid/docs")
   assert.equal(sandboxSaved.contacts[0]?.email, "sandbox@fundlane.invalid")
+  assert.equal(sandboxSaved.products.includes("Demo extra product"), true)
   assert.equal(sandboxSaved.routes.length, 1)
   assert.equal(sandboxSaved.routes[0]?.destination, SANDBOX_ROUTE_DESTINATION)
+
+  const disabled = await setSandboxFunderEnabled(actor(), false)
+  assert.equal(disabled.enabled, false)
+  assert.equal(disabled.funder?.website, "https://sandbox.fundlane.invalid/docs")
+  assert.equal(disabled.funder?.contacts[0]?.email, "sandbox@fundlane.invalid")
+  assert.equal(disabled.funder?.products.includes("Demo extra product"), true)
+  const reenabled = await setSandboxFunderEnabled(actor(), true)
+  assert.equal(reenabled.enabled, true)
+  assert.equal(reenabled.funder?.website, "https://sandbox.fundlane.invalid/docs")
+  assert.equal(reenabled.funder?.contacts[0]?.email, "sandbox@fundlane.invalid")
+  assert.equal(reenabled.funder?.products.includes("Demo extra product"), true)
+  assert.equal(reenabled.funder?.legalName, SANDBOX_LEGAL_NAME)
+  assert.equal(reenabled.funder?.routes[0]?.destination, SANDBOX_ROUTE_DESTINATION)
 })
 
 test("sandbox submission returns a synthetic offer and never touches the network", async () => {

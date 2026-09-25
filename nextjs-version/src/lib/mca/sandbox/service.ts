@@ -37,15 +37,20 @@ function assertManage(actor: DealActor): void {
   }
 }
 
+function sandboxProducts(current?: StoredFunder): string[] {
+  if (!current) return [SANDBOX_PRODUCT]
+  return current.products.includes(SANDBOX_PRODUCT) ? current.products : [SANDBOX_PRODUCT, ...current.products]
+}
+
 function sandboxProfile(current?: StoredFunder): Omit<StoredFunder, "id" | "workspaceId" | "idempotencyKey" | "createdAt" | "updatedAt" | "criteriaVersion" | "profileVersion"> {
   return {
     legalName: SANDBOX_LEGAL_NAME,
     nickname: SANDBOX_NICKNAME,
-    website: undefined,
+    website: current?.website,
     domains: [SANDBOX_DOMAIN],
-    products: [SANDBOX_PRODUCT],
+    products: sandboxProducts(current),
     active: true,
-    contacts: [],
+    contacts: current?.contacts ?? [],
     routes: [{
       id: current?.routes.find((route) => route.destination === SANDBOX_ROUTE_DESTINATION)?.id ?? newId(),
       kind: "api",
