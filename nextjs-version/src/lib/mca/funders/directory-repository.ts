@@ -2,6 +2,7 @@ import "server-only"
 
 import { getDatabase, parseJson, withImmediateTransaction } from "../db"
 import type { DbExecutor } from "../db"
+import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../sandbox/labels"
 import type { FunderContact, FunderGroup, FunderRecord, FunderRoute } from "./contracts"
 
 export interface StoredFunder extends FunderRecord {
@@ -78,6 +79,7 @@ export function toFunderRecord(record: StoredFunder): FunderRecord {
     domains: record.domains,
     products: record.products,
     active: record.active,
+    sandbox: record.idempotencyKey === SANDBOX_FUNDER_IDEMPOTENCY_KEY,
     contacts: record.contacts,
     routes: record.routes,
     criteriaVersion: record.criteriaVersion,
@@ -99,6 +101,11 @@ export async function findFunderByIdForUpdate(database: DbExecutor, workspaceId:
 
 export async function findFunderByIdempotencyKey(workspaceId: string, key: string): Promise<StoredFunder | undefined> {
   const row = await db().prepare<FunderRow>("SELECT * FROM mca_funders WHERE workspace_id = ? AND idempotency_key = ?").get(workspaceId, key)
+  return row ? fromFunderRow(row) : undefined
+}
+
+export async function findFunderByIdempotencyKeyForUpdate(database: DbExecutor, workspaceId: string, key: string): Promise<StoredFunder | undefined> {
+  const row = await database.prepare<FunderRow>("SELECT * FROM mca_funders WHERE workspace_id = ? AND idempotency_key = ? FOR UPDATE").get(workspaceId, key)
   return row ? fromFunderRow(row) : undefined
 }
 

@@ -4,6 +4,14 @@ import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
 import { canManageWorkspace } from "../policy"
 import type { DealActor } from "../deals/schema"
+import {
+  SANDBOX_DOMAIN,
+  SANDBOX_FUNDER_IDEMPOTENCY_KEY,
+  SANDBOX_LEGAL_NAME,
+  SANDBOX_NICKNAME,
+  SANDBOX_PRODUCT,
+  SANDBOX_ROUTE_DESTINATION,
+} from "../sandbox/labels"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "./contracts"
 import { validateFunderProfile, validateGroupName } from "./validation"
 import {
@@ -211,6 +219,60 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Error && ((error as Error & { code?: string }).code === "23505" || /unique/i.test(error.message))
 }
 
+function isSandboxRecord(record?: Pick<StoredFunder, "idempotencyKey">): boolean {
+  return record?.idempotencyKey === SANDBOX_FUNDER_IDEMPOTENCY_KEY
+}
+
+function assertReservedSandboxIdentity(input: CreateFunderInput | UpdateFunderInput, current?: StoredFunder): void {
+  if (isSandboxRecord(current)) {
+    if (input.legalName !== undefined && input.legalName !== SANDBOX_LEGAL_NAME) {
+      invalid("legalName", "The sandbox funder must stay labeled as not a real lender.")
+    }
+    if (input.nickname !== undefined && optionalText(input.nickname, "nickname", 120) !== SANDBOX_NICKNAME) {
+      invalid("nickname", "The sandbox funder nickname cannot be changed.")
+    }
+    if (input.domains !== undefined && !(input.domains.length === 1 && text(input.domains[0]).toLowerCase() === SANDBOX_DOMAIN)) {
+      invalid("domains", "The sandbox funder domain cannot be changed.")
+    }
+    if (input.routes !== undefined) {
+      const routes = normalizeRoutes(input.routes)
+      const sandboxRoutes = routes.filter((route) => route.destination === SANDBOX_ROUTE_DESTINATION && route.kind === "api")
+      const otherActive = routes.filter((route) => route.active && !(route.destination === SANDBOX_ROUTE_DESTINATION && route.kind === "api"))
+      if (sandboxRoutes.length !== 1 || !sandboxRoutes[0]?.active || otherActive.length > 0) {
+        invalid("routes", "The sandbox funder can only use its local synthetic route.")
+      }
+    }
+    return
+  }
+  if ("idempotencyKey" in input && text(input.idempotencyKey) === SANDBOX_FUNDER_IDEMPOTENCY_KEY) {
+    invalid("idempotencyKey", "That key is reserved for the workspace sandbox funder.")
+  }
+  if (input.legalName !== undefined) {
+    const legalName = text(input.legalName)
+    if (legalName !== (current?.legalName ?? "") && (legalName === SANDBOX_LEGAL_NAME || legalName.includes("[SANDBOX]"))) {
+      invalid("legalName", "That name is reserved for the workspace sandbox funder.")
+    }
+  }
+  if (input.nickname !== undefined) {
+    const nickname = optionalText(input.nickname, "nickname", 120)
+    if (nickname !== (current?.nickname ?? undefined) && (nickname === SANDBOX_NICKNAME || nickname?.includes("[SANDBOX]"))) {
+      invalid("nickname", "That nickname is reserved for the workspace sandbox funder.")
+    }
+  }
+  const domains = input.domains !== undefined ? uniqueList(input.domains, "domains", 30, 200) : []
+  const alreadyHasSandboxDomain = Boolean(current?.domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN))
+  if (!alreadyHasSandboxDomain && domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN)) {
+    invalid("domains", "That domain is reserved for the workspace sandbox funder.")
+  }
+  if (input.routes !== undefined) {
+    const routes = Array.isArray(input.routes) ? input.routes : []
+    const alreadyHasSandboxRoute = Boolean(current?.routes.some((route) => route.destination.toLowerCase() === SANDBOX_ROUTE_DESTINATION))
+    if (!alreadyHasSandboxRoute && routes.some((route) => text(route.destination).toLowerCase() === SANDBOX_ROUTE_DESTINATION)) {
+      invalid("routes", "That destination is reserved for the workspace sandbox funder.")
+    }
+  }
+}
+
 export async function listFunders(actor: DealActor, options: { includeInactive?: boolean } = {}): Promise<FunderRecord[]> {
   return (await listFunderRecords(actor.workspaceId, Boolean(options.includeInactive))).map(toFunderRecord)
 }
@@ -223,6 +285,7 @@ export async function getFunder(actor: DealActor, id: string): Promise<FunderRec
 
 export async function createFunder(actor: DealActor, input: CreateFunderInput): Promise<{ funder: FunderRecord; created: boolean }> {
   assertManage(actor)
+  assertReservedSandboxIdentity(input)
   const idempotencyKey = requiredText(input.idempotencyKey, "idempotencyKey", "Provide a stable retry key.", 128)
   const now = nowIso()
   const profile = profileFromInput(input)
@@ -254,11 +317,28 @@ export async function updateFunder(actor: DealActor, id: string, input: UpdateFu
   const saved = await withImmediateTransaction(async (database) => {
     const current = await findFunderByIdForUpdate(database, actor.workspaceId, id)
     if (!current) throw new AppError(404, "funder_not_found", "The requested funder was not found.")
-    return updateFunderRecord({
+    assertReservedSandboxIdentity(input, current)
+    const next = {
       ...current,
       ...profileFromInput(input, current),
       profileVersion: current.profileVersion + 1,
       updatedAt: nowIso(),
+    }
+    if (!isSandboxRecord(current)) return updateFunderRecord(next)
+    return updateFunderRecord({
+      ...next,
+      legalName: SANDBOX_LEGAL_NAME,
+      nickname: SANDBOX_NICKNAME,
+      domains: [SANDBOX_DOMAIN],
+      products: next.products.includes(SANDBOX_PRODUCT) ? next.products : [SANDBOX_PRODUCT, ...next.products],
+      routes: [{
+        id: current.routes.find((route) => route.destination === SANDBOX_ROUTE_DESTINATION)?.id ?? newId(),
+        kind: "api",
+        label: "[SANDBOX] Local synthetic reply — no outbound contact",
+        destination: SANDBOX_ROUTE_DESTINATION,
+        documentExceptions: [],
+        active: true,
+      }],
     })
   })
   await recordAuditEvent({

@@ -52,6 +52,7 @@ export interface FunderRecord {
   domains: string[]
   products: string[]
   active: boolean
+  sandbox?: boolean
   contacts: FunderContact[]
   routes: FunderRoute[]
   criteriaVersion: number

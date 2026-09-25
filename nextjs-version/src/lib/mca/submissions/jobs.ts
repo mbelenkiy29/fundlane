@@ -2,6 +2,7 @@ import "server-only"
 
 import { isDocumentReady, type DocumentSummary } from "../documents/contracts"
 import type { FunderRoute } from "../funders/contracts"
+import { isSandboxFunder } from "../sandbox/labels"
 import type { AttemptState, JobState, OutgoingDocument, QueuedJobSummary, SubmissionJob } from "./contracts"
 
 export const MISSING_ROUTE: FunderRoute = {
@@ -17,7 +18,8 @@ export function activeRoute(routes: FunderRoute[]): FunderRoute | undefined {
   return routes.find((route) => route.active)
 }
 
-export function displayName(funder: { legalName: string; nickname?: string }): string {
+export function displayName(funder: { legalName: string; nickname?: string; sandbox?: boolean; domains?: string[]; routes?: FunderRoute[] }): string {
+  if (isSandboxFunder(funder)) return funder.legalName
   return funder.nickname?.trim() || funder.legalName
 }
 
