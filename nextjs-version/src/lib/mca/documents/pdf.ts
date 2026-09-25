@@ -131,16 +131,16 @@ export async function renderApplicationPdf(
   }
   const pages = pdf.getPages()
   pages.forEach((current, index) => {
-    current.drawText("Generated from the MCA workspace record. Missing fields are labeled explicitly.", { x: 48, y: 34, size: 8, font, color: rgb(0.38, 0.42, 0.49) })
+    current.drawText("Generated from the Fundlane record. Missing fields are labeled explicitly.", { x: 48, y: 34, size: 8, font, color: rgb(0.38, 0.42, 0.49) })
     current.drawText(`Page ${index + 1} of ${pages.length}`, { x: 504, y: 34, size: 8, font, color: rgb(0.38, 0.42, 0.49) })
   })
 
   // Metadata deliberately excludes merchant contact values in every disclosure mode.
   pdf.setTitle("Merchant Funding Application")
   pdf.setSubject(`MCA deal application ${deal.displayId}`)
-  pdf.setAuthor("MCA Workspace")
-  pdf.setCreator("MCA Document Service")
-  pdf.setProducer("MCA Document Service")
+  pdf.setAuthor("Fundlane")
+  pdf.setCreator("Fundlane")
+  pdf.setProducer("Fundlane")
   pdf.setKeywords(["merchant application", "MCA", options.contactMode])
   return new Uint8Array(await pdf.save({ useObjectStreams: false }))
 }

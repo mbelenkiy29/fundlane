@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next"
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "MCA Workspace",
-    short_name: "MCA",
+    name: "Fundlane",
+    short_name: "Fundlane",
     description: "Secure merchant cash advance operations for brokerage teams.",
     start_url: "/dashboard",
     display: "standalone",

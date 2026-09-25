@@ -12,10 +12,10 @@ import renew from "../../../public/marketing/renew.png"
 import reporting from "../../../public/marketing/reporting.png"
 import team from "../../../public/marketing/team.png"
 
-export const metadata = {
-  ...marketingMetadata("Changelog", "/changelog"),
-  description: "See what’s new in Fundlane 1.0—pipeline, intake, underwriting, funder matching, closing, renewals, reporting, and team tools.",
-}
+const CHANGELOG_DESCRIPTION =
+  "See what’s new in Fundlane 1.0—pipeline, intake, underwriting, funder matching, closing, renewals, reporting, and team tools."
+
+export const metadata = marketingMetadata("Changelog", "/changelog", CHANGELOG_DESCRIPTION)
 
 const releaseGroups = [
   {
@@ -121,7 +121,7 @@ const changelogEntries: TimelineEntry[] = [
 
 export default function ChangelogPage() {
   return (
-    <MarketingShell>
+    <MarketingShell jsonLd={{ title: "Changelog", path: "/changelog", description: CHANGELOG_DESCRIPTION }}>
       <main id="main" className="fl-changelog">
         <section className="fl-container fl-changelog-intro">
           <p className="fl-section-label">Changelog</p>

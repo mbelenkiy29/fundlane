@@ -175,6 +175,7 @@ test("MIC-193 redacted PDF excludes real contact text and metadata; signed gener
   const redacted = await renderApplicationPdf(withContact, { contactMode: "redacted", signedOnBehalf: false })
   const parsed = await PDFDocument.load(redacted)
   assert.equal(parsed.getTitle(), "Merchant Funding Application")
+  assert.equal(parsed.getAuthor(), "Fundlane")
   assert.equal([parsed.getTitle(), parsed.getSubject(), parsed.getAuthor(), parsed.getKeywords()].join(" ").includes("real-contact@example.test"), false)
   const pdfPath = join(temp, "redacted.pdf"), textPath = join(temp, "redacted.txt")
   writeFileSync(pdfPath, redacted)

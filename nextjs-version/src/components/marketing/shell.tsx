@@ -1,31 +1,17 @@
 import Link from "next/link"
-import localFont from "next/font/local"
 import { ArrowUpRight } from "lucide-react"
+import { Logo } from "@/components/logo"
+import { marketingHeading, marketingMetric, marketingMono } from "@/lib/fonts"
+import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
 
-const heading = localFont({ src: "../../../public/fonts/marketing/InterDisplay-Medium.woff2", weight: "500", display: "swap", variable: "--font-marketing-heading" })
-const mono = localFont({ src: "../../../public/fonts/marketing/GeistMono-Regular.woff2", display: "swap", variable: "--font-marketing-mono" })
-const geist = localFont({ src: "../../../public/fonts/marketing/Geist-Regular.woff2", display: "swap", variable: "--font-marketing-metric" })
-
 export function Brand() {
   return (
     <Link href="/" className="fl-brand" aria-label="Fundlane home">
-      <svg
-        width="32"
-        height="32"
-        viewBox="0 0 32 32"
-        fill="none"
-        aria-hidden="true"
-      >
-        <rect width="32" height="32" rx="0" fill="currentColor" />
-        <path
-          d="M9 9h15l-4 4H9V9Zm0 7h11l-4 4H9v-4Zm0 7h7l-4 4H9v-4Z"
-          fill="#000000"
-        />
-      </svg>
+      <Logo size={32} aria-hidden="true" />
       <span>fundlane</span>
     </Link>
   )
@@ -49,10 +35,28 @@ export function DemoLink({
   )
 }
 
-export function MarketingShell({ children, immersive = false }: { children: React.ReactNode; immersive?: boolean }) {
+export function MarketingJsonLd({ title, path, description }: { title: string; path: string; description?: string }) {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(marketingJsonLd({ title, path, description })) }}
+    />
+  )
+}
+
+export function MarketingShell({
+  children,
+  immersive = false,
+  jsonLd,
+}: {
+  children: React.ReactNode
+  immersive?: boolean
+  jsonLd?: { title: string; path: string; description?: string }
+}) {
   const { privacyUrl } = getDemoConfiguration()
   return (
-    <div className={`fundlane ${heading.variable} ${mono.variable} ${geist.variable}${immersive ? " fl-immersive" : ""}`}>
+    <div className={`fundlane ${marketingHeading.variable} ${marketingMono.variable} ${marketingMetric.variable}${immersive ? " fl-immersive" : ""}`}>
+      {jsonLd && <MarketingJsonLd {...jsonLd} />}
       <a className="fl-skip" href="#main">
         Skip to content
       </a>

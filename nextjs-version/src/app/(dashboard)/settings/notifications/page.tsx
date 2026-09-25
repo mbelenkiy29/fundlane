@@ -91,7 +91,7 @@ export default function NotificationSettings() {
   return (
     <div className="space-y-6 px-4 lg:px-6">
         <div>
-          <h1 className="text-3xl font-bold">Notifications</h1>
+          <h2 className="text-3xl font-bold">Notifications</h2>
           <p className="text-muted-foreground">
             Configure how you receive notifications.
           </p>
