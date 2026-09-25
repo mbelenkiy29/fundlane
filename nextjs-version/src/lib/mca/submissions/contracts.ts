@@ -57,6 +57,7 @@ export interface QueuedJobSummary {
   funderId: string
   state: JobState
   reason?: string
+  eligibleAt?: string
 }
 
 export interface QueueSubmissionsResult {

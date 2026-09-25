@@ -15,6 +15,7 @@ export const DUPLICATE_RULE_COPY = {
 } as const
 
 const IGNORED_STATES = new Set(["blocked_duplicate", "skipped"])
+const RESUBMIT_STATES = new Set(["queued", "sending", "sent", "pending_portal", "declined", "funded"])
 
 export type DuplicateWindowCode = "retry_too_soon" | "recent_duplicate"
 
@@ -39,10 +40,17 @@ export function isCountingSubmissionState(state: string): boolean {
   return Boolean(state) && !IGNORED_STATES.has(state)
 }
 
-export function latestCountingSubmissionAt(jobs: readonly DuplicateWindowJob[]): number | undefined {
+export function isDeliveredSubmissionState(state: string): boolean {
+  return RESUBMIT_STATES.has(state)
+}
+
+function latestJobAt(
+  jobs: readonly DuplicateWindowJob[],
+  include: (state: string) => boolean,
+): number | undefined {
   let latest: number | undefined
   for (const job of jobs) {
-    if (!isCountingSubmissionState(job.state)) continue
+    if (!include(job.state)) continue
     const created = parseTime(job.createdAt)
     if (!Number.isFinite(created)) continue
     if (latest === undefined || created > latest) latest = created
@@ -50,23 +58,30 @@ export function latestCountingSubmissionAt(jobs: readonly DuplicateWindowJob[]):
   return latest
 }
 
+export function latestCountingSubmissionAt(jobs: readonly DuplicateWindowJob[]): number | undefined {
+  return latestJobAt(jobs, isCountingSubmissionState)
+}
+
 export function evaluateDuplicateWindows(
   jobs: readonly DuplicateWindowJob[],
   nowMs: number,
 ): DuplicateWindowDecision | undefined {
-  const latest = latestCountingSubmissionAt(jobs)
-  if (latest === undefined) return undefined
-  const retryAt = latest + DUPLICATE_RETRY_MS
-  if (nowMs < retryAt) {
-    const eligibleAt = new Date(retryAt).toISOString()
-    return {
-      allowed: false,
-      code: "retry_too_soon",
-      eligibleAt,
-      reason: DUPLICATE_RULE_COPY.retryTooSoon(eligibleAt),
+  const latestRetry = latestJobAt(jobs, isCountingSubmissionState)
+  if (latestRetry !== undefined) {
+    const retryAt = latestRetry + DUPLICATE_RETRY_MS
+    if (nowMs < retryAt) {
+      const eligibleAt = new Date(retryAt).toISOString()
+      return {
+        allowed: false,
+        code: "retry_too_soon",
+        eligibleAt,
+        reason: DUPLICATE_RULE_COPY.retryTooSoon(eligibleAt),
+      }
     }
   }
-  const resubmitAt = latest + DUPLICATE_RESUBMIT_MS
+  const latestResubmit = latestJobAt(jobs, isDeliveredSubmissionState)
+  if (latestResubmit === undefined) return undefined
+  const resubmitAt = latestResubmit + DUPLICATE_RESUBMIT_MS
   if (nowMs < resubmitAt) {
     const eligibleAt = new Date(resubmitAt).toISOString()
     return {

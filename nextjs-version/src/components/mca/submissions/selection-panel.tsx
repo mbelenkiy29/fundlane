@@ -59,7 +59,7 @@ type SelectionPayload = {
 type ConfirmPayload = {
   ok: true
   confirmationKey: string
-  jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string }>
+  jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string; eligibleAt?: string }>
 }
 
 const routeLabels: Record<RouteKind, string> = {
@@ -102,6 +102,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   const [results, setResults] = React.useState<ConfirmPayload["jobs"]>()
   const [override24h, setOverride24h] = React.useState(false)
   const [overrideReason, setOverrideReason] = React.useState("")
+  const [confirmationKey, setConfirmationKey] = React.useState(() => crypto.randomUUID())
 
   const load = React.useCallback(async () => {
     setError(undefined)
@@ -144,11 +145,12 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         method: "POST",
         body: JSON.stringify({
           funderIds: selected,
-          confirmationKey: crypto.randomUUID(),
+          confirmationKey,
           privilegedRetry: override24h,
           privilegedReason: override24h ? overrideReason.trim() : undefined,
         }),
       })
+      setConfirmationKey(crypto.randomUUID())
       setResults(next.jobs)
       const failed = next.jobs.filter((job) => job.state === "failed" || job.state === "preflight_failed" || job.state === "blocked_duplicate").length
       const ok = next.jobs.length - failed

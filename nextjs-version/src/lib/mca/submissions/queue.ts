@@ -208,12 +208,14 @@ async function queueDestination(input: {
 
   let state: SubmissionJob["state"] = "queued"
   let reason: string | undefined
+  let eligibleAt: string | undefined
   if (preflight.errors.length) {
     state = "preflight_failed"
     reason = reasonFromErrors(preflight.errors, "Preflight failed.")
   } else if (!duplicate.allowed) {
     state = "blocked_duplicate"
     reason = duplicate.reason ?? "A duplicate submission is blocked."
+    eligibleAt = duplicate.eligibleAt
   }
 
   const saved = await persistNewDestination({
@@ -239,8 +241,9 @@ async function queueDestination(input: {
     actor: input.actor,
   })
   await audit(input.actor, saved.job, saved.created)
-  if (!saved.created) return toQueuedSummary(saved.job)
-  if (saved.job.state !== "queued") return toQueuedSummary(saved.job)
+  const summary = toQueuedSummary(saved.job)
+  if (!saved.created) return eligibleAt ? { ...summary, eligibleAt } : summary
+  if (saved.job.state !== "queued") return eligibleAt ? { ...summary, eligibleAt } : summary
   if (input.deferDelivery) {
     if (backgroundJobsEnabled()) await enqueueSubmissionDelivery(saved.job)
     return toQueuedSummary(saved.job)

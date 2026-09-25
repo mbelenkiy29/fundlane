@@ -346,6 +346,11 @@ test("rapid retries of the same deal and funder are blocked for two minutes", as
   assert.equal(overrideTooSoon.allowed, false)
   assert.equal(overrideTooSoon.code, "retry_too_soon")
   assert.equal(await privilegedAuditCount(deal.id), 0)
+
+  setClock(() => retryAt)
+  const retried = await enqueue(deal.id, [emailFunderId])
+  assert.equal(retried.jobs[0]?.state, "failed")
+  assert.notEqual(retried.jobs[0]?.jobId, first.jobs[0]?.jobId)
 })
 
 test("same deal and funder stay blocked for 24 hours; another deal with the same EIN is allowed", async () => {
@@ -369,6 +374,7 @@ test("same deal and funder stay blocked for 24 hours; another deal with the same
   assert.match(insideDay.reason ?? "", /24 hours/)
   const stillBlocked = await enqueue(deal.id, [portalFunderId])
   assert.equal(stillBlocked.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(stillBlocked.jobs[0]?.eligibleAt, dayEligible)
   assert.equal((stillBlocked.jobs[0]?.reason ?? "").includes(dayEligible), true)
 
   const otherDeal = await seedDeal({ ein: SHARED_EIN, forceDuplicate: true })
@@ -541,9 +547,10 @@ test("other funders stay independent and HTTP uses the same deal-and-funder poli
     body: JSON.stringify({ funderIds: [portalFunderId], confirmationKey: confirmationKey("http-dup") }),
   }), params(deal.id))
   assert.equal(http.status, 200)
-  const body = await http.json() as { ok: true; jobs: Array<{ state: string; reason?: string }> }
+  const body = await http.json() as { ok: true; jobs: Array<{ state: string; reason?: string; eligibleAt?: string }> }
   assertNoSecret(body)
   assert.equal(body.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(body.jobs[0]?.eligibleAt, plus(T0, TWO_MIN_MS))
   assert.match(body.jobs[0]?.reason ?? "", /2 minutes/)
   assert.equal(body.jobs[0]?.reason?.includes(pdfChecksum), false)
 

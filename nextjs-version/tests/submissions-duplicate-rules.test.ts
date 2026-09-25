@@ -39,6 +39,15 @@ test("2-minute window precedes the 24-hour window and expires at the boundary", 
   assert.equal(afterDay, undefined)
 })
 
+test("failed and preflight jobs only hold the 2-minute retry window", () => {
+  const failed = [{ state: "failed", createdAt: "2026-09-08T12:00:00.000Z" }]
+  const preflight = [{ state: "preflight_failed", createdAt: "2026-09-08T12:00:00.000Z" }]
+  assert.equal(evaluateDuplicateWindows(failed, T0 + DUPLICATE_RETRY_MS - 1)?.code, "retry_too_soon")
+  assert.equal(evaluateDuplicateWindows(preflight, T0 + DUPLICATE_RETRY_MS - 1)?.code, "retry_too_soon")
+  assert.equal(evaluateDuplicateWindows(failed, T0 + DUPLICATE_RETRY_MS), undefined)
+  assert.equal(evaluateDuplicateWindows(preflight, T0 + DUPLICATE_RETRY_MS), undefined)
+})
+
 test("duplicate rule copy is documented for the submit UI", () => {
   assert.match(DUPLICATE_RULE_COPY.summary, /2 minutes/)
   assert.match(DUPLICATE_RULE_COPY.summary, /24 hours/)
