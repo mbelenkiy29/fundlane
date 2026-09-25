@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import Stripe from "stripe"
+import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog"
 
 const ACCOUNT = "acct_1UIDeIBP3qJwlwms"
 const API_VERSION = "2026-08-26.dahlia"
@@ -130,9 +131,9 @@ async function main() {
       // This sandbox defaults Checkout to Managed Payments, requiring a tax code.
       const product = await stripe.products.create({ name: e.run, metadata, tax_code: "txcd_10103001" }, { idempotencyKey: `${e.run}-product` })
       e.product = product.id; await save()
-      const base = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: 39900, recurring: { interval: "month", usage_type: "licensed" }, metadata }, { idempotencyKey: `${e.run}-base` })
+      const base = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: BILLING_CATALOG.base.unitAmountCents, recurring: { interval: "month", usage_type: "licensed" }, metadata }, { idempotencyKey: `${e.run}-base` })
       e.prices.push(base.id); await save()
-      const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month", usage_type: "licensed" }, tiers: [{ up_to: 9, unit_amount: 7900 }, { up_to: 19, unit_amount: 6900 }, { up_to: "inf", unit_amount: 5900 }], metadata }, { idempotencyKey: `${e.run}-seats` })
+      const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month", usage_type: "licensed" }, tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo ?? "inf", unit_amount: tier.unitAmountCents })), metadata }, { idempotencyKey: `${e.run}-seats` })
       e.prices.push(seats.id); await save()
       process.env.STRIPE_BASE_PRICE_ID = base.id
       process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID = seats.id

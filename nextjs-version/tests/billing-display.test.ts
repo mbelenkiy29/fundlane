@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {formatBillingMoney,validSelectedSeats} from "../src/lib/mca/billing-display"
-import {monthlyPriceCents} from "../src/lib/mca/billing-catalog"
+import {BILLING_CATALOG,monthlyPriceCents} from "../src/lib/mca/billing-catalog"
 import { spawnSync } from "node:child_process"
 import type { BillingRecovery } from "../src/lib/mca/billing-display"
 import { renderBillingEmailContent } from "../src/lib/mca/email"
@@ -13,7 +13,7 @@ test("seat selection supports quantities above trial cap and quotes exact gradua
   assert.equal(validSelectedSeats(100000),true)
 })
 test("money retains cents and distinguishes currencies",()=>{
-  assert.equal(formatBillingMoney(39900),"$399.00")
+  assert.equal(formatBillingMoney(BILLING_CATALOG.base.unitAmountCents),"$399.00")
   assert.equal(formatBillingMoney("12345","eur"),"€123.45")
   assert.equal(formatBillingMoney(0),"$0.00")
 })

@@ -1,5 +1,6 @@
 import Stripe from "stripe"
 import { verifyBillingPrices, priceIds } from "../../src/lib/mca/billing"
+import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog"
 
 /** Read-only by default; never changes an existing price or the account's default portal. */
 async function main() {
@@ -31,8 +32,8 @@ async function main() {
       }
     }
     product ??= await stripe.products.create({ name: "Fundlane", description: "Company subscription with graduated team seats", metadata: { application: "fundlane", catalog_version: "1" } }, { idempotencyKey: "fundlane-v1-product" })
-    base ??= await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: 39900, recurring: { interval: "month", usage_type: "licensed" }, lookup_key: keys[0], nickname: "Fundlane base — first user included" }, { idempotencyKey: keys[0] })
-    seats ??= await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month", usage_type: "licensed" }, tiers: [{ up_to: 9, unit_amount: 7900 }, { up_to: 19, unit_amount: 6900 }, { up_to: "inf", unit_amount: 5900 }], lookup_key: keys[1], nickname: "Fundlane additional users" }, { idempotencyKey: keys[1] })
+    base ??= await stripe.prices.create({ product: product.id, currency: BILLING_CATALOG.currency, unit_amount: BILLING_CATALOG.base.unitAmountCents, recurring: { interval: BILLING_CATALOG.interval, usage_type: BILLING_CATALOG.usageType }, lookup_key: keys[0], nickname: "Fundlane base — first user included" }, { idempotencyKey: keys[0] })
+    seats ??= await stripe.prices.create({ product: product.id, currency: BILLING_CATALOG.currency, billing_scheme: BILLING_CATALOG.additionalSeats.billingScheme, tiers_mode: BILLING_CATALOG.additionalSeats.tiersMode, recurring: { interval: BILLING_CATALOG.interval, usage_type: BILLING_CATALOG.usageType }, tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo ?? "inf", unit_amount: tier.unitAmountCents })), lookup_key: keys[1], nickname: "Fundlane additional users" }, { idempotencyKey: keys[1] })
   }
   process.env.STRIPE_BASE_PRICE_ID = base.id
   process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID = seats.id

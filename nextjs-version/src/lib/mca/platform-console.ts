@@ -5,7 +5,7 @@ import { syncWorkspaceBilling } from "./billing"
 import { getCompanyAccess } from "./company-access"
 import { AppError } from "./errors"
 import { z } from "zod"
-import { monthlyPriceCents } from "./billing-catalog"
+import { BILLING_CATALOG, monthlyPriceCents } from "./billing-catalog"
 
 export const platformQuerySchema = z.object({ q:z.string().trim().max(200).default(""),status:z.string().max(40).default(""),offset:z.coerce.number().int().min(0).max(1000000).default(0),currency:z.union([z.literal(""),z.string().regex(/^[a-zA-Z]{3}$/)]).transform(value=>value.toLowerCase()).optional(),from:z.union([z.literal(""),z.iso.date()]).optional(),to:z.union([z.literal(""),z.iso.date()]).optional() }).refine(query=>!query.from||!query.to||query.from<=query.to,{message:"Start date must not be after end date.",path:["to"]})
 export const platformActionSchema = z.discriminatedUnion("action",[
@@ -71,7 +71,7 @@ export async function platformCompany(id:string) {
   const subscription=await getDatabase().prepare<{planName:string;planSlug:string;seatLimit:number;status:string}>(`SELECT plan_name "planName",plan_slug "planSlug",seat_limit "seatLimit",status FROM workspace_billing_entitlements WHERE workspace_id=?`).get(id)
   // Explicit projection avoids leaking provider payloads, notification data or transport errors.
   const state=detail.state
-  return {company,owner:owner??null,ownerCandidates,subscription:subscription??null,pricing:{version:"fundlane-monthly-usd-399-79-69-59",selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
+  return {company,owner:owner??null,ownerCandidates,subscription:subscription??null,pricing:{version:BILLING_CATALOG.version,selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
     adjustments:await getDatabase().prepare<Adjustment>(`SELECT a.id,a.workspace_id,w.name company_name,a.kind,a.status,a.amount,a.currency,a.reason,a.livemode,a.created_at,a.synced_at FROM company_billing_adjustments a JOIN workspaces w ON w.id=a.workspace_id WHERE a.workspace_id=? ORDER BY a.created_at DESC,a.id LIMIT 200`).all(id),
     invoices:detail.invoices.map(row=>safeInvoice({stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_due:String(row.amount_due),amount_paid:String(row.amount_paid),amount_remaining:String(row.amount_remaining),created_at:String(row.created_at),invoice_url:row.invoice_url?String(row.invoice_url):null})),
     payments:detail.payments.map(row=>({stripe_payment_id:String(row.stripe_payment_id),stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_paid:String(row.amount_paid),synced_at:String(row.synced_at)})),
