@@ -41,7 +41,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { formatRole, requestJson } from "@/lib/mca/client"
+import { formatRole, RequestError, requestJson } from "@/lib/mca/client"
+import { normalizeTeamInvitationInput, validateTeamInvitation } from "@/lib/mca/invitations-validation"
 import { OwnershipTransfer } from "@/components/mca/ownership-transfer"
 import {
   assignableRoles,
@@ -650,16 +651,39 @@ function InvitationStatus({ member }: { member: MembershipSummary }) {
 }
 function Field({
   label,
+  error,
+  required,
   children,
 }: {
   label: string
-  children: React.ReactElement<{ id?: string }>
+  error?: string
+  required?: boolean
+  children: React.ReactElement<{
+    id?: string
+    "aria-invalid"?: boolean
+    "aria-describedby"?: string
+    "aria-required"?: boolean
+  }>
 }) {
   const id = React.useId()
+  const errorId = `${id}-error`
   return (
     <div className="space-y-2">
-      <Label htmlFor={id}>{label}</Label>
-      {React.cloneElement(children, { id })}
+      <Label htmlFor={id}>
+        {label}
+        {required ? <span className="sr-only"> (required)</span> : null}
+      </Label>
+      {React.cloneElement(children, {
+        id,
+        "aria-invalid": Boolean(error),
+        "aria-describedby": error ? errorId : undefined,
+        "aria-required": required,
+      })}
+      {error && (
+        <p id={errorId} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
@@ -790,12 +814,14 @@ function InviteDialog({
   const [busy, setBusy] = React.useState(false)
   const lock = React.useRef(false)
   const [error, setError] = React.useState("")
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>({})
   const [reserved, setReserved] = React.useState(false)
   const dirty = JSON.stringify(draft) !== JSON.stringify(emptyInvite)
   function dismiss() {
     if (!busy && (!dirty || window.confirm("Discard this invitation draft?"))) {
       setDraft(emptyInvite)
       setError("")
+      setFieldErrors({})
       setReserved(false)
       close()
     }
@@ -803,19 +829,22 @@ function InviteDialog({
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (lock.current) return
+    const nextErrors = validateTeamInvitation(draft)
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors)
+      setError("Review the highlighted fields.")
+      return
+    }
     lock.current = true
     setBusy(true)
     setError("")
+    setFieldErrors({})
     setReserved(false)
+    const payload = normalizeTeamInvitationInput(draft)
     try {
       const result = await requestJson<InvitationResult>("/api/invitations", {
         method: "POST",
-        body: JSON.stringify({
-          ...draft,
-          phone: draft.phone || undefined,
-          managerMembershipId: draft.managerMembershipId || undefined,
-          senderAssociation: draft.senderAssociation || undefined,
-        }),
+        body: JSON.stringify(payload),
       })
       toast.success(
         result.delivery === "preview"
@@ -831,9 +860,10 @@ function InviteDialog({
       const exists = (list ?? members).some(
         (m) =>
           m.status === "pending" &&
-          m.email.toLowerCase() === draft.email.trim().toLowerCase()
+          m.email.toLowerCase() === payload.email.toLowerCase()
       )
       setReserved(exists)
+      setFieldErrors(caught instanceof RequestError ? caught.fieldErrors ?? {} : {})
       setError(
         `${message(caught)}${exists ? " A seat is reserved for this employee. Retry delivery from Invitations." : ""}`
       )
@@ -857,7 +887,7 @@ function InviteDialog({
           restoreFocus()
         }}
       >
-        <form onSubmit={submit}>
+        <form noValidate onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>Invite an employee</DialogTitle>
             <DialogDescription>
@@ -866,17 +896,15 @@ function InviteDialog({
             </DialogDescription>
           </DialogHeader>
           <fieldset disabled={busy} className="my-5 space-y-4">
-            <Field label="Full name">
+            <Field label="Full name" required error={fieldErrors.name?.[0]}>
               <Input
-                required
                 autoComplete="name"
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               />
             </Field>
-            <Field label="Email address">
+            <Field label="Email address" required error={fieldErrors.email?.[0]}>
               <Input
-                required
                 type="email"
                 autoComplete="email"
                 value={draft.email}
@@ -886,7 +914,7 @@ function InviteDialog({
                 }}
               />
             </Field>
-            <Field label="Role">
+            <Field label="Role" error={fieldErrors.role?.[0]}>
               <RoleSelect
                 value={draft.role}
                 actor={actor}
@@ -898,7 +926,7 @@ function InviteDialog({
                 Optional details
               </summary>
               <div className="mt-4 space-y-4">
-                <Field label="Phone">
+                <Field label="Phone" error={fieldErrors.phone?.[0]}>
                   <Input
                     type="tel"
                     value={draft.phone}
@@ -916,7 +944,7 @@ function InviteDialog({
                     }
                   />
                 </Field>
-                <Field label="Sender association">
+                <Field label="Sender association" error={fieldErrors.senderAssociation?.[0]}>
                   <Input
                     placeholder="Sender ID"
                     value={draft.senderAssociation}

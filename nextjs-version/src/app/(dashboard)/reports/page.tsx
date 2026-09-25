@@ -6,11 +6,12 @@ import { ApplicationOutreachReport } from "@/components/mca/applications/outreac
 
 export default function ReportsPage() {
   return (
-    <div className="space-y-6 px-4 lg:px-6">
+    <div className="min-w-0 max-w-full space-y-6 overflow-x-hidden px-4 lg:px-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Rep, team, funder and lead reports load from verified workspace data. Incomplete periods stay labeled and permission-restricted views do not invent zeros.
+          Hover Restricted or N/A for why a cell is blank — Restricted is hidden by permission, N/A cannot be calculated.
         </p>
       </div>
       <ApplicationOutreachReport />

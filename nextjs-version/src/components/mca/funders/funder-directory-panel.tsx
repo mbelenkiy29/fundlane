@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from "@/lib/mca/documents/contracts"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "@/lib/mca/funders/contracts"
+import { FUNDER_FIELD_LIMITS, firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
 import type { SessionResponse } from "@/lib/mca/types"
@@ -175,6 +176,12 @@ export function FunderDirectoryPanel() {
   async function saveFunder(event: React.FormEvent) {
     event.preventDefault()
     if (!canManage) return
+    const nextErrors = validateFunderProfile(payloadFromDraft(draft), { requireLegalName: true })
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors)
+      setError("Review the highlighted fields.")
+      return
+    }
     setBusy(true); setError(""); setNotice(""); setFieldErrors({})
     try {
       if (selectedId) {
@@ -217,6 +224,12 @@ export function FunderDirectoryPanel() {
   async function saveGroup(event: React.FormEvent) {
     event.preventDefault()
     if (!canManage) return
+    const nextErrors = validateGroupName(groupName, { required: true })
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors)
+      setError("Review the highlighted fields.")
+      return
+    }
     setBusy(true); setError(""); setNotice(""); setFieldErrors({})
     try {
       if (editingGroupId) {
@@ -309,52 +322,92 @@ export function FunderDirectoryPanel() {
             <CardDescription>Legal name is required. Inactive funders stay readable for history and cannot be selected for new targeting.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={(event) => void saveFunder(event)} className="space-y-5">
+            <form noValidate onSubmit={(event) => void saveFunder(event)} className="space-y-5">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Legal name" htmlFor="legal-name" error={fieldErrors.legalName?.[0]}>
-                  <Input id="legal-name" value={draft.legalName} disabled={!canManage} onChange={(event) => setDraft({ ...draft, legalName: event.target.value })} required />
+                <Field label="Legal name" htmlFor="legal-name" error={fieldErrors.legalName?.[0]} required>
+                  <Input id="legal-name" value={draft.legalName} disabled={!canManage} onChange={(event) => setDraft({ ...draft, legalName: event.target.value })} aria-required aria-invalid={Boolean(fieldErrors.legalName?.[0])} />
                 </Field>
-                <Field label="Nickname" htmlFor="nickname">
-                  <Input id="nickname" value={draft.nickname} disabled={!canManage} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} />
+                <Field label="Nickname" htmlFor="nickname" error={fieldErrors.nickname?.[0]}>
+                  <Input id="nickname" value={draft.nickname} disabled={!canManage} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} aria-invalid={Boolean(fieldErrors.nickname?.[0])} />
                 </Field>
-                <Field label="Website" htmlFor="website">
-                  <Input id="website" value={draft.website} disabled={!canManage} onChange={(event) => setDraft({ ...draft, website: event.target.value })} placeholder="https://funder.example" />
+                <Field label="Website" htmlFor="website" error={fieldErrors.website?.[0]}>
+                  <Input id="website" value={draft.website} disabled={!canManage} onChange={(event) => setDraft({ ...draft, website: event.target.value })} placeholder="https://funder.example" aria-invalid={Boolean(fieldErrors.website?.[0])} />
                 </Field>
                 <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
                   <div><Label htmlFor="funder-active">Active</Label><p className="text-xs text-muted-foreground">Turn off to archive without deleting.</p></div>
                   <Switch id="funder-active" checked={draft.active} disabled={!canManage} onCheckedChange={(active) => setDraft({ ...draft, active })} />
                 </div>
-                <Field label="Domains" htmlFor="domains" className="sm:col-span-2">
-                  <Input id="domains" value={draft.domains} disabled={!canManage} onChange={(event) => setDraft({ ...draft, domains: event.target.value })} placeholder="funder.com, iso.funder.com" />
+                <Field label="Domains" htmlFor="domains" error={firstFieldError(fieldErrors, "domains")} className="sm:col-span-2">
+                  <Input id="domains" value={draft.domains} disabled={!canManage} onChange={(event) => setDraft({ ...draft, domains: event.target.value })} placeholder="funder.com, iso.funder.com" aria-invalid={Boolean(firstFieldError(fieldErrors, "domains"))} />
                 </Field>
-                <Field label="Products" htmlFor="products" className="sm:col-span-2">
-                  <Input id="products" value={draft.products} disabled={!canManage} onChange={(event) => setDraft({ ...draft, products: event.target.value })} placeholder="MCA, ACH" />
+                <Field label="Products" htmlFor="products" error={firstFieldError(fieldErrors, "products")} className="sm:col-span-2">
+                  <Input id="products" value={draft.products} disabled={!canManage} onChange={(event) => setDraft({ ...draft, products: event.target.value })} placeholder="MCA, ACH" aria-invalid={Boolean(firstFieldError(fieldErrors, "products"))} />
                 </Field>
               </div>
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Contacts</h3>{canManage && <Button type="button" variant="outline" size="sm" onClick={() => setDraft({ ...draft, contacts: [...draft.contacts, contactDraft()] })}><Plus />Contact</Button>}</div>
-                {!draft.contacts.length ? <p className="text-sm text-muted-foreground">No contacts yet.</p> : draft.contacts.map((contact, index) => <div key={contact.key} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-                  <Input aria-label={`Contact ${index + 1} name`} placeholder="Name" value={contact.name} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, name: event.target.value } : item) })} />
-                  <Input aria-label={`Contact ${index + 1} email`} placeholder="Email" value={contact.email} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, email: event.target.value } : item) })} />
-                  <Input aria-label={`Contact ${index + 1} role`} placeholder="Role" value={contact.role} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, role: event.target.value } : item) })} />
-                  {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove contact ${index + 1}`} onClick={() => setDraft({ ...draft, contacts: draft.contacts.filter((item) => item.key !== contact.key) })}><Trash2 /></Button>}
-                </div>)}
+                {fieldErrors.contacts?.[0] && <p id="contacts-error" role="alert" className="text-xs text-destructive">{fieldErrors.contacts[0]}</p>}
+                {!draft.contacts.length ? <p className="text-sm text-muted-foreground">No contacts yet.</p> : draft.contacts.map((contact, index) => {
+                  const nameError = fieldErrors[`contacts.${index}.name`]?.[0]
+                  const emailError = fieldErrors[`contacts.${index}.email`]?.[0]
+                  const roleError = fieldErrors[`contacts.${index}.role`]?.[0]
+                  const nameErrorId = `contact-${contact.key}-name-error`
+                  const emailErrorId = `contact-${contact.key}-email-error`
+                  const roleErrorId = `contact-${contact.key}-role-error`
+                  return <div key={contact.key} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                  <div className="space-y-1">
+                    <Input aria-label={`Contact ${index + 1} name`} placeholder="Name" value={contact.name} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, name: event.target.value } : item) })} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? nameErrorId : undefined} />
+                    {nameError && <p id={nameErrorId} role="alert" className="text-xs text-destructive">{nameError}</p>}
+                  </div>
+                  <div className="space-y-1">
+                    <Input aria-label={`Contact ${index + 1} email`} placeholder="Email" value={contact.email} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, email: event.target.value } : item) })} aria-invalid={Boolean(emailError)} aria-describedby={emailError ? emailErrorId : undefined} />
+                    {emailError && <p id={emailErrorId} role="alert" className="text-xs text-destructive">{emailError}</p>}
+                  </div>
+                  <div className="space-y-1">
+                    <Input aria-label={`Contact ${index + 1} role`} placeholder="Role" value={contact.role} disabled={!canManage} onChange={(event) => setDraft({ ...draft, contacts: draft.contacts.map((item) => item.key === contact.key ? { ...item, role: event.target.value } : item) })} aria-invalid={Boolean(roleError)} aria-describedby={roleError ? roleErrorId : undefined} />
+                    {roleError && <p id={roleErrorId} role="alert" className="text-xs text-destructive">{roleError}</p>}
+                  </div>
+                  {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove contact ${index + 1}`} onClick={() => {
+                    const contacts = draft.contacts.filter((item) => item.key !== contact.key)
+                    setDraft({ ...draft, contacts })
+                    setFieldErrors((current) => remapIndexedFieldErrors(current, "contacts", index, contacts.length, FUNDER_FIELD_LIMITS.maxContacts))
+                  }}><Trash2 /></Button>}
+                </div>
+                })}
               </section>
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Routes</h3>{canManage && <Button type="button" variant="outline" size="sm" onClick={() => setDraft({ ...draft, routes: [...draft.routes, routeDraft()] })}><Plus />Route</Button>}</div>
-                {!draft.routes.length ? <p className="text-sm text-muted-foreground">No submission routes yet.</p> : draft.routes.map((route, index) => <div key={route.key} className="space-y-2 rounded-lg border p-3">
+                {fieldErrors.routes?.[0] && <p id="routes-error" role="alert" className="text-xs text-destructive">{fieldErrors.routes[0]}</p>}
+                {!draft.routes.length ? <p className="text-sm text-muted-foreground">No submission routes yet.</p> : draft.routes.map((route, index) => {
+                  const kindError = fieldErrors[`routes.${index}.kind`]?.[0]
+                  const labelError = fieldErrors[`routes.${index}.label`]?.[0]
+                  const kindErrorId = `route-${route.key}-kind-error`
+                  const labelErrorId = `route-${route.key}-label-error`
+                  const exceptionsError = fieldErrors[`routes.${index}.documentExceptions`]?.[0]
+                  const exceptionsErrorId = `route-${route.key}-exceptions-error`
+                  return <div key={route.key} className="space-y-2 rounded-lg border p-3">
                   <div className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]">
-                    <Select value={route.kind} disabled={!canManage} onValueChange={(kind) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, kind: kind as FunderRouteKind } : item) })}>
-                      <SelectTrigger aria-label={`Route ${index + 1} kind`}><SelectValue /></SelectTrigger>
-                      <SelectContent>{FUNDER_ROUTE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{routeLabels[kind]}</SelectItem>)}</SelectContent>
-                    </Select>
-                    <Input aria-label={`Route ${index + 1} label`} placeholder="Label" value={route.label} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, label: event.target.value } : item) })} />
-                    {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove route ${index + 1}`} onClick={() => setDraft({ ...draft, routes: draft.routes.filter((item) => item.key !== route.key) })}><Trash2 /></Button>}
+                    <div className="space-y-1">
+                      <Select value={route.kind} disabled={!canManage} onValueChange={(kind) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, kind: kind as FunderRouteKind } : item) })}>
+                        <SelectTrigger aria-label={`Route ${index + 1} kind`} aria-invalid={Boolean(kindError)} aria-describedby={kindError ? kindErrorId : undefined}><SelectValue /></SelectTrigger>
+                        <SelectContent>{FUNDER_ROUTE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{routeLabels[kind]}</SelectItem>)}</SelectContent>
+                      </Select>
+                      {kindError && <p id={kindErrorId} role="alert" className="text-xs text-destructive">{kindError}</p>}
+                    </div>
+                    <div className="space-y-1">
+                      <Input aria-label={`Route ${index + 1} label`} placeholder="Label" value={route.label} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, label: event.target.value } : item) })} aria-invalid={Boolean(labelError)} aria-describedby={labelError ? labelErrorId : undefined} />
+                      {labelError && <p id={labelErrorId} role="alert" className="text-xs text-destructive">{labelError}</p>}
+                    </div>
+                    {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove route ${index + 1}`} onClick={() => {
+                      const routes = draft.routes.filter((item) => item.key !== route.key)
+                      setDraft({ ...draft, routes })
+                      setFieldErrors((current) => remapIndexedFieldErrors(current, "routes", index, routes.length, FUNDER_FIELD_LIMITS.maxRoutes))
+                    }}><Trash2 /></Button>}
                   </div>
                   <Field label={destinationLabels[route.kind]} htmlFor={`route-destination-${route.key}`} error={fieldErrors[`routes.${index}.destination`]?.[0]}>
-                    <Input id={`route-destination-${route.key}`} value={route.destination} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} />
+                    <Input id={`route-destination-${route.key}`} value={route.destination} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} aria-invalid={Boolean(fieldErrors[`routes.${index}.destination`]?.[0])} />
                   </Field>
                   <details className="rounded-md border p-3">
                     <summary className="cursor-pointer text-sm font-medium">Documents not to send (optional){route.documentExceptions.length ? ` · ${route.documentExceptions.length} selected` : ""}</summary>
@@ -369,10 +422,11 @@ export function FunderDirectoryPanel() {
                         <Label htmlFor={`route-${route.key}-${item}`} className="font-normal">Saved exclusion: {item}</Label>
                       </div>)}
                     </div>
-                    {fieldErrors[`routes.${index}.documentExceptions`]?.[0] && <p className="mt-2 text-xs text-destructive">{fieldErrors[`routes.${index}.documentExceptions`][0]}</p>}
+                    {exceptionsError && <p id={exceptionsErrorId} role="alert" className="mt-2 text-xs text-destructive">{exceptionsError}</p>}
                   </details>
                   <div className="flex items-center justify-between"><Label htmlFor={`route-active-${route.key}`}>Route active</Label><Switch id={`route-active-${route.key}`} checked={route.active} disabled={!canManage} onCheckedChange={(active) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, active } : item) })} /></div>
-                </div>)}
+                </div>
+                })}
               </section>
 
               {canManage ? <div className="flex flex-wrap gap-2">
@@ -406,9 +460,9 @@ export function FunderDirectoryPanel() {
             <CardDescription>Duplicate and inactive members are stored, then dropped when the group is resolved.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={(event) => void saveGroup(event)} className="space-y-4">
-              <Field label="Group name" htmlFor="group-name" error={fieldErrors.name?.[0]}>
-                <Input id="group-name" value={groupName} disabled={!canManage} onChange={(event) => setGroupName(event.target.value)} required />
+            <form noValidate onSubmit={(event) => void saveGroup(event)} className="space-y-4">
+              <Field label="Group name" htmlFor="group-name" error={fieldErrors.name?.[0]} required>
+                <Input id="group-name" value={groupName} disabled={!canManage} onChange={(event) => setGroupName(event.target.value)} aria-required aria-invalid={Boolean(fieldErrors.name?.[0])} />
               </Field>
               <div className="space-y-2">
                 <Label>Funders</Label>
@@ -436,10 +490,35 @@ export function FunderDirectoryPanel() {
   </div>
 }
 
-function Field({ label, htmlFor, error, className, children }: { label: string; htmlFor: string; error?: string; className?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  htmlFor,
+  error,
+  className,
+  required,
+  children,
+}: {
+  label: string
+  htmlFor: string
+  error?: string
+  className?: string
+  required?: boolean
+  children: React.ReactElement<{
+    id?: string
+    "aria-invalid"?: boolean
+    "aria-describedby"?: string
+    "aria-required"?: boolean
+  }>
+}) {
+  const errorId = `${htmlFor}-error`
   return <div className={`space-y-2 ${className ?? ""}`}>
-    <Label htmlFor={htmlFor}>{label}</Label>
-    {children}
-    {error && <p className="text-xs text-destructive">{error}</p>}
+    <Label htmlFor={htmlFor}>{label}{required ? <span className="sr-only"> (required)</span> : null}</Label>
+    {React.cloneElement(children, {
+      id: children.props.id ?? htmlFor,
+      "aria-invalid": Boolean(error) || children.props["aria-invalid"],
+      "aria-describedby": error ? errorId : children.props["aria-describedby"],
+      "aria-required": required || children.props["aria-required"],
+    })}
+    {error && <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>}
   </div>
 }

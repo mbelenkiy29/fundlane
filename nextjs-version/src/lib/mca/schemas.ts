@@ -3,7 +3,7 @@ import { API_KEY_SCOPES, ROLES } from "./types";
 
 const nullableUrl = z.union([z.url().refine((value) => value.startsWith("https://"), "Use an HTTPS URL."), z.null()]);
 const nullableId = z.union([z.uuid(), z.null()]);
-const phone = z.string().trim().min(7).max(32);
+const phone = z.string().trim().min(7, "Enter a phone number with 7 to 32 characters.").max(32, "Enter a phone number with 7 to 32 characters.");
 const strongPassword = z.string().min(12).max(256);
 
 export const signInSchema = z.object({
@@ -16,12 +16,12 @@ export const recoveryRequestSchema = z.object({ email: z.email() });
 export const recoveryResetSchema = z.object({ token: z.string().min(20), password: strongPassword });
 
 export const invitationSchema = z.object({
-  email: z.email(),
-  name: z.string().trim().min(1).max(120),
+  email: z.email({ error: "Enter a valid email address." }),
+  name: z.string().trim().min(1, "Enter the employee's full name.").max(120, "Use at most 120 characters."),
   phone: phone.nullable().optional(),
   role: z.enum(ROLES),
   managerMembershipId: nullableId.optional(),
-  senderAssociation: z.string().trim().max(160).nullable().optional(),
+  senderAssociation: z.string().trim().max(160, "Use at most 160 characters.").nullable().optional(),
 });
 
 export const invitationAcceptSchema = z.object({

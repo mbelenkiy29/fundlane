@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { requestJson } from "@/lib/mca/client"
+import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
 import { OUTREACH_METRICS, type OutreachMetric, type OutreachReport } from "@/lib/mca/applications/contracts"
 
 const labels: Record<OutreachMetric, string> = { created: "Invitations", emailed: "Emailed", opened: "Opened", started: "Started", received: "Applications received", incomplete: "Opened, not submitted", submitted: "Sent to funders", approved: "Approved", funded: "Funded" }
@@ -24,7 +25,7 @@ function OutreachRow({ row }: { row: OutreachReport["totals"] }) {
   return <TableRow>
     <TableHead scope="row" className="text-foreground">{row.name}</TableHead>
     {OUTREACH_METRICS.map(metric => <TableCell key={metric} className={cell}>{row.counts[metric]}</TableCell>)}
-    <TableCell className={cell}>{money(row.fundedAmountCents)}{row.unknownFundedAmountCount > 0 && <span className="ml-1 text-xs font-normal text-muted-foreground">+ {row.unknownFundedAmountCount} unknown</span>}</TableCell>
+    <TableCell className={cell}>{explainedReportValue(money(row.fundedAmountCents))}{row.unknownFundedAmountCount > 0 && <span className="ml-1 text-xs font-normal text-muted-foreground">+ {row.unknownFundedAmountCount} unknown</span>}</TableCell>
   </TableRow>
 }
 
@@ -48,7 +49,7 @@ export function ApplicationOutreachReport() {
     finally { if (version === requestId.current) setBusy(false) }
   }, [])
   React.useEffect(() => { void load() }, [load])
-  return <section id="mca-reports-application-outreach" className="overflow-hidden rounded-xl border bg-card" aria-labelledby="outreach-title">
+  return <section id="mca-reports-application-outreach" className="min-w-0 overflow-hidden rounded-xl border bg-card" aria-labelledby="outreach-title">
     <div className="border-b p-5"><h2 id="outreach-title" className="text-lg font-semibold">Application outreach</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">From first contact to funding. Credit stays with the original sender, even when the deal changes hands.</p>
       <form className="mt-5 flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void load(new URLSearchParams(filters).toString()) }}>
         <div className="space-y-2"><Label htmlFor="outreach-from">Invited from</Label><Input id="outreach-from" type="date" value={filters.from} onChange={event => setFilters({ ...filters, from: event.target.value })} /></div>
@@ -59,7 +60,8 @@ export function ApplicationOutreachReport() {
       {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}
     </div>
     {busy && <p role="status" className="p-5 text-sm text-muted-foreground">Loading outreach report…</p>}
-    {!busy && report && <>
+    {!busy && report && report.invitations.length === 0 && report.reps.every(row => OUTREACH_METRICS.every(metric => row.counts[metric] === 0)) ? <div className="p-5"><ReportEmptyState title="No outreach activity matches these filters." detail="Try another invitation period or original sender." /></div> : null}
+    {!busy && report && !(report.invitations.length === 0 && report.reps.every(row => OUTREACH_METRICS.every(metric => row.counts[metric] === 0))) && <>
       <div className="p-5 pb-2 text-xs text-muted-foreground">Invitations created {report.period.from} through {report.period.to} ({report.period.timezone}). Outcomes through {new Date(report.period.asOf).toLocaleString()}; this cohort can still progress.</div>
       <div className="p-2"><Table className="w-full whitespace-nowrap text-sm"><TableCaption className="sr-only">Employee outreach, application completion, and funding outcomes</TableCaption><TableHeader><TableRow className="text-xs text-muted-foreground"><TableHead scope="col" className="text-left">Original sender</TableHead>{OUTREACH_METRICS.map(metric => <TableHead scope="col" key={metric} className={cell}>{labels[metric]}</TableHead>)}<TableHead scope="col" className={cell}>Funded amount</TableHead></TableRow></TableHeader><TableBody>{report.reps.map(row => <OutreachRow key={row.membershipId ?? "unassigned"} row={row} />)}</TableBody><TableFooter><OutreachRow row={report.totals} /></TableFooter></Table></div>
       <div className="grid gap-4 border-y bg-muted/20 p-5 sm:grid-cols-3">{[["Emailed → opened", report.totals.conversions.emailedToOpened], ["Opened → application received", report.totals.conversions.openedToReceived], ["Application received → funded", report.totals.conversions.receivedToFunded]].map(([label, value]) => <div key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums">{percent(value as number | null)}</p></div>)}</div>

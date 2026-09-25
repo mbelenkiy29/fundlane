@@ -5,6 +5,7 @@ import { newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db
 import { canManageWorkspace } from "../policy"
 import type { DealActor } from "../deals/schema"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "./contracts"
+import { validateFunderProfile, validateGroupName } from "./validation"
 import {
   findFunderById,
   findFunderByIdForUpdate,
@@ -171,6 +172,10 @@ function normalizeRoutes(value: unknown): FunderRoute[] {
 }
 
 function profileFromInput(input: CreateFunderInput | UpdateFunderInput, current?: StoredFunder): Omit<StoredFunder, "id" | "workspaceId" | "idempotencyKey" | "criteriaVersion" | "profileVersion" | "createdAt" | "updatedAt"> {
+  const fieldErrors = validateFunderProfile(input, { requireLegalName: input.legalName !== undefined || !current })
+  if (Object.keys(fieldErrors).length) {
+    throw new AppError(422, "validation_failed", "Review the highlighted fields.", fieldErrors)
+  }
   return {
     legalName: input.legalName !== undefined || !current ? requiredText(input.legalName, "legalName", "Enter the funder legal name.", 200) : current.legalName,
     nickname: input.nickname !== undefined ? optionalText(input.nickname, "nickname", 120) : current?.nickname,
@@ -279,6 +284,8 @@ export async function getGroup(actor: DealActor, id: string): Promise<FunderGrou
 
 export async function createGroup(actor: DealActor, input: CreateGroupInput): Promise<FunderGroup> {
   assertManage(actor)
+  const nameErrors = validateGroupName(input.name, { required: true })
+  if (Object.keys(nameErrors).length) throw new AppError(422, "validation_failed", "Review the highlighted fields.", nameErrors)
   const name = requiredText(input.name, "name", "Enter a group name.", 120)
   const funderIds = normalizeFunderIds(input.funderIds)
   await assertWorkspaceFunders(actor, funderIds)

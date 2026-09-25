@@ -5,7 +5,8 @@ import { Mail, Plus, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { requestJson } from "@/lib/mca/client"
+import { RequestError, requestJson } from "@/lib/mca/client"
+import { validateApplicationInvitation } from "@/lib/mca/invitations-validation"
 import type { ApplicationInvitation, FormBranding } from "@/lib/mca/applications/contracts"
 import { InvitationsTable } from "./invitations-table"
 import { DEFAULT_OPTIONAL_FIELDS, type OptionalFieldKey } from "@/lib/mca/applications/form-schema"
@@ -15,6 +16,7 @@ interface ApplicationsData { invitations: ApplicationInvitation[]; forms: { id: 
 export function ApplicationsWorkspace() {
   const [data, setData] = React.useState<ApplicationsData | null>(null)
   const [error, setError] = React.useState("")
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>({})
   const [notice, setNotice] = React.useState("")
   const [busy, setBusy] = React.useState<string | null>(null)
   const [manualLink, setManualLink] = React.useState<{ id: string; url: string } | null>(null)
@@ -38,7 +40,13 @@ export function ApplicationsWorkspace() {
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = event.currentTarget, fields = new FormData(form)
-    setBusy("create"); setError(""); setNotice("")
+    const nextErrors = validateApplicationInvitation({ clientName: fields.get("clientName"), email: fields.get("email") })
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors)
+      setError("Review the highlighted fields.")
+      return
+    }
+    setBusy("create"); setError(""); setFieldErrors({}); setNotice("")
     createKey.current ??= crypto.randomUUID()
     try {
       await requestJson("/api/mca/applications", { method: "POST", body: JSON.stringify({ clientName: fields.get("clientName"), email: fields.get("email"), integrationId: fields.get("integrationId"), requestKey: createKey.current }) })
@@ -47,7 +55,10 @@ export function ApplicationsWorkspace() {
         ? "Invitation created. Send the email or copy the client’s link below."
         : "Invitation created. Copy the link to share with your client.")
       await refresh()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create the invitation. Try again.") }
+    } catch (reason) {
+      setFieldErrors(reason instanceof RequestError ? reason.fieldErrors ?? {} : {})
+      setError(reason instanceof Error ? reason.message : "Could not create the invitation. Try again.")
+    }
     finally { setBusy(null) }
   }
   async function send(row: ApplicationInvitation) {
@@ -104,9 +115,9 @@ export function ApplicationsWorkspace() {
       <section className="rounded-xl border bg-card p-5" aria-labelledby="new-application-title">
         <h2 id="new-application-title" className="font-semibold">Invite a client</h2>
         <p className="mt-1 text-sm text-muted-foreground">Each invitation has its own link, assigned to you and valid for 30 days.</p>
-        {!data.canCreate ? <p className="mt-4 text-sm">Creating invitations is disabled for your account. Contact your administrator.</p> : !data.forms.length ? <p className="mt-4 text-sm">Your company has no enabled application form yet. Refresh, or ask an administrator to check Application Intake.</p> : <form onSubmit={create} onChange={() => { createKey.current = null }} className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] xl:items-end">
-          <div className="space-y-2"><Label htmlFor="clientName">Business name</Label><Input id="clientName" name="clientName" required maxLength={150} autoComplete="organization" placeholder="Client or business name" disabled={busy === "create"} /></div>
-          <div className="space-y-2"><Label htmlFor="clientEmail">Email address</Label><Input id="clientEmail" name="email" required maxLength={254} type="email" autoComplete="email" placeholder="client@example.com" disabled={busy === "create"} /></div>
+        {!data.canCreate ? <p className="mt-4 text-sm">Creating invitations is disabled for your account. Contact your administrator.</p> : !data.forms.length ? <p className="mt-4 text-sm">Your company has no enabled application form yet. Refresh, or ask an administrator to check Application Intake.</p> : <form noValidate onSubmit={create} onChange={() => { createKey.current = null }} className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] xl:items-end">
+          <div className="space-y-2"><Label htmlFor="clientName">Business name</Label><Input id="clientName" name="clientName" maxLength={150} autoComplete="organization" placeholder="Client or business name" disabled={busy === "create"} aria-required aria-invalid={Boolean(fieldErrors.clientName?.[0])} aria-describedby={fieldErrors.clientName?.[0] ? "clientName-error" : undefined} />{fieldErrors.clientName?.[0] && <p id="clientName-error" role="alert" className="text-xs text-destructive">{fieldErrors.clientName[0]}</p>}</div>
+          <div className="space-y-2"><Label htmlFor="clientEmail">Email address</Label><Input id="clientEmail" name="email" maxLength={254} type="email" autoComplete="email" placeholder="client@example.com" disabled={busy === "create"} aria-required aria-invalid={Boolean(fieldErrors.email?.[0])} aria-describedby={fieldErrors.email?.[0] ? "clientEmail-error" : undefined} />{fieldErrors.email?.[0] && <p id="clientEmail-error" role="alert" className="text-xs text-destructive">{fieldErrors.email[0]}</p>}</div>
           {data.forms.length > 1 ? <div className="space-y-2"><Label htmlFor="applicationForm">Application form</Label><select id="applicationForm" name="integrationId" className="h-9 w-full rounded-md border bg-background px-3 text-sm" disabled={busy === "create"}>{data.forms.map(form => <option key={form.id} value={form.id}>{form.name}</option>)}</select></div> : <input type="hidden" name="integrationId" value={data.forms[0].id} />}
           <Button disabled={busy !== null} type="submit"><Plus className="size-4" />{busy === "create" ? "Creating…" : "Create invitation"}</Button>
         </form>}
