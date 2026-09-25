@@ -45,6 +45,7 @@ export const workspaces = pgTable("workspaces", {
 	action_visibility: text().default('{"createDeal":true,"exportDeals":true,"inviteUsers":true,"manageApiKeys":true,"viewPaymentTable":true,"viewCompanyFinancials":true}').notNull(),
 	created_at: text().notNull(),
 	updated_at: text().notNull(),
+	setup_checklist_dismissed_at: text(),
 }, () => [
 	check("workspaces_seat_limit_check", sql`seat_limit > 0`),
 ]);

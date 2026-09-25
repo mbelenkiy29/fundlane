@@ -16,6 +16,7 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from "@/lib/mca/documents/contracts"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "@/lib/mca/funders/contracts"
 import { FUNDER_FIELD_LIMITS, firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
+import { FunderDirectoryEmpty } from "@/components/mca/funders/funder-directory-empty"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
 import { FunderImportPanel } from "@/components/mca/funders/funder-import-panel"
@@ -311,7 +312,7 @@ export function FunderDirectoryPanel() {
             {canManage && <Button type="button" variant="outline" onClick={startCreate}><Plus />New funder</Button>}
           </CardHeader>
           <CardContent>
-            {!visibleFunders.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{funders.length ? "No active funders. Turn on Show inactive to review archived profiles." : "No funders yet. Add the first funder profile to start routing submissions."}</div> : <div className="space-y-2">
+            {!visibleFunders.length ? <FunderDirectoryEmpty hasFunders={funders.length > 0} canManage={canManage} onCreate={startCreate} /> : <div className="space-y-2">
               {visibleFunders.map((funder) => <button key={funder.id} type="button" onClick={() => editFunder(funder)} className={`flex w-full items-start justify-between gap-2 rounded-lg border p-3 text-left text-sm ${selectedId === funder.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"} ${isSandboxFunder(funder) ? "border-amber-500/50" : ""}`}>
                 <span><span className="font-medium">{funder.legalName}</span>{funder.nickname ? <span className="block text-xs text-muted-foreground">{funder.nickname}</span> : null}</span>
                 <span className="flex shrink-0 flex-col items-end gap-1">

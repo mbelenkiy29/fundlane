@@ -24,6 +24,7 @@ All paths below are relative to `nextjs-version/`.
 | Area | Entry points |
 | --- | --- |
 | Pages and HTTP endpoints | `src/app/`, `src/app/api/` |
+| New-workspace setup checklist | `src/lib/mca/setup/`, `src/components/mca/setup/`, `src/app/api/mca/setup/` |
 | MCA UI and shared components | `src/components/mca/`, `src/components/ui/`, `src/components/layouts/` |
 | Read-only ChatKit panel and `/assistant` tab | `src/lib/mca/assistant/chatkit-context.ts`, `chatkit-ui.ts`, `gateway.ts`, `security.ts`, `store.ts`, `tools.ts`, `src/components/mca/assistant/chatkit-session.tsx`, `assistant-workspace.tsx`, `src/app/api/mca/chatkit/`, `../chatkit-service/`, `docs/chatkit-assistant.md` |
 | Authentication and workspace isolation | `src/lib/mca/auth.ts`, `supabase-auth.ts`, `src/lib/supabase/`, `src/proxy.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts`, `docs/supabase-auth.md` |
