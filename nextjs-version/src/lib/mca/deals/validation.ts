@@ -137,6 +137,38 @@ export function missingRequiredFieldAnchor(field: string): string {
   return "deal-field-owners"
 }
 
+type FieldAnchorLookup = {
+  getElementById(id: string): FocusableFieldNode | null
+}
+
+type FocusableFieldNode = {
+  matches?(selectors: string): boolean
+  querySelector?(selectors: string): FocusableFieldNode | null
+  scrollIntoView?(options?: ScrollIntoViewOptions): void
+  focus?(): void
+}
+
+/** Prefer the field control; if an owner row was removed, use the owners section. */
+export function resolveMissingRequiredFieldAnchor(field: string, lookup: FieldAnchorLookup): string {
+  const preferred = missingRequiredFieldAnchor(field)
+  if (lookup.getElementById(preferred)) return preferred
+  if (ownerMissingField(field) && lookup.getElementById("deal-field-owners")) return "deal-field-owners"
+  return preferred
+}
+
+export function focusMissingRequiredField(field: string, lookup: FieldAnchorLookup): { anchor: string; focused: boolean } {
+  const anchor = resolveMissingRequiredFieldAnchor(field, lookup)
+  const node = lookup.getElementById(anchor)
+  if (!node) return { anchor, focused: false }
+  node.scrollIntoView?.({ behavior: "smooth", block: "center" })
+  const focusable = node.matches?.("input, textarea, button, select")
+    ? node
+    : node.querySelector?.("input, textarea, button, select") ?? null
+  if (!focusable?.focus) return { anchor, focused: false }
+  focusable.focus()
+  return { anchor, focused: true }
+}
+
 export function describeMissingRequiredFields(fields: string[]) {
   return fields.map((key) => ({
     key,

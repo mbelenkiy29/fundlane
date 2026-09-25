@@ -7,8 +7,10 @@ import { inclusiveUtcDateBounds, reconcilePipelineCounts } from "./filters"
 import { allowedTransitions, canTransition } from "./pipeline"
 import {
   describeMissingRequiredFields,
+  focusMissingRequiredField,
   missingRequiredFieldAnchor,
   missingRequiredFieldLabel,
+  resolveMissingRequiredFieldAnchor,
   submissionMissingFields,
   validateDealInput,
 } from "./validation"
@@ -63,6 +65,27 @@ test("missing required fields expose human names and form anchors from the same 
   assert.equal(missingRequiredFieldLabel("owners.0.firstName"), "Owner 1 first name")
   assert.equal(missingRequiredFieldAnchor("address.postalCode"), "deal-field-postalCode")
   assert.equal(missingRequiredFieldAnchor("owners.1.ownershipPercent"), "deal-field-owners-1-ownershipPercent")
+})
+
+test("focusing a removed owner field falls back to the owners section and does not stay pending", () => {
+  let focused = ""
+  const owners = {
+    matches: () => false,
+    querySelector: () => ({ focus() { focused = "owners" } }),
+    scrollIntoView() {},
+  }
+  const lookup = {
+    getElementById(id: string) {
+      if (id === "deal-field-owners") return owners
+      return null
+    },
+  }
+  assert.equal(resolveMissingRequiredFieldAnchor("owners.0.firstName", lookup), "deal-field-owners")
+  const result = focusMissingRequiredField("owners.0.firstName", lookup)
+  assert.equal(result.anchor, "deal-field-owners")
+  assert.equal(result.focused, true)
+  assert.equal(focused, "owners")
+  assert.equal(focusMissingRequiredField("owners.0.lastName", { getElementById: () => null }).focused, false)
 })
 
 test("optional requestedTermMonths is not a submission-required field", () => {

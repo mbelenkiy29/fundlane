@@ -10,6 +10,7 @@ import {
   type DealOwnerInput,
   type DealWriteInput,
 } from "@/lib/mca/deals/schema"
+import { submissionMissingFields } from "@/lib/mca/deals/validation"
 
 export interface DraftForm {
   legalName: string; dbaName: string; ein: string; entityType: string; line1: string; city: string; state: string; postalCode: string
@@ -69,6 +70,27 @@ export function formPayload(form: DraftForm) {
     ] : undefined,
     fieldSource: "manual" as const,
   }
+}
+
+export function draftMissingRequiredFields(form: DraftForm): string[] {
+  const payload = formPayload(form)
+  return submissionMissingFields({
+    legalName: payload.legalName,
+    entityType: payload.entityType as DealWriteInput["entityType"],
+    address: payload.address,
+    contactPhone: payload.contactPhone,
+    startDate: payload.startDate,
+    industry: payload.industry,
+    monthlyRevenue: payload.monthlyRevenue,
+    requestedAmount: payload.requestedAmount,
+    fundingPurpose: payload.fundingPurpose,
+    owners: (payload.owners ?? []).map((owner, index) => ({
+      id: owner.id ?? `draft-owner-${index}`,
+      firstName: owner.firstName,
+      lastName: owner.lastName,
+      ownershipPercent: owner.ownershipPercent,
+    })),
+  })
 }
 
 function FormField({ id, label, value, onChange, type = "text", placeholder, error }: { id?: string; label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string; error?: string }) {
