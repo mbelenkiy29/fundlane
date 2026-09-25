@@ -401,7 +401,7 @@ export function FunderDirectoryPanel() {
                   return <div key={route.key} className="space-y-2 rounded-lg border p-3">
                   <div className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]">
                     <div className="space-y-1">
-                      <Select value={route.kind} disabled={!canManage} onValueChange={(kind) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, kind: kind as FunderRouteKind } : item) })}>
+                      <Select value={route.kind} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onValueChange={(kind) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, kind: kind as FunderRouteKind } : item) })}>
                         <SelectTrigger aria-label={`Route ${index + 1} kind`} aria-invalid={Boolean(kindError)} aria-describedby={kindError ? kindErrorId : undefined}><SelectValue /></SelectTrigger>
                         <SelectContent>{FUNDER_ROUTE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{routeLabels[kind]}</SelectItem>)}</SelectContent>
                       </Select>
@@ -418,7 +418,7 @@ export function FunderDirectoryPanel() {
                     }}><Trash2 /></Button>}
                   </div>
                   <Field label={destinationLabels[route.kind]} htmlFor={`route-destination-${route.key}`} error={fieldErrors[`routes.${index}.destination`]?.[0]}>
-                    <Input id={`route-destination-${route.key}`} value={route.destination} disabled={!canManage} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} aria-invalid={Boolean(fieldErrors[`routes.${index}.destination`]?.[0])} />
+                    <Input id={`route-destination-${route.key}`} value={route.destination} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onChange={(event) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, destination: event.target.value } : item) })} aria-invalid={Boolean(fieldErrors[`routes.${index}.destination`]?.[0])} />
                   </Field>
                   <details className="rounded-md border p-3">
                     <summary className="cursor-pointer text-sm font-medium">Documents not to send (optional){route.documentExceptions.length ? ` · ${route.documentExceptions.length} selected` : ""}</summary>

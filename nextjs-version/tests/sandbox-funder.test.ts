@@ -229,6 +229,32 @@ test("regular create/update cannot impersonate or relabel the sandbox funder", a
     }),
     (error: { status?: number }) => error.status === 422,
   )
+  const legacy = await createFunder(actor(), {
+    idempotencyKey: "legacy-sandboxish-name",
+    legalName: "Legacy Merchant Capital",
+    nickname: "Legacy",
+    website: "https://legacy.example.test",
+    contacts: [{ name: "Pat", email: "pat@legacy.example.test" }],
+    routes: [{ kind: "email", label: "Subs", destination: "subs@legacy.example.test", documentExceptions: [], active: true }],
+  })
+  await getDatabase().prepare("UPDATE mca_funders SET legal_name = ?, nickname = ? WHERE workspace_id = ? AND id = ?")
+    .run("Legacy [SANDBOX] Merchant Capital", "Legacy [SANDBOX]", ids.workspace, legacy.funder.id)
+  const savedLegacy = await updateFunder(actor(), legacy.funder.id, {
+    legalName: "Legacy [SANDBOX] Merchant Capital",
+    nickname: "Legacy [SANDBOX]",
+    website: "https://legacy-updated.example.test",
+  })
+  assert.equal(savedLegacy.website, "https://legacy-updated.example.test")
+  assert.equal(savedLegacy.legalName, "Legacy [SANDBOX] Merchant Capital")
+
+  const sandboxSaved = await updateFunder(actor(), status.funder!.id, {
+    website: "https://sandbox.fundlane.invalid/docs",
+    contacts: [{ name: "Sandbox desk", email: "sandbox@fundlane.invalid" }],
+  })
+  assert.equal(sandboxSaved.website, "https://sandbox.fundlane.invalid/docs")
+  assert.equal(sandboxSaved.contacts[0]?.email, "sandbox@fundlane.invalid")
+  assert.equal(sandboxSaved.routes.length, 1)
+  assert.equal(sandboxSaved.routes[0]?.destination, SANDBOX_ROUTE_DESTINATION)
 })
 
 test("sandbox submission returns a synthetic offer and never touches the network", async () => {

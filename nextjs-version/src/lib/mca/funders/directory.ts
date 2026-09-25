@@ -247,22 +247,27 @@ function assertReservedSandboxIdentity(input: CreateFunderInput | UpdateFunderIn
   if ("idempotencyKey" in input && text(input.idempotencyKey) === SANDBOX_FUNDER_IDEMPOTENCY_KEY) {
     invalid("idempotencyKey", "That key is reserved for the workspace sandbox funder.")
   }
-  if (input.legalName !== undefined && (text(input.legalName) === SANDBOX_LEGAL_NAME || text(input.legalName).includes("[SANDBOX]"))) {
-    invalid("legalName", "That name is reserved for the workspace sandbox funder.")
+  if (input.legalName !== undefined) {
+    const legalName = text(input.legalName)
+    if (legalName !== (current?.legalName ?? "") && (legalName === SANDBOX_LEGAL_NAME || legalName.includes("[SANDBOX]"))) {
+      invalid("legalName", "That name is reserved for the workspace sandbox funder.")
+    }
   }
   if (input.nickname !== undefined) {
     const nickname = optionalText(input.nickname, "nickname", 120)
-    if (nickname === SANDBOX_NICKNAME || nickname?.includes("[SANDBOX]")) {
+    if (nickname !== (current?.nickname ?? undefined) && (nickname === SANDBOX_NICKNAME || nickname?.includes("[SANDBOX]"))) {
       invalid("nickname", "That nickname is reserved for the workspace sandbox funder.")
     }
   }
   const domains = input.domains !== undefined ? uniqueList(input.domains, "domains", 30, 200) : []
-  if (domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN)) {
+  const alreadyHasSandboxDomain = Boolean(current?.domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN))
+  if (!alreadyHasSandboxDomain && domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN)) {
     invalid("domains", "That domain is reserved for the workspace sandbox funder.")
   }
   if (input.routes !== undefined) {
     const routes = Array.isArray(input.routes) ? input.routes : []
-    if (routes.some((route) => text(route.destination).toLowerCase() === SANDBOX_ROUTE_DESTINATION)) {
+    const alreadyHasSandboxRoute = Boolean(current?.routes.some((route) => route.destination.toLowerCase() === SANDBOX_ROUTE_DESTINATION))
+    if (!alreadyHasSandboxRoute && routes.some((route) => text(route.destination).toLowerCase() === SANDBOX_ROUTE_DESTINATION)) {
       invalid("routes", "That destination is reserved for the workspace sandbox funder.")
     }
   }
@@ -324,10 +329,8 @@ export async function updateFunder(actor: DealActor, id: string, input: UpdateFu
       ...next,
       legalName: SANDBOX_LEGAL_NAME,
       nickname: SANDBOX_NICKNAME,
-      website: undefined,
       domains: [SANDBOX_DOMAIN],
-      products: next.products.includes(SANDBOX_PRODUCT) ? next.products : [SANDBOX_PRODUCT],
-      contacts: [],
+      products: next.products.includes(SANDBOX_PRODUCT) ? next.products : [SANDBOX_PRODUCT, ...next.products],
       routes: [{
         id: current.routes.find((route) => route.destination === SANDBOX_ROUTE_DESTINATION)?.id ?? newId(),
         kind: "api",
