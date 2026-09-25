@@ -1,5 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import sitemap from "../src/app/sitemap"
 import {
   DEMO_DESCRIPTION,
@@ -42,6 +44,11 @@ test("JSON-LD describes Fundlane without pricing or legal-entity claims", () => 
   assert.doesNotMatch(encoded, /MCA Workspace/)
   assert.doesNotMatch(encoded, /"@type":"Offer"/)
   assert.doesNotMatch(encoded, /Sentinel Tech Solutions/)
+})
+
+test("mobile nav demo arrow stays visible below 760px", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../src/components/marketing/marketing.css"), "utf8")
+  assert.doesNotMatch(css, /\.fl-nav-actions \.fl-button svg\s*\{\s*display:\s*none/)
 })
 
 test("sitemap includes lastmod for each public marketing URL", () => {
