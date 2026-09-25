@@ -7,6 +7,7 @@ import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBounda
 export { initializeCompanyTrial } from "./company-access"
 import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-reconciliation"
 import { webhookVerificationTime } from "./maintenance/replay-clock"
+import { recordOperationalError } from "./operations/telemetry"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 // Historical Clerk migration scripts retain their original role mapping.
@@ -363,13 +364,40 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     } else if (object.id && event.type === "invoice.payment_failed") {
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id})
     }
+    const jobId = newId()
     await db.prepare(`INSERT INTO mca_background_jobs
       (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
-      VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`).run(newId(),mapping.workspace_id,event.id,event.id,nowIso(),nowIso(),nowIso())
-    // The cron claims this durable job and re-reads Stripe. Signed event fields
-    // are notification context, never an entitlement source.
-    return { queued: true }
+      VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`).run(jobId,mapping.workspace_id,event.id,event.id,nowIso(),nowIso(),nowIso())
+    // The route starts a best-effort sync after commit; cron retains the durable fallback.
+    // Signed event fields are notification context, never an entitlement source.
+    return { queued: true, workspaceId: mapping.workspace_id, jobId }
   })
+}
+
+export const IMMEDIATE_BILLING_RECONCILE_TIMEOUT_MS = 5_000
+
+/** A timed-out sync may still finish; only a sync observed before the deadline completes the job. */
+export async function runImmediateBillingReconcile(
+  workspaceId: string,
+  jobId: string,
+  options: { timeoutMs?: number; client?: StripeBillingClient } = {},
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      syncWorkspaceBilling(workspaceId, options.client),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("billing_reconciliation_timeout")), options.timeoutMs ?? IMMEDIATE_BILLING_RECONCILE_TIMEOUT_MS)
+      }),
+    ])
+    await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',updated_at=? WHERE id=? AND workspace_id=? AND kind='billing_reconcile' AND state='queued'")
+      .run(nowIso(), jobId, workspaceId)
+  } catch {
+    try { await recordOperationalError("billing", "immediate_reconciliation_failed") }
+    catch { /* Telemetry must not turn a best-effort sync into a webhook failure. */ }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 async function ensureBillingState(workspaceId: string, db: DbExecutor) {
