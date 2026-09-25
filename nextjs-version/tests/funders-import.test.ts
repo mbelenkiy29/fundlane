@@ -258,4 +258,10 @@ test("invalid rows stay out of the saved set and HTTP enforces admin plus worksp
     funders: [{ legalName: "HTTP Import LLC" }],
   })
   assert.equal(remote.rows[0]?.status, "ready")
+
+  const nullPreview = await previewPost(cookieRequest("/api/mca/funders/import/preview", "import-admin-session", {
+    method: "POST",
+    body: "null",
+  }))
+  assert.equal(nullPreview.status, 400)
 })

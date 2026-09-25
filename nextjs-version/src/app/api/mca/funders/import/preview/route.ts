@@ -25,13 +25,15 @@ export async function POST(request: Request) {
       if (text.trim()) return NextResponse.json(await previewFunderImport(actor, { text }), { headers: noStore })
       throw new AppError(422, "funder_import_empty", "Choose a CSV or JSON file of funders to review.")
     }
-    let body: { funders?: unknown; text?: string }
+    let body: { funders?: unknown; text?: string } | unknown
     try {
-      body = await request.json() as { funders?: unknown; text?: string }
+      body = await request.json()
     } catch {
       throw new AppError(400, "invalid_json", "Request body must be valid JSON.")
     }
-    return NextResponse.json(await previewFunderImport(actor, body), { headers: noStore })
+    if (Array.isArray(body)) body = { funders: body }
+    if (!body || typeof body !== "object") throw new AppError(400, "invalid_json", "Request body must be valid JSON.")
+    return NextResponse.json(await previewFunderImport(actor, body as { funders?: unknown; text?: string }), { headers: noStore })
   } catch (error) {
     return apiError(error)
   }
