@@ -27,12 +27,8 @@ test("public marketing and auth pages stay public while logged out", () => {
     "/landing",
     "/sign-in",
     "/sign-in?returnTo=%2Fdashboard",
-    "/sign-in-2",
-    "/sign-in-3",
     "/sign-up",
-    "/sign-up-2",
     "/forgot-password",
-    "/forgot-password-3",
     "/reset-password",
     "/accept-invite?token=abc",
     "/verify-company",
@@ -77,10 +73,7 @@ test("real app routes still require sign-in when logged out", () => {
     "/reports",
     "/settings",
     "/settings/billing",
-    "/users",
-    "/faqs",
-    "/tasks",
-    "/chat",
+    "/settings/team",
     "/pricing",
     "/review/token",
     "/platform",
@@ -95,7 +88,7 @@ test("real app routes still require sign-in when logged out", () => {
 })
 
 test("unknown paths 404 instead of redirecting to sign-in", () => {
-  for (const path of ["/not-a-real-page", "/funded-book", "/random/nested", "/dealsbook", "/feature", "/applyform"]) {
+  for (const path of ["/not-a-real-page", "/funded-book", "/random/nested", "/dealsbook", "/feature", "/applyform", "/sign-in-2", "/users", "/tasks", "/chat", "/faqs"]) {
     assert.equal(anonymousRequestDisposition(path), "not-found", path)
     assert.equal(requiresSignInRedirect(path), false, path)
     assert.equal(isProtectedAppPath(path), false, path)

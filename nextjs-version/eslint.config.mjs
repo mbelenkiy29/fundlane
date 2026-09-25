@@ -17,5 +17,8 @@ export default defineConfig([
     "build/**",
     "next-env.d.ts",
     "pnpm-workspace.yaml",
+    // Minified Edge bundles from scripts/supabase/build.mjs. Lint the TypeScript
+    // entries under scripts/supabase/entries instead.
+    "supabase/functions/**/runtime.js",
   ]),
 ]);

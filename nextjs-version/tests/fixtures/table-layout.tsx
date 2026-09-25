@@ -1,9 +1,6 @@
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Table, TableHeader, TableBody, TableFooter, TableRow, TableHead, TableCell } from "@/components/ui/table"
-import { DataTable } from "@/app/(dashboard)/tasks/components/data-table"
-import { columns } from "@/app/(dashboard)/tasks/components/columns"
-import tasks from "@/app/(dashboard)/tasks/data/tasks.json"
 import { RichResponse } from "@/components/mca/assistant/rich-response"
 import { ActivityStream } from "@/components/marketing/activity-stream"
 
@@ -57,8 +54,6 @@ function LayoutCheck() {
           <TableFooter><TableRow><TableCell colSpan={2}>Total</TableCell><TableCell className="text-right">Fixture total</TableCell></TableRow></TableFooter>
         </Table>
       </section>)}
-      <h2>Real task table: sort, filter, select, paginate, and open row menus</h2>
-      <DataTable columns={columns} data={tasks} />
       <h2>Assistant Markdown: right-aligned numeric column</h2>
       <RichResponse copy={false} text={"| Merchant | Amount |\n| :--- | ---: |\n" + Array.from({ length: 20 }, (_, i) => `| Merchant ${i} | ${i * 125} |`).join("\n")} />
       <div className="fundlane"><ActivityStream /></div>

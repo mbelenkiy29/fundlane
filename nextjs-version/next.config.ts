@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { sampleRouteRedirects } from "./src/lib/mca/sample-route-redirects";
 import { nextConfigHeaders } from "./src/lib/mca/security-headers";
 
 const nextConfig: NextConfig = {
@@ -59,6 +60,7 @@ const nextConfig: NextConfig = {
         destination: '/pipeline?create=1',
         permanent: false,
       },
+      ...sampleRouteRedirects,
     ];
   },
 };
