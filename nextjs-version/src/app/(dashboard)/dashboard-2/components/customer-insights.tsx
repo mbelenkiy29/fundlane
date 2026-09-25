@@ -57,27 +57,27 @@ export function CustomerInsights({
       </CardHeader>
       <CardContent>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 bg-muted/50 p-1 rounded-lg h-12">
+          <TabsList className="grid h-12 w-full min-w-0 grid-cols-3 rounded-lg bg-muted/50 p-1">
             <TabsTrigger
               value="growth"
-              className="cursor-pointer flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground"
+              className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <TrendingUp className="h-4 w-4" />
-              <span className="hidden sm:inline">Growth</span>
+              <span className="hidden md:inline">Growth</span>
             </TabsTrigger>
             <TabsTrigger
               value="demographics"
-              className="cursor-pointer flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground"
+              className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <UserIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Demographics</span>
+              <span className="hidden md:inline">Demographics</span>
             </TabsTrigger>
             <TabsTrigger
               value="regions"
-              className="cursor-pointer flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground"
+              className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <MapPin className="h-4 w-4" />
-              <span className="hidden sm:inline">Regions</span>
+              <span className="hidden md:inline">Regions</span>
             </TabsTrigger>
           </TabsList>
 

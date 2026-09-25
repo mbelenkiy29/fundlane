@@ -15,12 +15,12 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
   const newDeal = useOptionalNewDeal()
   const pathname = usePathname()
   return (
-    <header className="sticky top-0 z-20 flex h-(--header-height) shrink-0 items-center border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <div className="flex w-full items-center gap-2 px-4 lg:px-6">
+    <header className="sticky top-0 z-20 flex h-(--header-height) shrink-0 items-center overflow-x-clip border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="flex w-full min-w-0 items-center gap-2 px-4 lg:px-6">
         <SidebarTrigger className="-ml-1" />
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
           {session?.permissions?.actions.createDeal && newDeal && (
-            <Button type="button" size="sm" className="hidden sm:inline-flex" onClick={() => newDeal.open()}>
+            <Button type="button" size="sm" className="hidden md:inline-flex" onClick={() => newDeal.open()}>
               <Plus /> New deal
             </Button>
           )}

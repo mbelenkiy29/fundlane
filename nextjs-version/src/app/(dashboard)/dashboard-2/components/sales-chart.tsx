@@ -43,12 +43,12 @@ export function SalesChart({ kpis }: { kpis?: HomeKpis | null }) {
 
   return (
     <Card className="cursor-pointer">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <div>
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <CardTitle>Sales Performance</CardTitle>
           <CardDescription>Monthly funded vs commission</CardDescription>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Select value={timeRange} onValueChange={(value) => setTimeRange(value as Dashboard2SalesRange)}>
             <SelectTrigger className="w-32 cursor-pointer">
               <SelectValue />

@@ -54,7 +54,7 @@ export function Dashboard2Shell({
   React.useEffect(() => newDeal.subscribe(() => { void refresh() }), [newDeal, refresh])
 
   return (
-    <div className="flex-1 space-y-6 px-4 pt-0 lg:px-6">
+    <div className="min-w-0 flex-1 space-y-6 px-4 pt-0 lg:px-6">
         <div className="flex md:flex-row flex-col md:items-center justify-between gap-4 md:gap-6">
           <div className="flex flex-col gap-2">
             <h1 className="text-2xl font-bold tracking-tight">{firstName ? `Good afternoon, ${firstName}` : "Home"}</h1>
