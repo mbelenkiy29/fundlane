@@ -123,5 +123,5 @@ async function renderSampleStatementPdf(statement: SampleStatement, industry: st
     })
     y -= index === 0 ? 18 : 16
   }
-  return document.save()
+  return document.save({ useObjectStreams: false })
 }

@@ -2,6 +2,7 @@ import "./helpers/business-auth"
 import test, { after, afterEach, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { PDFDocument } from "pdf-lib"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
@@ -279,7 +280,9 @@ test("sample bank statements are labeled synthetic PDFs", async () => {
   assert.ok(pizza)
   const { statement, bytes } = await getSampleStatementPdf(pizza.id)
   assert.equal(Buffer.from(bytes.subarray(0, 5)).toString("ascii"), "%PDF-")
-  assert.match(Buffer.from(bytes).toString("latin1"), /SYNTHETIC SAMPLE/)
+  const parsed = await PDFDocument.load(bytes)
+  assert.match(parsed.getTitle() ?? "", /SYNTHETIC SAMPLE/)
+  assert.match(parsed.getSubject() ?? "", /Not a real account/)
   assert.match(statement.merchantName, /QA Test Pizza LLC/)
   assert.equal(createHash("sha256").update(bytes).digest("hex").length, 64)
 })
