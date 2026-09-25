@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, CheckCircle2, Loader2, Send } from "lucide-react"
+import { AlertCircle, CheckCircle2, FileSearch, Loader2, Send } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -89,6 +89,38 @@ function funderTitle(funder: SelectionFunder): string {
   return funder.nickname || funder.legalName
 }
 
+export function stampedCopyPreviewLabel(filename: string, funderName: string): string {
+  return `Preview stamped copy of ${filename} for ${funderName}`
+}
+
+export function StampedCopyPreviewButton({
+  filename,
+  funderName,
+  busy = false,
+  disabled = false,
+  onClick,
+}: {
+  filename: string
+  funderName: string
+  busy?: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={disabled || busy}
+      aria-label={stampedCopyPreviewLabel(filename, funderName)}
+      onClick={onClick}
+    >
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileSearch className="size-3.5" />}
+      Preview stamped copy
+    </Button>
+  )
+}
+
 export function SelectionPanel({ dealId }: { dealId: string }) {
   const [payload, setPayload] = React.useState<SelectionPayload>()
   const [selected, setSelected] = React.useState<string[]>([])
@@ -98,6 +130,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   const [error, setError] = React.useState<string>()
   const [message, setMessage] = React.useState<string>()
   const [results, setResults] = React.useState<ConfirmPayload["jobs"]>()
+  const [previewBusy, setPreviewBusy] = React.useState<string>()
 
   const load = React.useCallback(async () => {
     setError(undefined)
@@ -119,6 +152,40 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
       if (checked === true) return current.includes(id) ? current : [...current, id]
       return current.filter((item) => item !== id)
     })
+  }
+
+  async function previewStampedCopy(documentId: string, funderId: string, filename: string) {
+    const key = `${funderId}:${documentId}`
+    setPreviewBusy(key)
+    setError(undefined)
+    setMessage(undefined)
+    try {
+      const result = await requestJson<{
+        skipped: boolean
+        reason?: string
+        previewUrl?: string
+      }>(`/api/mca/submissions/document-protection/preview`, {
+        method: "POST",
+        body: JSON.stringify({ documentId, funderId }),
+      })
+      if (result.skipped) {
+        setMessage(result.reason === "disabled"
+          ? "Document protection is off. Turn it on in Settings → Connections to stamp outgoing copies."
+          : result.reason === "not_pdf"
+            ? `${filename} is not a PDF, so it cannot be stamped.`
+            : `${filename} was not stamped for this destination.`)
+        return
+      }
+      if (!result.previewUrl) {
+        setError("The stamped preview link could not be created.")
+        return
+      }
+      window.open(`${result.previewUrl}?preview=1`, "_blank", "noopener,noreferrer")
+    } catch (caught) {
+      setError(errorMessage(caught, "The stamped copy could not be previewed."))
+    } finally {
+      setPreviewBusy(undefined)
+    }
   }
 
   async function confirm() {
@@ -215,12 +282,27 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                       <ul className="space-y-1 text-xs text-muted-foreground">
                         {funder.checklist.length === 0 ? (
                           <li>No documents on this deal yet.</li>
-                        ) : funder.checklist.map((document) => (
-                          <li key={document.documentId}>
-                            {document.filename} · {document.category} · {document.checksum.slice(0, 12)}
-                            {document.excluded ? " · excluded" : ""}
-                          </li>
-                        ))}
+                        ) : funder.checklist.map((document) => {
+                          const previewKey = `${funder.id}:${document.documentId}`
+                          const canPreview = document.category === "statement" && !document.excluded
+                          return (
+                            <li key={document.documentId} className="flex flex-wrap items-center gap-2">
+                              <span>
+                                {document.filename} · {document.category} · {document.checksum.slice(0, 12)}
+                                {document.excluded ? " · excluded" : ""}
+                              </span>
+                              {canPreview && (
+                                <StampedCopyPreviewButton
+                                  filename={document.filename}
+                                  funderName={funderTitle(funder)}
+                                  busy={previewBusy === previewKey}
+                                  disabled={busy}
+                                  onClick={() => void previewStampedCopy(document.documentId, funder.id, document.filename)}
+                                />
+                              )}
+                            </li>
+                          )
+                        })}
                       </ul>
                     </div>
                   </div>

@@ -7,6 +7,7 @@ import { SmsConnectionsPanel } from "@/components/mca/sms"
 import { ProvidersPanel } from "@/components/mca/leads/providers-panel"
 import { WebhookConsole } from "@/components/mca/comms/webhook-console"
 import { AdapterCredentialsPanel } from "@/components/mca/submissions/adapter-credentials-panel"
+import { DocumentProtectionPanel } from "@/components/mca/submissions/document-protection-panel"
 import { IntegrationConnectionStatus } from "@/components/mca/integrations/connection-status"
 
 export default function ConnectionSettings() {
@@ -22,6 +23,7 @@ export default function ConnectionSettings() {
       <details><summary className="cursor-pointer text-sm">Existing manually configured SMS senders</summary><SmsConnectionsPanel /></details>
       <WebhookConsole />
       <ProvidersPanel />
+      <DocumentProtectionPanel />
       <AdapterCredentialsPanel />
       <div className="rounded-lg border p-5"><h3 className="font-semibold">Application intake</h3><p className="mt-1 text-sm text-muted-foreground">Connect forms, route applications, and track automatic underwriting.</p><Link href="/intake" className="mt-3 inline-block text-sm font-medium underline">Open Application Intake</Link></div>
       <ImportPanel />
