@@ -121,6 +121,12 @@ const subscribeViewport=(listener:()=>void)=>{
 }
 const mobileSnapshot=()=>window.matchMedia("(max-width: 640px)").matches
 const serverMobileSnapshot=()=>false
+const subscribeSearch=(listener:()=>void)=>{
+  window.addEventListener("popstate",listener)
+  return()=>window.removeEventListener("popstate",listener)
+}
+const googleFailedSnapshot=()=>new URLSearchParams(window.location.search).get("google")==="failed"
+const googleFailedServer=()=>false
 
 export function CalendarWorkspace({dealId}:{dealId?:string}) {
   const [date,setDate]=useState(()=>dateInZone(new Date(),"America/New_York"))
@@ -130,8 +136,7 @@ export function CalendarWorkspace({dealId}:{dealId?:string}) {
   const [scope,setScope]=useState("mine"),[feed,setFeed]=useState<CalendarFeed>(),[loading,setLoading]=useState(true),[error,setError]=useState("")
   const [revision,setRevision]=useState(0),[filters,setFilters]=useState<CalendarKind[]>(kinds.map(k=>k.id)),[showCancelled,setShowCancelled]=useState(false)
   const [dialog,setDialog]=useState<{event:CalendarEvent|null;date:string}|null>(null)
-  const [googleFailed,setGoogleFailed]=useState(false)
-  useEffect(()=>{setGoogleFailed(new URLSearchParams(window.location.search).get("google")==="failed")},[])
+  const googleFailed=useSyncExternalStore(subscribeSearch,googleFailedSnapshot,googleFailedServer)
   const timezone=feed?.timezone??"America/New_York"
   const days=useMemo(()=>{
     let start=date,count=1
