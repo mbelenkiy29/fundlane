@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from "@/lib/mca/documents/contracts"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "@/lib/mca/funders/contracts"
-import { firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
+import { FUNDER_FIELD_LIMITS, firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
 import type { SessionResponse } from "@/lib/mca/types"
@@ -369,8 +369,9 @@ export function FunderDirectoryPanel() {
                     {roleError && <p id={roleErrorId} role="alert" className="text-xs text-destructive">{roleError}</p>}
                   </div>
                   {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove contact ${index + 1}`} onClick={() => {
-                    setDraft({ ...draft, contacts: draft.contacts.filter((item) => item.key !== contact.key) })
-                    setFieldErrors((current) => remapIndexedFieldErrors(current, "contacts", index))
+                    const contacts = draft.contacts.filter((item) => item.key !== contact.key)
+                    setDraft({ ...draft, contacts })
+                    setFieldErrors((current) => remapIndexedFieldErrors(current, "contacts", index, contacts.length, FUNDER_FIELD_LIMITS.maxContacts))
                   }}><Trash2 /></Button>}
                 </div>
                 })}
@@ -400,8 +401,9 @@ export function FunderDirectoryPanel() {
                       {labelError && <p id={labelErrorId} role="alert" className="text-xs text-destructive">{labelError}</p>}
                     </div>
                     {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove route ${index + 1}`} onClick={() => {
-                      setDraft({ ...draft, routes: draft.routes.filter((item) => item.key !== route.key) })
-                      setFieldErrors((current) => remapIndexedFieldErrors(current, "routes", index))
+                      const routes = draft.routes.filter((item) => item.key !== route.key)
+                      setDraft({ ...draft, routes })
+                      setFieldErrors((current) => remapIndexedFieldErrors(current, "routes", index, routes.length, FUNDER_FIELD_LIMITS.maxRoutes))
                     }}><Trash2 /></Button>}
                   </div>
                   <Field label={destinationLabels[route.kind]} htmlFor={`route-destination-${route.key}`} error={fieldErrors[`routes.${index}.destination`]?.[0]}>

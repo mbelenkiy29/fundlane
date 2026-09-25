@@ -92,6 +92,8 @@ test("create funder and invitation forms render field-level errors", () => {
   assert.match(funder, /aria-describedby/)
   assert.match(funder, /firstFieldError/)
   assert.match(funder, /remapIndexedFieldErrors/)
+  assert.match(funder, /FUNDER_FIELD_LIMITS\.maxContacts/)
+  assert.match(funder, /FUNDER_FIELD_LIMITS\.maxRoutes/)
   assert.match(funder, /fieldErrors\.contacts/)
   assert.match(funder, /fieldErrors\.routes/)
   assert.match(funder, /Review the highlighted fields/)
@@ -117,13 +119,21 @@ test("funder row errors remap after an earlier row is removed", () => {
     "contacts.1.email": ["Enter a valid email address."],
     "contacts.1.name": ["Use at most 120 characters."],
     "routes.0.label": ["Enter a route label."],
-  }, "contacts", 0)
+  }, "contacts", 0, 50, 50)
   assert.deepEqual(remapped, {
     legalName: ["Enter the funder legal name."],
-    contacts: ["Use at most 50 contacts."],
     "contacts.0.email": ["Enter a valid email address."],
     "contacts.0.name": ["Use at most 120 characters."],
     "routes.0.label": ["Enter a route label."],
+  })
+
+  const stillOver = remapIndexedFieldErrors({
+    contacts: ["Use at most 50 contacts."],
+    "contacts.2.email": ["Enter a valid email address."],
+  }, "contacts", 0, 51, 50)
+  assert.deepEqual(stillOver, {
+    contacts: ["Use at most 50 contacts."],
+    "contacts.1.email": ["Enter a valid email address."],
   })
 })
 

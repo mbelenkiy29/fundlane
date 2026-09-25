@@ -169,11 +169,18 @@ export function remapIndexedFieldErrors(
   errors: Record<string, string[]>,
   prefix: string,
   removedIndex: number,
+  remainingCount?: number,
+  maxItems?: number,
 ): Record<string, string[]> {
   const next: Record<string, string[]> = {}
   const dotted = `${prefix}.`
+  const withinLimit = remainingCount !== undefined && maxItems !== undefined && remainingCount <= maxItems
   for (const [key, messages] of Object.entries(errors)) {
-    if (key === prefix || !key.startsWith(dotted)) {
+    if (key === prefix) {
+      if (!withinLimit) next[key] = messages
+      continue
+    }
+    if (!key.startsWith(dotted)) {
       next[key] = messages
       continue
     }
