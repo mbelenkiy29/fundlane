@@ -465,4 +465,17 @@ test("issue 74: settings writes are admin-only and previews stay workspace-scope
 
   const missing = await protectionFile(cookieRequest("/api/mca/submissions/document-protection/preview/file", "rep-session-token"))
   assert.equal(missing.status, 422)
+
+  const nullBody = await protectionPatch(cookieRequest("/api/mca/submissions/document-protection", "admin-session-token", {
+    method: "PATCH",
+    body: "null",
+  }))
+  assert.equal(nullBody.status, 400)
+
+  const { document: ungenerated } = await seedDeal()
+  const unread = await protectionFile(cookieRequest(
+    `/api/mca/submissions/document-protection/preview/file?documentId=${encodeURIComponent(ungenerated.id)}&funderId=${encodeURIComponent(harborId)}`,
+    "rep-session-token",
+  ))
+  assert.equal(unread.status, 409)
 })

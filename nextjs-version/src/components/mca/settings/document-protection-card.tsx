@@ -84,6 +84,16 @@ export function DocumentProtectionCard() {
 
   async function uploadLogo(file: File | undefined) {
     if (!file || !view?.canManage) return
+    if (file.size > 2 * 1024 * 1024) {
+      setError("Logo files must be 2 MB or smaller.")
+      if (fileInput.current) fileInput.current.value = ""
+      return
+    }
+    if (file.type && file.type !== "image/png" && file.type !== "image/jpeg") {
+      setError("Upload a PNG or JPEG shop logo.")
+      if (fileInput.current) fileInput.current.value = ""
+      return
+    }
     setSaving(true)
     setError("")
     try {
@@ -155,7 +165,7 @@ export function DocumentProtectionCard() {
           <p className="text-xs text-muted-foreground">
             {view?.settings.hasLogo
               ? "A shop logo is on file and will watermark protected statement copies."
-              : "Upload a PNG or JPEG logo. It is applied only to outgoing copies, never to the stored original."}
+              : "Upload a PNG or JPEG logo up to 2 MB. It is applied only to outgoing copies, never to the stored original."}
           </p>
         </div>
       </CardContent>
