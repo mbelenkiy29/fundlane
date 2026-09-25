@@ -153,6 +153,16 @@ export function formatMonthLabel(month: string): string {
   return new Date(Date.UTC(year, monthIndex, 1)).toLocaleString("en-US", { month: "short", timeZone: "UTC" })
 }
 
+export function formatDashboardTimestamp(asOf: string, timezone = "UTC"): string {
+  const parsed = Date.parse(asOf)
+  if (!Number.isFinite(parsed)) return "—"
+  return new Date(parsed).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: timezone,
+  })
+}
+
 export function formatPercent(rate: number | null): string {
   if (rate == null || !Number.isFinite(rate)) return NA_LABEL
   const percent = rate * 100
