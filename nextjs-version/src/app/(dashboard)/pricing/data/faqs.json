@@ -12,12 +12,12 @@
   {
     "id": 3,
     "question": "What payment methods do you accept?",
-    "answer": "We accept all major credit cards (Visa, MasterCard, American Express), PayPal, and bank transfers for enterprise customers. All payments are processed securely."
+    "answer": "Subscriptions are paid by card through Stripe Checkout. All payments are processed securely by Stripe."
   },
   {
     "id": 4,
-    "question": "Do you offer discounts for annual plans?",
-    "answer": "Yes, save 20% when you choose annual billing on any plan. You can switch to annual billing from your account settings at any time."
+    "question": "Do you offer annual billing?",
+    "answer": "Fundlane is currently billed monthly."
   },
   {
     "id": 5,
