@@ -1,3 +1,4 @@
+import { ExportPanel } from "@/components/mca/exports/export-panel"
 import { FunderAnalytics } from "@/components/mca/reports/funder-analytics"
 import { LeadRoi } from "@/components/mca/reports/lead-roi"
 import { RepFunnel } from "@/components/mca/reports/rep-funnel"
@@ -12,6 +13,9 @@ export default function ReportsPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Rep, team, funder and lead reports load from verified workspace data. Incomplete periods stay labeled and permission-restricted views do not invent zeros.
         </p>
+      </div>
+      <div id="mca-export-panel">
+        <ExportPanel />
       </div>
       <ApplicationOutreachReport />
       <div id="mca-reports-rep-funnel">

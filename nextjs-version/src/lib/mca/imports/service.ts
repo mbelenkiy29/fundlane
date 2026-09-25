@@ -11,7 +11,7 @@ import { ingestApplication } from "../intake/service"
 import { listMemberships } from "../memberships"
 import { validateAssignmentPool } from "./assignment"
 import type { ImportCommitResult, ImportPreview, ImportSource, ImportableField, LeadBatch, MappingProfile, UpdatePreview, UpdateRowPreview } from "./contracts"
-import { IMPORTABLE_FIELDS } from "./contracts"
+import { BULK_UPDATE_BATCH_NAME, BULK_UPDATE_SOURCE_NAME, IMPORTABLE_FIELDS } from "./contracts"
 import { assertMapping, heuristicMapping, mapRow, normalizeHeader } from "./mapping"
 import { parseSpreadsheet } from "./parser"
 import {
@@ -219,7 +219,32 @@ export async function previewCsvUpdate(actor: DealActor, input:{sourceId:string;
     if(deal&&status)before.status=deal.status
     return{id:newId(),rowNumber:parsed.headerRow+index+1,dealId,expectedVersion,before,changes,status,clearFields,errors}
   }))
-  return insertUpdatePreview({workspaceId:actor.workspaceId,sourceId:input.sourceId,batchId:input.batchId,filename:input.filename,mapping,headers:parsed.headers,rows})
+  const preview = await insertUpdatePreview({workspaceId:actor.workspaceId,sourceId:input.sourceId,batchId:input.batchId,filename:input.filename,mapping,headers:parsed.headers,rows})
+  await recordAuditEvent({
+    context: actor,
+    action: "import.update_previewed",
+    resourceType: "import_run",
+    resourceId: preview.runId,
+    metadata: {
+      sourceId: input.sourceId,
+      batchId: input.batchId,
+      filename: input.filename,
+      rowCount: preview.rows.length,
+      errorCount: preview.rows.filter((row) => row.errors.length).length,
+    },
+    correlationId: actor.correlationId,
+  })
+  return preview
+}
+
+export async function ensureBulkUpdateRegistry(actor: DealActor): Promise<{ source: ImportSource; batch: LeadBatch }> {
+  requireAdmin(actor)
+  const [sources, batches] = await Promise.all([sourcesFor(actor.workspaceId), batchesFor(actor.workspaceId)])
+  const source = sources.find((item) => item.active && item.kind === "spreadsheet" && item.name === BULK_UPDATE_SOURCE_NAME)
+    ?? await createImportSource(actor, { name: BULK_UPDATE_SOURCE_NAME, kind: "spreadsheet" })
+  const batch = batches.find((item) => item.sourceId === source.id && item.name === BULK_UPDATE_BATCH_NAME)
+    ?? await createLeadBatch(actor, { sourceId: source.id, name: BULK_UPDATE_BATCH_NAME })
+  return { source, batch }
 }
 
 function nestedDealChanges(changes:Record<string,unknown>,current:Awaited<ReturnType<typeof getDealForDocument>>):DealWriteInput { const result:Record<string,unknown>={},address:Record<string,unknown>={...(current.address??{})};for(const [field,value] of Object.entries(changes)){const resolved=value===null?undefined:value;if(field.startsWith("address."))address[field.slice(8)]=resolved;else result[field]=resolved}if(Object.keys(changes).some((field)=>field.startsWith("address.")))result.address=address;return result as DealWriteInput }
@@ -235,7 +260,16 @@ export async function commitCsvUpdate(actor:DealActor,input:{runId:string;expect
     try{const current=await getDealForDocument(actor,row.dealId);if(current.version!==row.expectedVersion)throw new AppError(409,"version_conflict","This deal changed after preview.");const next=await applyBulkDealUpdate(actor,row.dealId,{expectedVersion:row.expectedVersion,changes:nestedDealChanges(row.changes,current),status:row.status,reason:`Bulk update ${input.runId}`,transactionCheckpoint:async(database)=>{if(!await recordRowResultInTransaction(database,actor.workspaceId,input.runId,row.id,"updated",row.dealId,null,commitToken))throw new AppError(409,"import_commit_lease_lost","Another worker reclaimed this update before its deal change.")}})
       created++;results.push([String(row.rowNumber),"updated",next.id,""])
     }catch(error){if(error instanceof AppError&&error.code==="import_commit_lease_lost")throw error;failed++;const message=error instanceof Error?error.message:"Unknown row error";await recordCommittedRow(actor.workspaceId,input.runId,row.id,"failed",null,message,commitToken);results.push([String(row.rowNumber),"failed",row.dealId,message])}}
-  const result:ImportCommitResult={runId:input.runId,state:failed?"failed":"completed",created,skipped,failed,resultsCsv:results.map((row)=>row.map(csvCell).join(",")).join("\r\n")};if(!await finishRun(actor.workspaceId,input.runId,result,commitToken))throw new AppError(409,"import_commit_lease_lost","Another worker reclaimed this update before finalization. Refresh its status.");return result
+  const result:ImportCommitResult={runId:input.runId,state:failed?"failed":"completed",created,skipped,failed,resultsCsv:results.map((row)=>row.map(csvCell).join(",")).join("\r\n")};if(!await finishRun(actor.workspaceId,input.runId,result,commitToken))throw new AppError(409,"import_commit_lease_lost","Another worker reclaimed this update before finalization. Refresh its status.")
+  await recordAuditEvent({
+    context: actor,
+    action: "import.update_committed",
+    resourceType: "import_run",
+    resourceId: input.runId,
+    metadata: { created, skipped, failed, state: result.state },
+    correlationId: actor.correlationId,
+  })
+  return result
 }
 
 export async function importStatus(actor:DealActor,runId:string):Promise<ImportPreview|UpdatePreview> { requireAdmin(actor);const preview=await findPreview(actor.workspaceId,runId)??await findUpdatePreview(actor.workspaceId,runId);if(!preview)throw new AppError(404,"import_run_not_found","The import run was not found.");return preview }
