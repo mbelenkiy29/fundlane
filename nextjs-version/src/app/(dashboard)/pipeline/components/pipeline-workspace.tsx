@@ -21,7 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { allowedTransitions } from "@/lib/mca/deals/pipeline"
-import { dealListQueryString } from "@/lib/mca/deals/filters"
+import { dealListQueryString, parseDealListFilters } from "@/lib/mca/deals/filters"
 import { DealForm, draftMissingRequiredFields, emptyDraft, formPayload, type DraftForm } from "@/components/mca/deals/deal-form"
 import { MissingFieldsCount, MissingSubmissionFields } from "@/components/mca/deals/missing-submission-fields"
 import { useNewDeal } from "@/components/mca/deals/new-deal-provider"
@@ -46,7 +46,7 @@ import { DealAssistant } from "@/components/mca/assistant/deal-assistant"
 import { RemindFunder } from "@/components/mca/comms/remind-funder"
 import {
   DEAL_STATUSES, DEAL_STATUS_LABELS,
-  type DealConflict, type DealDetail, type DealFilters, type DealListResponse, type DealStatus,
+  type DealConflict, type DealDetail, type DealListResponse, type DealStatus,
 } from "@/lib/mca/deals/schema"
 
 type ViewMode = "table" | "kanban"
@@ -95,9 +95,19 @@ export function DealsWorkspace() {
   const [selected, setSelected] = useState<DealDetail | null>(null); const [detailOpen, setDetailOpen] = useState(false); const [editMode, setEditMode] = useState(false); const [focusField, setFocusField] = useState<string | null>(null)
   useAssistantDeal(selected?.id, selected?.displayId)
   const [conflict, setConflict] = useState<DealConflict | null>(null); const [note, setNote] = useState(""); const [transition, setTransition] = useState<DealStatus | "">("")
-  const [funderDraft, setFunderDraft] = useState(() => searchParams.get("funder") ?? "")
+  const urlFunder = searchParams.get("funder") ?? ""
+  const [funderDraft, setFunderDraft] = useState(urlFunder)
+  const lastUrlFunder = useRef(urlFunder)
+  if (lastUrlFunder.current !== urlFunder) {
+    lastUrlFunder.current = urlFunder
+    setFunderDraft(urlFunder)
+  }
   const view = (searchParams.get("view") === "kanban" ? "kanban" : "table") as ViewMode
   const listQuery = useMemo(() => dealListQueryString(searchParams), [searchParams])
+  const listFilters = useMemo(() => {
+    const parsed = parseDealListFilters(searchParams, "omit")
+    return parsed.ok ? parsed.filters : {}
+  }, [searchParams])
   const loadGeneration = useRef(0)
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -121,17 +131,20 @@ export function DealsWorkspace() {
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
-  useEffect(() => { setFunderDraft(searchParams.get("funder") ?? "") }, [searchParams])
 
   const setParam = useCallback((key: string, value?: string) => { const params = new URLSearchParams(searchParams); if (value) params.set(key, value); else params.delete(key); router.replace(`${pathname}?${params}`) }, [pathname, router, searchParams])
+  const searchParamsRef = useRef(searchParams)
+  const setParamRef = useRef(setParam)
+  searchParamsRef.current = searchParams
+  setParamRef.current = setParam
   useEffect(() => {
     const handle = window.setTimeout(() => {
       const next = funderDraft.trim() || undefined
-      const current = searchParams.get("funder")?.trim() || undefined
-      if (next !== current) setParam("funder", next)
+      const current = searchParamsRef.current.get("funder")?.trim() || undefined
+      if (next !== current) setParamRef.current("funder", next)
     }, 300)
     return () => window.clearTimeout(handle)
-  }, [funderDraft, searchParams, setParam])
+  }, [funderDraft])
   useEffect(() => {
     if (searchParams.get("create") !== "1") return
     newDeal.open()
@@ -194,17 +207,7 @@ export function DealsWorkspace() {
 
   const assignees = useMemo(() => [...new Set(result?.deals.flatMap((deal) => deal.assignments.map((item) => item.membershipId)) ?? [])], [result])
   const stages = useMemo(() => DEAL_STATUSES.filter((status) => (result?.counts[status] ?? 0) > 0 || ["lead", "new_application", "ready_to_submit", "submitted", "offer", "contract", "funded"].includes(status)), [result])
-  const exportFilters = useMemo<DealFilters>(() => {
-    const status = searchParams.get("status")
-    return {
-      search: searchParams.get("q")?.trim() || undefined,
-      statuses: status && DEAL_STATUSES.includes(status as DealStatus) ? [status as DealStatus] : undefined,
-      assignee: searchParams.get("assignee")?.trim() || undefined,
-      createdFrom: searchParams.get("from") || undefined,
-      createdTo: searchParams.get("to") || undefined,
-      funder: searchParams.get("funder")?.trim() || undefined,
-    }
-  }, [searchParams])
+  const exportFilters = listFilters
 
   const dialogMissingFields = selected
     ? (editMode ? draftMissingRequiredFields(form) : selected.missingRequiredFields)
@@ -217,13 +220,13 @@ export function DealsWorkspace() {
       <div className="relative"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" placeholder="Search name or deal ID" defaultValue={searchParams.get("q") ?? ""} onKeyDown={(event) => { if (event.key === "Enter") setParam("q", event.currentTarget.value) }} /></div>
       <Select value={searchParams.get("status") && DEAL_STATUSES.includes(searchParams.get("status") as DealStatus) ? searchParams.get("status")! : "all"} onValueChange={(value) => setParam("status", value === "all" ? undefined : value)}><SelectTrigger><SelectValue placeholder="All statuses" /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem>{DEAL_STATUSES.map((status) => <SelectItem value={status} key={status}>{DEAL_STATUS_LABELS[status]}</SelectItem>)}</SelectContent></Select>
       <Select value={searchParams.get("assignee") ?? "all"} onValueChange={(value) => setParam("assignee", value === "all" ? undefined : value)}><SelectTrigger><SelectValue placeholder="All assignees" /></SelectTrigger><SelectContent><SelectItem value="all">All assignees</SelectItem>{assignees.map((id) => <SelectItem value={id} key={id}>{id.slice(0, 10)}…</SelectItem>)}</SelectContent></Select>
-      <Input type="date" aria-label="Created from" value={searchParams.get("from") ?? ""} onChange={(event) => setParam("from", event.target.value)} /><Input type="date" aria-label="Created to" value={searchParams.get("to") ?? ""} onChange={(event) => setParam("to", event.target.value)} />
+      <Input type="date" aria-label="Created from" value={listFilters.createdFrom ?? ""} onChange={(event) => setParam("from", event.target.value)} /><Input type="date" aria-label="Created to" value={listFilters.createdTo ?? ""} onChange={(event) => setParam("to", event.target.value)} />
       <div className="flex rounded-md border p-1"><Button size="sm" aria-label="Table view" variant={view === "table" ? "secondary" : "ghost"} onClick={() => setParam("view", "table")}><LayoutList className="size-4" /></Button><Button size="sm" aria-label="Kanban view" variant={view === "kanban" ? "secondary" : "ghost"} onClick={() => setParam("view", "kanban")}><Columns3 className="size-4" /></Button></div>
     </div><div className="mt-3"><Input placeholder="Filter by funder name" value={funderDraft} onChange={(event) => setFunderDraft(event.target.value)} /></div></CardContent></Card>
     <ExportPanel filters={exportFilters} />
     {failure ? <Card className="border-destructive/40"><CardContent className="flex flex-col items-center gap-3 py-10 text-center"><AlertCircle className="size-8 text-destructive" /><div><p className="font-medium">Deals could not be loaded</p><p className="text-sm text-muted-foreground">{failure}</p></div><Button variant="outline" onClick={() => void load()}><RefreshCw className="mr-2 size-4" />Retry</Button></CardContent></Card> : null}
     {loading && result ? <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="size-4 animate-spin" />Updating deals…</p> : null}
-    {loading && !result && !failure ? <div className="space-y-3" role="status" aria-label="Loading deals">{[0,1,2].map((item) => <Skeleton key={item} className="h-20 w-full" />)}</div> : !result?.deals.length && !failure ? <Card><CardContent className="flex flex-col items-center gap-3 py-14 text-center"><div className="rounded-full bg-muted p-4"><Building2 className="size-7" /></div><div><p className="font-medium">No deals match this view</p><p className="text-sm text-muted-foreground">Clear filters or save a partial merchant application.</p></div><Button onClick={() => newDeal.open()}><Plus className="mr-2 size-4" />New deal</Button></CardContent></Card> : result?.deals.length ? view === "table" ? <Card className="overflow-hidden"><Table><TableHeader><TableRow><TableHead>Merchant</TableHead><TableHead>Status</TableHead><TableHead>Requested</TableHead><TableHead>Assignees</TableHead><TableHead>Readiness</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{result.deals.map((deal) => <TableRow key={deal.id} className="cursor-pointer" onClick={() => void openDeal(deal.id)}><TableCell><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}{deal.dbaName ? ` · ${deal.dbaName}` : ""}</p></TableCell><TableCell>{statusBadge(deal.status)}</TableCell><TableCell>{deal.requestedAmount ? money.format(deal.requestedAmount) : "—"}</TableCell><TableCell>{deal.assignments.length || "—"}</TableCell><TableCell>{deal.draftState === "partial" ? <MissingFieldsCount fields={deal.missingRequiredFields} /> : <span className="text-emerald-600">Ready</span>}</TableCell><TableCell className="text-muted-foreground">{new Date(deal.updatedAt).toLocaleDateString("en-US", { timeZone: "UTC" })}</TableCell></TableRow>)}</TableBody></Table></Card> : <div className="overflow-x-auto pb-3"><div className="flex min-w-max gap-3">{stages.map((status) => <div className="w-72 rounded-xl bg-muted/45 p-3" key={status}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-medium">{DEAL_STATUS_LABELS[status]}</p><Badge variant="secondary">{result.counts[status] ?? 0}</Badge></div><div className="space-y-2">{result.deals.filter((deal) => deal.status === status).map((deal) => <Card className="cursor-pointer transition-shadow hover:shadow-sm" key={deal.id} onClick={() => void openDeal(deal.id)}><CardContent className="p-3"><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}</p><div className="mt-3 flex items-center justify-between text-xs"><span>{deal.requestedAmount ? money.format(deal.requestedAmount) : "No request"}</span>{deal.draftState === "partial" && <MissingFieldsCount fields={deal.missingRequiredFields} />}</div></CardContent></Card>)}</div></div>)}</div></div> : null}
+    {loading && !result && !failure ? <div className="space-y-3" role="status" aria-label="Loading deals">{[0,1,2].map((item) => <Skeleton key={item} className="h-20 w-full" />)}</div> : !result?.deals.length && !failure ? <Card><CardContent className="flex flex-col items-center gap-3 py-14 text-center"><div className="rounded-full bg-muted p-4"><Building2 className="size-7" /></div><div><p className="font-medium">No deals match this view</p><p className="text-sm text-muted-foreground">Clear filters or save a partial merchant application.</p></div><Button onClick={() => newDeal.open()}><Plus className="mr-2 size-4" />New deal</Button></CardContent></Card> : result?.deals.length && !failure ? view === "table" ? <Card className="overflow-hidden"><Table><TableHeader><TableRow><TableHead>Merchant</TableHead><TableHead>Status</TableHead><TableHead>Requested</TableHead><TableHead>Assignees</TableHead><TableHead>Readiness</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{result.deals.map((deal) => <TableRow key={deal.id} className="cursor-pointer" onClick={() => void openDeal(deal.id)}><TableCell><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}{deal.dbaName ? ` · ${deal.dbaName}` : ""}</p></TableCell><TableCell>{statusBadge(deal.status)}</TableCell><TableCell>{deal.requestedAmount ? money.format(deal.requestedAmount) : "—"}</TableCell><TableCell>{deal.assignments.length || "—"}</TableCell><TableCell>{deal.draftState === "partial" ? <MissingFieldsCount fields={deal.missingRequiredFields} /> : <span className="text-emerald-600">Ready</span>}</TableCell><TableCell className="text-muted-foreground">{new Date(deal.updatedAt).toLocaleDateString("en-US", { timeZone: "UTC" })}</TableCell></TableRow>)}</TableBody></Table></Card> : <div className="overflow-x-auto pb-3"><div className="flex min-w-max gap-3">{stages.map((status) => <div className="w-72 rounded-xl bg-muted/45 p-3" key={status}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-medium">{DEAL_STATUS_LABELS[status]}</p><Badge variant="secondary">{result.counts[status] ?? 0}</Badge></div><div className="space-y-2">{result.deals.filter((deal) => deal.status === status).map((deal) => <Card className="cursor-pointer transition-shadow hover:shadow-sm" key={deal.id} onClick={() => void openDeal(deal.id)}><CardContent className="p-3"><p className="font-medium">{deal.legalName}</p><p className="text-xs text-muted-foreground">{deal.displayId}</p><div className="mt-3 flex items-center justify-between text-xs"><span>{deal.requestedAmount ? money.format(deal.requestedAmount) : "No request"}</span>{deal.draftState === "partial" && <MissingFieldsCount fields={deal.missingRequiredFields} />}</div></CardContent></Card>)}</div></div>)}</div></div> : null}
 
     <Dialog open={detailOpen} onOpenChange={setDetailOpen}><DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">{!selected ? <><DialogHeader className="sr-only"><DialogTitle>Loading deal</DialogTitle><DialogDescription>Loading the selected merchant deal.</DialogDescription></DialogHeader><div className="space-y-3 py-8"><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div></> : <><DialogHeader><div className="flex flex-wrap items-center gap-2"><DialogTitle>{selected.legalName || "Untitled draft"}</DialogTitle>{statusBadge(selected.status)}<Badge variant="secondary">v{selected.version}</Badge><AssistantButton onOpen={() => setDetailOpen(false)} /></div><DialogDescription>{selected.displayId} · Updated {new Date(selected.updatedAt).toLocaleString("en-US", { timeZone: "UTC" })}</DialogDescription></DialogHeader>
       {!editMode && <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3"><div className="mr-auto text-sm"><p className="font-medium">{selected.contactName || "Merchant contact"}</p><p className="text-muted-foreground">{selected.contactEmail || "No email"} · {selected.contactPhone || "No phone"}</p></div>{(["sms","email"] as const).map(channel=><Button key={channel} size="sm" variant="outline" onClick={()=>{setDetailTabs(current=>({...current,[selected.id]:"messages"}));setMessageChannels(current=>({...current,[selected.id]:channel}))}}>{channel==="sms"?"Text":"Email"}</Button>)}</div>}

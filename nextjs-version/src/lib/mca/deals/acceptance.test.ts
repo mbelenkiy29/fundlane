@@ -166,6 +166,12 @@ test("pipeline list query ignores UI-only params and drops invalid optional filt
     assert.equal(omitted.filters.createdFrom, "2026-09-01")
     assert.equal(omitted.filters.createdTo, undefined)
   }
+  const bookmarkDates = parseDealListFilters(new URLSearchParams("from=09/25/2026&to=2026-09-25"), "omit")
+  assert.equal(bookmarkDates.ok, true)
+  if (bookmarkDates.ok) {
+    assert.equal(bookmarkDates.filters.createdFrom, undefined)
+    assert.equal(bookmarkDates.filters.createdTo, "2026-09-25")
+  }
   const funded = parseDealListFilters(new URLSearchParams("status=funded&assignee=member-1"), "reject")
   assert.equal(funded.ok, true)
   if (funded.ok) assert.deepEqual(funded.filters.statuses, ["funded"])
