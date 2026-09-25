@@ -29,6 +29,7 @@ test("page ChatKit chrome enables the header and uses normal density", () => {
   assert.equal(options.disclaimer?.text, CHATKIT_DISCLAIMER)
   assert.deepEqual(options.startScreen?.prompts, CHATKIT_START_PROMPTS)
   assert.equal(options.startScreen?.greeting, "What would you like to know?")
+  assert.equal(options.frameTitle, "Fundlane assistant")
   assert.equal(options.theme.color?.accent?.primary, "oklch(0.42 0.16 155)")
 })
 

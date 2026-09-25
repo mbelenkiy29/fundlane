@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Account access",
-  description: "Secure access to your MCA workspace",
+  description: "Secure access to your Fundlane workspace",
 };
 
 export default function AuthLayout({

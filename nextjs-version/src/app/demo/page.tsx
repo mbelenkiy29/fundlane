@@ -3,15 +3,15 @@ import { Check } from "lucide-react"
 import { MarketingShell } from "@/components/marketing/shell"
 import { DemoForm } from "@/components/marketing/demo-form"
 import { getDemoConfiguration } from "@/lib/marketing/config"
-import { marketingMetadata } from "@/lib/marketing/metadata"
+import { DEMO_DESCRIPTION, marketingMetadata } from "@/lib/marketing/metadata"
 
-export const metadata: Metadata = marketingMetadata("Request a demo", "/demo")
+export const metadata: Metadata = marketingMetadata("Request a demo", "/demo", DEMO_DESCRIPTION)
 export const dynamic = "force-dynamic"
 
 export default function DemoPage() {
   const { enabled, privacyUrl } = getDemoConfiguration()
   return (
-    <MarketingShell>
+    <MarketingShell jsonLd={{ title: "Request a demo", path: "/demo", description: DEMO_DESCRIPTION }}>
       <main id="main" className="fl-container fl-demo-page">
         <div className="fl-demo-intro">
           <p className="fl-section-label">Your brokerage. Your workflow.</p>

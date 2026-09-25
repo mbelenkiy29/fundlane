@@ -91,7 +91,10 @@ const faqs = [
 
 export function MarketingHome() {
   return (
-    <MarketingShell immersive>
+    <MarketingShell
+      immersive
+      jsonLd={{ title: "MCA brokerage software, from application to renewal", path: "/" }}
+    >
       <main id="main">
         <section className="fl-hero">
           <Image src={heroImage} alt="" fill sizes="100vw" preload className="fl-hero-background" />

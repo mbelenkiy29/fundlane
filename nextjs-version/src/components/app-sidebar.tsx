@@ -33,7 +33,7 @@ const groups = [
 ]
 
 export function AppSidebar({ session, ...props }: React.ComponentProps<typeof Sidebar> & { session?: SessionResponse }) {
-  const identity = { workspace: session?.membership?.workspaceName ?? "MCA Workspace", name: session?.user?.name ?? "User", email: session?.user?.email ?? "" }
+  const identity = { workspace: session?.membership?.workspaceName ?? "Fundlane", name: session?.user?.name ?? "User", email: session?.user?.email ?? "" }
   const pages = session?.permissions?.pages
 
   return (
@@ -42,7 +42,7 @@ export function AppSidebar({ session, ...props }: React.ComponentProps<typeof Si
         <SidebarMenu><SidebarMenuItem><SidebarMenuButton size="lg" asChild>
           <Link href="/dashboard">
             <div className="flex aspect-square size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"><Logo size={25} aria-hidden="true" /></div>
-            <div className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate text-sm font-semibold">{identity.workspace}</span><span className="flex items-center gap-1 truncate text-xs text-muted-foreground"><Building2 className="size-3" /> MCA workspace</span></div>
+            <div className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate text-sm font-semibold">{identity.workspace}</span><span className="flex items-center gap-1 truncate text-xs text-muted-foreground"><Building2 className="size-3" /> Fundlane</span></div>
           </Link>
         </SidebarMenuButton></SidebarMenuItem></SidebarMenu>
       </SidebarHeader>

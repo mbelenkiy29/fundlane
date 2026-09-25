@@ -11,7 +11,7 @@ export const metadata = {
 }
 
 export default function FeaturesPage() {
-  return <MarketingShell><main id="main">
+  return <MarketingShell jsonLd={{ title: "Explore every part of your MCA workflow", path: "/features", description: "Explore Fundlane’s pipeline, intake, underwriting, funder matching, submissions, AI assistant, closing, renewals, reporting, and team tools." }}><main id="main">
     <section className="fl-container fl-features-intro">
       <p className="fl-section-label">The Fundlane workspace</p>
       <h1>Every part of the deal.<br />Connected.</h1>

@@ -26,7 +26,7 @@ export function chatkitUiOptions(input: {
 > & { theme: ThemeOption } {
   const page = input.surface === "page"
   return {
-    frameTitle: "MCA workspace assistant",
+    frameTitle: "Fundlane assistant",
     theme: {
       colorScheme: input.colorScheme,
       radius: "round",

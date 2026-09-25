@@ -8,13 +8,13 @@ import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: {
-    default: "MCA Workspace",
-    template: "%s | MCA Workspace",
+    default: "Fundlane",
+    template: "%s | Fundlane",
   },
   description: "A secure workspace for merchant cash advance teams.",
-  applicationName: "MCA Workspace",
+  applicationName: "Fundlane",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "MCA Workspace", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "Fundlane", statusBarStyle: "default" },
 };
 
 export default function RootLayout({
