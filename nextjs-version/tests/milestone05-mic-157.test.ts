@@ -110,6 +110,17 @@ test("MIC-157 rejects private and loopback PSF destinations", async () => {
   assert.equal((await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int count FROM mca_psf_config WHERE workspace_id=?").get(ids.workspace))?.count, 0)
 })
 
+test("MIC-157 closing snapshot reports persisted PSF webhook readiness", async () => {
+  const before = await getClosingSnapshot(actor(), dealId)
+  assert.equal(before.psfDeliveryReady, false)
+  assert.match(before.productionGates.psfDelivery, /available after an administrator connects/i)
+  await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true, destination: "https://example.com/psf", signingSecret })
+  const after = await getClosingSnapshot(actor(), dealId)
+  assert.equal(after.psfDeliveryReady, true)
+  assert.equal(after.capabilities.psfVisible, true)
+  assert.match(after.productionGates.psfDelivery, /webhook is configured/i)
+})
+
 test("MIC-157 API keys cannot read PSF records, submit bank details, or configure PSF", async () => {
   await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true, destination: "https://example.com/psf", signingSecret })
   setClosingTransportForTests({ async deliver(request) { return { state: "sent", correlationId: request.correlationId, externalId: "psf-ext-visible" } } })

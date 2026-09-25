@@ -59,6 +59,7 @@ export interface ClosingSnapshot {
   psfRequests: PsfRequestSummary[]; messagePreviews: OfferMessagePreview[]
   deliveries: ClosingDelivery[]; pitchedRevisionIds: string[]
   capabilities: { psfVisible: boolean; psfAdmin: boolean }
+  psfDeliveryReady: boolean
   merchantContact: { email?: string; phone?: string }
   assignableOwners: Array<{ id: string; name: string }>
   merchantSmsAccounts: Array<{ id: string; label: string; senderMasked: string; providerConfigured: boolean; isDefault: boolean }>

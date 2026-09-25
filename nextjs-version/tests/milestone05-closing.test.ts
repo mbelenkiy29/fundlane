@@ -583,6 +583,7 @@ test("closing panel ranks highest/all without picker lock and keeps revisionId o
 test("production gates stay qualified and closing UI renders all four lines", async () => {
   const snapshot = await getClosingSnapshot(actor(), dealId)
   const gates = snapshot.productionGates
+  assert.equal(snapshot.psfDeliveryReady, false)
   assert.equal(typeof gates.merchantEmail, "string")
   assert.equal(typeof gates.merchantSms, "string")
   assert.equal(typeof gates.contractDelivery, "string")
@@ -600,6 +601,8 @@ test("production gates stay qualified and closing UI renders all four lines", as
   assert.match(source, /productionGates\.merchantSms/)
   assert.match(source, /productionGates\.contractDelivery/)
   assert.match(source, /productionGates\.psfDelivery/)
+  assert.match(source, /psfDeliveryReady/)
+  assert.equal(source.includes("psfConfig.destination.trim()"), false)
   assert.match(source, /Provider readiness/)
   assert.equal(/\bready\b/i.test(gates.merchantEmail), false)
 })

@@ -7,6 +7,7 @@ import {
   emailChannelStatus,
   emailComposerGate,
   funderSubmissionChannelStatus,
+  psfProviderReady,
   reminderSendGate,
   smsChannelStatus,
   submissionConfirmGate,
@@ -30,10 +31,48 @@ test("sms connection status uses onboarding and account config without inventing
     onboarding: { registrationState: "submitted", platformReady: false, optOutReady: false, numbers: [] },
   }).label, "Pending")
   assert.equal(smsChannelStatus({
-    onboarding: { registrationState: "approved", platformReady: true, optOutReady: true, numbers: [{ id: "n1" }] },
+    onboarding: {
+      reviewState: "approved",
+      registrationState: "approved",
+      platformReady: true,
+      optOutReady: true,
+      numbers: [{ id: "n1" }],
+    },
   }).label, "Connected")
   assert.equal(smsChannelStatus({ accounts: [{ state: "active", providerConfigured: true }] }).label, "Connected")
   assert.equal(smsChannelStatus({ onboarding: { suspended: true, registrationState: "approved" } }).label, "Revoked")
+  assert.equal(smsChannelStatus({
+    onboarding: {
+      suspended: true,
+      reviewState: "approved",
+      registrationState: "approved",
+      platformReady: true,
+      optOutReady: true,
+      numbers: [{ id: "n1" }],
+    },
+  }).label, "Revoked")
+  assert.equal(smsChannelStatus({
+    onboarding: {
+      reviewState: "pending",
+      registrationState: "approved",
+      platformReady: true,
+      optOutReady: true,
+      numbers: [{ id: "n1" }],
+    },
+  }).label, "Pending")
+  assert.match(smsChannelStatus({
+    onboarding: {
+      reviewState: "pending",
+      registrationState: "submitted",
+      platformReady: true,
+      optOutReady: true,
+      numbers: [{ id: "n1" }],
+    },
+  }).detail, /business review approval|carrier registration approval/)
+  assert.equal(smsChannelStatus({
+    accounts: [{ state: "active", providerConfigured: true }],
+    onboarding: { suspended: true, registrationState: "approved" },
+  }).label, "Connected")
 })
 
 test("funder submission status is not connected until a route or credential exists", () => {
@@ -43,6 +82,12 @@ test("funder submission status is not connected until a route or credential exis
   assert.equal(funderSubmissionChannelStatus({
     funders: [{ active: true, routes: [{ active: true, kind: "email" }] }],
   }).label, "Connected")
+  assert.equal(funderSubmissionChannelStatus({
+    funders: [{ routes: [{ active: true, kind: "api" }] }],
+  }).label, "Connected")
+  assert.equal(funderSubmissionChannelStatus({
+    funders: [{ active: false, routes: [{ active: true, kind: "email" }] }],
+  }).label, "Pending")
   assert.equal(funderSubmissionChannelStatus({
     credentials: [{ hasCredential: true, active: true }],
   }).label, "Connected")
@@ -114,4 +159,10 @@ test("closing and reminder send actions stay disabled until ready", () => {
   }).enabled, true)
   assert.equal(reminderSendGate({ canSend: true, body: "" }).enabled, false)
   assert.equal(reminderSendGate({ canSend: true, body: "Checking status" }).enabled, true)
+  assert.equal(psfProviderReady({}), false)
+  assert.equal(psfProviderReady({ enabled: true, destinationConfigured: true }), false)
+  assert.equal(psfProviderReady({
+    enabled: true, destinationConfigured: true, signingSecretConfigured: true,
+  }), true)
+  assert.equal(psfProviderReady({ docuSealConfigured: true }), true)
 })

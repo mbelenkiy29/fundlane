@@ -23,6 +23,7 @@ type SmsAccountsPayload = {
 
 type SmsOnboardingPayload = {
   registrationState?: string
+  reviewState?: string
   platformReady?: boolean
   optOutReady?: boolean
   numbers?: unknown[]

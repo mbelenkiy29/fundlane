@@ -36,6 +36,7 @@ export type SmsAccountStatusInput = {
 
 export type SmsOnboardingStatusInput = {
   registrationState?: string
+  reviewState?: string
   platformReady?: boolean
   optOutReady?: boolean
   numbers?: unknown[]
@@ -124,18 +125,14 @@ export function smsChannelStatus(input: {
   const href = "/settings/connections#company-sms"
   const accounts = input.accounts ?? []
   const readyAccount = accounts.some((account) => account.state !== "revoked" && account.providerConfigured)
-  const numbers = input.onboarding?.numbers ?? []
-  const onboarded = Boolean(input.onboarding?.platformReady && input.onboarding.optOutReady && numbers.length)
-  if (readyAccount || onboarded) {
+  if (readyAccount) {
     return {
       channel: "sms",
       title,
       href,
       label: "Connected",
       ready: true,
-      detail: readyAccount
-        ? "A text account is configured and can send when consent is recorded."
-        : "Company SMS has an assigned number.",
+      detail: "A text account is configured and can send when consent is recorded.",
     }
   }
   if (input.onboarding?.suspended) {
@@ -148,6 +145,22 @@ export function smsChannelStatus(input: {
       detail: "Company SMS is suspended.",
     }
   }
+  const numbers = input.onboarding?.numbers ?? []
+  const reviewApproved = input.onboarding?.reviewState === "approved"
+  const registrationApproved = input.onboarding?.registrationState === "approved"
+  const onboarded = Boolean(
+    reviewApproved && registrationApproved && input.onboarding?.platformReady && input.onboarding.optOutReady && numbers.length,
+  )
+  if (onboarded) {
+    return {
+      channel: "sms",
+      title,
+      href,
+      label: "Connected",
+      ready: true,
+      detail: "Company SMS has an assigned number.",
+    }
+  }
   const onboardingStarted = Boolean(
     input.onboarding?.registrationState && input.onboarding.registrationState !== "not_started",
   )
@@ -157,6 +170,8 @@ export function smsChannelStatus(input: {
       missing.push("provider credentials")
     }
     if (input.onboarding && !input.onboarding.platformReady) missing.push("platform Twilio setup")
+    if (input.onboarding && onboardingStarted && !reviewApproved) missing.push("business review approval")
+    if (input.onboarding && onboardingStarted && !registrationApproved) missing.push("carrier registration approval")
     if (input.onboarding && onboardingStarted && !input.onboarding.optOutReady) missing.push("Advanced Opt-Out")
     if (input.onboarding && onboardingStarted && !numbers.length) missing.push("an assigned number")
     return {
@@ -186,7 +201,9 @@ export function funderSubmissionChannelStatus(input: {
   const href = "/settings/connections#funder-adapters"
   const funders = input.funders ?? []
   const credentials = input.credentials ?? []
-  const activeRoutes = funders.flatMap((funder) => (funder.routes ?? []).filter((route) => route.active))
+  const activeRoutes = funders.flatMap((funder) =>
+    funder.active === false ? [] : (funder.routes ?? []).filter((route) => route.active),
+  )
   const readyCredential = credentials.some((credential) => credential.hasCredential && credential.active !== false)
   if (activeRoutes.length || readyCredential) {
     const kinds = [...new Set(activeRoutes.map((route) => route.kind))]
@@ -319,6 +336,18 @@ export function closingMerchantPreviewGate(input: {
     return { enabled: false, missing: ["Record the merchant’s current opt-in evidence before preparing or sending a text."] }
   }
   return input.smsReady ? { enabled: true, missing: [] } : { enabled: false, missing: ["A ready text sender and merchant opt-in are required."] }
+}
+
+export function psfProviderReady(input: {
+  docuSealConfigured?: boolean
+  enabled?: boolean
+  destinationConfigured?: boolean
+  signingSecretConfigured?: boolean
+}): boolean {
+  return Boolean(
+    input.docuSealConfigured
+    || (input.enabled && input.destinationConfigured && input.signingSecretConfigured),
+  )
 }
 
 export function closingPsfDeliverGate(input: {
