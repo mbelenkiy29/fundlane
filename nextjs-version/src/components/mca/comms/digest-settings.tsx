@@ -144,7 +144,7 @@ export function DigestSettings() {
           <Mail className="size-4" /> Daily deal activity digest
         </CardTitle>
         <CardDescription>
-          Opt in to a workspace-local {hourLabel(payload?.defaultLocalSendHour ?? 6)} email of new, submitted, approved, and funded deals from the previous 24 hours.
+          Opt in to a daily report email at a set local time. Content is role-appropriate: administrators see workspace-wide activity, and other roles see only deals they can access.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -177,7 +177,7 @@ export function DigestSettings() {
             <div className="space-y-1">
               <Label htmlFor="digest-enabled">Enable daily reports</Label>
               <p className="text-sm text-muted-foreground">
-                Emails use actual pipeline event times, not later edits. A deal funded three days ago does not appear because it was edited today.
+                Emails use actual pipeline event times, not later edits. A deal funded three days ago does not appear because it was edited today. Each recipient gets role-appropriate content for their deal visibility.
               </p>
             </div>
           </div>

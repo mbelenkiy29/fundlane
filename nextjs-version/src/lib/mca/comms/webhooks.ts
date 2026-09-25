@@ -813,6 +813,31 @@ export async function disableWorkflowWebhookEndpoint(actor: DealActor, id: strin
   return updateWorkflowWebhookEndpoint(actor, id, { enabled: false })
 }
 
+export async function removeWorkflowWebhookEndpoint(actor: DealActor, id: string): Promise<{ id: string; removed: true }> {
+  const current = await loadEndpoint(actor.workspaceId, asResourceId(id, "id"))
+  const now = nowIso()
+  await withImmediateTransaction(async () => {
+    await db().prepare(
+      `UPDATE mca_workflow_webhook_outbox
+       SET state = 'failed', last_error = ?, updated_at = ?
+       WHERE workspace_id = ? AND endpoint_id = ? AND state = 'pending'`,
+    ).run("Webhook endpoint removed.", now, actor.workspaceId, current.id)
+    const deleted = await db().prepare<{ id: string }>(
+      "DELETE FROM mca_workflow_webhook_endpoints WHERE workspace_id = ? AND id = ? RETURNING id",
+    ).get(actor.workspaceId, current.id)
+    if (!deleted) throw new AppError(404, "webhook_endpoint_not_found", "The webhook endpoint was not found.")
+  })
+  await recordAuditEvent({
+    context: actor,
+    action: "webhook.endpoint_removed",
+    resourceType: "workflow_webhook_endpoint",
+    resourceId: current.id,
+    metadata: { label: current.label, destinationHost: destinationHost(current.destination_url) },
+    correlationId: actor.correlationId,
+  })
+  return { id: current.id, removed: true }
+}
+
 export async function publishWorkflowWebhook(actor: DealActor, input: PublishWorkflowWebhookInput): Promise<PublishWorkflowWebhookResult> {
   if (!EVENT_SET.has(input.eventType)) invalid("eventType", "Choose a workflow webhook event.")
   const deal = await getDealForDocument(actor, asResourceId(input.dealId, "dealId"))
@@ -935,8 +960,12 @@ async function postEnvelope(input: {
         "x-correlation-id": input.correlationId,
       },
       body: input.body,
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     })
+    if (response.status >= 300 && response.status < 400) {
+      return { ok: false, httpStatus: response.status, error: "The webhook destination redirected the request." }
+    }
     if (response.ok) return { ok: true, httpStatus: response.status }
     return { ok: false, httpStatus: response.status, error: "The webhook destination did not accept the event." }
   } catch (error) {

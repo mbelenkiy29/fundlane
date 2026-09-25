@@ -72,7 +72,7 @@ export async function createOffer(actor: DealActor, input: {
       return replay
     }
   }
-  return withImmediateTransaction(async (database) => {
+  const created = await withImmediateTransaction(async (database) => {
     if (input.externalId?.trim()) {
       await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:${source}:${input.externalId.trim()}`)
       const replay = await findOfferByExternal(actor.workspaceId, source, input.externalId.trim(), database)
@@ -93,6 +93,8 @@ export async function createOffer(actor: DealActor, input: {
     await audit(database, actor, "offer.created", offer.id, { dealId: offer.dealId, revisionId: offer.currentRevisionId, source: offer.source, incompleteFields: normalized.incompleteFields })
     return offer
   })
+  await (await import("../comms/workflow-events")).emitOfferCreatedWebhook(actor, created)
+  return created
 }
 
 export async function reviseOffer(actor: DealActor, offerId: string, input: { expectedRevisionNumber: number; terms: OfferTermsInput }): Promise<OfferRecord> {
@@ -113,8 +115,8 @@ export async function reviseOffer(actor: DealActor, offerId: string, input: { ex
 }
 
 export async function selectOfferRevision(actor: DealActor, input: { dealId: string; offerId: string; revisionId: string; selected: boolean; reason?: string }): Promise<OfferRecord> {
-  await getDealForDocument(actor, input.dealId)
-  return withImmediateTransaction(async (database) => {
+  const before = await getDealForDocument(actor, input.dealId)
+  const saved = await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:offer-select:${input.dealId}`)
     await database.prepare("SELECT id FROM mca_offers WHERE workspace_id = ? AND deal_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, input.dealId, input.offerId)
     const offer = await findOffer(actor.workspaceId, input.offerId, database)
@@ -132,10 +134,21 @@ export async function selectOfferRevision(actor: DealActor, input: { dealId: str
     await setSelection({ workspaceId: actor.workspaceId, dealId: input.dealId, offerId: input.offerId, revisionId: input.revisionId, selected: input.selected, actorUserId: actor.userId, reason: input.reason?.trim() || undefined }, database)
     if (input.selected) await syncDealToOffer(database, actor, input.dealId)
     await audit(database, actor, input.selected ? "offer.selected" : "offer.deselected", offer.id, { dealId: offer.dealId, revisionId: revision.id, reason: input.reason?.trim() || undefined })
-    const saved = await findOffer(actor.workspaceId, input.offerId, database)
-    if (!saved) throw new Error("Offer disappeared after selection")
-    return saved
+    const selected = await findOffer(actor.workspaceId, input.offerId, database)
+    if (!selected) throw new Error("Offer disappeared after selection")
+    return selected
   })
+  if (input.selected) {
+    const after = await getDealForDocument(actor, input.dealId)
+    if (after.status !== before.status) {
+      await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
+        dealId: input.dealId,
+        fromStatus: before.status,
+        toStatus: after.status,
+      })
+    }
+  }
+  return saved
 }
 
 function requestedRevision(offer: OfferRecord, input: { revisionId?: string }): OfferRevision | undefined {

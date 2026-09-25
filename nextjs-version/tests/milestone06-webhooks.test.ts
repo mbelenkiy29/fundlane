@@ -480,6 +480,9 @@ test("MIC-158: webhook console states, API permissions match the UI, and secrets
   assert.match(source, /Test delivery does not mark workflow events delivered/)
   assert.match(source, /Notify originators/)
   assert.match(source, /Replay preserves event identity/)
+  assert.match(source, /Remove webhook/)
+  assert.match(source, /Delivery log/)
+  assert.match(source, /Deal status updated/)
 
   const empty = await webhooksGet(cookieRequest("/api/mca/comms/webhooks", "admin-session-token"))
   assert.equal(empty.status, 200)
@@ -566,9 +569,11 @@ test("MIC-158: webhook console states, API permissions match the UI, and secrets
   assertHmac(posted[0]!, patchedBody.signingSecret!)
   assertNoSecret(posted[0]!.envelope)
 
-  const disabled = await webhookDelete(cookieRequest(`/api/mca/comms/webhooks/${createdBody.id}`, "admin-session-token", { method: "DELETE" }), params(createdBody.id))
-  assert.equal(disabled.status, 200)
-  assert.equal((await disabled.json() as { enabled: boolean }).enabled, false)
+  const removed = await webhookDelete(cookieRequest(`/api/mca/comms/webhooks/${createdBody.id}`, "admin-session-token", { method: "DELETE" }), params(createdBody.id))
+  assert.equal(removed.status, 200)
+  assert.equal((await removed.json() as { removed: boolean; id: string }).removed, true)
+  const afterRemove = await webhookGet(cookieRequest(`/api/mca/comms/webhooks/${createdBody.id}`, "admin-session-token"), params(createdBody.id))
+  assert.equal(afterRemove.status, 404)
 
   const repGet = await webhooksGet(cookieRequest("/api/mca/comms/webhooks", "rep-session-token"))
   assert.equal(repGet.status, 403)

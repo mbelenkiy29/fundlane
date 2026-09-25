@@ -429,6 +429,7 @@ test("MIC-146: profile opt-in API matches the UI, validation and permissions, se
   assert.match(source, /role="alert"/)
   assert.match(source, /No deal activity in the current digest window/)
   assert.match(source, /Enable daily reports/)
+  assert.match(source, /role-appropriate/)
 
   const initial = await digestGet(cookieRequest(`/api/mca/comms/digest?nowIso=${encodeURIComponent(NOW)}`, "admin-session-token"))
   assert.equal(initial.status, 200)

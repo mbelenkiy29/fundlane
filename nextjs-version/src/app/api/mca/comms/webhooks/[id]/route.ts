@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import {
-  disableWorkflowWebhookEndpoint,
   getWorkflowWebhookEndpoint,
+  removeWorkflowWebhookEndpoint,
   requireWebhookAdmin,
   requireWebhookAdminRead,
   updateWorkflowWebhookEndpoint,
@@ -37,7 +37,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(request: Request, context: RouteContext) {
   try {
     const actor = await requireWebhookAdmin(request)
-    return NextResponse.json(await disableWorkflowWebhookEndpoint(actor, (await context.params).id), { headers: noStore })
+    return NextResponse.json(await removeWorkflowWebhookEndpoint(actor, (await context.params).id), { headers: noStore })
   } catch (error) {
     return apiError(error)
   }

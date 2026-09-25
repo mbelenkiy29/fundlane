@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, CheckCircle2, LoaderCircle, RotateCcw, Webhook } from "lucide-react"
+import { AlertCircle, CheckCircle2, LoaderCircle, RotateCcw, Trash2, Webhook } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,7 +13,7 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 
 const EVENT_TYPES = [
   { id: "offer.created", label: "Offer created" },
-  { id: "deal.transitioned", label: "Deal transitioned" },
+  { id: "deal.transitioned", label: "Deal status updated" },
   { id: "deal.assigned", label: "Deal assigned" },
   { id: "submission.created", label: "Submission created" },
 ] as const
@@ -166,6 +166,24 @@ export function WebhookConsole() {
     }
   }
 
+  async function removeEndpoint(endpointId: string) {
+    if (!window.confirm("Remove this webhook endpoint? Pending deliveries will fail. Historical deliveries stay in the log.")) {
+      return
+    }
+    setBusyId(endpointId)
+    setError(undefined)
+    setMessage(undefined)
+    try {
+      await requestJson(`/api/mca/comms/webhooks/${encodeURIComponent(endpointId)}`, { method: "DELETE" })
+      setMessage("Webhook endpoint removed.")
+      await load()
+    } catch (caught) {
+      setError(errorMessage(caught, "Webhook endpoint could not be removed."))
+    } finally {
+      setBusyId(undefined)
+    }
+  }
+
   async function testEndpoint(endpointId: string) {
     setBusyId(endpointId)
     setError(undefined)
@@ -203,7 +221,7 @@ export function WebhookConsole() {
           <Webhook className="size-4" /> Workflow webhooks
         </CardTitle>
         <CardDescription>
-          POST versioned deal, offer, assignment, and submission envelopes to HTTPS destinations. Replay preserves event identity.
+          Admins can add, test, and remove HTTPS destinations for offer-created and deal-status-updated events. Deliveries are signed, retried on failure, and listed in the delivery log. Replay preserves event identity.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -293,16 +311,21 @@ export function WebhookConsole() {
               {endpoint.notifyOriginator ? " · originators" : ""}
               {endpoint.notifyCloser ? " · closers" : ""}
             </p>
-            <Button type="button" variant="outline" size="sm" disabled={busyId === endpoint.id} onClick={() => void testEndpoint(endpoint.id)}>
-              Test webhook
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" disabled={busyId === endpoint.id} onClick={() => void testEndpoint(endpoint.id)}>
+                Test webhook
+              </Button>
+              <Button type="button" variant="outline" size="sm" disabled={busyId === endpoint.id} onClick={() => void removeEndpoint(endpoint.id)}>
+                <Trash2 className="size-3.5" /> Remove webhook
+              </Button>
+            </div>
           </div>
         ))}
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">Deliveries</h3>
+          <h3 className="text-sm font-medium">Outbox</h3>
           {!payload?.outbox.length ? (
-            <p className="text-sm text-muted-foreground">No webhook deliveries yet.</p>
+            <p className="text-sm text-muted-foreground">No webhook outbox items yet.</p>
           ) : (
             <ul className="space-y-2">
               {payload.outbox.map((item) => (
@@ -314,6 +337,29 @@ export function WebhookConsole() {
                   <Button type="button" variant="outline" size="sm" disabled={busyId === item.id} onClick={() => void replay(item.id)}>
                     <RotateCcw className="size-3.5" /> Replay
                   </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium">Delivery log</h3>
+          {!payload?.deliveries.length ? (
+            <p className="text-sm text-muted-foreground">No webhook deliveries yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {payload.deliveries.map((item) => (
+                <li key={item.id} className="rounded-md border px-3 py-2 text-sm">
+                  <p>
+                    <span className="font-medium">{eventLabel(item.eventType)}</span> · {item.state} · attempt {item.attempt}
+                    {item.httpStatus != null ? ` · HTTP ${item.httpStatus}` : ""}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    event id {item.eventId}
+                    {item.error ? ` · ${item.error}` : ""}
+                    {` · ${item.createdAt}`}
+                  </p>
                 </li>
               ))}
             </ul>
