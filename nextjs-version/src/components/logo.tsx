@@ -1,4 +1,4 @@
-import { useId, type SVGProps } from "react"
+import type { SVGProps } from "react"
 
 interface LogoProps extends SVGProps<SVGSVGElement> {
   size?: number
@@ -7,9 +7,11 @@ interface LogoProps extends SVGProps<SVGSVGElement> {
 export const FUNDLANE_MARK_PATH =
   "M9 9h15l-4 4H9V9Zm0 7h11l-4 4H9v-4Zm0 7h7l-4 4H9v-4Z"
 
+/** Square plus F holes, so the letter reveals the parent background on any `currentColor`. */
+export const FUNDLANE_MARK_CUTOUT_PATH = `M0 0h32v32H0z ${FUNDLANE_MARK_PATH}`
+
 /** Existing Fundlane “F” mark. The F is cut out so it stays readable on light or dark `currentColor`. */
 export function Logo({ size = 24, className, ...props }: LogoProps) {
-  const maskId = `fundlane-mark-${useId().replace(/:/g, "")}`
   return (
     <svg
       width={size}
@@ -20,13 +22,7 @@ export function Logo({ size = 24, className, ...props }: LogoProps) {
       className={className}
       {...props}
     >
-      <defs>
-        <mask id={maskId}>
-          <rect width="32" height="32" fill="#ffffff" />
-          <path d={FUNDLANE_MARK_PATH} fill="#000000" />
-        </mask>
-      </defs>
-      <rect width="32" height="32" fill="currentColor" mask={`url(#${maskId})`} />
+      <path d={FUNDLANE_MARK_CUTOUT_PATH} fill="currentColor" fillRule="evenodd" />
     </svg>
   )
 }
