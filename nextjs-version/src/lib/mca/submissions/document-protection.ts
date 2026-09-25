@@ -118,10 +118,11 @@ export async function updateDocumentProtectionSettings(actor: DealActor, input: 
   if (!isAdmin(actor)) denied("Only workspace administrators can update document protection.")
   if (!input || typeof input !== "object" || Array.isArray(input)) invalid("enabled", "enabled must be true or false.")
   if (typeof input.enabled !== "boolean") invalid("enabled", "enabled must be true or false.")
+  const enabled = input.enabled
   const view = await withTransaction(async () => {
     const current = await getWatermarkSettings(actor)
-    await updateStampSettings(actor, { enabled: input.enabled })
-    if (input.enabled && current.settings.hasLogo) {
+    await updateStampSettings(actor, { enabled })
+    if (enabled && current.settings.hasLogo) {
       await updateWatermarkSettings(actor, { enabled: true })
     } else {
       await updateWatermarkSettings(actor, { enabled: false })
