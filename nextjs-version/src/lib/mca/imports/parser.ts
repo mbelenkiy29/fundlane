@@ -6,7 +6,7 @@ import * as XLSX from "xlsx"
 import { AppError } from "../errors"
 import type { ImportFormat, ParsedSpreadsheet } from "./contracts"
 
-const MAX_ROWS = 1_000
+const MAX_ROWS = 10_000
 const MAX_COLUMNS = 200
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 
@@ -108,13 +108,14 @@ export function parseSpreadsheet(input: { filename: string; bytes: Uint8Array })
     if (format === "xlsx" ? !isZip : !isOle) throw new AppError(422, "spreadsheet_invalid", "The Excel file could not be read. Check the file and try again.")
     try {
       // Only cell values are read. Formulas, macros, links, and workbook code are never evaluated.
-      const workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, bookVBA: false })
+      // Allow the header search's 20 leading rows and one overflow row without parsing the rest.
+      const workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, bookVBA: false, sheetRows: MAX_ROWS + 21 })
       sheetName = workbook.SheetNames[0] ?? ""
       if (!sheetName) throw new Error("No worksheet")
       const sheet = workbook.Sheets[sheetName]
       const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1")
       if (range.e.c - range.s.c + 1 > MAX_COLUMNS) throw new AppError(422, "spreadsheet_column_limit", `Import at most ${MAX_COLUMNS} columns.`)
-      if (range.e.r - range.s.r + 1 > MAX_ROWS + 20) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
+      if (sheet["!fullref"] || range.e.r - range.s.r + 1 > MAX_ROWS + 20) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
       matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: "", blankrows: false }).map((row) => row.map(cleanCell))
       encoding = "binary"; warnings = workbook.SheetNames.length > 1 ? [`Only the first worksheet (${sheetName}) was imported.`] : []
     } catch (error) {
