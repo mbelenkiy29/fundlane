@@ -5,7 +5,13 @@ import assert from "node:assert/strict"
 import { canActorAccessDeal, normalizePrimaryAssignments, permittedAssignmentIds } from "./access-policy"
 import { inclusiveUtcDateBounds, reconcilePipelineCounts } from "./filters"
 import { allowedTransitions, canTransition } from "./pipeline"
-import { submissionMissingFields, validateDealInput } from "./validation"
+import {
+  describeMissingRequiredFields,
+  missingRequiredFieldAnchor,
+  missingRequiredFieldLabel,
+  submissionMissingFields,
+  validateDealInput,
+} from "./validation"
 
 const actor = (overrides: Partial<DealActor> = {}): DealActor => ({
   workspaceId: "workspace-a", userId: "user-manager", membershipId: "manager-1", role: "manager",
@@ -40,6 +46,23 @@ test("optional requestedTermMonths accepts 1–60 integers and rejects out-of-ra
   assert.ok(validateDealInput({ requestedTermMonths: 61 }).requestedTermMonths?.length)
   assert.ok(validateDealInput({ requestedTermMonths: 12.5 }).requestedTermMonths?.length)
   assert.ok(validateDealInput({ requestedTermMonths: -3 }).requestedTermMonths?.length)
+})
+
+test("missing required fields expose human names and form anchors from the same keys as the count", () => {
+  const missing = submissionMissingFields({ legalName: "Harbor Coffee LLC", owners: [], address: {} })
+  assert.ok(missing.length > 0)
+  const described = describeMissingRequiredFields(missing)
+  assert.equal(described.length, missing.length)
+  assert.deepEqual(described.map((item) => item.key), missing)
+  for (const item of described) {
+    assert.notEqual(item.label, item.key)
+    assert.match(item.anchor, /^deal-field-/)
+  }
+  assert.equal(missingRequiredFieldLabel("legalName"), "Legal name")
+  assert.equal(missingRequiredFieldLabel("address.line1"), "Street address")
+  assert.equal(missingRequiredFieldLabel("owners.0.firstName"), "Owner 1 first name")
+  assert.equal(missingRequiredFieldAnchor("address.postalCode"), "deal-field-postalCode")
+  assert.equal(missingRequiredFieldAnchor("owners.1.ownershipPercent"), "deal-field-owners-1-ownershipPercent")
 })
 
 test("optional requestedTermMonths is not a submission-required field", () => {
