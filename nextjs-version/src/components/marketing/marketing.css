@@ -159,6 +159,22 @@
 .fl-footer nav { display: flex; gap: 26px; flex-wrap: wrap; font-size: 13px; align-items: flex-start; }
 .fl-footer-bottom { border-top: 1px solid var(--fl-line); display: flex; justify-content: space-between; margin-top: 40px; padding-top: 22px; font-size: 11px; color: var(--fl-muted); }
 .fl-features-intro { text-align: center; padding-block: 85px 55px; }
+.fl-help { padding-block: 72px 100px; }
+.fl-help h1 { font-size: clamp(40px, 5vw, 64px); margin: 12px 0 18px; }
+.fl-help h2 { font-size: clamp(28px, 3vw, 38px); margin-bottom: 22px; }
+.fl-help > p { max-width: 720px; font-size: 18px; }
+.fl-help section { margin-top: 64px; }
+.fl-help-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.fl-help-card { display: block; padding: 26px; border: 1px solid var(--fl-line); background: #111; }
+.fl-help-card:hover { border-color: var(--fl-blue); }
+.fl-help-card h3 { font-size: 22px; }
+.fl-help-card p { margin: 12px 0 22px; }
+.fl-help-card span { color: var(--fl-blue); }
+.fl-help-resources { border-top: 1px solid var(--fl-line); padding-top: 40px; }
+.fl-help-resources p { margin: 10px 0; }
+.fl-help-article { max-width: 850px; }
+.fl-help-article ol { list-style: decimal; padding-left: 24px; margin: 44px 0; }
+.fl-help-article li { padding-left: 8px; margin-bottom: 24px; }
 .fl-features-intro h1 { font-size: clamp(42px, 5vw, 68px); }
 .fl-features-intro > p:not(.fl-section-label) { max-width: 620px; font-size: 18px; margin: 25px auto 0; }
 .fl-feature-jumps { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: 1000px; padding-bottom: 65px; }

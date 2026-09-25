@@ -41,7 +41,7 @@ export function MobileNav() {
   return <details ref={ref} className="fl-mobile-nav">
     <summary><Menu className="fl-menu-open" size={22} /><X className="fl-menu-close" size={22} /><span className="fl-menu-open fl-sr-only">Open navigation</span><span className="fl-menu-close fl-sr-only">Close navigation</span></summary>
     <nav aria-label="Mobile navigation" onClick={event => { if ((event.target as HTMLElement).closest("a")) { ref.current!.open = false; ref.current!.querySelector("summary")!.focus() } }}>
-      <a href="/features">Features</a><a href="/changelog">Changelog</a><a href="/#workflow">How it works</a><a href="/#faq">FAQ</a><a href="/sign-in">Sign in</a><a href="/demo">Book a demo <span aria-hidden="true">↗</span></a>
+      <a href="/features">Features</a><a href="/changelog">Changelog</a><a href="/help">Help</a><a href="/#workflow">How it works</a><a href="/#faq">FAQ</a><a href="/sign-in">Sign in</a><a href="/demo">Book a demo <span aria-hidden="true">↗</span></a>
     </nav>
   </details>
 }

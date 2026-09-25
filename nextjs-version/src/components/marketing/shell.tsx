@@ -4,6 +4,7 @@ import { Logo } from "@/components/logo"
 import { marketingHeading, marketingMetric, marketingMono } from "@/lib/fonts"
 import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { getDemoConfiguration } from "@/lib/marketing/config"
+import { getSupportConfig } from "@/lib/marketing/support-config"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
@@ -54,6 +55,7 @@ export function MarketingShell({
   jsonLd?: { title: string; path: string; description?: string }
 }) {
   const { privacyUrl } = getDemoConfiguration()
+  const { statusUrl, roadmapUrl, supportEmail } = getSupportConfig()
   return (
     <div className={`fundlane ${marketingHeading.variable} ${marketingMono.variable} ${marketingMetric.variable}${immersive ? " fl-immersive" : ""}`}>
       {jsonLd && <MarketingJsonLd {...jsonLd} />}
@@ -66,6 +68,7 @@ export function MarketingShell({
           <nav className="fl-desktop-nav" aria-label="Main navigation">
             <Link href="/features">Features</Link>
             <Link href="/changelog">Changelog</Link>
+            <Link href="/help">Help</Link>
             <Link href="/#workflow">How it works</Link>
             <Link href="/#faq">FAQ</Link>
           </nav>
@@ -89,9 +92,13 @@ export function MarketingShell({
             <nav aria-label="Footer navigation">
               <Link href="/features">Features</Link>
               <Link href="/changelog">Changelog</Link>
+              <Link href="/help">Help center</Link>
               <Link href="/#workflow">How it works</Link>
               <Link href="/demo">Book a demo</Link>
               <Link href="/sign-in">Sign in</Link>
+              {statusUrl && <a href={statusUrl}>System status</a>}
+              {roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
+              {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
               {privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>
           </div>
