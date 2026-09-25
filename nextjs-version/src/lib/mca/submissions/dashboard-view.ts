@@ -102,7 +102,7 @@ export function submissionGuidance(state: string): string | null {
   if (state === "failed")
     return "Delivery failed. Open the deal’s Submissions tab to review the error and retry after correcting it."
   if (state === "blocked_duplicate")
-    return "A recent submission blocked this attempt. Review the existing submission and retry eligibility in the deal."
+    return "A recent submission of this deal to this funder is blocked for 2 minutes, and again for 24 hours unless someone who can submit provides an explicit override."
   if (state === "pending_portal")
     return "Complete this submission in the funder portal using the deal’s manual portal tools."
   if (state === "skipped")

@@ -50,9 +50,9 @@ function funderName(payload: Payload, funderId: string): string {
   return match?.nickname || match?.legalName || funderId
 }
 
-function modeLabel(mode: AnalysisMode): string {
+function modeLabel(mode: AnalysisMode, automaticSendEnabled = true): string {
   if (mode === "analyze_only") return "Analyze only"
-  if (mode === "automatic_send") return "Automatic send"
+  if (mode === "automatic_send") return automaticSendEnabled ? "Automatic send" : "Automatic send (not available)"
   return "Review first"
 }
 
@@ -114,7 +114,7 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
       return
     }
     if (mode === "automatic_send" && payload && !payload.settings.automaticSendEnabled) {
-      setError("Automatic send is disabled until an administrator enables it.")
+      setError("Automatic send is not available until an administrator enables it.")
       setBusy(false)
       return
     }
@@ -127,7 +127,7 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
       if (next.run?.state === "blocked" && next.run.reason === "no_qualified_funder") {
         setMessage("No qualified funders. Disqualified funders were not selected.")
       } else if (next.run?.state === "blocked" && next.run.reason === "automatic_send_disabled") {
-        setError("Automatic send is disabled until an administrator enables it.")
+        setError("Automatic send is not available until an administrator enables it.")
       } else if (next.run?.state === "blocked" && next.run.reason === "completeness_not_ready") {
         setError("Document completeness is not ready.")
       } else if (next.run?.state === "blocked" && next.run.reason === "positions_unconfirmed") {
@@ -158,7 +158,7 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
         <div>
           <CardTitle className="flex items-center gap-2"><Sparkles className="size-5" />Funder analysis</CardTitle>
           <CardDescription>
-            Workspace default is {payload ? modeLabel(payload.settings.mode) : "review first"} with top {payload?.settings.topN ?? 5}.
+            Workspace default is {payload ? modeLabel(payload.settings.mode, payload.settings.automaticSendEnabled) : "review first"} with top {payload?.settings.topN ?? 5}.
             Run-level overrides do not change those defaults.
           </CardDescription>
         </div>
@@ -176,7 +176,9 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
               <SelectContent>
                 <SelectItem value="analyze_only">Analyze only</SelectItem>
                 <SelectItem value="review_first">Review first</SelectItem>
-                <SelectItem value="automatic_send">Automatic send</SelectItem>
+                <SelectItem value="automatic_send" disabled={payload ? !payload.settings.automaticSendEnabled : true}>
+                  {payload?.settings.automaticSendEnabled ? "Automatic send" : "Automatic send (not available)"}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -197,7 +199,10 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
           </div>
         </div>
         {payload && !payload.settings.automaticSendEnabled && (
-          <p className="text-xs text-muted-foreground">Automatic send stays blocked until an administrator enables it. Analyze-only never changes selection or sends.</p>
+          <p className="text-xs text-muted-foreground">Automatic send is not available until an administrator enables it for this workspace. Analyze-only never changes selection or sends.</p>
+        )}
+        {payload?.settings.automaticSendEnabled && (
+          <p className="text-xs text-muted-foreground">Automatic send scores this deal and queues submissions to the top matched funders. Analyze-only never changes selection or sends.</p>
         )}
         {loading && <p role="status" className="text-sm text-muted-foreground">Loading analysis…</p>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -211,7 +216,7 @@ export function AnalysisPanel({ dealId }: { dealId: string }) {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={stateVariant(runRecord.state)}>{runRecord.state.split("_").join(" ")}</Badge>
-              <Badge variant="outline">{modeLabel(runRecord.mode)}</Badge>
+              <Badge variant="outline">{modeLabel(runRecord.mode, runRecord.settingsSnapshot.automaticSendEnabled)}</Badge>
               <Badge variant="secondary">{channelLabel(runRecord.reviewNotificationChannel)}</Badge>
             </div>
             {runRecord.state === "queued" && (

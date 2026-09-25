@@ -254,7 +254,7 @@ async function queueDestination(input: {
 
 export async function queueSubmissions(input: QueueSubmissionsInput): Promise<QueueSubmissionsResult> {
   if (input.privilegedRetry === true && !privilegedOverrideAllowed(input.actor)) {
-    throw new AppError(403, "privileged_retry_forbidden", "Privileged retry requires a workspace administrator session.")
+    throw new AppError(403, "privileged_retry_forbidden", "The 24-hour duplicate rule can be overridden only by someone who can submit this deal.")
   }
   const deal = await getDealForDocument(input.actor, input.dealId)
   await assertSubmissionSendGates(input.actor, deal.id)
