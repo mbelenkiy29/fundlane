@@ -676,4 +676,26 @@ test("guideline PDF upload without a deal can be edited before matching uses the
   assert.equal(blocked.eligible, false)
   const allowed = await evaluateFunderScore(actor(), matchingInputs(720), funder, published.rules)
   assert.equal(allowed.eligible, true)
+
+  setDocumentScannerForTests(scanner("infected"))
+  await assert.rejects(
+    () => uploadAndScanFunderCriteria(actor(), {
+      funderId: funder.id,
+      idempotencyKey: "inline-dirty",
+      filename: "dirty-inline.pdf",
+      mimeType: "application/pdf",
+      bytes: pdf("dirty-inline"),
+    }),
+    (error: { status?: number; code?: string }) => error.status === 422 && error.code === "file_quarantined",
+  )
+  await assert.rejects(
+    () => uploadAndScanFunderCriteria(actor(), {
+      funderId: funder.id,
+      idempotencyKey: "inline-mismatch",
+      filename: "not-a-pdf.pdf",
+      mimeType: "application/pdf",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6]),
+    }),
+    (error: { status?: number; code?: string }) => error.status === 422 && error.code === "document_content_mismatch",
+  )
 })

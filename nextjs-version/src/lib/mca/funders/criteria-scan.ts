@@ -9,7 +9,8 @@ import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction 
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import type { DocumentSummary, ExtractionFileInput } from "../documents/contracts"
-import { getDocumentContent, listDocuments, storeDocument } from "../documents/service"
+import { getDocumentContent, listDocuments, MAX_DOCUMENT_BYTES, storeDocument } from "../documents/service"
+import { documentScanner } from "../documents/scanner"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { canManageWorkspace } from "../policy"
@@ -423,6 +424,25 @@ function mimeFromUpload(filename: string, mimeType: string): string {
   return provided
 }
 
+function matchesDeclaredType(mimeType: string, bytes: Uint8Array): boolean {
+  if (mimeType === "application/pdf") return bytes.length >= 5 && Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-"
+  if (mimeType === "image/png") return bytes.length >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  return false
+}
+
+async function assertCleanCriteriaUpload(filename: string, mimeType: string, bytes: Uint8Array): Promise<void> {
+  if (!bytes.byteLength || bytes.byteLength > MAX_DOCUMENT_BYTES) {
+    throw new AppError(413, "document_size_invalid", `Documents must be between 1 byte and ${MAX_DOCUMENT_BYTES} bytes.`)
+  }
+  if (!matchesDeclaredType(mimeType, bytes)) {
+    throw new AppError(422, "document_content_mismatch", "The file contents do not match the declared PDF or image type.")
+  }
+  const scan = await documentScanner().scan(bytes, filename)
+  if (scan.status === "infected") throw new AppError(422, "file_quarantined", "Security scanning rejected this file.")
+  if (scan.status !== "clean") throw new AppError(503, "scanner_unavailable", "Security scanning must succeed before this file can be processed.")
+}
+
 function inlineDocumentId(workspaceId: string, funderId: string, bytes: Uint8Array): string {
   return `inline:${createHash("sha256").update(workspaceId).update(funderId).update(bytes).digest("hex")}`
 }
@@ -460,6 +480,7 @@ export async function uploadAndScanFunderCriteria(actor: DealActor, input: {
   if (!ALLOWED_MIME_TYPES.has(mimeType)) {
     throw new AppError(415, "unsupported_document_type", "Scan a clean PDF, PNG, or JPEG criteria sheet.")
   }
+  if (!text(input.dealId)) await assertCleanCriteriaUpload(input.filename, mimeType, input.bytes)
   if (text(input.dealId)) {
     const document = await storeDocument(actor, {
       dealId: text(input.dealId),
