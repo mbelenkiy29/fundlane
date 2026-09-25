@@ -106,3 +106,22 @@ export function anonymousRequestDisposition(pathname: string): AnonymousRequestD
   if (isProtectedAppPath(path)) return "sign-in"
   return "not-found"
 }
+
+export type UnauthenticatedPageGate =
+  | { action: "allow"; status: 200 }
+  | { action: "sign-in"; status: 307; location: string }
+  | { action: "not-found"; status: 404 }
+
+/** Status and destination the dashboard auth gate uses for an anonymous visitor. */
+export function unauthenticatedPageGate(pathname: string, returnTo?: string): UnauthenticatedPageGate {
+  const disposition = anonymousRequestDisposition(pathname)
+  if (disposition === "public" || disposition === "api") return { action: "allow", status: 200 }
+  if (disposition === "sign-in") {
+    return {
+      action: "sign-in",
+      status: 307,
+      location: `/sign-in?returnTo=${encodeURIComponent(returnTo || pathname.split(/[?#]/, 1)[0] || "/dashboard")}`,
+    }
+  }
+  return { action: "not-found", status: 404 }
+}

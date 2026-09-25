@@ -10,7 +10,7 @@ import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
 import { getCompanyAccess } from "@/lib/mca/company-access"
 import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
 import { CompanyPaused } from "@/components/mca/company-paused"
-import { requiresSignInRedirect } from "@/lib/mca/app-paths"
+import { unauthenticatedPageGate } from "@/lib/mca/app-paths"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard" || pathname === "/dashboard-2" || pathname.startsWith("/dashboard-2/")) return "dashboard"
@@ -30,7 +30,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const context = await authenticateSupabaseSession()
   if (!context && await supabaseIdentity({ allowPasswordSetup: true })) redirect("/onboarding")
   if (!context) {
-    if (requiresSignInRedirect(pathname)) redirect(`/sign-in?returnTo=${encodeURIComponent(headerStore.get("x-mca-return-to") ?? "/dashboard")}`)
+    const gate = unauthenticatedPageGate(pathname, headerStore.get("x-mca-return-to") ?? "/dashboard")
+    if (gate.action === "sign-in") redirect(gate.location)
     notFound()
   }
 

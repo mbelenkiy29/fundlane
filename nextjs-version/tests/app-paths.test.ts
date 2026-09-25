@@ -1,5 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
   DEALS_PAGE_TITLE,
   PUBLIC_PAGE_PREFIXES,
@@ -8,6 +10,7 @@ import {
   isPublicPagePath,
   isProtectedAppPath,
   requiresSignInRedirect,
+  unauthenticatedPageGate,
 } from "../src/lib/mca/app-paths"
 
 test("Deals is the shared nav and page title", () => {
@@ -97,7 +100,37 @@ test("unknown paths 404 instead of redirecting to sign-in", () => {
     assert.equal(requiresSignInRedirect(path), false, path)
     assert.equal(isProtectedAppPath(path), false, path)
     assert.equal(isPublicPagePath(path), false, path)
+    assert.deepEqual(unauthenticatedPageGate(path), { action: "not-found", status: 404 })
   }
+})
+
+test("anonymous gate returns sign-in status and destination only for real app routes", () => {
+  assert.deepEqual(unauthenticatedPageGate("/deals", "/deals?q=acme"), {
+    action: "sign-in",
+    status: 307,
+    location: "/sign-in?returnTo=%2Fdeals%3Fq%3Dacme",
+  })
+  assert.deepEqual(unauthenticatedPageGate("/dashboard"), {
+    action: "sign-in",
+    status: 307,
+    location: "/sign-in?returnTo=%2Fdashboard",
+  })
+  assert.deepEqual(unauthenticatedPageGate("/features"), { action: "allow", status: 200 })
+  assert.deepEqual(unauthenticatedPageGate("/api/mca/deals"), { action: "allow", status: 200 })
+  assert.deepEqual(unauthenticatedPageGate("/not-a-real-page", "/not-a-real-page"), { action: "not-found", status: 404 })
+})
+
+test("unknown first segments no longer match a dashboard catch-all, so the 404 page can render", () => {
+  const root = resolve(import.meta.dirname, "..")
+  assert.equal(existsSync(resolve(root, "src/app/(dashboard)/[section]/page.tsx")), false)
+  const layout = readFileSync(resolve(root, "src/app/(dashboard)/layout.tsx"), "utf8")
+  assert.match(layout, /unauthenticatedPageGate/)
+  assert.match(layout, /notFound\(\)/)
+  assert.doesNotMatch(layout, /requiresSignInRedirect\(pathname\)\) redirect/)
+  const notFoundPage = readFileSync(resolve(root, "src/app/not-found.tsx"), "utf8")
+  assert.match(notFoundPage, /Page not found/)
+  assert.match(notFoundPage, /href="\/"/)
+  assert.doesNotMatch(notFoundPage, /href="\/dashboard"/)
 })
 
 test("API routes are not HTML-redirected to sign-in", () => {
