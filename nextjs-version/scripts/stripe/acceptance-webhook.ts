@@ -8,6 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import Stripe from "stripe"
+import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog"
 
 const ACCOUNT = "acct_1UIDeIBP3qJwlwms"
 class AcceptanceError extends Error {}
@@ -91,9 +92,9 @@ async function main() {
     const metadata = { acceptance_run: run, application: "fundlane" }
     const product = await stripe.products.create({ name: run, metadata }, { idempotencyKey: `${run}-product` })
     evidence.ids.product = product.id; await save()
-    const base = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: 39900, recurring: { interval: "month" }, metadata }, { idempotencyKey: `${run}-base` })
+    const base = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: BILLING_CATALOG.base.unitAmountCents, recurring: { interval: "month" }, metadata }, { idempotencyKey: `${run}-base` })
     evidence.ids.base = base.id; await save()
-    const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month" }, tiers: [{ up_to: 9, unit_amount: 7900 }, { up_to: 19, unit_amount: 6900 }, { up_to: "inf", unit_amount: 5900 }], metadata }, { idempotencyKey: `${run}-seats` })
+    const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month" }, tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo ?? "inf", unit_amount: tier.unitAmountCents })), metadata }, { idempotencyKey: `${run}-seats` })
     evidence.ids.seats = seats.id; await save()
     process.env.STRIPE_BASE_PRICE_ID = base.id
     process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID = seats.id

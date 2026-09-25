@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { writeFile } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import Stripe from "stripe"
+import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog"
 
 // Optional external browser module keeps acceptance tooling out of production deps.
 async function main() {
@@ -43,9 +44,9 @@ async function main() {
     const metadata = { application: "fundlane", acceptance_run: run }
     const product = await stripe.products.create({ name: run, metadata, tax_code: "txcd_10103001" })
     e.ids.product = product.id; await save()
-    const price = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: 39900, recurring: { interval: "month" }, metadata })
+    const price = await stripe.prices.create({ product: product.id, currency: "usd", unit_amount: BILLING_CATALOG.base.unitAmountCents, recurring: { interval: "month" }, metadata })
     e.ids.price = price.id; await save()
-    const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month" }, tiers: [{ up_to: 9, unit_amount: 7900 }, { up_to: 19, unit_amount: 6900 }, { up_to: "inf", unit_amount: 5900 }], metadata })
+    const seats = await stripe.prices.create({ product: product.id, currency: "usd", billing_scheme: "tiered", tiers_mode: "graduated", recurring: { interval: "month" }, tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo ?? "inf", unit_amount: tier.unitAmountCents })), metadata })
     e.ids.seats = seats.id; await save()
     process.env.STRIPE_BASE_PRICE_ID = price.id
     process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID = seats.id

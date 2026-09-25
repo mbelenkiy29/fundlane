@@ -2,7 +2,7 @@ import "server-only"
 import Stripe from "stripe"
 import { getDatabase, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from "./db"
 import { AppError } from "./errors"
-import { monthlyPriceCents } from "./billing-catalog"
+import { BILLING_CATALOG, monthlyPriceCents } from "./billing-catalog"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 export { initializeCompanyTrial } from "./company-access"
 import { reconcileBillingInvoices } from "./billing-reconciliation"
@@ -43,10 +43,10 @@ export function priceIds() {
 export async function verifyBillingPrices(client: StripeBillingClient) {
   const ids = priceIds()
   const [base, seats] = await Promise.all([client.prices.retrieve(ids.base), client.prices.retrieve(ids.seats, { expand: ["tiers"] })])
-  const common = (p: Stripe.Price) => p.livemode === stripeLiveMode() && p.active && p.currency === "usd" && p.recurring?.interval === "month" && p.recurring.interval_count === 1 && p.recurring.usage_type === "licensed" && !p.transform_quantity
+  const common = (p: Stripe.Price) => p.livemode === stripeLiveMode() && p.active && p.currency === BILLING_CATALOG.currency && p.recurring?.interval === BILLING_CATALOG.interval && p.recurring.interval_count === 1 && p.recurring.usage_type === BILLING_CATALOG.usageType && !p.transform_quantity
   const tiers = seats.tiers ?? []
-  if (!common(base) || base.billing_scheme !== "per_unit" || base.unit_amount !== 39900 || !common(seats) || seats.billing_scheme !== "tiered" || seats.tiers_mode !== "graduated" || tiers.length !== 3 ||
-    tiers.some((t, i) => t.up_to !== [9, 19, null][i] || t.unit_amount !== [7900, 6900, 5900][i] || (t.flat_amount ?? 0) !== 0))
+  if (!common(base) || base.billing_scheme !== BILLING_CATALOG.base.billingScheme || base.unit_amount !== BILLING_CATALOG.base.unitAmountCents || !common(seats) || seats.billing_scheme !== BILLING_CATALOG.additionalSeats.billingScheme || seats.tiers_mode !== BILLING_CATALOG.additionalSeats.tiersMode || tiers.length !== BILLING_CATALOG.additionalSeats.tiers.length ||
+    tiers.some((t, i) => t.up_to !== BILLING_CATALOG.additionalSeats.tiers[i].upTo || t.unit_amount !== BILLING_CATALOG.additionalSeats.tiers[i].unitAmountCents || (t.flat_amount ?? 0) !== 0))
     throw new AppError(503, "billing_price_mismatch", "Stripe prices must match the monthly USD Fundlane graduated seat catalog.")
   return ids
 }

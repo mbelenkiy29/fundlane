@@ -1,4 +1,5 @@
 import { createServer } from "node:http"
+import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog.ts"
 export async function createStripeHttpFixture() {
   const subscriptions = new Map(), customers = new Map(), checkouts = new Map(), invoices = new Map(), schedules = new Map(), calls = []
   const scheduleCreations = new Map()
@@ -12,7 +13,7 @@ export async function createStripeHttpFixture() {
       if (req.method === "GET" && url.pathname === "/v1/subscriptions") data = { object: "list", data: subscriptions.get(url.searchParams.get("customer")) ?? [], has_more: false }
       else if (req.method === "GET" && url.pathname.startsWith("/v1/prices/")) {
         const id = url.pathname.split("/").at(-1)
-        data = { id, active: true, livemode: false, currency: "usd", recurring: { interval: "month", interval_count: 1, usage_type: "licensed" }, ...(id === "price_base" ? { billing_scheme: "per_unit", unit_amount: 39900 } : { billing_scheme: "tiered", tiers_mode: "graduated", tiers: [{ up_to: 9, unit_amount: 7900, flat_amount: null }, { up_to: 19, unit_amount: 6900, flat_amount: null }, { up_to: null, unit_amount: 5900, flat_amount: null }] }) }
+        data = { id, active: true, livemode: false, currency: "usd", recurring: { interval: "month", interval_count: 1, usage_type: "licensed" }, ...(id === "price_base" ? { billing_scheme: "per_unit", unit_amount: BILLING_CATALOG.base.unitAmountCents } : { billing_scheme: "tiered", tiers_mode: "graduated", tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo, unit_amount: tier.unitAmountCents, flat_amount: null })) }) }
       }
       else if (req.method === "GET" && url.pathname === "/v1/invoices") data = { object: "list", data: invoices.get(url.searchParams.get("customer")) ?? [], has_more: false }
       else if (url.pathname.startsWith("/v1/subscriptions/")) {
