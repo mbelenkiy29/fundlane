@@ -341,7 +341,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     const session = await client.checkout.sessions.create({ mode: "subscription", customer: mapping.stripe_customer_id,
       integration_identifier: COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER,
       client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
-      subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } : {}) },
+      subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
       line_items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])],
       success_url: returnUrl, cancel_url: returnUrl, expires_at: (slot + 2) * 1800,
     }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}-${slot}` })
