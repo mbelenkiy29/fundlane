@@ -351,12 +351,21 @@ function fillout(payload: Record<string, unknown>, integration: IntegrationRecor
 }
 
 function highlevel(payload: Record<string, unknown>, integration: IntegrationRecord): ProviderApplication {
-  const locationId = text(payload.locationId)
+  const locationId = text(payload.locationId) ?? text(object(payload.location).id)
   if (!locationId || locationId !== integration.locationId) throw new AppError(422, "provider_binding_mismatch", "HighLevel location ID does not match this integration.")
   const eventId = text(payload.webhookId)
   if (!eventId) throw new AppError(422, "provider_event_missing", "HighLevel webhookId is required.")
-  const source = { ...payload }
-  const customFields: Record<string, unknown> = {}
+  const source: Record<string, unknown> = {
+    ...payload,
+    legalName: payload.legalName ?? payload.company_name,
+    contactEmail: payload.contactEmail ?? payload.email,
+    contactPhone: payload.contactPhone ?? payload.phone,
+    address: payload.address ?? {
+      line1: payload.address1, city: payload.city, state: payload.state,
+      postalCode: payload.postal_code, country: payload.country,
+    },
+  }
+  const customFields: Record<string, unknown> = { ...object(payload.customFields) }
   for (const field of Array.isArray(payload.customFields) ? payload.customFields : []) {
     const item = object(field); const name = text(item.id) ?? text(item.key)
     if (name) customFields[name] = item.value
@@ -376,7 +385,7 @@ function custom(payload: Record<string, unknown>, integration: IntegrationRecord
   if (!formId || formId !== integration.formId) throw new AppError(422, "provider_binding_mismatch", "Custom form ID does not match this integration.")
   const eventId = text(payload.eventId)
   if (!eventId) throw new AppError(422, "provider_event_missing", "Custom webhook eventId is required.")
-  const source = object(payload.application)
+  const source = Object.keys(object(payload.application)).length ? object(payload.application) : payload
   const files = categorizedAttachments(source, integration, attachments(Array.isArray(payload.attachments) ? payload.attachments : []))
   return {
     answers: captureIntakeAnswers(source, files),

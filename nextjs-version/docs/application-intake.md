@@ -30,6 +30,30 @@ Before marking a connection live, validate in staging with a real delivery from 
 
 `tests/intake-workflow.test.ts` exercises connected providers with synthetic payloads, private-download fixtures, scanner/extraction fixtures, duplicate and concurrent events, integration-scoped identities, late documents, worker lease recovery, disabled integrations, inactive reps, corrections, and cross-workspace access. Existing intake, document, and underwriting tests cover the reused contracts. Document tests include clean-storage promotion failure and recovery.
 
+## Inbound form and CRM webhooks
+
+Workspace administrators can create and rotate inbound connections in **Settings → Connections and imports → Inbound webhook settings**. A generated secret is shown in the create or rotation response only; the database keeps a hash for bearer admission. Keep that secret in the sending service and send `Authorization: Bearer <secret>` to `/api/mca/intake/providers/custom/<integrationId>`. A new rotation immediately invalidates the old secret. The custom connection's configured form ID must match `formId` in each request. The body is JSON, at most 1 MiB, and deliveries are limited to 120 attempts per minute per connection and client address. Each `eventId` must be stable and unique for a submission: exact retries return the same deal, while reuse with changed data returns a conflict.
+
+The generic JSON contract accepts deal fields either under `application` or at the top level. This example is synthetic:
+
+```json
+{
+  "formId": "your-configured-form-id",
+  "eventId": "your-stable-submission-id",
+  "application": {
+    "legalName": "Example Merchant LLC",
+    "contactEmail": "owner@example.test",
+    "requestedAmount": 50000,
+    "address": { "state": "NY" }
+  },
+  "attachments": [{ "id": "file-1", "url": "https://your-allowed-host.example.test/file.pdf", "filename": "application.pdf", "category": "application" }]
+}
+```
+
+Map provider fields in the connection settings when their names differ. Accepted deal targets are listed in `providers.ts`; an active fallback rep is required for automatic processing. Attachment URLs enter the existing private document retrieval queue, which enforces allowed hosts and file validation. This does not support zip or cloud-folder bulk packages. The endpoint creates a deal and schedules available attachments, but does not send it to funders automatically.
+
+The supported provider payload assumptions come from provider documentation: [Jotform webhook fields and `rawRequest`](https://www.jotform.com/help/245-how-to-send-submission-data-via-a-webhook/) (JSON or standard multipart/form submission), [HighLevel signed webhooks](https://marketplace.gohighlevel.com/docs/webhook/WebhookIntegrationGuide/) and [workflow payloads](https://help.gohighlevel.com/support/solutions/articles/155000003299), [Zoho Forms configurable JSON payload parameters and attachment links](https://help.zoho.com/portal/en/kb/forms/integrations/webhooks/articles/webhook-configuration), [Zoho CRM configurable raw JSON webhook bodies](https://www.zoho.com/crm/developer/docs/api/v8/create-webhook.html), [Fillout webhook integration](https://www.fillout.com/integrations/rest), and [DocuSeal submission webhooks](https://www.docuseal.com/docs/api). Jotform uses `formID`, `submissionID`, and `rawRequest`; HighLevel uses a verified `X-GHL-Signature`, the configured `locationId`, and a stable `webhookId`; Fillout uses `formId`, `submissionId`, and `questions`; Zoho uses administrator-configured `formId`/`entryId` payload parameters; DocuSeal accepts signed `submission.completed` events for the configured template. For Zoho CRM, configure a POST raw JSON body that explicitly sends the connection's `formId`, a stable `entryId` for each created lead, and the desired CRM fields (for example `Company` and `Email`), then map those fields in the connection. A CRM record update using the same `entryId` with changed data returns a conflict, so use a creation-only workflow or a distinct stable event ID. The required identity keys that providers do not supply automatically must be mapped into their configurable outbound webhook body. Real provider delivery and private attachment access still need verification in a nonproduction Supabase workspace before activation.
+
 Browser verification uses the real intake components with synthetic API responses for desktop/mobile, guided setup through activation, and the rep-only empty state. It does not establish live backend/provider connectivity.
 
 Local verification on September 13, 2026: 89 focused intake/document/underwriting/funder/adapter tests passed. Typecheck, production build, the worker bundle, and an isolated-database worker `--once` smoke test passed. Lint finished with no errors and 16 existing warnings. The initial full suite had five failures: billing, legacy assistant authentication, payment receipts, and two local TLS fixtures. Billing's four HTTP tests and both TLS fixture tests passed on recheck with the disposable database certificate trusted. The legacy assistant callback test and payment receipt test still fail outside the intake changes. PostgreSQL tests used disposable databases only.

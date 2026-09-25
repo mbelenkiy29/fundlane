@@ -41,6 +41,7 @@ export function IntakePanel() {
   const [previewIntegration, setPreviewIntegration] = React.useState<string>()
   const [previewPayload, setPreviewPayload] = React.useState("{}")
   const [previewResult, setPreviewResult] = React.useState<string>()
+  const [origin, setOrigin] = React.useState("")
 
   const load = React.useCallback(async () => {
     setLoading(true); setError(undefined)
@@ -53,7 +54,7 @@ export function IntakePanel() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load intake settings.") }
     finally { setLoading(false) }
   }, [])
-  React.useEffect(() => { void load() }, [load])
+  React.useEffect(() => { setOrigin(window.location.origin); void load() }, [load])
 
   async function createIntegration(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy("create"); setError(undefined); setNotice(undefined); setSecret(undefined)
@@ -178,9 +179,10 @@ export function IntakePanel() {
           {integrations.map((integration) => <div key={integration.id} className="rounded-lg border p-4">
             <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><p className="font-medium">{integration.displayName}</p><Badge variant="outline">{integration.provider}</Badge>{integration.emailGateway && <Badge variant="outline">{integration.emailGateway}</Badge>}<Badge variant={integration.enabled ? "secondary" : "outline"}>{integration.enabled ? "Active" : "Disabled"}</Badge><Badge variant={integration.readiness === "live_configured" ? "secondary" : "outline"}>{integration.readiness.replace(/_/g, " ")}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Binding {integration.binding ?? integration.inboundAddress ?? "not set"} · credential {integration.credential} · version {integration.credentialVersion}</p>{integration.contractKey && <p className="mt-1 text-xs text-muted-foreground">Contract {integration.contractKey} · attachments {integration.attachmentMethod ?? "none"}</p>}{integration.providerServerId && <p className="mt-1 text-xs text-muted-foreground">{integration.emailGateway === "usesend" ? "Verified useSend domain" : "Verified Postmark server"} {integration.providerServerId}</p>}{integration.emailGateway === "usesend" && integration.mapping.fromAddress && <p className="mt-1 text-xs text-muted-foreground">Receipts from {integration.mapping.fromAddress}</p>}</div>{integration.approvalState !== "approved" && <Badge variant="destructive">Custom contract pending</Badge>}</div>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
-              <form onSubmit={(event) => { event.preventDefault(); void rotate(integration, event.currentTarget) }} className="flex flex-wrap gap-2"><Input className="min-w-44 flex-1" name="credential" type="password" placeholder="New private read credential" aria-label="New private read credential" /><Input className="min-w-44 flex-1" name="credentialExpiresAt" placeholder="Expiry ISO timestamp" aria-label="Credential expiry ISO timestamp" /><Input className="min-w-44 flex-1" name="admissionSecret" type="password" placeholder="Optional webhook secret" aria-label="New webhook secret" /><Button type="submit" variant="outline" size="sm" disabled={busy === `rotate:${integration.id}`}><RotateCw className="size-4" />Rotate</Button></form>
+              <form onSubmit={(event) => { event.preventDefault(); void rotate(integration, event.currentTarget) }} className="flex flex-wrap gap-2"><Input className="min-w-44 flex-1" name="credential" type="password" placeholder="New private read credential" aria-label="New private read credential" /><Input className="min-w-44 flex-1" name="credentialExpiresAt" placeholder="Expiry ISO timestamp" aria-label="Credential expiry ISO timestamp" /><Input className="min-w-44 flex-1" name="admissionSecret" type="password" placeholder="Leave blank to generate a webhook secret" aria-label="New webhook secret" /><Button type="submit" variant="outline" size="sm" disabled={busy === `rotate:${integration.id}`}><RotateCw className="size-4" />Rotate</Button></form>
               {integration.provider === "jotform" && <form onSubmit={(event) => { event.preventDefault(); void createLink(integration, String(new FormData(event.currentTarget).get("membershipId") ?? "")) }} className="flex gap-2"><Input name="membershipId" placeholder="Active member UUID" aria-label="Active member ID" /><Button type="submit" variant="outline" size="sm" disabled={busy === `link:${integration.id}`}><Link2 className="size-4" />Copy rep link</Button></form>}
             </div>
+            {!["email", "fundlane", "native"].includes(integration.provider) && <div className="mt-3"><Label htmlFor={`webhook-url-${integration.id}`}>Inbound webhook URL</Label><Input id={`webhook-url-${integration.id}`} className="mt-1 font-mono text-xs" readOnly value={`${origin}/api/mca/intake/providers/${integration.provider}/${integration.id}`} /></div>}
           </div>)}
         </div>}
       </CardContent>

@@ -8,8 +8,12 @@ import { ProvidersPanel } from "@/components/mca/leads/providers-panel"
 import { WebhookConsole } from "@/components/mca/comms/webhook-console"
 import { AdapterCredentialsPanel } from "@/components/mca/submissions/adapter-credentials-panel"
 import { IntegrationConnectionStatus } from "@/components/mca/integrations/connection-status"
+import { IntakePanel } from "@/components/mca/intake/intake-panel"
+import { authenticateSupabaseSession } from "@/lib/mca/supabase-auth"
 
-export default function ConnectionSettings() {
+export default async function ConnectionSettings() {
+  const session = await authenticateSupabaseSession()
+  const canManageIntake = Boolean(session && ["admin", "super_admin"].includes(session.role))
   return (
     <div className="space-y-6">
       <div>
@@ -24,6 +28,7 @@ export default function ConnectionSettings() {
       <ProvidersPanel />
       <AdapterCredentialsPanel />
       <div className="rounded-lg border p-5"><h3 className="font-semibold">Application intake</h3><p className="mt-1 text-sm text-muted-foreground">Connect forms, route applications, and track automatic underwriting.</p><Link href="/intake" className="mt-3 inline-block text-sm font-medium underline">Open Application Intake</Link></div>
+      {canManageIntake && <details className="rounded-lg border p-5"><summary className="cursor-pointer font-semibold">Inbound webhook settings</summary><p className="mt-2 text-sm text-muted-foreground">Create a custom webhook, copy its secret once, or rotate the secret for an existing connection.</p><div className="mt-4"><IntakePanel /></div></details>}
       <ImportPanel />
       <DataMerchConfigPanel />
     </div>
