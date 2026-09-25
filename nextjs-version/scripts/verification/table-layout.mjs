@@ -1,5 +1,6 @@
 // Run from nextjs-version: node scripts/verification/table-layout.mjs
-// Open the printed URL, then run the layout check and exercise the real task table.
+// Open the printed URL, then run the layout check on the long/short/empty/wide tables
+// and the assistant Markdown numeric column. The template task table was removed.
 import { createServer } from "node:http"
 import { readFile } from "node:fs/promises"
 import { build } from "esbuild"

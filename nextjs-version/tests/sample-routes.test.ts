@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
@@ -7,6 +8,25 @@ import { sampleRouteRedirects } from "../src/lib/mca/sample-route-redirects"
 import { safeAuthReturnTo } from "../src/lib/mca/auth-navigation"
 
 const root = resolve(import.meta.dirname, "..")
+
+const expectedRedirects = [
+  { source: "/sign-in-2", destination: "/sign-in", permanent: true },
+  { source: "/sign-in-3", destination: "/sign-in", permanent: true },
+  { source: "/sign-up-2", destination: "/sign-up", permanent: true },
+  { source: "/sign-up-3", destination: "/sign-up", permanent: true },
+  { source: "/forgot-password-2", destination: "/forgot-password", permanent: true },
+  { source: "/forgot-password-3", destination: "/forgot-password", permanent: true },
+  { source: "/auth/sign-in-2", destination: "/sign-in", permanent: true },
+  { source: "/auth/sign-in-3", destination: "/sign-in", permanent: true },
+  { source: "/auth/sign-up-2", destination: "/sign-up", permanent: true },
+  { source: "/auth/sign-up-3", destination: "/sign-up", permanent: true },
+  { source: "/auth/forgot-password-2", destination: "/forgot-password", permanent: true },
+  { source: "/auth/forgot-password-3", destination: "/forgot-password", permanent: true },
+  { source: "/users", destination: "/settings/team", permanent: true },
+  { source: "/tasks", destination: "/dashboard", permanent: true },
+  { source: "/chat", destination: "/assistant", permanent: true },
+  { source: "/faqs", destination: "/", permanent: true },
+] as const
 
 const removedPages = [
   "src/app/(auth)/sign-in-2/page.tsx",
@@ -38,17 +58,20 @@ test("template sample pages are removed and product routes remain", () => {
 
 test("old sample URLs redirect to live product routes", () => {
   const config = readFileSync(resolve(root, "next.config.ts"), "utf8")
-  assert.match(config, /sampleRouteRedirects/)
+  assert.match(config, /from "\.\/src\/lib\/mca\/sample-route-redirects"/)
   assert.match(config, /\.\.\.sampleRouteRedirects/)
-  for (const expected of sampleRouteRedirects) {
-    assert.notEqual(expected.destination, expected.source, expected.source)
-    assert.match(expected.destination, /^\/(sign-in|sign-up|forgot-password|settings\/team|dashboard|assistant)?$/)
+  assert.deepEqual(sampleRouteRedirects, expectedRedirects)
+  assert.equal(sampleRouteRedirects.length, expectedRedirects.length)
+  for (const expected of expectedRedirects) {
+    const match = sampleRouteRedirects.find((redirect) => redirect.source === expected.source)
+    assert.deepEqual(match, expected, expected.source)
+    assert.equal(expected.permanent, true, expected.source)
   }
 })
 
 test("sidebar and auth return paths cannot land on removed sample routes", () => {
   const sidebar = readFileSync(resolve(root, "src/components/app-sidebar.tsx"), "utf8")
-  for (const source of sampleRouteRedirects.map((redirect) => redirect.source)) {
+  for (const source of expectedRedirects.map((redirect) => redirect.source)) {
     assert.equal(sidebar.includes(`url: "${source}"`), false, source)
     assert.equal(safeAuthReturnTo(source), "/dashboard", source)
     assert.equal(safeAuthReturnTo(`${source}/next`), "/dashboard", `${source}/next`)
@@ -61,11 +84,12 @@ test("eslint excludes generated supabase runtime bundles and still lints applica
   assert.doesNotMatch(config, /["']src\/\*\*["']/)
   assert.doesNotMatch(config, /["']scripts\/\*\*["']/)
 
-  const probeDir = resolve(root, "supabase/functions/_lint_probe")
+  const probeRel = `supabase/functions/_lint_probe_${randomBytes(6).toString("hex")}`
+  const probeDir = resolve(root, probeRel)
   mkdirSync(probeDir, { recursive: true })
   writeFileSync(resolve(probeDir, "runtime.js"), "var unusedGeneratedBinding = 1\n")
   try {
-    const ignored = spawnSync("pnpm", ["exec", "eslint", "supabase/functions/_lint_probe/runtime.js"], {
+    const ignored = spawnSync("pnpm", ["exec", "eslint", `${probeRel}/runtime.js`], {
       cwd: root,
       encoding: "utf8",
     })
