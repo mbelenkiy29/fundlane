@@ -3,10 +3,9 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { AssistantButton } from "@/components/mca/assistant/assistant-panel"
-import { Plus } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { CreditNotificationBell } from "@/components/mca/assistant/notification-bell"
+import { NewDealHeaderAction } from "@/components/mca/deals/new-deal-header-action"
 import { useOptionalNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { ModeToggle } from "@/components/mode-toggle"
 import type { SessionResponse } from "@/lib/mca/types"
@@ -20,9 +19,7 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
         <SidebarTrigger className="-ml-1" />
         <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
           {session?.permissions?.actions.createDeal && newDeal && (
-            <Button type="button" size="sm" className="hidden md:inline-flex" onClick={() => newDeal.open()}>
-              <Plus /> New deal
-            </Button>
+            <NewDealHeaderAction onOpen={() => newDeal.open()} />
           )}
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
           {session?.platformOwner && <Link href="/admin/status" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform status</Link>}

@@ -63,21 +63,21 @@ export function CustomerInsights({
               className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <TrendingUp className="h-4 w-4" />
-              <span className="hidden md:inline">Growth</span>
+              <span className="sr-only md:not-sr-only">Growth</span>
             </TabsTrigger>
             <TabsTrigger
               value="demographics"
               className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <UserIcon className="h-4 w-4" />
-              <span className="hidden md:inline">Demographics</span>
+              <span className="sr-only md:not-sr-only">Demographics</span>
             </TabsTrigger>
             <TabsTrigger
               value="regions"
               className="flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-2 text-sm font-medium transition-all sm:px-4 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
               <MapPin className="h-4 w-4" />
-              <span className="hidden md:inline">Regions</span>
+              <span className="sr-only md:not-sr-only">Regions</span>
             </TabsTrigger>
           </TabsList>
 
