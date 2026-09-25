@@ -8,18 +8,16 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
 
 const applicationReviewHash = "eace840adc50c0b66a4203414cd3c6e123474b4e4715cefe6e50e4028e98c49d";
 const catchupTimestamp = 1790035200003;
-<<<<<<< HEAD
 const setupChecklistTimestamp = 1790299200000;
+const totpTimestamp = 1790299200001;
 const billingRecoveryTimestamp = 1790035200002;
-=======
-const totpTimestamp = 1790035200004;
 
 async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
-  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at=$1", [totpTimestamp]);
+  await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
+  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at=$1 OR created_at=$2", [setupChecklistTimestamp, totpTimestamp]);
 }
->>>>>>> c6d0b20 (feat(auth): add TOTP 2FA, recovery codes, and workspace policy)
 
 async function withFixture(label, run) {
   const fixture = await createPostgresTestDatabase(label);
@@ -37,16 +35,12 @@ test("merged fresh schema includes both migration branches; catch-up does not re
       BEGIN RAISE EXCEPTION 'application-review data migration replayed'; END $$;
       CREATE TRIGGER forbid_review_replay BEFORE UPDATE ON intake_integrations
       FOR EACH STATEMENT EXECUTE FUNCTION forbid_review_replay();`);
-<<<<<<< HEAD
-    await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-    await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at=$1 OR created_at=$2", [catchupTimestamp, setupChecklistTimestamp]);
-=======
     await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at=$1", [catchupTimestamp]);
     await revertLaterThanCatchup(fixture);
->>>>>>> c6d0b20 (feat(auth): add TOTP 2FA, recovery codes, and workspace policy)
     await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [catchupTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [setupChecklistTimestamp])).rows[0].n, 1);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [totpTimestamp])).rows[0].n, 1);
   });
 });
 
@@ -57,15 +51,9 @@ test("auth-first 0048 deployment receives older application-review schema throug
     await fixture.query(`DROP TABLE intake_notifications, intake_submission_previews;
       ALTER TABLE intake_events DROP COLUMN answers_cipher;
       ALTER TABLE mca_submission_jobs DROP COLUMN approved_package_cipher;`);
-<<<<<<< HEAD
-    await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-    await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE hash=$1 OR created_at=$2 OR created_at=$3", [applicationReviewHash, catchupTimestamp, setupChecklistTimestamp]);
-    assert.equal(Number((await fixture.query("SELECT max(created_at) n FROM drizzle.__drizzle_migrations")).rows[0].n), billingRecoveryTimestamp);
-=======
     await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE hash=$1 OR created_at=$2", [applicationReviewHash, catchupTimestamp]);
     await revertLaterThanCatchup(fixture);
-    assert.equal(Number((await fixture.query("SELECT max(created_at) n FROM drizzle.__drizzle_migrations")).rows[0].n), 1790035200002);
->>>>>>> c6d0b20 (feat(auth): add TOTP 2FA, recovery codes, and workspace policy)
+    assert.equal(Number((await fixture.query("SELECT max(created_at) n FROM drizzle.__drizzle_migrations")).rows[0].n), billingRecoveryTimestamp);
     await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
     const tables = await fixture.query("SELECT relname,relrowsecurity FROM pg_class WHERE oid IN ('intake_notifications'::regclass,'intake_submission_previews'::regclass) ORDER BY relname");
     assert.deepEqual(tables.rows, [{ relname: "intake_notifications", relrowsecurity: true }, { relname: "intake_submission_previews", relrowsecurity: true }]);
@@ -73,8 +61,9 @@ test("auth-first 0048 deployment receives older application-review schema throug
       (table_name='intake_events' AND column_name='answers_cipher') OR
       (table_name='mca_submission_jobs' AND column_name='approved_package_cipher') OR
       (table_name='company_subscription_state' AND column_name='processing_extension_granted_at') OR
-      (table_name='workspaces' AND column_name='setup_checklist_dismissed_at')`);
-    assert.equal(columns.rows.length, 4);
+      (table_name='workspaces' AND column_name='setup_checklist_dismissed_at') OR
+      (table_name='workspaces' AND column_name='require_2fa')`);
+    assert.equal(columns.rows.length, 5);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE hash=$1", [applicationReviewHash])).rows[0].n, 0, "Drizzle really skipped the older migration");
     const ledger = (await fixture.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows;
     await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
