@@ -66,6 +66,7 @@ const cspDirectives: Record<string, string[]> = {
   ],
   "frame-src": [
     "'self'",
+    "blob:",
     "https://form.jotform.com",
     "https://*.jotform.com",
     "https://accounts.google.com",

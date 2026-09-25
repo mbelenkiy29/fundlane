@@ -28,6 +28,7 @@ test("enforced CSP allowlists first-party and known third-party loads", () => {
   assert.match(directive("connect-src"), /\*\.supabase\.co/)
   assert.match(directive("connect-src"), /vitals\.vercel-insights\.com/)
   assert.match(directive("frame-src"), /form\.jotform\.com/)
+  assert.match(directive("frame-src"), /blob:/)
   assert.match(directive("form-action"), /accounts\.google\.com/)
   assert.match(directive("form-action"), /checkout\.stripe\.com/)
   assert.equal(directive("object-src"), "object-src 'none'")
