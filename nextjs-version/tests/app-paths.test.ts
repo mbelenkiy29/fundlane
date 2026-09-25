@@ -21,6 +21,8 @@ test("public marketing and auth pages stay public while logged out", () => {
   for (const path of [
     "/",
     "/features",
+    "/help",
+    "/help/set-up-your-company",
     "/features/pipeline",
     "/demo",
     "/privacy",

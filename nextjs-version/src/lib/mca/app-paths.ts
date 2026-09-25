@@ -7,6 +7,7 @@ export const DEALS_PAGE_TITLE = "Deals"
  */
 export const PUBLIC_PAGE_PREFIXES = [
   "/features",
+  "/help",
   "/demo",
   "/privacy",
   "/landing",
