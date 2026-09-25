@@ -1,10 +1,11 @@
 import "server-only"
-import { getDatabase, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
+import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
 import { billingEnabled, syncWorkspaceBilling, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
 import { AppError } from "./errors"
+import { recordOperationalError } from "./operations/telemetry"
 
 /** At-least-once delivery; downstream receiver deduplicates the stable correlation ID. */
 export async function deliverBillingNotifications(limit = 50) {
@@ -27,7 +28,7 @@ export async function deliverBillingNotifications(limit = 50) {
         const origin = process.env.MCA_APP_ORIGIN
         if (!origin) throw new Error("MCA_APP_ORIGIN is required")
         if (!process.env.MCA_EMAIL_WEBHOOK_URL && !(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())) throw new Error("Configure the billing email webhook or UseSend API key and From address")
-        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...JSON.parse(row.data),kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
+        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${row.kind==="payment_failed"?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...JSON.parse(row.data),kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
         payload.content=renderBillingEmailContent(payload)
         const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
         if (!frozen.changes) continue
@@ -42,14 +43,46 @@ export async function deliverBillingNotifications(limit = 50) {
   return { claimed: claimed.length, delivered }
 }
 
+async function reconcileQueuedBillingEvents(client?: StripeBillingClient) {
+  const now=nowIso(),leaseToken=newId()
+  const claimed=await getDatabase().prepare<{id:string;workspace_id:string;attempts:number}>(`WITH due AS (
+    SELECT id FROM mca_background_jobs WHERE kind='billing_reconcile' AND
+      ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?))
+    ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 100
+  ) UPDATE mca_background_jobs j SET state='running',attempts=j.attempts+1,lease_token=?,lease_expires_at=?,updated_at=?
+    FROM due WHERE j.id=due.id RETURNING j.id,j.workspace_id,j.attempts`).all(now,now,leaseToken,new Date(Date.now()+600000).toISOString(),now)
+  const byWorkspace=new Map<string,typeof claimed>()
+  for(const job of claimed) byWorkspace.set(job.workspace_id,[...(byWorkspace.get(job.workspace_id)??[]),job])
+  const errors:Array<{workspaceId:string;error:string}>=[]
+  for(const [workspaceId,jobs] of byWorkspace) {
+    try {
+      await syncWorkspaceBilling(workspaceId,client)
+      for(const job of jobs) await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',lease_token=NULL,lease_expires_at=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?").run(nowIso(),job.id,leaseToken)
+    } catch(error) {
+      const message=error instanceof Error?error.message:"Reconciliation failed"
+      errors.push({workspaceId,error:message})
+      await recordOperationalError("billing","reconciliation_failed")
+      for(const job of jobs) await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',available_at=?,lease_token=NULL,lease_expires_at=NULL,error_code='billing_reconciliation_failed',updated_at=? WHERE id=? AND state='running' AND lease_token=?")
+        .run(new Date(Date.now()+Math.min(86400000,60000*2**Math.min(job.attempts,10))).toISOString(),nowIso(),job.id,leaseToken)
+    }
+  }
+  return {claimed:claimed.length,reconciled:byWorkspace.size-errors.length,errors,workspaces:new Set(byWorkspace.keys())}
+}
+
 export async function runBillingMaintenance(client?: StripeBillingClient) {
-  const companies = await getDatabase().prepare<{ workspace_id: string; trial_ends_at: string | null; stripe_customer_id: string | null }>(`SELECT s.workspace_id,s.trial_ends_at,c.stripe_customer_id FROM company_subscription_state s
-    LEFT JOIN workspace_stripe_customers c ON c.workspace_id=s.workspace_id ORDER BY s.updated_at LIMIT 100`).all()
-  const errors: Array<{ workspaceId: string; error: string }> = []
-  let reconciled = 0
+  const queued=await reconcileQueuedBillingEvents(client)
+  const companies = await getDatabase().prepare<{ workspace_id: string; trial_ends_at: string | null; stripe_customer_id: string | null }>(`SELECT w.id workspace_id,s.trial_ends_at,c.stripe_customer_id FROM workspaces w
+    LEFT JOIN company_subscription_state s ON s.workspace_id=w.id
+    LEFT JOIN workspace_stripe_customers c ON c.workspace_id=w.id
+    WHERE s.workspace_id IS NOT NULL OR c.workspace_id IS NOT NULL ORDER BY s.updated_at NULLS FIRST,w.id LIMIT 100`).all()
+  const errors: Array<{ workspaceId: string; error: string }> = [...queued.errors]
+  let reconciled = queued.reconciled
   for (const company of companies) {
     try {
-      if (company.stripe_customer_id && billingEnabled()) { await syncWorkspaceBilling(company.workspace_id, client); reconciled++ }
+      if (company.stripe_customer_id && billingEnabled() && !queued.workspaces.has(company.workspace_id)) {
+        await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),company.workspace_id)
+        await syncWorkspaceBilling(company.workspace_id, client); reconciled++
+      }
       const access = await getCompanyAccess(company.workspace_id)
       if (!access.allowed) await withImmediateTransaction(async db=>{
         await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(company.workspace_id)
@@ -59,11 +92,11 @@ export async function runBillingMaintenance(client?: StripeBillingClient) {
         await enqueueBillingNotification(getDatabase(), company.workspace_id, `billing:${company.workspace_id}:trial-ended`, "trial_ended", { trialEndsAt: company.trial_ends_at })
       }
       if (company.trial_ends_at && access.status === "trial" && Date.parse(company.trial_ends_at) - Date.now() <= 3 * 86400000) await enqueueBillingNotification(getDatabase(), company.workspace_id, `billing:${company.workspace_id}:trial-ending`, "trial_ending", { trialEndsAt: company.trial_ends_at })
-    } catch (error) { errors.push({ workspaceId: company.workspace_id, error: error instanceof Error ? error.message : "Reconciliation failed" }) }
+    } catch (error) { errors.push({ workspaceId: company.workspace_id, error: error instanceof Error ? error.message : "Reconciliation failed" });await recordOperationalError("billing","reconciliation_failed") }
     // Fair rotation even for a provider failure; the next cron revisits after others.
     await getDatabase().prepare("UPDATE company_subscription_state SET updated_at=? WHERE workspace_id=?").run(nowIso(), company.workspace_id)
   }
-  return { scanned: companies.length, reconciled, errors, notifications: await deliverBillingNotifications() }
+  return { scanned: companies.length, jobsClaimed:queued.claimed, reconciled, errors, notifications: await deliverBillingNotifications() }
 }
 
 /** Call only behind requirePlatformAdmin; does not infer platform authority from company role. */

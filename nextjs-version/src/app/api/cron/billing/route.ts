@@ -10,6 +10,8 @@ export async function GET(request: Request) {
     if (!secret) throw new AppError(503,"cron_unconfigured","Billing scheduler is not configured.")
     const received = Buffer.from(request.headers.get("authorization") ?? ""), expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received,expected)) throw new AppError(401,"unauthorized","Invalid scheduler credentials.")
-    return NextResponse.json(await runBillingMaintenance())
+    const result = await runBillingMaintenance()
+    if (result.errors.length) return NextResponse.json(result,{status:503})
+    return NextResponse.json(result)
   } catch (error) { return apiError(error) }
 }

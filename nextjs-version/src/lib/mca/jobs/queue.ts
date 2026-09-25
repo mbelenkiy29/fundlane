@@ -111,7 +111,7 @@ export async function currentJobActor(actor: DealActor): Promise<DealActor> {
 
 export async function claimBackgroundJob(): Promise<BackgroundJob | undefined> {
   const now = nowIso()
-  const companies = await getDatabase().prepare<{ workspace_id: string }>("SELECT DISTINCT workspace_id FROM mca_background_jobs WHERE state IN ('queued','running')").all()
+  const companies = await getDatabase().prepare<{ workspace_id: string }>("SELECT DISTINCT workspace_id FROM mca_background_jobs WHERE kind<>'billing_reconcile' AND state IN ('queued','running')").all()
   const allowed: string[] = []
   for (const company of companies) {
     if ((await getCompanyAccess(company.workspace_id)).allowed) allowed.push(company.workspace_id)
@@ -125,9 +125,9 @@ export async function claimBackgroundJob(): Promise<BackgroundJob | undefined> {
     }
   }
   if (!allowed.length) return undefined
-  await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts>=3 AND workspace_id IN (${allowed.map(() => "?").join(",")})`).run(now, now, ...allowed)
+  await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE kind<>'billing_reconcile' AND state='running' AND lease_expires_at<? AND attempts>=3 AND workspace_id IN (${allowed.map(() => "?").join(",")})`).run(now, now, ...allowed)
   return getDatabase().prepare<BackgroundJob>(`WITH candidate AS (
-    SELECT id FROM mca_background_jobs WHERE ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3 AND workspace_id IN (${allowed.map(() => "?").join(",")})
+    SELECT id FROM mca_background_jobs WHERE kind<>'billing_reconcile' AND ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3 AND workspace_id IN (${allowed.map(() => "?").join(",")})
     ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
   ) UPDATE mca_background_jobs j SET state='running',attempts=attempts+1,lease_token=?,lease_expires_at=?,updated_at=?
     FROM candidate c WHERE j.id=c.id RETURNING j.*`).get(now, now, ...allowed, newId(), new Date(Date.now() + 600_000).toISOString(), now)

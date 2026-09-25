@@ -1,12 +1,13 @@
 import "server-only"
 import Stripe from "stripe"
-import { getDatabase, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from "./db"
+import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from "./db"
 import { AppError } from "./errors"
 import { BILLING_CATALOG, monthlyPriceCents } from "./billing-catalog"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 export { initializeCompanyTrial } from "./company-access"
-import { reconcileBillingInvoices } from "./billing-reconciliation"
+import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-reconciliation"
 import { webhookVerificationTime } from "./maintenance/replay-clock"
+import { recordOperationalError } from "./operations/telemetry"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 // Historical Clerk migration scripts retain their original role mapping.
@@ -344,7 +345,7 @@ export function verifyStripeBillingEvent(body: string, signature: string | null,
 export async function processStripeBillingEvent(event: Stripe.Event, providedClient?: StripeBillingClient) {
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
   if (!/^(customer\.subscription\.|invoice\.|charge\.(refunded|dispute\.)|refund\.|checkout\.session\.(completed|async_payment_succeeded|async_payment_failed|expired)$)/.test(event.type)) return { ignored: true }
-  const object = event.data.object as unknown as { customer?: string | { id: string }; charge?:string|{id:string} }
+  const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
   if (!customerId && object.charge) {
     const charge = await (providedClient??getStripeClient()).charges.retrieve(typeof object.charge==="string"?object.charge:object.charge.id)
@@ -353,15 +354,50 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
   }
   if (!customerId) return { ignored: true }
   return withImmediateTransaction(async db => {
-    const mapping = await db.prepare<{ workspace_id: string }>("SELECT workspace_id FROM workspace_stripe_customers WHERE stripe_customer_id = ?").get(customerId)
+    const mapping = await db.prepare<{ workspace_id: string; livemode: number }>("SELECT workspace_id,livemode FROM workspace_stripe_customers WHERE stripe_customer_id = ?").get(customerId)
     if (!mapping) return { ignored: true }
-    await db.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(mapping.workspace_id)
+    if (Boolean(mapping.livemode) !== event.livemode) throw new AppError(400,"billing_mode_mismatch","Webhook customer mode mismatch.")
     const receipt = await db.prepare("INSERT INTO stripe_billing_events (event_id, event_type, stripe_customer_id, workspace_id, received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (event_id) DO NOTHING").run(event.id, event.type, customerId, mapping.workspace_id, nowIso())
     if (!receipt.changes) return { duplicate: true }
-    // Read current provider state, never trust the order or entitlement fields of an event.
-    await syncWorkspaceBilling(mapping.workspace_id, providedClient)
-    return { reconciled: true }
+    if (object.id && event.type === "invoice.payment_action_required") {
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:action-required:${object.id}`,"payment_action_required",{invoiceId:object.id,invoiceUrl:object.hosted_invoice_url??null})
+    } else if (object.id && event.type === "invoice.payment_failed") {
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id})
+    }
+    const jobId = newId()
+    await db.prepare(`INSERT INTO mca_background_jobs
+      (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
+      VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`).run(jobId,mapping.workspace_id,event.id,event.id,nowIso(),nowIso(),nowIso())
+    // The route starts a best-effort sync after commit; cron retains the durable fallback.
+    // Signed event fields are notification context, never an entitlement source.
+    return { queued: true, workspaceId: mapping.workspace_id, jobId }
   })
+}
+
+export const IMMEDIATE_BILLING_RECONCILE_TIMEOUT_MS = 5_000
+
+/** A timed-out sync may still finish; only a sync observed before the deadline completes the job. */
+export async function runImmediateBillingReconcile(
+  workspaceId: string,
+  jobId: string,
+  options: { timeoutMs?: number; client?: StripeBillingClient } = {},
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      syncWorkspaceBilling(workspaceId, options.client),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("billing_reconciliation_timeout")), options.timeoutMs ?? IMMEDIATE_BILLING_RECONCILE_TIMEOUT_MS)
+      }),
+    ])
+    await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',updated_at=? WHERE id=? AND workspace_id=? AND kind='billing_reconcile' AND state='queued'")
+      .run(nowIso(), jobId, workspaceId)
+  } catch {
+    try { await recordOperationalError("billing", "immediate_reconciliation_failed") }
+    catch { /* Telemetry must not turn a best-effort sync into a webhook failure. */ }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 async function ensureBillingState(workspaceId: string, db: DbExecutor) {

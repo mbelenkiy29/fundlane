@@ -53,7 +53,7 @@ async function fixture(mapped = true) {
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
 }
-for (const entry of ["standalone", "webhook", "outer_sync_failure", "outer_failure"] as const) test(`recovery verification failure survives ${entry} rollback with a single pool connection`, { timeout: 20000 }, async () => {
+for (const entry of ["standalone", "outer_sync_failure", "outer_failure"] as const) test(`recovery verification failure survives ${entry} rollback with a single pool connection`, { timeout: 20000 }, async () => {
   const previousMax = process.env.MCA_DB_POOL_MAX
   await closeDatabaseForTests()
   process.env.MCA_DB_POOL_MAX = "1"
@@ -67,8 +67,7 @@ for (const entry of ["standalone", "webhook", "outer_sync_failure", "outer_failu
     const error = new Error("provider invoice verification failed")
     const event = { id: `evt_${randomUUID()}`, type: "invoice.payment_failed", livemode: false, data: { object: { customer: f.customerId } } } as Stripe.Event
     const client = { ...f.client, invoices: { ...f.client.invoices, list: async () => { throw error } } } as unknown as StripeBillingClient
-    const operation = entry === "webhook" ? () => processStripeBillingEvent(event, client)
-      : entry === "standalone" ? () => syncWorkspaceBilling(f.workspaceId, client)
+    const operation = entry === "standalone" ? () => syncWorkspaceBilling(f.workspaceId, client)
       : entry === "outer_sync_failure" ? () => withTransaction(() => syncWorkspaceBilling(f.workspaceId, client))
       : () => withTransaction(async db => {
         // Even a successful nested reconciliation is uncommitted until its caller commits.
@@ -1096,15 +1095,19 @@ test("outbox retries use a stable receiver idempotency key and deliver to the ex
     assert.equal((await getDatabase().prepare<{delivery_payload:string}>("SELECT delivery_payload FROM company_billing_notifications WHERE id=?").get(id))?.delivery_payload,frozen!.delivery_payload)
   } finally { delete process.env.MCA_EMAIL_WEBHOOK_URL;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve())) }
 })
-test("signed duplicate and out-of-order events reconcile current state; notification failures remain retryable",async()=>{
+test("signed duplicate and out-of-order events queue once; notification failures remain retryable",async()=>{
   const f=await fixture()
   const event={id:`evt_${randomUUID()}`,type:"invoice.payment_failed",livemode:false,data:{object:{customer:f.customerId}}} as unknown as Stripe.Event
   const stripe=new Stripe("sk_test_fixture")
   const body=JSON.stringify(event),signature=stripe.webhooks.generateTestHeaderString({payload:body,secret:"whsec_fixture"})
   assert.equal(verifyStripeBillingEvent(body,signature,stripe).id,event.id)
   assert.throws(()=>verifyStripeBillingEvent(body,"bad",stripe),/signature/)
-  assert.deepEqual(await processStripeBillingEvent(event,f.client),{reconciled:true})
+  const queued=await processStripeBillingEvent(event,f.client)
+  assert.ok("queued" in queued && queued.queued)
+  assert.equal(queued.workspaceId,f.workspaceId)
+  assert.ok(queued.jobId)
   assert.deepEqual(await processStripeBillingEvent(event,f.client),{duplicate:true})
+  await syncWorkspaceBilling(f.workspaceId,f.client)
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"active")
   delete process.env.MCA_EMAIL_WEBHOOK_URL
   await deliverBillingNotifications()
@@ -1217,6 +1220,7 @@ test("refund and dispute projections are provider-backed, reconcile resolutions,
   refund.status="succeeded";dispute.status="won"
   const event={id:`evt_${randomUUID()}`,type:"charge.dispute.closed",livemode:false,data:{object:{charge:charge.id}}} as unknown as Stripe.Event
   await processStripeBillingEvent(event,f.client)
+  await syncWorkspaceBilling(f.workspaceId,f.client)
   detail=await getPlatformCompanyBillingDetail(f.workspaceId)
   assert.deepEqual(detail.adjustments.map(a=>a.status).sort(),["succeeded","won"])
   const before=await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action LIKE 'billing.%'").get(f.workspaceId)
