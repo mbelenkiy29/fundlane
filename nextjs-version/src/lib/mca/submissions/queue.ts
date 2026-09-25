@@ -16,6 +16,7 @@ import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../und
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
 import { enqueueSubmissionDelivery } from "./delivery-job"
 import { assertDuplicatePolicy, privilegedOverrideAllowed } from "./duplicate-policy"
+import { eligibleAtFromReason } from "./duplicate-rules"
 import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
@@ -123,6 +124,12 @@ function independentReason(error: unknown): string {
   return "This destination could not be queued."
 }
 
+function withEligibleAt(summary: QueuedJobSummary, eligibleAt?: string): QueuedJobSummary {
+  const next = eligibleAt
+    ?? (summary.state === "blocked_duplicate" ? eligibleAtFromReason(summary.reason) : undefined)
+  return next ? { ...summary, eligibleAt: next } : summary
+}
+
 function toJobView(job: SubmissionJob): SubmissionJobView {
   return {
     jobId: job.id,
@@ -208,12 +215,14 @@ async function queueDestination(input: {
 
   let state: SubmissionJob["state"] = "queued"
   let reason: string | undefined
+  let eligibleAt: string | undefined
   if (preflight.errors.length) {
     state = "preflight_failed"
     reason = reasonFromErrors(preflight.errors, "Preflight failed.")
   } else if (!duplicate.allowed) {
     state = "blocked_duplicate"
     reason = duplicate.reason ?? "A duplicate submission is blocked."
+    eligibleAt = duplicate.eligibleAt
   }
 
   const saved = await persistNewDestination({
@@ -239,8 +248,9 @@ async function queueDestination(input: {
     actor: input.actor,
   })
   await audit(input.actor, saved.job, saved.created)
-  if (!saved.created) return toQueuedSummary(saved.job)
-  if (saved.job.state !== "queued") return toQueuedSummary(saved.job)
+  const summary = toQueuedSummary(saved.job)
+  if (!saved.created) return withEligibleAt(summary, eligibleAt)
+  if (saved.job.state !== "queued") return withEligibleAt(summary, eligibleAt)
   if (input.deferDelivery) {
     if (backgroundJobsEnabled()) await enqueueSubmissionDelivery(saved.job)
     return toQueuedSummary(saved.job)
@@ -254,7 +264,7 @@ async function queueDestination(input: {
 
 export async function queueSubmissions(input: QueueSubmissionsInput): Promise<QueueSubmissionsResult> {
   if (input.privilegedRetry === true && !privilegedOverrideAllowed(input.actor)) {
-    throw new AppError(403, "privileged_retry_forbidden", "Privileged retry requires a workspace administrator session.")
+    throw new AppError(403, "privileged_retry_forbidden", "The 24-hour duplicate rule can be overridden only by someone who can submit this deal.")
   }
   const deal = await getDealForDocument(input.actor, input.dealId)
   await assertSubmissionSendGates(input.actor, deal.id)

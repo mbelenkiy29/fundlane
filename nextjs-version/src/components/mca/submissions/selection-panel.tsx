@@ -6,9 +6,16 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { submissionConfirmGate } from "@/lib/mca/integrations/connection-status"
 import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
+import {
+  confirmationAttemptFingerprint,
+  confirmationKeyForAttempt,
+  DUPLICATE_RULE_COPY,
+} from "@/lib/mca/submissions/duplicate-rules"
 
 type JobState =
   | "preflight_failed"
@@ -56,7 +63,7 @@ type SelectionPayload = {
 type ConfirmPayload = {
   ok: true
   confirmationKey: string
-  jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string }>
+  jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string; eligibleAt?: string }>
 }
 
 const routeLabels: Record<RouteKind, string> = {
@@ -92,12 +99,14 @@ function funderTitle(funder: SelectionFunder): string {
 export function SelectionPanel({ dealId }: { dealId: string }) {
   const [payload, setPayload] = React.useState<SelectionPayload>()
   const [selected, setSelected] = React.useState<string[]>([])
-  const [confirmationKey] = React.useState(() => crypto.randomUUID())
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string>()
   const [message, setMessage] = React.useState<string>()
   const [results, setResults] = React.useState<ConfirmPayload["jobs"]>()
+  const [override24h, setOverride24h] = React.useState(false)
+  const [overrideReason, setOverrideReason] = React.useState("")
+  const pendingConfirmation = React.useRef<{ fingerprint: string; key: string } | null>(null)
 
   const load = React.useCallback(async () => {
     setError(undefined)
@@ -130,11 +139,32 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
       setBusy(false)
       return
     }
+    if (override24h && !overrideReason.trim()) {
+      setError("Enter a reason to override the 24-hour same-funder rule.")
+      setBusy(false)
+      return
+    }
+    const pending = confirmationKeyForAttempt(
+      pendingConfirmation.current,
+      confirmationAttemptFingerprint({
+        funderIds: selected,
+        override24h,
+        overrideReason,
+      }),
+      () => crypto.randomUUID(),
+    )
+    pendingConfirmation.current = pending
     try {
       const next = await requestJson<ConfirmPayload>(`/api/mca/submissions/${encodeURIComponent(dealId)}`, {
         method: "POST",
-        body: JSON.stringify({ funderIds: selected, confirmationKey }),
+        body: JSON.stringify({
+          funderIds: selected,
+          confirmationKey: pending.key,
+          privilegedRetry: override24h,
+          privilegedReason: override24h ? overrideReason.trim() : undefined,
+        }),
       })
+      pendingConfirmation.current = null
       setResults(next.jobs)
       const failed = next.jobs.filter((job) => job.state === "failed" || job.state === "preflight_failed" || job.state === "blocked_duplicate").length
       const ok = next.jobs.length - failed
@@ -161,7 +191,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         <div>
           <CardTitle className="flex items-center gap-2"><Send className="size-5" />Submit to funders</CardTitle>
           <CardDescription>
-            Confirming freezes deal version {payload?.dealVersion ?? "—"} and document checksums. Each funder is queued independently.
+            Confirming freezes deal version {payload?.dealVersion ?? "—"} and document checksums. Each funder is queued independently. {DUPLICATE_RULE_COPY.summary}
           </CardDescription>
         </div>
         <Button onClick={() => void confirm()} disabled={!gate.enabled || busy} aria-label="Confirm submissions">
@@ -174,6 +204,29 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         {!loading && <MissingPrerequisites missing={gate.missing} />}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}
+        <div className="space-y-2 rounded-lg border p-3">
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="submission-override-24h"
+              checked={override24h}
+              onCheckedChange={(value) => setOverride24h(value === true)}
+              aria-label="Override the 24-hour same-funder rule"
+            />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Label htmlFor="submission-override-24h">{DUPLICATE_RULE_COPY.overrideHint}</Label>
+              {override24h && (
+                <Textarea
+                  id="submission-override-reason"
+                  value={overrideReason}
+                  onChange={(event) => setOverrideReason(event.target.value)}
+                  maxLength={500}
+                  aria-label="24-hour override reason"
+                  placeholder="Why this deal should be sent to the same funder again"
+                />
+              )}
+            </div>
+          </div>
+        </div>
         {!loading && !error && funders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
             Not connected. No active funders are available. Add a funder route before submitting.

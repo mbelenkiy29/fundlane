@@ -90,8 +90,6 @@ const scanner: DocumentScanner = {
 
 const minimalPdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"))
 const pdfChecksum = createHash("sha256").update(minimalPdf).digest("hex")
-const extraPdf = new Uint8Array(Buffer.from("%PDF-1.4\n2 0 obj<</Type/Catalog>>endobj\n%%EOF\n"))
-const extraChecksum = createHash("sha256").update(extraPdf).digest("hex")
 const SHARED_EIN = "12-8800221"
 
 let emailFunderId = ""
@@ -261,15 +259,16 @@ function policyInput(dealId: string, funderId: string, extra: {
   }
 }
 
-async function seedDeal(options: { ein?: string; forceDuplicate?: boolean } = {}) {
+async function seedDeal(options: { ein?: string; forceDuplicate?: boolean; actor?: DealActor } = {}) {
   dealCounter += 1
-  const deal = (await createDeal(actor(), {
+  const owner = options.actor ?? actor()
+  const deal = (await createDeal(owner, {
     idempotencyKey: `duplicate-deal-${dealCounter}`,
     legalName: `Duplicate Merchant ${dealCounter} LLC`,
     ein: options.ein,
     forceDuplicate: options.forceDuplicate,
   })).deal
-  await storeDocument(actor(), {
+  await storeDocument(owner, {
     dealId: deal.id,
     idempotencyKey: `duplicate-doc-${dealCounter}`,
     filename: "statement.pdf",
@@ -316,7 +315,7 @@ async function attemptCount(jobId: string) {
   return Number(row?.count ?? 0)
 }
 
-test("MIC-174 error retries are blocked inside two minutes and allowed at the boundary", async () => {
+test("rapid retries of the same deal and funder are blocked for two minutes", async () => {
   setClock(() => T0)
   const deal = await seedDeal()
   const first = await enqueue(deal.id, [emailFunderId])
@@ -325,25 +324,36 @@ test("MIC-174 error retries are blocked inside two minutes and allowed at the bo
   assertNoSecret(first)
 
   const before = await assertDuplicatePolicy(policyInput(deal.id, emailFunderId, { merchantId: deal.merchantId }))
-  const eligibleAt = plus(T0, TWO_MIN_MS)
+  const retryAt = plus(T0, TWO_MIN_MS)
   assert.equal(before.allowed, false)
   assert.equal(before.code, "retry_too_soon")
-  assert.equal(before.eligibleAt, eligibleAt)
-  assert.equal((before.reason ?? "").includes(eligibleAt), true)
+  assert.equal(before.eligibleAt, retryAt)
+  assert.match(before.reason ?? "", /2 minutes/)
+  assert.equal((before.reason ?? "").includes(retryAt), true)
 
   setClock(() => plus(T0, TWO_MIN_MS - 1))
   const early = await enqueue(deal.id, [emailFunderId])
   assert.equal(early.jobs[0]?.state, "blocked_duplicate")
-  assert.equal((early.jobs[0]?.reason ?? "").includes(eligibleAt), true)
+  assert.equal((early.jobs[0]?.reason ?? "").includes(retryAt), true)
+  assert.match(early.jobs[0]?.reason ?? "", /cannot be overridden/)
   assert.equal((await jobRows(deal.id)).some((row) => row.id === first.jobs[0]?.jobId && row.state === "failed"), true)
 
-  setClock(() => eligibleAt)
+  const overrideTooSoon = await assertDuplicatePolicy(policyInput(deal.id, emailFunderId, {
+    merchantId: deal.merchantId,
+    privilegedRetry: true,
+    privilegedReason: "Should not bypass the 2-minute rule.",
+  }))
+  assert.equal(overrideTooSoon.allowed, false)
+  assert.equal(overrideTooSoon.code, "retry_too_soon")
+  assert.equal(await privilegedAuditCount(deal.id), 0)
+
+  setClock(() => retryAt)
   const retried = await enqueue(deal.id, [emailFunderId])
   assert.equal(retried.jobs[0]?.state, "failed")
   assert.notEqual(retried.jobs[0]?.jobId, first.jobs[0]?.jobId)
 })
 
-test("merchant+funder lock survives 24h and decline; new checksum allowed; shared EIN blocked", async () => {
+test("same deal and funder stay blocked for 24 hours; another deal with the same EIN is allowed", async () => {
   setClock(() => T0)
   const deal = await seedDeal({ ein: SHARED_EIN })
   const identity = {
@@ -355,59 +365,68 @@ test("merchant+funder lock survives 24h and decline; new checksum allowed; share
   const originalId = first.jobs[0]?.jobId
   assert.ok(originalId)
 
-  setClock(() => plus(T0, DAY_MS))
-  const afterDay = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, identity))
-  assert.equal(afterDay.allowed, false)
-  assert.equal(afterDay.code, "active_duplicate")
-  assert.equal(afterDay.eligibleAt, undefined)
-  const stillActive = await enqueue(deal.id, [portalFunderId])
-  assert.equal(stillActive.jobs[0]?.state, "blocked_duplicate")
-  assert.equal((stillActive.jobs[0]?.reason ?? "").includes(plus(T0, DAY_MS)), false)
+  setClock(() => plus(T0, TWO_MIN_MS))
+  const insideDay = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, identity))
+  const dayEligible = plus(T0, DAY_MS)
+  assert.equal(insideDay.allowed, false)
+  assert.equal(insideDay.code, "recent_duplicate")
+  assert.equal(insideDay.eligibleAt, dayEligible)
+  assert.match(insideDay.reason ?? "", /24 hours/)
+  const stillBlocked = await enqueue(deal.id, [portalFunderId])
+  assert.equal(stillBlocked.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(stillBlocked.jobs[0]?.eligibleAt, dayEligible)
+  assert.equal((stillBlocked.jobs[0]?.reason ?? "").includes(dayEligible), true)
 
   const otherDeal = await seedDeal({ ein: SHARED_EIN, forceDuplicate: true })
-  const sharedEin = await enqueue(otherDeal.id, [portalFunderId])
-  assert.equal(sharedEin.jobs[0]?.state, "blocked_duplicate")
-  const sharedPolicy = await assertDuplicatePolicy(policyInput(otherDeal.id, portalFunderId, {
+  const otherDealQueue = await enqueue(otherDeal.id, [portalFunderId])
+  assert.equal(otherDealQueue.jobs[0]?.state, "pending_portal")
+  const otherPolicy = await assertDuplicatePolicy(policyInput(otherDeal.id, portalFunderId, {
     ein: SHARED_EIN,
     merchantId: otherDeal.merchantId,
   }))
-  assert.equal(sharedPolicy.allowed, false)
-  assert.equal(sharedPolicy.code, "active_duplicate")
+  assert.equal(otherPolicy.allowed, false)
+  assert.equal(otherPolicy.code, "retry_too_soon")
 
+  setClock(() => plus(T0, DAY_MS - 1))
   await updateJobRecord(ids.workspace, originalId, { state: "declined" })
   const declinedSame = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, identity))
   assert.equal(declinedSame.allowed, false)
-  assert.equal(declinedSame.code, "package_unchanged")
-  const declinedQueue = await enqueue(deal.id, [portalFunderId])
-  assert.equal(declinedQueue.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(declinedSame.code, "recent_duplicate")
 
-  await updateJobRecord(ids.workspace, originalId, { state: "funded" })
-  const fundedSame = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, identity))
-  assert.equal(fundedSame.allowed, false)
-  assert.equal(fundedSame.code, "package_unchanged")
-
-  dealCounter += 1
-  await storeDocument(actor(), {
-    dealId: deal.id,
-    idempotencyKey: `duplicate-doc-extra-${dealCounter}`,
-    filename: "statement-2.pdf",
-    mimeType: "application/pdf",
-    bytes: extraPdf,
-    category: "statement",
-    source: "test",
-  })
+  setClock(() => plus(T0, DAY_MS))
   const renewed = await enqueue(deal.id, [portalFunderId])
   assert.equal(renewed.jobs[0]?.state, "pending_portal")
   assert.notEqual(renewed.jobs[0]?.jobId, originalId)
-  const newPackage = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
-    ...identity,
-    checksums: [pdfChecksum, extraChecksum],
-  }))
-  assert.equal(newPackage.allowed, false)
-  assert.equal(newPackage.code, "active_duplicate")
 })
 
-test("MIC-174 concurrent queueSubmissions accept one attempt and block the rest", async () => {
+test("replaying a blocked confirmation key keeps eligibleAt after the window expires", async () => {
+  setClock(() => T0)
+  const deal = await seedDeal()
+  const first = await enqueue(deal.id, [portalFunderId])
+  assert.equal(first.jobs[0]?.state, "pending_portal")
+
+  const replayKey = confirmationKey("replay-block")
+  const blocked = await enqueue(deal.id, [portalFunderId], { confirmationKey: replayKey })
+  const retryAt = plus(T0, TWO_MIN_MS)
+  assert.equal(blocked.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(blocked.jobs[0]?.eligibleAt, retryAt)
+  assert.equal((blocked.jobs[0]?.reason ?? "").includes(retryAt), true)
+
+  setClock(() => plus(T0, DAY_MS))
+  const replayed = await enqueue(deal.id, [portalFunderId], { confirmationKey: replayKey })
+  assert.equal(replayed.jobs[0]?.jobId, blocked.jobs[0]?.jobId)
+  assert.equal(replayed.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(replayed.jobs[0]?.eligibleAt, retryAt)
+  assert.equal((replayed.jobs[0]?.reason ?? "").includes(retryAt), true)
+
+  setClock(() => plus(T0, DAY_MS + TWO_MIN_MS))
+  const renewed = await enqueue(deal.id, [portalFunderId])
+  assert.equal(renewed.jobs[0]?.state, "pending_portal")
+  assert.notEqual(renewed.jobs[0]?.jobId, first.jobs[0]?.jobId)
+  assert.notEqual(renewed.jobs[0]?.jobId, blocked.jobs[0]?.jobId)
+})
+
+test("concurrent queueSubmissions accept one attempt and block the rest", async () => {
   setClock(() => T0)
   const deal = await seedDeal()
   const [first, second] = await Promise.all([
@@ -421,14 +440,13 @@ test("MIC-174 concurrent queueSubmissions accept one attempt and block the rest"
   assert.equal(accepted.length, 1)
   assert.equal(blocked.length, 1)
   assert.equal(accepted[0]?.state, "pending_portal")
-  assert.equal((blocked[0]?.reason ?? "").includes("2026-09-09T12:00:00.000Z"), false)
-  assert.match(blocked[0]?.reason ?? "", /active/i)
+  assert.match(blocked[0]?.reason ?? "", /2 minutes|in progress/i)
   assert.equal(await attemptCount(accepted[0]!.jobId), 1)
   assert.equal(await attemptCount(blocked[0]!.jobId), 0)
   assert.equal((await jobRows(deal.id)).filter((row) => row.funder_id === portalFunderId).length, 2)
 })
 
-test("MIC-174 privileged retry requires a reason and retains prior jobs", async () => {
+test("24-hour override requires a reason, is audited, and keeps prior jobs", async () => {
   setClock(() => T0)
   const deal = await seedDeal()
   const first = await enqueue(deal.id, [portalFunderId])
@@ -437,13 +455,14 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   assert.equal(first.jobs[0]?.state, "pending_portal")
   assert.equal(await privilegedAuditCount(deal.id), 0)
 
+  setClock(() => plus(T0, TWO_MIN_MS))
   const missingReason = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
     merchantId: deal.merchantId,
     privilegedRetry: true,
   }))
   assert.equal(missingReason.allowed, false)
-  assert.equal(missingReason.code, "active_duplicate")
-  assert.equal(missingReason.eligibleAt, undefined)
+  assert.equal(missingReason.code, "recent_duplicate")
+  assert.equal(missingReason.eligibleAt, plus(T0, DAY_MS))
 
   const blankReason = await enqueue(deal.id, [portalFunderId], {
     privilegedRetry: true,
@@ -452,22 +471,13 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   assert.equal(blankReason.jobs[0]?.state, "blocked_duplicate")
   assert.equal(await privilegedAuditCount(deal.id), 0)
 
-  const override = await assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
-    merchantId: deal.merchantId,
-    privilegedRetry: true,
-    privilegedReason: "Merchant sent corrected statements.",
-  }))
-  assert.equal(override.allowed, true)
-  assert.equal(override.code, "privileged_retry")
-  assert.equal(await privilegedAuditCount(deal.id), 1)
-
   const retried = await enqueue(deal.id, [portalFunderId], {
     privilegedRetry: true,
     privilegedReason: "Merchant sent corrected statements.",
   })
   assert.equal(retried.jobs[0]?.state, "pending_portal")
   assert.notEqual(retried.jobs[0]?.jobId, originalId)
-  assert.equal(await privilegedAuditCount(deal.id), 2)
+  assert.equal(await privilegedAuditCount(deal.id), 1)
 
   const rows = await jobRows(deal.id)
   assert.equal(rows.some((row) => row.id === originalId && row.state === "pending_portal"), true)
@@ -475,40 +485,34 @@ test("MIC-174 privileged retry requires a reason and retains prior jobs", async 
   assert.equal(rows.filter((row) => row.state === "pending_portal").length, 2)
 })
 
-test("privilegedRetry is forbidden for rep sessions and API keys", async () => {
+test("reps and API keys that can already submit may override the 24-hour rule", async () => {
   setClock(() => T0)
-  const deal = await seedDeal()
+  const deal = await seedDeal({ actor: actor(ids.workspace, "rep") })
   const first = await enqueue(deal.id, [portalFunderId])
   assert.equal(first.jobs[0]?.state, "pending_portal")
 
-  await assert.rejects(
-    () => assertDuplicatePolicy(policyInput(deal.id, portalFunderId, {
-      merchantId: deal.merchantId,
-      actor: actor(ids.workspace, "rep"),
-      privilegedRetry: true,
-      privilegedReason: "Rep override attempt",
-    })),
-    (error: unknown) => {
-      assert.equal((error as { status?: number; code?: string }).status, 403)
-      assert.equal((error as { code?: string }).code, "privileged_retry_forbidden")
-      return true
-    },
-  )
+  setClock(() => plus(T0, TWO_MIN_MS))
+  const repQueued = await enqueue(deal.id, [portalFunderId], {
+    actor: actor(ids.workspace, "rep"),
+    privilegedRetry: true,
+    privilegedReason: "Rep override after two minutes",
+  })
+  assert.equal(repQueued.jobs[0]?.state, "pending_portal")
+  assert.equal(await privilegedAuditCount(deal.id), 1)
 
-  await assert.rejects(
-    () => enqueue(deal.id, [portalFunderId], {
-      actor: actor(ids.workspace, null),
-      privilegedRetry: true,
-      privilegedReason: "API key override attempt",
-    }),
-    (error: unknown) => {
-      assert.equal((error as { status?: number; code?: string }).status, 403)
-      assert.equal((error as { code?: string }).code, "privileged_retry_forbidden")
-      return true
-    },
-  )
+  setClock(() => plus(T0, TWO_MIN_MS * 2))
+  const apiQueued = await enqueue(deal.id, [portalFunderId], {
+    actor: actor(ids.workspace, null),
+    privilegedRetry: true,
+    privilegedReason: "API key override after two minutes",
+  })
+  assert.equal(apiQueued.jobs[0]?.state, "pending_portal")
+  assert.equal(await privilegedAuditCount(deal.id), 2)
 
-  const repHttp = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "rep-session-token", {
+  const dealForHttp = await seedDeal({ actor: actor(ids.workspace, "rep") })
+  await enqueue(dealForHttp.id, [portalFunderId])
+  setClock(() => plus(T0, TWO_MIN_MS * 3))
+  const repHttp = await submissionsPost(cookieRequest(`/api/mca/submissions/${dealForHttp.id}`, "rep-session-token", {
     method: "POST",
     body: JSON.stringify({
       funderIds: [portalFunderId],
@@ -516,13 +520,14 @@ test("privilegedRetry is forbidden for rep sessions and API keys", async () => {
       privilegedRetry: true,
       privilegedReason: "Rep HTTP override",
     }),
-  }), params(deal.id))
-  assert.equal(repHttp.status, 403)
-  const repBody = await repHttp.json() as { error: { code: string } }
-  assert.equal(repBody.error.code, "privileged_retry_forbidden")
+  }), params(dealForHttp.id))
+  assert.equal(repHttp.status, 200)
+  const repBody = await repHttp.json() as { ok: true; jobs: Array<{ state: string }> }
+  assert.equal(repBody.jobs[0]?.state, "pending_portal")
   assertNoSecret(repBody)
 
-  const apiHttp = await submissionsPost(bearerRequest(`/api/mca/submissions/${deal.id}`, "write-secret", {
+  setClock(() => plus(T0, TWO_MIN_MS * 4))
+  const apiHttp = await submissionsPost(bearerRequest(`/api/mca/submissions/${dealForHttp.id}`, "write-secret", {
     method: "POST",
     body: JSON.stringify({
       funderIds: [portalFunderId],
@@ -530,17 +535,16 @@ test("privilegedRetry is forbidden for rep sessions and API keys", async () => {
       privilegedRetry: true,
       privilegedReason: "API key HTTP override",
     }),
-  }), params(deal.id))
-  assert.equal(apiHttp.status, 403)
-  const apiBody = await apiHttp.json() as { error: { code: string } }
-  assert.equal(apiBody.error.code, "privileged_retry_forbidden")
+  }), params(dealForHttp.id))
+  assert.equal(apiHttp.status, 200)
+  const apiBody = await apiHttp.json() as { ok: true; jobs: Array<{ state: string; reason?: string }> }
+  assert.equal(apiBody.jobs[0]?.state, "pending_portal", apiBody.jobs[0]?.reason ?? JSON.stringify(apiBody))
   assertNoSecret(apiBody)
-
-  assert.equal(await privilegedAuditCount(deal.id), 0)
-  assert.equal((await jobRows(deal.id)).filter((row) => row.state === "pending_portal").length, 1)
+  assert.ok(await privilegedAuditCount(deal.id) >= 2)
+  assert.ok(await privilegedAuditCount(dealForHttp.id) >= 2)
 })
 
-test("MIC-174 other funders stay independent and HTTP uses the same policy", async () => {
+test("other funders stay independent and HTTP uses the same deal-and-funder policy", async () => {
   setClock(() => T0)
   const deal = await seedDeal()
   const first = await enqueue(deal.id, [portalFunderId])
@@ -556,6 +560,7 @@ test("MIC-174 other funders stay independent and HTTP uses the same policy", asy
 
   const duplicateSame = await enqueue(deal.id, [portalFunderId])
   assert.equal(duplicateSame.jobs[0]?.state, "blocked_duplicate")
+  assert.match(duplicateSame.jobs[0]?.reason ?? "", /2 minutes/)
 
   const intake = await submissionsPost(bearerRequest(`/api/mca/submissions/${deal.id}`, "intake-secret", {
     method: "POST",
@@ -569,13 +574,14 @@ test("MIC-174 other funders stay independent and HTTP uses the same policy", asy
     body: JSON.stringify({ funderIds: [portalFunderId], confirmationKey: confirmationKey("http-dup") }),
   }), params(deal.id))
   assert.equal(http.status, 200)
-  const body = await http.json() as { ok: true; jobs: Array<{ state: string; reason?: string }> }
+  const body = await http.json() as { ok: true; jobs: Array<{ state: string; reason?: string; eligibleAt?: string }> }
   assertNoSecret(body)
   assert.equal(body.jobs[0]?.state, "blocked_duplicate")
-  assert.equal((body.jobs[0]?.reason ?? "").includes("2026-09-09T12:00:00.000Z"), false)
-  assert.match(body.jobs[0]?.reason ?? "", /active/i)
+  assert.equal(body.jobs[0]?.eligibleAt, plus(T0, TWO_MIN_MS))
+  assert.match(body.jobs[0]?.reason ?? "", /2 minutes/)
   assert.equal(body.jobs[0]?.reason?.includes(pdfChecksum), false)
 
+  setClock(() => plus(T0, TWO_MIN_MS))
   const adminOverride = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
     method: "POST",
     body: JSON.stringify({

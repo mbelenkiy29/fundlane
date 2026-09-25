@@ -61,10 +61,10 @@ export const marketingFeatures: readonly MarketingFeature[] = [
     id: "submissions", title: "Submissions and automation", icon: Send,
     headline: "Send with context. Follow every submission.",
     summary: "Prepare the package, choose funders, and keep progress and exceptions visible in the same workflow.",
-    capabilities: ["Review packages and preflight checks", "Track each destination and submission outcome", "Choose analyze-only, review-first, or enabled automatic-send modes"],
-    note: "Automatic sending requires administrator enablement. Delivery depends on configured routes and providers.",
+    capabilities: ["Review packages and preflight checks", "Track each destination and submission outcome", "Choose analyze-only, review-first, or automatic-send after an administrator enables it"],
+    note: "Automatic send is not available until an administrator enables it. Delivery depends on configured routes and providers.",
     image: submit, imageAlt: "Fundlane submission tracking with synthetic sent, queued, and exception records",
-    detail: { heading: "Your workflow, your controls", rows: [["Analyze only", "Review the findings"], ["Review first", "Confirm before sending"], ["Automatic send", "Administrator enabled"]] },
+    detail: { heading: "Your workflow, your controls", rows: [["Analyze only", "Review the findings"], ["Review first", "Confirm before sending"], ["Automatic send", "Not available until administrator enablement"]] },
   },
   {
     image: offers, imageAlt: "Fundlane offers and closing with a synthetic Northside Kitchen offer and complete terms",

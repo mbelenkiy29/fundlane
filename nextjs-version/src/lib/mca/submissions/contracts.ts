@@ -35,7 +35,7 @@ export type AdapterEnvironment = (typeof ADAPTER_ENVIRONMENTS)[number]
 
 export interface DuplicateDecision {
   allowed: boolean
-  code?: "retry_too_soon" | "active_duplicate" | "package_unchanged" | "privileged_retry"
+  code?: "retry_too_soon" | "recent_duplicate" | "privileged_retry"
   eligibleAt?: string
   reason?: string
 }
@@ -57,6 +57,7 @@ export interface QueuedJobSummary {
   funderId: string
   state: JobState
   reason?: string
+  eligibleAt?: string
 }
 
 export interface QueueSubmissionsResult {
