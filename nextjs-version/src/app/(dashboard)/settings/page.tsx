@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { DocumentProtectionCard } from "@/components/mca/settings/document-protection-card"
 import { requestJson } from "@/lib/mca/client"
 import { DEALS_PAGE_TITLE } from "@/lib/mca/app-paths"
 import type { SessionResponse, WorkspaceSettings } from "@/lib/mca/types"
@@ -47,7 +48,8 @@ export default function WorkspaceSettingsPage() {
   if (loading) return <SettingsLoading label="Loading workspace settings" />
   if (!settings) return <SettingsError message={error} retry={load} />
 
-  return <form onSubmit={save} className="space-y-5">
+  return <div className="space-y-5">
+  <form onSubmit={save} className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">Brokerage</h2><p className="text-sm text-muted-foreground">Details and capabilities shared by this workspace.</p></div><Button type="submit" disabled={!canEdit || saving}>{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{saving ? "Saving" : "Save changes"}</Button></div>
     {error && <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</div>}
     {!canEdit && <div className="rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">Only a super admin can change workspace configuration. You can still review the current settings.</div>}
@@ -69,6 +71,8 @@ export default function WorkspaceSettingsPage() {
       </CardContent></Card>
     </div>
   </form>
+  <DocumentProtectionCard />
+  </div>
 }
 
 function SwitchRow({ label, description, ...props }: { label: string; description: string } & React.ComponentProps<typeof Switch>) {

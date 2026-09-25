@@ -32,7 +32,7 @@ const MAX_LOGO_HEIGHT_PT = 72
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 const PNG_KEEP = new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND"])
 
-type SkipReason = "disabled" | "excluded" | "not_pdf" | "no_logo"
+type SkipReason = "disabled" | "excluded" | "not_pdf" | "no_logo" | "not_statement"
 type LogoSource = "document" | "workspace" | "none"
 type ImageMime = "image/png" | "image/jpeg"
 
@@ -106,6 +106,7 @@ type OriginalRow = {
   byte_length: number | string
   mime_type: string
   processing_state: string
+  category: string
 }
 
 type LogoDocumentRow = {
@@ -564,7 +565,7 @@ export async function requireWatermarkPreview(request: Request): Promise<DealAct
 
 async function loadOriginal(documentId: string): Promise<OriginalRow | undefined> {
   return db().prepare<OriginalRow>(
-    "SELECT id, workspace_id, deal_id, storage_key, checksum, byte_length, mime_type, processing_state FROM mca_documents WHERE id = ?",
+    "SELECT id, workspace_id, deal_id, storage_key, checksum, byte_length, mime_type, processing_state, category FROM mca_documents WHERE id = ?",
   ).get(documentId)
 }
 
@@ -688,10 +689,15 @@ function isPdf(bytes: Uint8Array): boolean {
   return bytes.length >= 5 && Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-"
 }
 
-function skipReason(settings: WatermarkSettings, funderId: string, pdf: boolean, hasLogo: boolean): SkipReason | undefined {
+function isBankStatement(category: string): boolean {
+  return category.trim().toLowerCase() === "statement"
+}
+
+function skipReason(settings: WatermarkSettings, funderId: string, pdf: boolean, hasLogo: boolean, category: string): SkipReason | undefined {
   if (!settings.enabled) return "disabled"
   if (settings.excludedFunderIds.includes(funderId)) return "excluded"
   if (!hasLogo) return "no_logo"
+  if (!isBankStatement(category)) return "not_statement"
   if (!pdf) return "not_pdf"
   return undefined
 }
@@ -801,6 +807,10 @@ export async function applyWatermark(documents: OutgoingDocument[], funderId: st
     if (!original || original.workspace_id !== workspaceId) {
       throw new AppError(404, "document_not_found", "The requested document was not found.")
     }
+    if (!isBankStatement(original.category)) {
+      next.push(document)
+      continue
+    }
     const source = await sourceBytesFor(document)
     if (!isPdf(source)) {
       next.push(document)
@@ -826,7 +836,7 @@ export async function previewWatermark(actor: DealActor, input: { documentId?: u
   const content = await getDocumentContent(actor, documentId)
   const pdf = isPdf(content.bytes)
   const logo = await resolveLogo(actor.workspaceId, settings)
-  const reason = skipReason(settings, funderId, pdf, Boolean(logo))
+  const reason = skipReason(settings, funderId, pdf, Boolean(logo), record.category)
   if (reason) {
     return {
       skipped: true,
@@ -862,6 +872,7 @@ export async function previewWatermark(actor: DealActor, input: { documentId?: u
     byte_length: record.byteLength,
     mime_type: record.mimeType,
     processing_state: record.processingState,
+    category: record.category,
   }
   const source: OutgoingDocument = {
     documentId: record.id,
