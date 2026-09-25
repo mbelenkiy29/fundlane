@@ -6,6 +6,10 @@ import type { DealActor } from "../deals/schema"
 import type { OfferRecord } from "../offers/contracts"
 import type { PublishWorkflowWebhookInput, PublishWorkflowWebhookResult } from "./webhooks"
 
+function isAutomatedTestRuntime(): boolean {
+  return process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT)
+}
+
 function scheduleOutbox(actor: DealActor): void {
   const run = async () => {
     try {
@@ -19,7 +23,9 @@ function scheduleOutbox(actor: DealActor): void {
       }))
     }
   }
-  if (process.env.NODE_ENV === "test") return
+  // node:test does not set NODE_ENV=test; NODE_TEST_CONTEXT is set by the runner.
+  // Tests assert pending outbox rows, then call processWebhookOutbox themselves.
+  if (isAutomatedTestRuntime()) return
   try {
     after(() => { void run() })
   } catch {
