@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { nextConfigHeaders } from "./src/lib/mca/security-headers";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -26,40 +27,8 @@ const nextConfig: NextConfig = {
     formats: ['image/webp', 'image/avif'],
   },
 
-  // Headers for better security and performance
   async headers() {
-    return [
-      {
-        source: "/fonts/inter/:font*",
-        headers: [{ key: "Access-Control-Allow-Origin", value: "*" }],
-      },
-      {
-        source: "/api/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "private, no-store, max-age=0",
-          },
-        ],
-      },
-      {
-        source: '/(.*)',
-        headers: [
-          {
-            key: 'X-Frame-Options',
-            value: 'DENY',
-          },
-          {
-            key: 'X-Content-Type-Options',
-            value: 'nosniff',
-          },
-          {
-            key: 'Referrer-Policy',
-            value: 'origin-when-cross-origin',
-          },
-        ],
-      },
-    ];
+    return nextConfigHeaders();
   },
 
   // Redirects for better SEO
