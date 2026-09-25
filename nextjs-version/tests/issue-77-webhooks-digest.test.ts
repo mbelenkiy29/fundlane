@@ -3,8 +3,9 @@ import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, runOutsideTransaction, withImmediateTransaction } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
+import { commitHistoricalImport, previewHistoricalImport } from "../src/lib/mca/historical/service"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal, transitionDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
@@ -224,6 +225,98 @@ test("issue 77: cron tick retries failed webhook outbox and is runtime-agnostic"
   const body = await ok.json() as { workspaces: number; webhooks: { delivered: number } }
   assert.equal(body.workspaces, 0)
   assert.equal(body.webhooks.delivered, 0)
+})
+
+test("issue 77: webhook triggered inside a transaction delivers on the pool after commit", async () => {
+  await createWorkflowWebhookEndpoint(actor(), {
+    label: "In-transaction hook",
+    destinationUrl: PUBLIC_HOOK,
+    events: ["offer.created"],
+    signingSecret: SIGNING_SECRET,
+  })
+  const deal = await seedDeal()
+  await withImmediateTransaction(async (database) => {
+    assert.equal(getDatabase(), database)
+    await createOffer(actor(), {
+      dealId: deal.id,
+      funderName: "Txn Capital",
+      terms: { amountCents: 1_250_000, factorRate: 1.18, termMonths: 8, paymentAmountCents: 70_000, paymentFrequency: "weekly" },
+    })
+    await runOutsideTransaction(async () => {
+      assert.notEqual(getDatabase(), database)
+      const leakedKick = await getDatabase().prepare<{ count: number }>(
+        "SELECT count(*)::int count FROM mca_workflow_webhook_outbox WHERE workspace_id = ?",
+      ).get(ids.workspace)
+      assert.equal(leakedKick?.count ?? 0, 0, "pool must not see uncommitted outbox rows")
+    })
+  })
+  const pending = await listWorkflowWebhookConsole(actor())
+  assert.equal(pending.outbox.length, 1)
+  assert.equal(pending.outbox[0]?.state, "pending")
+  const processed = await runOutsideTransaction(() => processWebhookOutbox({ actor: actor(), nowIso: NOW }))
+  assert.equal(processed.delivered, 1)
+  assert.equal(posted.length, 1)
+  assert.equal(posted[0]?.envelope.event_type, "offer.created")
+})
+
+test("issue 77: webhook delivery does not follow redirects to a private address", async () => {
+  const inits: RequestInit[] = []
+  setWorkflowWebhookFetchForTests(async (_input, init) => {
+    inits.push(init ?? {})
+    return new Response("", {
+      status: 302,
+      headers: { location: "http://169.254.169.254/latest/meta-data" },
+    })
+  })
+  await createWorkflowWebhookEndpoint(actor(), {
+    label: "Redirect hook",
+    destinationUrl: PUBLIC_HOOK,
+    events: ["offer.created"],
+    signingSecret: SIGNING_SECRET,
+  })
+  const deal = await seedDeal()
+  await createOffer(actor(), {
+    dealId: deal.id,
+    funderName: "Redirect Capital",
+    terms: { amountCents: 900_000, factorRate: 1.15, termMonths: 6, paymentAmountCents: 50_000, paymentFrequency: "weekly" },
+  })
+  const processed = await processWebhookOutbox({ actor: actor(), nowIso: NOW })
+  assert.equal(processed.delivered, 0)
+  assert.equal(processed.failed, 1)
+  assert.equal(processed.outcomes[0]?.httpStatus, 302)
+  assert.equal(inits[0]?.redirect, "manual")
+  const afterRedirect = await listWorkflowWebhookConsole(actor())
+  assert.equal(afterRedirect.deliveries[0]?.state, "failed")
+  assert.match(afterRedirect.deliveries[0]?.error ?? "", /redirect/i)
+})
+
+test("issue 77: historical import does not emit offer.created or deal.transitioned webhooks", async () => {
+  await createWorkflowWebhookEndpoint(actor(), {
+    label: "Historical silence",
+    destinationUrl: PUBLIC_HOOK,
+    events: ["offer.created", "deal.transitioned"],
+    signingSecret: SIGNING_SECRET,
+  })
+  const preview = await previewHistoricalImport(actor(), {
+    sourceId: "issue77-legacy",
+    batchId: "issue77-batch",
+    requestId: "issue77-historical",
+    rows: [{
+      externalId: "issue77-legacy-1",
+      legalName: "Issue 77 Historical Bakery",
+      funderName: "Archive Capital",
+      fundedAt: "2023-02-14",
+      amountCents: 8_000_000,
+      factorRate: 1.25,
+      commissionCents: 640_000,
+    }],
+  })
+  const result = await commitHistoricalImport(actor(), { runId: preview.runId, expectedPreviewRevision: 1 })
+  assert.equal(result.state, "committed")
+  assert.equal(result.created, 1)
+  const consoleAfter = await listWorkflowWebhookConsole(actor())
+  assert.equal(consoleAfter.outbox.length, 0)
+  assert.equal(posted.length, 0)
 })
 
 test("issue 77: admins can opt in to a daily report at a set time with role-appropriate preview", async () => {

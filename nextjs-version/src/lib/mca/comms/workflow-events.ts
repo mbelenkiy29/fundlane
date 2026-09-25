@@ -1,20 +1,36 @@
 import "server-only"
 
+import { AsyncLocalStorage } from "node:async_hooks"
 import { after } from "next/server"
-import { nowIso } from "../db"
+import { nowIso, runOutsideTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import type { OfferRecord } from "../offers/contracts"
 import type { PublishWorkflowWebhookInput, PublishWorkflowWebhookResult } from "./webhooks"
+
+const webhookEmission = new AsyncLocalStorage<{ suppress: true }>()
 
 function isAutomatedTestRuntime(): boolean {
   return process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT)
 }
 
+function workflowWebhooksSuppressed(): boolean {
+  return webhookEmission.getStore()?.suppress === true
+}
+
+/** Historical imports replay past records; callers must not notify live endpoints. */
+export function withoutWorkflowWebhooks<T>(operation: () => Promise<T>): Promise<T> {
+  return webhookEmission.run({ suppress: true }, operation)
+}
+
 function scheduleOutbox(actor: DealActor): void {
   const run = async () => {
     try {
-      const { processWebhookOutbox } = await import("./webhooks")
-      await processWebhookOutbox({ actor, nowIso: nowIso() })
+      // after() restores request ALS, including a committed/released transaction
+      // executor. Always kick on the pool so getDatabase() is not that client.
+      await runOutsideTransaction(async () => {
+        const { processWebhookOutbox } = await import("./webhooks")
+        await processWebhookOutbox({ actor, nowIso: nowIso() })
+      })
     } catch (error) {
       console.error(JSON.stringify({
         event: "workflow_webhook_outbox_kick_failed",
@@ -37,6 +53,7 @@ export async function emitWorkflowWebhook(
   actor: DealActor,
   input: PublishWorkflowWebhookInput,
 ): Promise<PublishWorkflowWebhookResult | undefined> {
+  if (workflowWebhooksSuppressed()) return undefined
   try {
     const { publishWorkflowWebhook } = await import("./webhooks")
     const result = await publishWorkflowWebhook(actor, input)

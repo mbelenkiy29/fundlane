@@ -181,6 +181,14 @@ const poolExecutor = createExecutor({
 });
 
 export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
+
+/** Run work on the pool even if AsyncLocalStorage still holds a transaction
+ * executor (for example Next.js `after()`, which restores request ALS after
+ * COMMIT and client release). */
+export function runOutsideTransaction<T>(operation: () => T): T {
+  return transactionContext.exit(operation);
+}
+
 export function statement<Row extends QueryResultRow = QueryResultRow>(sql: string): AsyncStatement<Row> { return getDatabase().prepare<Row>(sql); }
 export async function query<Row extends QueryResultRow = QueryResultRow>(sql: string, values: readonly unknown[] = []): Promise<Row[]> { return (await getDatabase().query<Row>(sql, values)).rows; }
 export function queryOne<Row extends QueryResultRow = QueryResultRow>(sql: string, values: readonly unknown[] = []): Promise<Row | undefined> { return getDatabase().queryOne<Row>(sql, values); }

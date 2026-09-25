@@ -960,8 +960,12 @@ async function postEnvelope(input: {
         "x-correlation-id": input.correlationId,
       },
       body: input.body,
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     })
+    if (response.status >= 300 && response.status < 400) {
+      return { ok: false, httpStatus: response.status, error: "The webhook destination redirected the request." }
+    }
     if (response.ok) return { ok: true, httpStatus: response.status }
     return { ok: false, httpStatus: response.status, error: "The webhook destination did not accept the event." }
   } catch (error) {

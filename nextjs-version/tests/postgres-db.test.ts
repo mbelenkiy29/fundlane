@@ -75,6 +75,20 @@ test("placeholder conversion skips strings, identifiers, dollar quotes, and nest
   );
 });
 
+test("runOutsideTransaction uses the pool while an outer transaction is open", async () => {
+  const { getDatabase, runOutsideTransaction, withTransaction } = await import("../src/lib/mca/db");
+  await getDatabase().execute("CREATE TABLE outside_txn_probe (id text PRIMARY KEY)");
+  await withTransaction(async (tx) => {
+    await tx.execute("INSERT INTO outside_txn_probe (id) VALUES (?)", ["uncommitted"]);
+    assert.equal(getDatabase(), tx);
+    await runOutsideTransaction(async () => {
+      assert.notEqual(getDatabase(), tx);
+      assert.equal(await getDatabase().queryOne("SELECT id FROM outside_txn_probe WHERE id = ?", ["uncommitted"]), undefined);
+    });
+  });
+  assert.equal((await getDatabase().queryOne<{ id: string }>("SELECT id FROM outside_txn_probe WHERE id = ?", ["uncommitted"]))?.id, "uncommitted");
+});
+
 test("transactions keep nested operations on one client, see their writes, and roll back failures", async () => {
   const { getDatabase, withTransaction } = await import("../src/lib/mca/db");
   await getDatabase().execute("CREATE TABLE transaction_probe (id text PRIMARY KEY, value text NOT NULL)");

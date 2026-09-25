@@ -19,6 +19,9 @@ Deliveries:
 - Automatic retries stop at five attempts; the delivery log is `mca_workflow_webhook_deliveries`
 - Test POSTs do not mark workflow outbox rows delivered
 - DELETE removes the endpoint and fails its pending outbox rows; historical deliveries stay visible
+- HTTP delivery uses `redirect: "manual"` and treats 3xx as a failed attempt so a public URL cannot bounce to a private address
+- Outbox kicks from `after()` run via `runOutsideTransaction` so they use the pool, not a committed request transaction
+- Historical funding imports do not emit `offer.created` or `deal.transitioned`
 
 No schema migration is required. Tables already exist from `drizzle/0012_furry_ultimatum.sql`.
 

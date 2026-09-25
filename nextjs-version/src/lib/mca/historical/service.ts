@@ -4,6 +4,7 @@ import { timeHistoricalPhase } from "./telemetry"
 
 import { createHash } from "node:crypto"
 import { reconcilePayment } from "../accounting/service"
+import { withoutWorkflowWebhooks } from "../comms/workflow-events"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "../db"
 import { createDeal, getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
@@ -180,10 +181,12 @@ export async function commitHistoricalImport(
       await database.execute("SAVEPOINT historical_row")
       try {
         const identity = historicalIdentity(run.source_id, row.externalId)
-        const dealId = row.dealId ?? (await createDeal(actor, { legalName: row.legalName, idempotencyKey: `historical:${identity}`, fieldSource: "import" })).deal.id
-        const manual = await createManualSubmission(actor, { dealId, funderId: row.funderId, funderName: row.funderName, historicalAt: row.fundedAt, reason: `Historical import ${input.runId}`, idempotencyKey: `historical-submission:${identity}`, source: "historical" })
-        const approved = await approveManualSubmission(actor, { submissionId: manual.submission.id, terms: { amountCents: row.amountCents, factorRate: row.factorRate, termMonths: row.termMonths, paymentAmountCents: row.paymentAmountCents, paymentFrequency: row.paymentFrequency, commissionCents: row.commissionCents, feeCents: row.feeCents, effectiveAt: row.fundedAt } })
-        const funding = await confirmOfferFunding(actor, { dealId, offerId: approved.offer.id, offerRevisionId: approved.offer.currentRevisionId, manualSubmissionId: manual.submission.id, idempotencyKey: `historical-funding:${identity}`, fundedAt: row.fundedAt, amountCents: row.amountCents, commissionCents: row.commissionCents, feeCents: row.feeCents, expectedCommissionAt: row.expectedCommissionAt, expectedFeeAt: row.expectedFeeAt, paymentCount: row.paymentCount, paymentFrequency: row.paymentFrequency, calendarConvention: row.calendarConvention, splits: row.splits, source: "historical" }, accountingWriter)
+        const funding = await withoutWorkflowWebhooks(async () => {
+          const dealId = row.dealId ?? (await createDeal(actor, { legalName: row.legalName, idempotencyKey: `historical:${identity}`, fieldSource: "import" })).deal.id
+          const manual = await createManualSubmission(actor, { dealId, funderId: row.funderId, funderName: row.funderName, historicalAt: row.fundedAt, reason: `Historical import ${input.runId}`, idempotencyKey: `historical-submission:${identity}`, source: "historical" })
+          const approved = await approveManualSubmission(actor, { submissionId: manual.submission.id, terms: { amountCents: row.amountCents, factorRate: row.factorRate, termMonths: row.termMonths, paymentAmountCents: row.paymentAmountCents, paymentFrequency: row.paymentFrequency, commissionCents: row.commissionCents, feeCents: row.feeCents, effectiveAt: row.fundedAt } })
+          return confirmOfferFunding(actor, { dealId, offerId: approved.offer.id, offerRevisionId: approved.offer.currentRevisionId, manualSubmissionId: manual.submission.id, idempotencyKey: `historical-funding:${identity}`, fundedAt: row.fundedAt, amountCents: row.amountCents, commissionCents: row.commissionCents, feeCents: row.feeCents, expectedCommissionAt: row.expectedCommissionAt, expectedFeeAt: row.expectedFeeAt, paymentCount: row.paymentCount, paymentFrequency: row.paymentFrequency, calendarConvention: row.calendarConvention, splits: row.splits, source: "historical" }, accountingWriter)
+        })
         if ((row.paidCommissionCents ?? 0) > 0) {
           const payment = await database.prepare<{ id: string }>("SELECT id FROM mca_accounting_payments WHERE workspace_id = ? AND advance_id = ? AND type = 'commission'").get(actor.workspaceId, funding.advanceId)
           if (!payment) throw new Error("Historical commission payment record was not created")
