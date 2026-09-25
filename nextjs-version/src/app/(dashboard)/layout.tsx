@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation"
 import { DashboardChrome } from "@/components/mca/dashboard-chrome"
 import { NewDealProvider } from "@/components/mca/deals/new-deal-provider"
 import { authenticateSupabaseSession, supabaseIdentity } from "@/lib/mca/supabase-auth"
+import { getTotpAccessState } from "@/lib/mca/totp-service"
 import { getSessionResponse } from "@/lib/mca/sessions"
 import type { PageKey } from "@/lib/mca/types"
 import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
@@ -36,6 +37,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   const session = await getSessionResponse(context)
+  const totp = await getTotpAccessState({ userId: context.userId, sessionId: context.sessionId, workspaceId: context.workspaceId })
+  if (totp.enrollmentRequired) redirect("/account-security?required=1")
+  if (totp.challengeRequired) redirect("/account-security?challenge=1")
   if (pathname.startsWith("/settings/billing") && !["admin", "super_admin"].includes(context.role)) redirect("/errors/forbidden")
   const access = await getCompanyAccess(context.workspaceId)
   if (!access.allowed && !isCompanyRecoveryPage(pathname)) {

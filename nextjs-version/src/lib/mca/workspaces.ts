@@ -2,7 +2,7 @@ import "server-only";
 
 import { AppError } from "./errors";
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction } from "./db";
-import { hashPassword } from "./crypto";
+import { hashPassword, totpEncryptionAvailable } from "./crypto";
 import { billingEnabled } from "./billing";
 import type { ActionVisibility, AuthContext, FeatureFlags, PageVisibility, Role, WorkspaceSettings } from "./types";
 
@@ -40,6 +40,7 @@ interface WorkspaceRow {
   feature_flags: string;
   page_visibility: string;
   action_visibility: string;
+  require_2fa: boolean | null;
   updated_at: string;
   clerk_organization_id: string | null;
 }
@@ -55,6 +56,7 @@ function mapWorkspace(row: WorkspaceRow): WorkspaceSettings {
     featureFlags: parseJson(row.feature_flags, DEFAULT_FEATURE_FLAGS),
     pageVisibility: parseJson(row.page_visibility, DEFAULT_PAGE_VISIBILITY),
     actionVisibility: parseJson(row.action_visibility, DEFAULT_ACTION_VISIBILITY),
+    require2fa: row.require_2fa === true,
     updatedAt: row.updated_at,
   };
 }
@@ -79,6 +81,9 @@ export async function updateWorkspaceSettings(
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
     const current = await getWorkspaceSettings(context.workspaceId);
     if (current.seatLimitManaged && patch.seatLimit !== undefined && patch.seatLimit !== current.seatLimit) throw new AppError(409, "billing_managed_seats", "Change company seats from Plans & Billing.");
+    if (patch.require2fa === true && !totpEncryptionAvailable()) {
+      throw new AppError(503, "totp_unavailable", "Two-factor authentication is not configured on this deployment.");
+    }
     const next: WorkspaceSettings = {
       ...current,
       ...patch,
@@ -95,7 +100,7 @@ export async function updateWorkspaceSettings(
       throw new AppError(409, "seat_limit_below_usage", `Seat limit cannot be lower than the ${activeSeats.count} reserved seats.`);
     }
     await database.prepare(`UPDATE workspaces SET name = ?, logo_url = ?, timezone = ?, seat_limit = ?,
-      feature_flags = ?, page_visibility = ?, action_visibility = ?, updated_at = ? WHERE id = ?`).run(
+      feature_flags = ?, page_visibility = ?, action_visibility = ?, require_2fa = ?, updated_at = ? WHERE id = ?`).run(
         next.brokerageName,
         next.logoUrl,
         next.timezone,
@@ -103,6 +108,7 @@ export async function updateWorkspaceSettings(
         JSON.stringify(next.featureFlags),
         JSON.stringify(next.pageVisibility),
         JSON.stringify(next.actionVisibility),
+        next.require2fa,
         next.updatedAt,
         context.workspaceId,
       );

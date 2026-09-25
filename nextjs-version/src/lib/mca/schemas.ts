@@ -59,6 +59,7 @@ export const workspacePatchSchema = z.object({
   featureFlags: featureFlags.optional(),
   pageVisibility: pageVisibility.optional(),
   actionVisibility: actionVisibility.optional(),
+  require2fa: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, "Provide at least one change.");
 
 export const apiKeyCreateSchema = z.object({

@@ -7,6 +7,7 @@ import { isCompanyRecoveryApi } from "./company-recovery";
 import { AppError } from "./errors";
 import { nowIso, parseJson, withImmediateTransaction } from "./db";
 import { hashOpaqueToken } from "./crypto";
+import { assertSessionTotpAccess } from "./totp-service";
 import type { ApiKeyScope, AuthContext, MembershipContext, Role } from "./types";
 
 export const SESSION_COOKIE_NAME = "mca_session";
@@ -84,6 +85,9 @@ export async function requireWorkspaceAccess(request: Request, options: AccessOp
   const recovery = context.authType === "session" && (options.allowPaused === true ||
     (isCompanyRecoveryApi(new URL(request.url).pathname) && ["admin", "super_admin"].includes(context.role ?? "")));
   if (!recovery) await assertCompanyOperational(context.workspaceId);
+  if (context.authType === "session" && context.userId && context.sessionId) {
+    await assertSessionTotpAccess({ userId: context.userId, sessionId: context.sessionId, workspaceId: context.workspaceId });
+  }
   if (context.authType === "session" && context.userId) recordActivity(request, context.userId);
   return context;
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import { completeCompanyOnboarding, listSupabaseWorkspaces, setActiveWorkspace, supabaseIdentity } from "@/lib/mca/supabase-auth"
+import { getTotpAccessState } from "@/lib/mca/totp-service"
 import { assertTrustedMutation } from "@/lib/mca/auth"
 import { readJson } from "@/lib/mca/http"
 import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured } from "@/lib/mca/billing"
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
     const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name,input.selectedSeats)
     const checkoutUrl = await createOnboardingCheckoutUrl(context.workspaceId,context.role,"name" in input?input.selectedSeats:1)
-    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl })
+    const totp=context.userId ? await getTotpAccessState({ userId:context.userId, sessionId:identity.sessionId, workspaceId:context.workspaceId }) : null
+    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl,totpEnrollmentRequired:totp?.enrollmentRequired===true,totpChallengeRequired:totp?.challengeRequired===true })
   } catch(error) { return apiError(error) }
 }

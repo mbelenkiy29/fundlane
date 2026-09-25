@@ -4,6 +4,7 @@ import { authOrigin } from "@/lib/mca/supabase-auth-http"
 import { callbackDestination, emailCallbackContinuation } from "@/lib/mca/auth-navigation"
 import { supabaseIdentity } from "@/lib/mca/supabase-auth"
 import { apiError } from "@/lib/mca/errors"
+import { markGoogleTotpSession } from "@/lib/mca/totp-service"
 export async function GET(request: Request) {
   const url=new URL(request.url),origin=authOrigin(request)
   const code=url.searchParams.get("code"),tokenHash=url.searchParams.get("token_hash"),type=url.searchParams.get("type")
@@ -15,7 +16,13 @@ export async function GET(request: Request) {
     if (url.searchParams.has("error")) success=false
     else if (tokenHash && !code && (type === "email" || type === "signup" || type === "recovery")) success=!(await client.auth.verifyOtp({ token_hash:tokenHash,type })).error
     else if (code && !tokenHash) success=!(await client.auth.exchangeCodeForSession(code)).error
-    if (success) success=Boolean(await supabaseIdentity({ allowPasswordSetup:true }))
+    if (success) {
+      const identity=await supabaseIdentity({ allowPasswordSetup:true })
+      success=Boolean(identity)
+      if (identity?.user.app_metadata?.provider === "google") {
+        try { await markGoogleTotpSession(identity) } catch { /* Password/Google session marking must not block a verified callback. */ }
+      }
+    }
   } catch(error) {
     const response=apiError(error)
     response.headers.set("Cache-Control","no-store")

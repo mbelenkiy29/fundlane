@@ -9,6 +9,7 @@ import { readJson } from "./http"
 import { getDatabase, nowIso } from "./db"
 import { supabaseIdentity, WORKSPACE_COOKIE } from "./supabase-auth"
 import { authContinuation, recoveryDestination } from "./auth-navigation"
+import { startPasswordTotpChallenge } from "./totp-service"
 
 const emailInput = z.object({ email: z.email().max(320), next: z.string().max(2048).optional() })
 const credentials = emailInput.extend({ password: z.string().min(1).max(256) })
@@ -49,6 +50,9 @@ export async function handleSupabaseAuth(request: Request, action: "sign-in" | "
       const input = credentials.parse(body)
       const { error } = await client.auth.signInWithPassword(input)
       if (error) throw new AppError(401,"invalid_credentials","Email or password is incorrect. Verify your email or recover your account if needed.")
+      const identity = await supabaseIdentity()
+      const challenge = identity ? await startPasswordTotpChallenge(identity) : { mfaRequired: false }
+      return NextResponse.json({ success: true, mfaRequired: challenge.mfaRequired }, { headers: { "Cache-Control": "no-store" } })
     } else if (action === "company-signup") {
       const input = credentials.extend({ password:newPassword, name:z.string().trim().min(2).max(200), companyName:z.string().trim().max(200).optional() }).parse(body)
       const { data,error } = await client.auth.signUp({ email:input.email, password:input.password, options: { data:{ name:input.name,companyName:input.companyName }, emailRedirectTo:`${authOrigin(request)}/auth/callback?next=${encodeURIComponent(authContinuation(input.next ?? null))}` } })

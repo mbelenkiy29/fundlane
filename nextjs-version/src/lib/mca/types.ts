@@ -59,6 +59,7 @@ export interface WorkspaceSettings {
   featureFlags: FeatureFlags;
   pageVisibility: PageVisibility;
   actionVisibility: ActionVisibility;
+  require2fa: boolean;
   updatedAt: string;
 }
 
