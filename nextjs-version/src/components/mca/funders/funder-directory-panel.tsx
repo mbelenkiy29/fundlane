@@ -18,6 +18,8 @@ import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRe
 import { FUNDER_FIELD_LIMITS, firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
+import { SandboxFunderCard } from "@/components/mca/funders/sandbox-funder-card"
+import { isSandboxFunder } from "@/lib/mca/sandbox/labels"
 import type { SessionResponse } from "@/lib/mca/types"
 
 const routeLabels: Record<FunderRouteKind, string> = {
@@ -289,6 +291,7 @@ export function FunderDirectoryPanel() {
   }
 
   return <div className="space-y-4">
+    <SandboxFunderCard canManage={canManage} onChange={() => void load({ keepSelection: true })} />
     {(error || notice) && <div className={`rounded-lg border p-4 text-sm ${error ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-emerald-500/30 bg-emerald-500/5"}`} role={error ? "alert" : "status"}>
       <div className="flex items-start gap-2">{error ? <AlertCircle className="mt-0.5 size-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0" />}<p>{error || notice}</p></div>
     </div>}
@@ -308,9 +311,12 @@ export function FunderDirectoryPanel() {
           </CardHeader>
           <CardContent>
             {!visibleFunders.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{funders.length ? "No active funders. Turn on Show inactive to review archived profiles." : "No funders yet. Add the first funder profile to start routing submissions."}</div> : <div className="space-y-2">
-              {visibleFunders.map((funder) => <button key={funder.id} type="button" onClick={() => editFunder(funder)} className={`flex w-full items-start justify-between gap-2 rounded-lg border p-3 text-left text-sm ${selectedId === funder.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}>
+              {visibleFunders.map((funder) => <button key={funder.id} type="button" onClick={() => editFunder(funder)} className={`flex w-full items-start justify-between gap-2 rounded-lg border p-3 text-left text-sm ${selectedId === funder.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"} ${isSandboxFunder(funder) ? "border-amber-500/50" : ""}`}>
                 <span><span className="font-medium">{funder.legalName}</span>{funder.nickname ? <span className="block text-xs text-muted-foreground">{funder.nickname}</span> : null}</span>
-                <Badge variant={funder.active ? "secondary" : "outline"}>{funder.active ? "Active" : "Inactive"}</Badge>
+                <span className="flex shrink-0 flex-col items-end gap-1">
+                  {isSandboxFunder(funder) ? <Badge variant="outline" className="border-amber-600 text-amber-800">SANDBOX</Badge> : null}
+                  <Badge variant={funder.active ? "secondary" : "outline"}>{funder.active ? "Active" : "Inactive"}</Badge>
+                </span>
               </button>)}
             </div>}
           </CardContent>
@@ -323,12 +329,17 @@ export function FunderDirectoryPanel() {
           </CardHeader>
           <CardContent>
             <form noValidate onSubmit={(event) => void saveFunder(event)} className="space-y-5">
+              {selected && isSandboxFunder(selected) ? (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                  This profile is the workspace sandbox funder — not a real lender. Identity and route stay locked so it cannot be mistaken for a live destination.
+                </div>
+              ) : null}
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Legal name" htmlFor="legal-name" error={fieldErrors.legalName?.[0]} required>
-                  <Input id="legal-name" value={draft.legalName} disabled={!canManage} onChange={(event) => setDraft({ ...draft, legalName: event.target.value })} aria-required aria-invalid={Boolean(fieldErrors.legalName?.[0])} />
+                  <Input id="legal-name" value={draft.legalName} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onChange={(event) => setDraft({ ...draft, legalName: event.target.value })} aria-required aria-invalid={Boolean(fieldErrors.legalName?.[0])} />
                 </Field>
                 <Field label="Nickname" htmlFor="nickname" error={fieldErrors.nickname?.[0]}>
-                  <Input id="nickname" value={draft.nickname} disabled={!canManage} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} aria-invalid={Boolean(fieldErrors.nickname?.[0])} />
+                  <Input id="nickname" value={draft.nickname} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} aria-invalid={Boolean(fieldErrors.nickname?.[0])} />
                 </Field>
                 <Field label="Website" htmlFor="website" error={fieldErrors.website?.[0]}>
                   <Input id="website" value={draft.website} disabled={!canManage} onChange={(event) => setDraft({ ...draft, website: event.target.value })} placeholder="https://funder.example" aria-invalid={Boolean(fieldErrors.website?.[0])} />
@@ -338,7 +349,7 @@ export function FunderDirectoryPanel() {
                   <Switch id="funder-active" checked={draft.active} disabled={!canManage} onCheckedChange={(active) => setDraft({ ...draft, active })} />
                 </div>
                 <Field label="Domains" htmlFor="domains" error={firstFieldError(fieldErrors, "domains")} className="sm:col-span-2">
-                  <Input id="domains" value={draft.domains} disabled={!canManage} onChange={(event) => setDraft({ ...draft, domains: event.target.value })} placeholder="funder.com, iso.funder.com" aria-invalid={Boolean(firstFieldError(fieldErrors, "domains"))} />
+                  <Input id="domains" value={draft.domains} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onChange={(event) => setDraft({ ...draft, domains: event.target.value })} placeholder="funder.com, iso.funder.com" aria-invalid={Boolean(firstFieldError(fieldErrors, "domains"))} />
                 </Field>
                 <Field label="Products" htmlFor="products" error={firstFieldError(fieldErrors, "products")} className="sm:col-span-2">
                   <Input id="products" value={draft.products} disabled={!canManage} onChange={(event) => setDraft({ ...draft, products: event.target.value })} placeholder="MCA, ACH" aria-invalid={Boolean(firstFieldError(fieldErrors, "products"))} />

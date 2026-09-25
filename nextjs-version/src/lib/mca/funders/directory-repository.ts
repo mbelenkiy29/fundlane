@@ -2,6 +2,7 @@ import "server-only"
 
 import { getDatabase, parseJson, withImmediateTransaction } from "../db"
 import type { DbExecutor } from "../db"
+import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../sandbox/labels"
 import type { FunderContact, FunderGroup, FunderRecord, FunderRoute } from "./contracts"
 
 export interface StoredFunder extends FunderRecord {
@@ -78,6 +79,7 @@ export function toFunderRecord(record: StoredFunder): FunderRecord {
     domains: record.domains,
     products: record.products,
     active: record.active,
+    sandbox: record.idempotencyKey === SANDBOX_FUNDER_IDEMPOTENCY_KEY,
     contacts: record.contacts,
     routes: record.routes,
     criteriaVersion: record.criteriaVersion,

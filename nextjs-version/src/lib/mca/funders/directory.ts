@@ -4,6 +4,13 @@ import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
 import { canManageWorkspace } from "../policy"
 import type { DealActor } from "../deals/schema"
+import {
+  SANDBOX_DOMAIN,
+  SANDBOX_FUNDER_IDEMPOTENCY_KEY,
+  SANDBOX_LEGAL_NAME,
+  SANDBOX_NICKNAME,
+  SANDBOX_ROUTE_DESTINATION,
+} from "../sandbox/labels"
 import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRecord, type FunderRoute, type FunderRouteKind } from "./contracts"
 import { validateFunderProfile, validateGroupName } from "./validation"
 import {
@@ -211,6 +218,50 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Error && ((error as Error & { code?: string }).code === "23505" || /unique/i.test(error.message))
 }
 
+function isSandboxRecord(record?: Pick<StoredFunder, "idempotencyKey">): boolean {
+  return record?.idempotencyKey === SANDBOX_FUNDER_IDEMPOTENCY_KEY
+}
+
+function assertReservedSandboxIdentity(input: CreateFunderInput | UpdateFunderInput, current?: StoredFunder): void {
+  if (isSandboxRecord(current)) {
+    if (input.legalName !== undefined && input.legalName !== SANDBOX_LEGAL_NAME) {
+      invalid("legalName", "The sandbox funder must stay labeled as not a real lender.")
+    }
+    if (input.nickname !== undefined && optionalText(input.nickname, "nickname", 120) !== SANDBOX_NICKNAME) {
+      invalid("nickname", "The sandbox funder nickname cannot be changed.")
+    }
+    if (input.domains !== undefined && !(input.domains.length === 1 && text(input.domains[0]).toLowerCase() === SANDBOX_DOMAIN)) {
+      invalid("domains", "The sandbox funder domain cannot be changed.")
+    }
+    if (input.routes !== undefined) {
+      const routes = normalizeRoutes(input.routes)
+      if (!routes.some((route) => route.destination === SANDBOX_ROUTE_DESTINATION && route.kind === "api")) {
+        invalid("routes", "The sandbox funder must keep its local synthetic route.")
+      }
+    }
+    return
+  }
+  if ("idempotencyKey" in input && text(input.idempotencyKey) === SANDBOX_FUNDER_IDEMPOTENCY_KEY) {
+    invalid("idempotencyKey", "That key is reserved for the workspace sandbox funder.")
+  }
+  if (input.legalName !== undefined && text(input.legalName) === SANDBOX_LEGAL_NAME) {
+    invalid("legalName", "That name is reserved for the workspace sandbox funder.")
+  }
+  if (input.nickname !== undefined && optionalText(input.nickname, "nickname", 120) === SANDBOX_NICKNAME) {
+    invalid("nickname", "That nickname is reserved for the workspace sandbox funder.")
+  }
+  const domains = input.domains !== undefined ? uniqueList(input.domains, "domains", 30, 200) : []
+  if (domains.some((domain) => domain.toLowerCase() === SANDBOX_DOMAIN)) {
+    invalid("domains", "That domain is reserved for the workspace sandbox funder.")
+  }
+  if (input.routes !== undefined) {
+    const routes = Array.isArray(input.routes) ? input.routes : []
+    if (routes.some((route) => text(route.destination).toLowerCase() === SANDBOX_ROUTE_DESTINATION)) {
+      invalid("routes", "That destination is reserved for the workspace sandbox funder.")
+    }
+  }
+}
+
 export async function listFunders(actor: DealActor, options: { includeInactive?: boolean } = {}): Promise<FunderRecord[]> {
   return (await listFunderRecords(actor.workspaceId, Boolean(options.includeInactive))).map(toFunderRecord)
 }
@@ -223,6 +274,7 @@ export async function getFunder(actor: DealActor, id: string): Promise<FunderRec
 
 export async function createFunder(actor: DealActor, input: CreateFunderInput): Promise<{ funder: FunderRecord; created: boolean }> {
   assertManage(actor)
+  assertReservedSandboxIdentity(input)
   const idempotencyKey = requiredText(input.idempotencyKey, "idempotencyKey", "Provide a stable retry key.", 128)
   const now = nowIso()
   const profile = profileFromInput(input)
@@ -254,6 +306,7 @@ export async function updateFunder(actor: DealActor, id: string, input: UpdateFu
   const saved = await withImmediateTransaction(async (database) => {
     const current = await findFunderByIdForUpdate(database, actor.workspaceId, id)
     if (!current) throw new AppError(404, "funder_not_found", "The requested funder was not found.")
+    assertReservedSandboxIdentity(input, current)
     return updateFunderRecord({
       ...current,
       ...profileFromInput(input, current),

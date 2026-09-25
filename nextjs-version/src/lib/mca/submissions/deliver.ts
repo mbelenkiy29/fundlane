@@ -2,6 +2,7 @@ import "server-only"
 
 import { newId } from "../db"
 import { assertCompanyOperational } from "../company-access"
+import { deliverSandboxSubmission, isSandboxSubmissionJob } from "../sandbox/deliver"
 import { submitViaAdapter } from "./adapters/framework"
 import type { DeliverResult, OutgoingDocument, SubmissionJob } from "./contracts"
 import { sendSubmissionEmail } from "./email-templates"
@@ -10,6 +11,9 @@ import { deliverWebhook } from "./webhook"
 
 export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
   await assertCompanyOperational(job.workspaceId)
+  if (isSandboxSubmissionJob(job)) {
+    return deliverSandboxSubmission(job)
+  }
   await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   switch (job.routeKind) {
     case "email":
