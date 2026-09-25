@@ -164,5 +164,6 @@ test("closing and reminder send actions stay disabled until ready", () => {
   assert.equal(psfProviderReady({
     enabled: true, destinationConfigured: true, signingSecretConfigured: true,
   }), true)
-  assert.equal(psfProviderReady({ docuSealConfigured: true }), true)
+  assert.equal(psfProviderReady({ docuSealConfigured: true }), false)
+  assert.equal(psfProviderReady({ docuSealConfigured: true, enabled: true }), true)
 })

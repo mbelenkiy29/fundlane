@@ -121,6 +121,34 @@ test("MIC-157 closing snapshot reports persisted PSF webhook readiness", async (
   assert.match(after.productionGates.psfDelivery, /webhook is configured/i)
 })
 
+test("MIC-157 DocuSeal PSF is not ready until delivery is enabled", async () => {
+  const previous = process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON
+  process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON = JSON.stringify([{
+    workspaceId: ids.workspace,
+    apiBaseUrl: "https://sign.example.test/api",
+    apiToken: "synthetic-api-token",
+    webhookSecret: "synthetic-webhook-secret-with-at-least-32-characters",
+    templateId: 42,
+    signerRole: "Merchant",
+    fieldBindings: {},
+    sendEmail: false,
+    requireEmail2fa: true,
+    artifactAllowedHosts: ["files.example.test"],
+  }])
+  try {
+    const before = await getClosingSnapshot(actor(), dealId)
+    assert.equal(before.psfDeliveryReady, false)
+    assert.match(before.productionGates.psfDelivery, /enable PSF delivery/i)
+    await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true })
+    const after = await getClosingSnapshot(actor(), dealId)
+    assert.equal(after.psfDeliveryReady, true)
+    assert.match(after.productionGates.psfDelivery, /DocuSeal is configured/i)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON
+    else process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON = previous
+  }
+})
+
 test("MIC-157 API keys cannot read PSF records, submit bank details, or configure PSF", async () => {
   await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true, destination: "https://example.com/psf", signingSecret })
   setClosingTransportForTests({ async deliver(request) { return { state: "sent", correlationId: request.correlationId, externalId: "psf-ext-visible" } } })

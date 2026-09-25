@@ -345,8 +345,8 @@ export function psfProviderReady(input: {
   signingSecretConfigured?: boolean
 }): boolean {
   return Boolean(
-    input.docuSealConfigured
-    || (input.enabled && input.destinationConfigured && input.signingSecretConfigured),
+    input.enabled
+    && (input.docuSealConfigured || (input.destinationConfigured && input.signingSecretConfigured)),
   )
 }
 

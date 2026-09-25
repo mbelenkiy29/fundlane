@@ -142,7 +142,9 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
       merchantSms: smsProviderConfigured ? "ready when merchant text consent is recorded" : "unavailable: connect and assign merchant text messaging in Settings",
       contractDelivery: emailTransportConfigured ? "configured; verify delivery before production use" : "unavailable: connect contract delivery in Settings",
       psfDelivery: docuSealConfigured
-        ? "DocuSeal is configured; enable PSF delivery before sending"
+        ? (psfDeliveryReady
+          ? "DocuSeal is configured; verify delivery before production use"
+          : "DocuSeal is configured; enable PSF delivery before sending")
         : psfDeliveryReady
           ? "webhook is configured; verify delivery before production use"
           : "available after an administrator connects and validates the PSF provider",
