@@ -39,7 +39,7 @@ async function fixture(mapped = true) {
   if (mapped) await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(local.workspaceId,customerId,nowIso())
   const sub = subscription(customerId)
   const invoice = { id:`in_${suffix}`,customer:customerId,livemode:false,status:"paid",billing_reason:"subscription_create",currency:"usd",amount_due:71500,amount_paid:71500,amount_remaining:0,hosted_invoice_url:null,period_start:sub.items.data[0].current_period_start,period_end:sub.items.data[0].current_period_end,created:Math.floor(Date.now()/1000),parent:{subscription_details:{subscription:sub.id}},attempt_count:1,due_date:null,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:Math.floor(Date.now()/1000) as number|null} }
-   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
+   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,expires:0,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,checkoutKey:undefined as string|undefined,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
   const client = {
     customers:{ create:async()=>{state.createdCustomers++;return{id:customerId,livemode:false}},retrieve:async()=>({id:customerId,livemode:false,metadata:{workspace_id:local.workspaceId}}) },
     subscriptions:{ list:async()=>{if(state.fail)throw new Error("outage");return{data:state.subscriptions,has_more:false}},retrieve:async(id:string)=>state.subscriptions.find(s=>s.id===id),update:async(_id:string,params:Record<string,unknown>)=>{state.updates.push(params);if("pause_collection" in params)sub.pause_collection=params.pause_collection ? {behavior:"keep_as_draft"} : null;return sub} },
@@ -48,7 +48,7 @@ async function fixture(mapped = true) {
     invoices:{list:async()=>{state.invoiceReads++;return{data:structuredClone(state.invoices),has_more:false}},finalizeInvoice:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.finalizations.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params,{status:"open",hosted_invoice_url:`https://invoice.stripe.com/i/${id}`,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:null}});return structuredClone(target)},update:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.invoiceUpdates.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params);return structuredClone(target)}},
     invoicePayments:{list:async(params:{invoice?:string;payment?:{payment_intent?:string}})=>({data:state.processing?state.invoices.filter(i=>i.amount_remaining>0 && (!params.invoice || params.invoice===i.id) && (!params.payment?.payment_intent || params.payment.payment_intent===`pi_${i.id}`)).map(i=>({id:`ip_${i.id}`,invoice:i.id,livemode:false,status:"open",amount_requested:i.amount_remaining,amount_paid:null,currency:"usd",payment:{type:"payment_intent",payment_intent:`pi_${i.id}`}})):[],has_more:false})},
     paymentIntents:{retrieve:async(id:string)=>({id,customer:customerId,livemode:false,currency:"usd",amount:71500,amount_received:0,status:"processing"})},
-    checkout:{sessions:{create:async(params:Record<string,unknown>)=>{state.checkouts++;state.checkoutParams=params;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:"open",url:"https://checkout.stripe.com/test"}),expire:async()=>({})}},
+    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:"open",url:"https://checkout.stripe.com/test"}),expire:async()=>{state.expires++;return{}}}},
     subscriptionSchedules:{create:async(params:Record<string,unknown>)=>{assert.deepEqual(params,{from_subscription:sub.id});return{id:`sched_${suffix}`,customer:customerId,subscription:sub.id,livemode:false,status:"active",metadata:{},phases:[{start_date:sub.items.data[0].current_period_start,end_date:sub.items.data[0].current_period_end}]}},update:async()=>({})},
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
@@ -297,7 +297,8 @@ test("checkout reuses customer and open session and includes base plus additiona
   await initializeCompanyTrial(f.workspaceId,5)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
-  assert.equal(f.state.createdCustomers,1);assert.equal(f.state.checkouts,1)
+  assert.equal(f.state.createdCustomers,1);assert.equal(f.state.checkouts,1);assert.equal(f.state.expires,0)
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
   assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:4}])
   assert.deepEqual(f.state.checkoutParams.subscription_data,{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"}})
   assert.match(String(f.state.checkoutParams.integration_identifier),/^fundlane_company_subscription_[a-z]{8}$/)
@@ -308,8 +309,8 @@ test("new company Checkout requires a card and one Stripe trial; retries reuse t
   await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(f.workspaceId,nowIso())
   assert.equal((await getCompanyAccess(f.workspaceId)).reason,"finish_setup")
   await createBillingCheckout(f.workspaceId,8,true,f.client)
-  await createBillingCheckout(f.workspaceId,2,true,f.client)
-  assert.equal(f.state.checkouts,1)
+  await createBillingCheckout(f.workspaceId,8,true,f.client)
+  assert.equal(f.state.checkouts,1);assert.equal(f.state.expires,0)
   assert.equal(f.state.checkoutParams.payment_method_collection,"always")
   assert.deepEqual(f.state.checkoutParams.subscription_data,{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"},trial_period_days:14,trial_settings:{end_behavior:{missing_payment_method:"pause"}}})
   assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:7}])
@@ -320,8 +321,18 @@ test("new company Checkout requires a card and one Stripe trial; retries reuse t
   assert.throws(billingTrialDays,/Trial days/)
   delete process.env.MCA_BILLING_TRIAL_DAYS
 })
+test("changing checkout seats expires the open session and creates a new one",async()=>{
+  const f=await fixture(false)
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(f.workspaceId,nowIso())
+  await createBillingCheckout(f.workspaceId,8,true,f.client)
+  await createBillingCheckout(f.workspaceId,2,true,f.client)
+  assert.equal(f.state.checkouts,2);assert.equal(f.state.expires,1)
+  assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:1}])
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:2-cs_[-\\w]+-\\d+$`))
+})
 test("Stripe status access table and trial quantity use provider state",()=>{
   const end=new Date(Date.now()+86400000).toISOString()
+  const expired=new Date(Date.now()-86400000).toISOString()
   const row={legacy_exempt:0,trial_ends_at:null,manual_paused:0,access_extended_until:null,grace_ends_at:null,processing_extension_until:null,pending_seats:null,status:"none",period_end:end,seat_limit:12}
   for(const [status,expected] of Object.entries(STRIPE_ACCESS)) {
     const access=evaluateCompanyAccess({...row,status})
@@ -332,6 +343,24 @@ test("Stripe status access table and trial quantity use provider state",()=>{
   assert.equal(evaluateCompanyAccess({...row,status:"past_due",grace_ends_at:end}).allowed,true)
   assert.equal(evaluateCompanyAccess({...row,status:"trialing",grace_ends_at:"2000-01-01"}).allowed,true)
   assert.equal(evaluateCompanyAccess({...row,status:"none"}).reason,"finish_setup")
+  for (const status of ["incomplete","incomplete_expired"] as const) {
+    const granted=evaluateCompanyAccess({...row,status,trial_ends_at:end})
+    assert.equal(granted.allowed,true,status)
+    assert.equal(granted.status,"trial",status)
+    assert.equal(granted.reason,null,status)
+    assert.equal(granted.seatLimit,5,status)
+    const denied=evaluateCompanyAccess({...row,status,trial_ends_at:expired})
+    assert.equal(denied.allowed,false,status)
+    assert.equal(denied.status,"paused",status)
+    assert.equal(denied.reason,STRIPE_ACCESS[status].reason,status)
+  }
+  const unpaidGrace=evaluateCompanyAccess({...row,status:"unpaid",grace_ends_at:end})
+  assert.equal(unpaidGrace.allowed,true)
+  assert.equal(unpaidGrace.status,"grace")
+  const unpaidExpired=evaluateCompanyAccess({...row,status:"unpaid",grace_ends_at:expired})
+  assert.equal(unpaidExpired.allowed,false)
+  assert.equal(unpaidExpired.status,"paused")
+  assert.equal(unpaidExpired.reason,"payment_overdue")
 })
 test("trialing webhook receipts once, grants seats, and trial seat changes avoid invoices",async()=>{
   const f=await fixture()
@@ -1164,6 +1193,15 @@ test("an active subscription without paid invoice evidence never activates a new
   const current=await syncWorkspaceBilling(f.workspaceId,f.client)
   assert.equal(current.status,"incomplete")
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"trial")
+})
+test("an active subscriber whose first paid invoice is $0 from a coupon keeps access",async()=>{
+  const f=await fixture()
+  Object.assign(f.state.invoices[0],{amount_due:0,amount_paid:0,amount_remaining:0})
+  const current=await syncWorkspaceBilling(f.workspaceId,f.client)
+  assert.equal(current.status,"active")
+  const access=await getCompanyAccess(f.workspaceId)
+  assert.equal(access.allowed,true)
+  assert.equal(access.status,"active")
 })
 test("outbox retries use a stable receiver idempotency key and deliver to the explicit owner",async()=>{
   const f=await fixture(false)

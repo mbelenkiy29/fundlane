@@ -27,9 +27,9 @@ export function evaluateCompanyAccess(row: CompanyAccessRow, now = Date.now()): 
   if (row.legacy_exempt) { allowed = true; status = "legacy_exempt"; reason = null }
   else if (future(row.access_extended_until)) { allowed = true; status = "extended"; reason = null }
   else if (row.status === "trialing" && future(row.period_end)) { allowed = true; status = "trialing"; reason = null }
-  else if (row.grace_ends_at && ["active","past_due"].includes(row.status ?? "")) { allowed = future(grace); status = allowed ? "grace" : "paused"; reason = allowed ? null : "payment_overdue" }
+  else if (row.grace_ends_at) { allowed = future(grace); status = allowed ? "grace" : "paused"; reason = allowed ? null : "payment_overdue" }
   else if (row.status === "active" && future(row.period_end)) { allowed = true; status = "active"; reason = null }
-  else if (row.status === "incomplete" && future(row.trial_ends_at)) { allowed = true; status = "trial"; reason = null }
+  else if (["incomplete","incomplete_expired"].includes(row.status ?? "") && future(row.trial_ends_at)) { allowed = true; status = "trial"; reason = null }
   else if (row.status && row.status in STRIPE_ACCESS) {
     const policy = STRIPE_ACCESS[row.status as keyof typeof STRIPE_ACCESS]
     allowed = policy.allowed && future(row.period_end)

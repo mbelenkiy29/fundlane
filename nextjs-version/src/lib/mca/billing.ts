@@ -200,7 +200,10 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
     // leave the original items in place until their proration invoice is paid.
     const previous = await db.prepare<{ seat_limit: number }>("SELECT seat_limit FROM workspace_billing_entitlements WHERE workspace_id=?").get(workspaceId)
     const unpaid = reconciled.hasUnpaidInvoices
-    const paid = current.subscriptionId ? await db.prepare<{paid_at:string|null}>("SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' AND amount_due>0 ORDER BY created_at LIMIT 1").get(workspaceId, current.subscriptionId) : null
+    const excludeTrialStartZero = Boolean(subscription?.trial_start || subscription?.trial_end)
+    const paid = current.subscriptionId ? await db.prepare<{paid_at:string|null}>(excludeTrialStartZero
+      ? "SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' AND NOT (amount_due=0 AND billing_reason='subscription_create') ORDER BY created_at LIMIT 1"
+      : "SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' ORDER BY created_at LIMIT 1").get(workspaceId, current.subscriptionId) : null
     if (current.status === "active" && !paid) { current.status = "incomplete"; current.paymentPastDue = true; current.seatLimit = previous?.seat_limit ?? 1 }
     if (unpaid && current.status !== "trialing" && current.seatLimit > (previous?.seat_limit ?? 1)) current.seatLimit = previous?.seat_limit ?? 1
     if (subscription?.status === "trialing") await db.prepare("UPDATE company_subscription_state SET selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
@@ -319,10 +322,9 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     if (mapping.checkout_session_id) {
       const pending = await client.checkout.sessions.retrieve(mapping.checkout_session_id)
       if (pending.status === "open") {
-        if (!pending.url) throw new AppError(503,"billing_checkout_unavailable","Checkout is temporarily unavailable.")
-        return { url: pending.url }
-      }
-      if (pending.status === "complete") {
+        if (mapping.checkout_plan_slug === slug && pending.url) return { url: pending.url }
+        await client.checkout.sessions.expire(pending.id)
+      } else if (pending.status === "complete") {
         const subscriptionId = typeof pending.subscription === "string" ? pending.subscription : pending.subscription?.id
         const previous = subscriptionId ? await client.subscriptions.retrieve(subscriptionId) : null
         // Allow a new plan after a previous subscription actually ended. A completed
@@ -339,10 +341,10 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     const session = await client.checkout.sessions.create({ mode: "subscription", customer: mapping.stripe_customer_id,
       integration_identifier: COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER,
       client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
-      subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
+      subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } : {}) },
       line_items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])],
       success_url: returnUrl, cancel_url: returnUrl, expires_at: (slot + 2) * 1800,
-    }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}` })
+    }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}-${slot}` })
     if (session.livemode !== stripeLiveMode() || !session.url) throw new AppError(503, "billing_checkout_unavailable", "Checkout is temporarily unavailable.")
     await db.prepare("UPDATE workspace_stripe_customers SET checkout_session_id = ?, checkout_plan_slug = ? WHERE workspace_id = ?").run(session.id, slug, workspaceId)
     return { url: session.url }
