@@ -35,13 +35,13 @@ before(async()=>{testDatabase=await createPostgresTestDatabase("imports_core");p
 
 function workbookBytes(bookType:"xlsx"|"xls"):Uint8Array{const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([["Business Name","Revenue"],["Acme LLC",125000]]),"Merchants");return XLSX.write(workbook,{type:"buffer",bookType})}
 
-test("parses CSV with encoding and header detection; rejects other spreadsheet formats", () => {
+test("parses CSV with encoding and header detection, plus Excel workbooks", () => {
   const csv = parseSpreadsheet({ filename: "leads.csv", bytes: Buffer.from("Exported 2026-09-08\nBusiness Name,Revenue\nCafé Uno,100000") })
   assert.equal(csv.headerRow, 2); assert.equal(csv.rows[0][0], "Café Uno")
   const legacy = parseSpreadsheet({ filename: "leads.csv", bytes: Buffer.from("Business Name,City\nCaf\xe9,Montr\xe9al", "binary") })
   assert.equal(legacy.encoding, "windows-1252"); assert.equal(legacy.rows[0][0], "Café")
-  for (const format of ["xlsx", "xls"] as const) assert.throws(() => parseSpreadsheet({ filename: `leads.${format}`, bytes: workbookBytes(format) }), /Choose a CSV/)
-  assert.throws(() => parseSpreadsheet({ filename: "leads.tsv", bytes: Buffer.from("a\tb\n1\t2") }), /Choose a CSV/)
+  for (const format of ["xlsx", "xls"] as const) { const parsed = parseSpreadsheet({ filename: `leads.${format}`, bytes: workbookBytes(format) }); assert.equal(parsed.sheetName, "Merchants"); assert.equal(parsed.rows[0][0], "Acme LLC") }
+  assert.throws(() => parseSpreadsheet({ filename: "leads.tsv", bytes: Buffer.from("a\tb\n1\t2") }), /Choose a CSV, XLSX, or XLS/)
 })
 
 test("MIC-119 stages a realistic 1,000-row sheet and preserves unmapped samples",async()=>{const rows=Array.from({length:1000},(_,index)=>`Merchant ${index+1},${100000+index},note ${index+1}`);const parsed=parseSpreadsheet({filename:"1000.csv",bytes:Buffer.from(`Business Name,Monthly Revenue,Unmapped Note\n${rows.join("\n")}`)});assert.equal(parsed.rows.length,1000);const guessed=heuristicMapping(parsed.headers);const mapped=mapRow(parsed.headers,parsed.rows[999],guessed.mapping);assert.equal(mapped.application.legalName,"Merchant 1000");assert.equal(mapped.sourceValues["Unmapped Note"],"note 1000")})
@@ -61,6 +61,30 @@ test("MIC-119/MIC-155 preview, cancellation, member invalidation and checkpointe
 
 test("MIC-119/MIC-155 persists duplicate and external-originator review, encrypts staging, and recovers an expired commit lease",async()=>{const registry=await listImportRegistry(actor),source=registry.sources[0],batch=registry.batches[0];await createDeal(actor,{idempotencyKey:"duplicate-seed",legalName:"Reviewed Duplicate LLC"});const preview=await previewSpreadsheetImport(actor,{sourceId:source.id,batchId:batch.id,filename:"review.csv",bytes:Buffer.from("Business Name,Originator\nReviewed Duplicate LLC,Outside Rep"),mapping:{"Business Name":"legalName","Originator":"originatorMembershipId"}});assert.equal(preview.rows[0].duplicateDecision,null);assert.equal(preview.rows[0].assignmentMembershipId,null);const staged=(await getDatabase().prepare("SELECT application_json,source_values_json FROM import_rows WHERE id=?").get(preview.rows[0].id)) as {application_json:string;source_values_json:string};assert.equal(staged.application_json.includes("Reviewed Duplicate"),false);assert.equal(staged.source_values_json.includes("Outside Rep"),false)
   const reviewed=await reviewSpreadsheetImport(actor,{runId:preview.runId,expectedPreviewRevision:1,decisions:[{rowId:preview.rows[0].id,duplicateDecision:"create",assignmentMembershipId:ids.repA}]});assert.equal(reviewed.previewRevision,2);assert.equal(reviewed.rows[0].assignmentMembershipId,ids.repA);const profile=await saveMappingProfile(actor,{name:"External reps",mapping:preview.mapping,originatorMapping:{"Outside Rep":ids.repA}});assert.equal(profile.originatorMapping["Outside Rep"],ids.repA);const staleWorkerToken=await beginCommit(actor.workspaceId,preview.runId,2);assert.ok(staleWorkerToken);await getDatabase().prepare("UPDATE import_runs SET lease_expires_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z",preview.runId);const committed=await commitSpreadsheetImport(actor,{runId:preview.runId,expectedPreviewRevision:2});assert.equal(committed.created,1);assert.equal(await recordRowResult(actor.workspaceId,preview.runId,preview.rows[0].id,"failed",null,"late stale worker",staleWorkerToken!),false);const saved=(await getDatabase().prepare("SELECT state,deal_id FROM import_rows WHERE id=?").get(preview.rows[0].id)) as {state:string;deal_id:string};assert.equal(saved.state,"created");assert.ok(saved.deal_id)})
+
+test("issue 75 previews field errors and workspace/file duplicates before committing", async () => {
+  const registry = await listImportRegistry(actor), source = registry.sources[0], batch = registry.batches[0]
+  await createDeal(actor, { idempotencyKey: "issue75-existing", legalName: "Issue 75 Existing", ein: "12-3456789" })
+  await createDeal(otherActor, { idempotencyKey: "issue75-foreign", legalName: "Issue 75 Foreign", ein: "22-3456789" })
+  const preview = await previewSpreadsheetImport(actor, { sourceId: source.id, batchId: batch.id, filename: "issue75.csv", bytes: Buffer.from("Business Name,EIN,Email\nIssue 75 Existing,12-3456789,\nIssue 75 Existing,99-3456789,\nIssue 75 Fresh,33-3456789,fresh@example.test\nIssue 75 Fresh,33-3456789,\nIssue 75 Invalid,,bad-email\nIssue 75 Foreign,22-3456789,") })
+  assert.equal(preview.rows[0].duplicateDecision, "skip")
+  assert.equal(preview.rows[1].duplicateDecision, "create")
+  assert.equal(preview.rows[3].duplicateDecision, "skip")
+  assert.match(preview.rows[3].warnings.join(" "), /file row 4/)
+  assert.match(preview.rows[4].errors.join(" "), /valid email/)
+  assert.equal(preview.rows[5].duplicateDecision, "create")
+  const reviewed = await reviewSpreadsheetImport(actor, { runId: preview.runId, expectedPreviewRevision: 1, decisions: [{ rowId: preview.rows[3].id, duplicateDecision: "skip" }] })
+  const result = await commitSpreadsheetImport(actor, { runId: preview.runId, expectedPreviewRevision: reviewed.previewRevision })
+  assert.equal(result.created, 3)
+  assert.equal(result.skipped, 3)
+  assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int count FROM deals WHERE workspace_id=? AND legal_name='Issue 75 Fresh'").get(ids.workspace))!.count, 1)
+  const override = await previewSpreadsheetImport(actor, { sourceId: source.id, batchId: batch.id, filename: "override.csv", bytes: Buffer.from("Business Name,EIN\nIssue 75 Override,44-3456789\nIssue 75 Override,44-3456789") })
+  assert.equal(override.rows[1].duplicateDecision, "skip")
+  await assert.rejects(() => reviewSpreadsheetImport(actor, { runId: override.runId, expectedPreviewRevision: 1, decisions: [{ rowId: override.rows[1].id, duplicateDecision: "create" }] }), /existing EIN/)
+  const overrideResult = await commitSpreadsheetImport(actor, { runId: override.runId, expectedPreviewRevision: 1 })
+  assert.equal(overrideResult.created, 1, overrideResult.resultsCsv)
+  assert.equal(overrideResult.skipped, 1)
+})
 
 test("MIC-173 rejects cross-workspace/blank IDs, applies durable clears, and detects stale versions",async()=>{const source=(await listImportRegistry(actor)).sources[0],batch=(await listImportRegistry(actor)).batches[0];const foreign=(await createDeal(otherActor,{idempotencyKey:"foreign",legalName:"Foreign LLC"})).deal;const target=(await createDeal(actor,{idempotencyKey:"target",legalName:"Target LLC",contactName:"Remove Me"})).deal
   const preview=await previewCsvUpdate(actor,{sourceId:source.id,batchId:batch.id,filename:"updates.csv",bytes:Buffer.from(`dealId,expectedVersion,legalName,clearFields\n,1,Blank LLC,\n${foreign.id},1,Hacked LLC,\n${target.id},${target.version},,contactName`)});assert.match(preview.rows[0].errors.join(" "),/deal ID/i);assert.match(preview.rows[1].errors.join(" "),/authorized workspace/i);const result=await commitCsvUpdate(actor,{runId:preview.runId,expectedPreviewRevision:1});assert.equal(result.created,1);assert.equal((await getDealForDocument(actor,target.id)).contactName,undefined)

@@ -2,6 +2,7 @@ import "server-only"
 
 import { extname } from "node:path"
 import iconv from "iconv-lite"
+import * as XLSX from "xlsx"
 import { AppError } from "../errors"
 import type { ImportFormat, ParsedSpreadsheet } from "./contracts"
 
@@ -11,8 +12,8 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024
 
 function formatFor(filename: string): ImportFormat {
   const extension = extname(filename).toLowerCase().slice(1)
-  if (extension === "csv") return "csv"
-  throw new AppError(422, "unsupported_import_format", "Choose a CSV file. Export Excel or Google Sheets as CSV first.")
+  if (extension === "csv" || extension === "xlsx" || extension === "xls") return extension
+  throw new AppError(422, "unsupported_import_format", "Choose a CSV, XLSX, or XLS file.")
 }
 
 function decodeText(bytes: Uint8Array): { text: string; encoding: string; warnings: string[] } {
@@ -96,17 +97,40 @@ function csvRows(text: string): string[][] {
 export function parseSpreadsheet(input: { filename: string; bytes: Uint8Array }): ParsedSpreadsheet {
   if (!input.bytes.byteLength || input.bytes.byteLength > MAX_FILE_BYTES) throw new AppError(422, "import_file_size", "Import files must contain data and be no larger than 25 MiB.")
   const format = formatFor(input.filename)
-  const decoded = decodeText(input.bytes)
-  const matrix = csvRows(decoded.text)
-  if (!matrix.length) throw new AppError(422, "spreadsheet_empty", "The CSV does not contain any rows.")
+  let matrix: string[][], encoding: string, sheetName: string, warnings: string[]
+  if (format === "csv") {
+    const decoded = decodeText(input.bytes)
+    matrix = csvRows(decoded.text)
+    encoding = decoded.encoding; sheetName = "CSV"; warnings = decoded.warnings
+  } else {
+    const isZip = input.bytes[0] === 0x50 && input.bytes[1] === 0x4b
+    const isOle = input.bytes[0] === 0xd0 && input.bytes[1] === 0xcf && input.bytes[2] === 0x11 && input.bytes[3] === 0xe0
+    if (format === "xlsx" ? !isZip : !isOle) throw new AppError(422, "spreadsheet_invalid", "The Excel file could not be read. Check the file and try again.")
+    try {
+      // Only cell values are read. Formulas, macros, links, and workbook code are never evaluated.
+      // Allow the header search's 20 leading rows and one overflow row without parsing the rest.
+      const workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, bookVBA: false, sheetRows: MAX_ROWS + 21 })
+      sheetName = workbook.SheetNames[0] ?? ""
+      if (!sheetName) throw new Error("No worksheet")
+      const sheet = workbook.Sheets[sheetName]
+      const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1")
+      if (range.e.c - range.s.c + 1 > MAX_COLUMNS) throw new AppError(422, "spreadsheet_column_limit", `Import at most ${MAX_COLUMNS} columns.`)
+      if (sheet["!fullref"] || range.e.r - range.s.r + 1 > MAX_ROWS + 20) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
+      matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: "", blankrows: false }).map((row) => row.map(cleanCell))
+      encoding = "binary"; warnings = workbook.SheetNames.length > 1 ? [`Only the first worksheet (${sheetName}) was imported.`] : []
+    } catch (error) {
+      if (error instanceof AppError) throw error
+      throw new AppError(422, "spreadsheet_invalid", "The Excel file could not be read. Check the file and try again.")
+    }
+  }
+  if (!matrix.length) throw new AppError(422, "spreadsheet_empty", "The spreadsheet does not contain any rows.")
   const headerRow = chooseHeader(matrix)
   const deduped = uniqueHeaders(matrix[headerRow])
-  const warnings = [...decoded.warnings]
   if (deduped.warning) warnings.push(deduped.warning)
   const data = matrix.slice(headerRow + 1)
   if (data.length > MAX_ROWS) throw new AppError(422, "spreadsheet_row_limit", `Import at most ${MAX_ROWS.toLocaleString()} rows per run.`)
-  if (!data.length) throw new AppError(422, "spreadsheet_no_data", "The CSV has headers but no data rows.")
-  if (data.some(row => row.length > deduped.headers.length)) throw new AppError(422, "csv_row_width", "A CSV row contains more values than the header. Check commas and quoted values.")
+  if (!data.length) throw new AppError(422, "spreadsheet_no_data", "The spreadsheet has headers but no data rows.")
+  if (data.some(row => row.length > deduped.headers.length)) throw new AppError(422, "csv_row_width", "A row contains more values than the header. Check the source file.")
   const rows = data.map(row => deduped.headers.map((_, index) => row[index] ?? ""))
-  return { format, encoding: decoded.encoding, sheetName: "CSV", headerRow: headerRow + 1, headers: deduped.headers, rows, warnings }
+  return { format, encoding, sheetName, headerRow: headerRow + 1, headers: deduped.headers, rows, warnings }
 }

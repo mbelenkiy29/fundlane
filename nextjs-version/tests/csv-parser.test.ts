@@ -11,7 +11,7 @@ test("CSV rejects disguised binary, malformed quotes, extra columns and rows", (
   for (const content of ['a,b\nPK\u0003\u0004,x', 'a,b\n"unclosed,x', 'a,b\n"x"bad,y']) assert.throws(() => parse(content))
   assert.throws(() => parse(Array.from({ length: 201 }, (_, i) => `h${i}`).join(',') + '\n1'), /200 columns/)
   assert.throws(() => parse('Name,Value\n' + 'a,1\n'.repeat(10001)), /10,000/)
-  assert.throws(() => parseSpreadsheet({ filename: "book.xlsx", bytes: Buffer.from("Name,Value\na,1") }), /Choose a CSV/)
+  assert.throws(() => parseSpreadsheet({ filename: "book.xlsx", bytes: Buffer.from("Name,Value\na,1") }), /Excel file could not be read/)
 })
 test("CSV accepts the current 10,000-row and 200-column limits without truncating", () => {
   const headers = Array.from({ length: 200 }, (_, i) => `column${i}`).join(',')

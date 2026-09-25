@@ -1,11 +1,13 @@
 import "server-only"
 
 import { AppError } from "../errors"
-import { newId, nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
+import { decryptSensitive } from "../crypto"
 import type { DealTransactionCheckpoint } from "../deals/repository"
 import type { DealActor, DealStatus, DealWriteInput } from "../deals/schema"
 import { DEAL_STATUSES } from "../deals/schema"
-import { applyBulkDealUpdate, getDealForDocument, listDeals } from "../deals/service"
+import { validateDealInput } from "../deals/validation"
+import { applyBulkDealUpdate, getDealForDocument } from "../deals/service"
 import { suggestFieldMapping } from "../documents/extraction"
 import { ingestApplication } from "../intake/service"
 import { listMemberships } from "../memberships"
@@ -105,10 +107,30 @@ export async function saveMappingProfile(actor: DealActor, input: { name: string
   return upsertProfile(actor.workspaceId, cleanName(input.name, "Profile name"), mapping, originatorMapping)
 }
 
+type DuplicateCandidate = { id: string; application: DealWriteInput }
+function sameLead(a: DealWriteInput, b: DealWriteInput): boolean {
+  const names = [a.legalName, a.dbaName].filter(Boolean).map((name) => normalizeHeader(name!))
+  if (!names.length || ![b.legalName, b.dbaName].some((name) => name && names.includes(normalizeHeader(name)))) return false
+  const ein = (value?: string) => value?.replace(/\D/g, "") || undefined
+  const phone = (value?: string) => value?.replace(/\D/g, "") || undefined
+  const email = (value?: string) => value?.trim().toLowerCase() || undefined
+  const fields = [[ein(a.ein), ein(b.ein)], [phone(a.contactPhone), phone(b.contactPhone)], [email(a.contactEmail), email(b.contactEmail)]]
+  const comparable = fields.filter(([left, right]) => left && right)
+  return !comparable.length || comparable.some(([left, right]) => left === right)
+}
+function sameEin(a: DealWriteInput, b: DealWriteInput): boolean {
+  const left = a.ein?.replace(/\D/g, ""), right = b.ein?.replace(/\D/g, "")
+  return Boolean(left && right && left === right)
+}
+async function workspaceCandidates(workspaceId: string): Promise<DuplicateCandidate[]> {
+  const rows = await getDatabase().prepare<{ id: string; legal_name: string | null; dba_name: string | null; ein_cipher: string | null; contact_phone_cipher: string | null; contact_email_cipher: string | null }>(
+    "SELECT id, legal_name, dba_name, ein_cipher, contact_phone_cipher, contact_email_cipher FROM deals WHERE workspace_id=?",
+  ).all(workspaceId)
+  const reveal = (value: string | null) => value ? decryptSensitive(value, workspaceId) : undefined
+  return rows.map((row) => ({ id: row.id, application: { legalName: row.legal_name ?? undefined, dbaName: row.dba_name ?? undefined, ein: reveal(row.ein_cipher), contactPhone: reveal(row.contact_phone_cipher), contactEmail: reveal(row.contact_email_cipher) } }))
+}
 async function duplicateIds(actor: DealActor, application: DealWriteInput): Promise<string[]> {
-  const candidates = new Set([application.legalName, application.dbaName].filter(Boolean).map((value) => normalizeHeader(String(value))))
-  if (!candidates.size) return []
-  return (await listDeals(actor, {})).deals.filter((deal) => candidates.has(normalizeHeader(deal.legalName)) || (deal.dbaName && candidates.has(normalizeHeader(deal.dbaName)))).map((deal) => deal.id)
+  return (await workspaceCandidates(actor.workspaceId)).filter((deal) => sameLead(application, deal.application)).map((deal) => deal.id)
 }
 
 export async function previewSpreadsheetImport(actor: DealActor, input: {
@@ -139,6 +161,7 @@ export async function previewSpreadsheetImport(actor: DealActor, input: {
   }
   const pool = validateAssignmentPool(actor, input.assignmentPool ?? [])
   const mapped = parsed.rows.map((row) => mapRow(parsed.headers, row, mapping))
+  const existing = await workspaceCandidates(actor.workspaceId)
   const active=(await listMemberships(actor.workspaceId)).filter((member)=>member.status==="active")
   const byExternal=new Map<string,string>();for(const member of active)for(const label of [member.id,member.name,member.email,member.applicationIdentifier])if(label)byExternal.set(normalizeHeader(label),member.id)
   for(const [label,id] of Object.entries(input.originatorMapping??{}))byExternal.set(normalizeHeader(label),validateAssignmentPool(actor,[id])[0])
@@ -148,19 +171,23 @@ export async function previewSpreadsheetImport(actor: DealActor, input: {
     runId: newId(), workspaceId: actor.workspaceId, sourceId: input.sourceId, batchId: input.batchId,
     filename: input.filename, format: parsed.format, state: "preview", previewRevision: 1, mapping,
     mappingConfidence: confidence, mappingProvider, mappingWarnings, assignmentPool: pool, createdAt,
-    rows: await Promise.all(mapped.map(async (row, index) => {
-      const duplicateDealIds = await duplicateIds(actor, row.application)
-      const warnings=[...(duplicateDealIds.length?["Choose whether to create this possible duplicate or skip it."]:[]),...(row.explicitOriginator&&!assignments[index]?["Resolve the source originator to an active member."]:[])]
+    rows: mapped.map((row, index) => {
+      const duplicateDealIds = existing.filter((deal) => sameLead(row.application, deal.application)).map((deal) => deal.id)
+      const earlierMatches = mapped.slice(0, index).filter((earlier) => sameLead(row.application, earlier.application))
+      const duplicateRows = mapped.slice(0, index).flatMap((earlier, earlierIndex) => sameLead(row.application, earlier.application) ? [parsed.headerRow + earlierIndex + 1] : [])
+      const blockedEin = existing.some((deal) => sameEin(row.application, deal.application)) || earlierMatches.some((earlier) => sameEin(row.application, earlier.application))
+      const errors = [...row.errors, ...Object.entries(validateDealInput(row.application)).flatMap(([field, messages]) => messages.map((message) => `${field}: ${message}`))]
+      const warnings=[...(duplicateDealIds.length?[blockedEin?"Possible duplicate of an existing deal.":"Possible duplicate of an existing deal; choose create or skip."]:[]),...(duplicateRows.length?[`Possible duplicate of file row ${duplicateRows.join(", ")}${blockedEin?".":"; choose create or skip."}`]:[]),...(blockedEin?["Skipped because this EIN already exists; deal creation blocks identical EINs."]:[]),...(row.explicitOriginator&&!assignments[index]?["Resolve the source originator to an active member."]:[])]
       return { id: newId(), rowNumber: parsed.headerRow + index + 1, application: row.application, sourceValues: row.sourceValues,
-        assignmentMembershipId: assignments[index], originatorSourceValue:row.explicitOriginator??null,duplicateDecision:duplicateDealIds.length?null:"create",errors: row.errors, warnings, duplicateDealIds }
-    })),
+        assignmentMembershipId: assignments[index], originatorSourceValue:row.explicitOriginator??null,duplicateDecision:blockedEin?"skip":duplicateDealIds.length||duplicateRows.length?null:"create",errors, warnings, duplicateDealIds }
+    }),
   }
   await insertPreview(preview)
   await recordAuditEvent({ context: actor, action: "import.previewed", resourceType: "import_run", resourceId: preview.runId, metadata: { sourceId: input.sourceId, batchId: input.batchId, format: preview.format, rowCount: preview.rows.length, mappingProvider }, correlationId: actor.correlationId })
   return preview
 }
 
-export async function reviewSpreadsheetImport(actor:DealActor,input:{runId:string;expectedPreviewRevision:number;decisions:Array<{rowId:string;duplicateDecision?:"create"|"skip";assignmentMembershipId?:string}>}):Promise<ImportPreview>{requireAdmin(actor);const preview=await findPreview(actor.workspaceId,input.runId);if(!preview)throw new AppError(404,"import_run_not_found","The import run was not found.");const ids=new Set(preview.rows.map((row)=>row.id));const activeActor=await refreshedActor(actor);for(const decision of input.decisions){if(!ids.has(decision.rowId))throw new AppError(404,"import_row_not_found","A reviewed row is not part of this preview.");if(decision.assignmentMembershipId)validateAssignmentPool(activeActor,[decision.assignmentMembershipId])}const updated=await applyCreateReview(actor.workspaceId,input.runId,input.expectedPreviewRevision,input.decisions);if(!updated)throw new AppError(409,"import_preview_stale","The preview changed. Refresh before saving review decisions.");return updated}
+export async function reviewSpreadsheetImport(actor:DealActor,input:{runId:string;expectedPreviewRevision:number;decisions:Array<{rowId:string;duplicateDecision?:"create"|"skip";assignmentMembershipId?:string}>}):Promise<ImportPreview>{requireAdmin(actor);const preview=await findPreview(actor.workspaceId,input.runId);if(!preview)throw new AppError(404,"import_run_not_found","The import run was not found.");const rows=new Map(preview.rows.map((row)=>[row.id,row]));const activeActor=await refreshedActor(actor);for(const decision of input.decisions){const row=rows.get(decision.rowId);if(!row)throw new AppError(404,"import_row_not_found","A reviewed row is not part of this preview.");if(decision.duplicateDecision==="create"&&row.warnings.some((warning)=>warning.startsWith("Skipped because this EIN")))throw new AppError(422,"duplicate_ein","A row with an existing EIN cannot be created.");if(decision.assignmentMembershipId)validateAssignmentPool(activeActor,[decision.assignmentMembershipId])}const updated=await applyCreateReview(actor.workspaceId,input.runId,input.expectedPreviewRevision,input.decisions);if(!updated)throw new AppError(409,"import_preview_stale","The preview changed. Refresh before saving review decisions.");return updated}
 
 function csvCell(value: unknown): string {
   const raw = value === null || value === undefined ? "" : String(value)
@@ -188,11 +215,12 @@ export async function commitSpreadsheetImport(actor: DealActor, input: { runId: 
   let created = 0, skipped = 0, failed = 0
   const results: string[][] = [["row", "state", "deal_id", "message"]]
   const checkpoints = await rowResultsForRun(actor.workspaceId, preview.runId)
+  const createdInRun = new Set<string>()
   for (const row of preview.rows) {
     const checkpoint=checkpoints.get(row.id)
-    if(checkpoint&&["created","retried","skipped"].includes(checkpoint.state)){if(checkpoint.state==="created")created++;else skipped++;results.push([String(row.rowNumber),checkpoint.state,checkpoint.dealId??"",checkpoint.message??""]);continue}
+    if(checkpoint&&["created","retried","skipped"].includes(checkpoint.state)){if(checkpoint.state==="created"){created++;if(checkpoint.dealId)createdInRun.add(checkpoint.dealId)}else skipped++;results.push([String(row.rowNumber),checkpoint.state,checkpoint.dealId??"",checkpoint.message??""]);continue}
     const currentDuplicates=await duplicateIds(actor,row.application)
-    const duplicateChanged=currentDuplicates.some((id)=>!row.duplicateDealIds.includes(id))
+    const duplicateChanged=currentDuplicates.some((id)=>!row.duplicateDealIds.includes(id)&&!createdInRun.has(id))
     if (row.errors.length || row.duplicateDecision!=="create" || duplicateChanged || (row.originatorSourceValue&&!row.assignmentMembershipId)) {
       skipped += 1; const message = row.errors.join(" ") || (duplicateChanged?"A possible duplicate appeared after preview; refresh and review.":row.duplicateDecision==="skip"?"Skipped by duplicate review.":row.originatorSourceValue&&!row.assignmentMembershipId?"Originator mapping is unresolved.":"Possible duplicate requires an explicit create or skip decision.")
       await recordCommittedRow(actor.workspaceId, preview.runId, row.id, "skipped", null, message,commitToken); results.push([String(row.rowNumber), "skipped", "", message]); continue
@@ -205,7 +233,7 @@ export async function commitSpreadsheetImport(actor: DealActor, input: { runId: 
       }
       const outcome = await ingestApplication(actor, { schemaVersion: 1, provider: "import", eventId: `${preview.batchId}:${row.id}`, application, sourceReference: `import:${preview.runId}:${row.rowNumber}` }, checkpoint)
       if (!outcome.dealId) throw new Error(outcome.warnings.join(" ") || "The intake did not create a deal.")
-      if (outcome.created) created += 1; else skipped += 1
+      if (outcome.created) { created += 1; createdInRun.add(outcome.dealId) } else skipped += 1
       const state = outcome.created ? "created" : "retried"
       results.push([String(row.rowNumber), state, outcome.dealId, outcome.warnings.join(" ")])
     } catch (error) {
