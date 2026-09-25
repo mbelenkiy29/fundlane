@@ -65,6 +65,7 @@ export function MarketingShell({
           <Brand />
           <nav className="fl-desktop-nav" aria-label="Main navigation">
             <Link href="/features">Features</Link>
+            <Link href="/changelog">Changelog</Link>
             <Link href="/#workflow">How it works</Link>
             <Link href="/#faq">FAQ</Link>
           </nav>
@@ -87,6 +88,7 @@ export function MarketingShell({
             </div>
             <nav aria-label="Footer navigation">
               <Link href="/features">Features</Link>
+              <Link href="/changelog">Changelog</Link>
               <Link href="/#workflow">How it works</Link>
               <Link href="/demo">Book a demo</Link>
               <Link href="/sign-in">Sign in</Link>

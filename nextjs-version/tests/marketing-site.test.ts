@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import robots from "../src/app/robots"
 import sitemap from "../src/app/sitemap"
 import {
   DEMO_DESCRIPTION,
@@ -55,10 +56,21 @@ test("sitemap includes lastmod for each public marketing URL", () => {
   const entries = sitemap()
   assert.deepEqual(
     entries.map((entry) => entry.url),
-    [MARKETING_ORIGIN, `${MARKETING_ORIGIN}/features`, `${MARKETING_ORIGIN}/demo`],
+    [MARKETING_ORIGIN, `${MARKETING_ORIGIN}/features`, `${MARKETING_ORIGIN}/changelog`, `${MARKETING_ORIGIN}/demo`],
   )
   for (const entry of entries) {
     assert.deepEqual(entry.lastModified, MARKETING_SITEMAP_LASTMOD)
     assert.ok(entry.lastModified instanceof Date)
   }
+})
+
+test("robots allows each public marketing URL listed in the sitemap", () => {
+  const rules = robots().rules
+  assert.ok(rules && !Array.isArray(rules))
+  const allow = rules.allow
+  assert.ok(Array.isArray(allow))
+  assert.ok(allow.includes("/$"))
+  assert.ok(allow.includes("/features$"))
+  assert.ok(allow.includes("/changelog$"))
+  assert.ok(allow.includes("/demo$"))
 })
