@@ -22,3 +22,11 @@ export function getSupportConfig() {
     supportEmail: emailAddress(process.env.MCA_SUPPORT_EMAIL),
   }
 }
+
+export function getConfiguredSupportRows(config: ReturnType<typeof getSupportConfig>) {
+  const rows: { label: string; href: string; linkText: string }[] = []
+  if (config.supportEmail) rows.push({ label: "Support", href: `mailto:${config.supportEmail}`, linkText: config.supportEmail })
+  if (config.statusUrl) rows.push({ label: "System status", href: config.statusUrl, linkText: "View status page" })
+  if (config.roadmapUrl) rows.push({ label: "Roadmap", href: config.roadmapUrl, linkText: "View roadmap" })
+  return rows
+}

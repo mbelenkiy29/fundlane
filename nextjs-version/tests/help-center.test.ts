@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { helpArticle, helpArticles } from "../src/lib/marketing/help"
-import { getSupportConfig } from "../src/lib/marketing/support-config"
+import { getConfiguredSupportRows, getSupportConfig } from "../src/lib/marketing/support-config"
 
 test("help articles have unique routes and actionable steps", () => {
   assert.equal(new Set(helpArticles.map(article => article.slug)).size, helpArticles.length)
@@ -24,11 +24,18 @@ test("support resources remain unpublished until configured", () => {
     delete process.env.NEXT_PUBLIC_ROADMAP_URL
     delete process.env.MCA_SUPPORT_EMAIL
     assert.deepEqual(getSupportConfig(), { statusUrl: null, roadmapUrl: null, supportEmail: null })
+    assert.deepEqual(getConfiguredSupportRows(getSupportConfig()), [])
+
+    process.env.MCA_SUPPORT_EMAIL = "help@example.com"
+    assert.deepEqual(getConfiguredSupportRows(getSupportConfig()), [
+      { label: "Support", href: "mailto:help@example.com", linkText: "help@example.com" },
+    ])
 
     process.env.NEXT_PUBLIC_STATUS_PAGE_URL = "http://example.com/status"
     process.env.NEXT_PUBLIC_ROADMAP_URL = "https://user:pass@example.com/roadmap"
     process.env.MCA_SUPPORT_EMAIL = "not an email"
     assert.deepEqual(getSupportConfig(), { statusUrl: null, roadmapUrl: null, supportEmail: null })
+    assert.deepEqual(getConfiguredSupportRows(getSupportConfig()), [])
 
     process.env.NEXT_PUBLIC_STATUS_PAGE_URL = "https://status.example.com/"
     process.env.NEXT_PUBLIC_ROADMAP_URL = "https://roadmap.example.com/"
@@ -38,6 +45,11 @@ test("support resources remain unpublished until configured", () => {
       roadmapUrl: "https://roadmap.example.com/",
       supportEmail: "help@example.com",
     })
+    assert.deepEqual(getConfiguredSupportRows(getSupportConfig()), [
+      { label: "Support", href: "mailto:help@example.com", linkText: "help@example.com" },
+      { label: "System status", href: "https://status.example.com/", linkText: "View status page" },
+      { label: "Roadmap", href: "https://roadmap.example.com/", linkText: "View roadmap" },
+    ])
   } finally {
     for (const [name, value] of Object.entries({
       NEXT_PUBLIC_STATUS_PAGE_URL: previous.status,
