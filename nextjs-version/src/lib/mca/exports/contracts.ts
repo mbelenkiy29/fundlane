@@ -107,6 +107,7 @@ export interface MintExportDownloadInput {
 export const EXPORT_PANEL_COPY = {
   title: "CSV exports",
   description: "Download the deals and offers you can already see. Standard exports omit payments and ledger rows.",
+  offersWorkspace: "This downloads every offer you can already see, not only the selected deal.",
   notPayment: "This is not a payment export.",
   loading: "Loading exports…",
   empty: "No export jobs yet. Choose a format to generate a CSV of the records you can see.",

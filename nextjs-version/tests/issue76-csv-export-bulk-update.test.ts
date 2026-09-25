@@ -7,6 +7,7 @@ import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { AppError } from "../src/lib/mca/errors"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import { createDeal, getDealForDocument } from "../src/lib/mca/deals/service"
+import { createOffer } from "../src/lib/mca/offers/service"
 import { csvEscape } from "../src/lib/mca/exports/csv"
 import { createExportJob, redeemExportDownload } from "../src/lib/mca/exports/service"
 import {
@@ -56,7 +57,16 @@ const rep: DealActor = {
   managedMembershipIds: [], correlationId: "corr-issue76-rep",
 }
 
-const seeded = { visibleDealId: "", hiddenDealId: "", sourceId: "", batchId: "" }
+const seeded = {
+  visibleDealId: "",
+  secondVisibleDealId: "",
+  hiddenDealId: "",
+  visibleOfferId: "",
+  secondVisibleOfferId: "",
+  hiddenOfferId: "",
+  sourceId: "",
+  batchId: "",
+}
 
 function cookieRequest(path: string, token: string, init: RequestInit = {}) {
   return new Request(`http://localhost${path}`, {
@@ -114,6 +124,24 @@ async function seed() {
   })
   seeded.visibleDealId = visible.deal.id
   seeded.hiddenDealId = hidden.deal.id
+  const secondVisible = await createDeal(admin, {
+    idempotencyKey: "issue76-visible-2",
+    legalName: "Second Visible Merchant",
+    assignments: [{ membershipId: ids.repMember, kind: "originator", isPrimary: true }],
+  })
+  seeded.secondVisibleDealId = secondVisible.deal.id
+  seeded.visibleOfferId = (await createOffer(admin, {
+    dealId: visible.deal.id, funderName: "Visible Capital", externalId: "issue76-offer-visible",
+    terms: { amountCents: 5_000_000, factorRate: 1.35 },
+  })).id
+  seeded.secondVisibleOfferId = (await createOffer(admin, {
+    dealId: secondVisible.deal.id, funderName: "Second Visible Capital", externalId: "issue76-offer-visible-2",
+    terms: { amountCents: 2_500_000 },
+  })).id
+  seeded.hiddenOfferId = (await createOffer(admin, {
+    dealId: hidden.deal.id, funderName: "Hidden Capital", externalId: "issue76-offer-hidden",
+    terms: { amountCents: 8_000_000 },
+  })).id
   const source = await createImportSource(admin, { name: "Issue 76 updates" })
   const batch = await createLeadBatch(admin, { sourceId: source.id, name: "September" })
   seeded.sourceId = source.id
@@ -160,6 +188,20 @@ test("issue 76: filtered exports respect role visibility and record audit events
   assert.equal(owners.csv.includes("Admin Only Merchant"), true)
   assert.match(owners.csv, /'=CMD\(\)/)
 
+  const repOffers = await createExportJob(rep, { kind: "offers", correlationId: "issue76-rep-offers" })
+  const repOfferCsv = (await redeemExportDownload(rep, repOffers.download!.url.split("/").pop() ?? "")).csv
+  assert.equal(repOfferCsv.includes("Visible Capital"), true)
+  assert.equal(repOfferCsv.includes("Second Visible Capital"), true)
+  assert.equal(repOfferCsv.includes("Hidden Capital"), false)
+  assert.equal(repOfferCsv.includes(seeded.visibleOfferId), true)
+  assert.equal(repOfferCsv.includes(seeded.secondVisibleOfferId), true)
+  assert.equal(repOfferCsv.includes(seeded.hiddenOfferId), false)
+
+  const adminOffers = await createExportJob(admin, { kind: "offers", correlationId: "issue76-admin-offers" })
+  const adminOfferCsv = (await redeemExportDownload(admin, adminOffers.download!.url.split("/").pop() ?? "")).csv
+  assert.equal(adminOfferCsv.includes("Hidden Capital"), true)
+  assert.equal(adminOfferCsv.includes(seeded.hiddenOfferId), true)
+
   const audits = await getDatabase().prepare<{ action: string }>(
     "SELECT action FROM audit_events WHERE workspace_id = ? AND resource_type = 'export_job'",
   ).all(ids.workspace)
@@ -196,6 +238,15 @@ test("issue 76: only admins can preview and commit CSV bulk updates; commits are
   const registry = await ensureBulkUpdateRegistry(admin)
   assert.equal(registry.source.name, "Deal bulk updates")
   assert.equal(registry.batch.name, "Updates")
+  const [again, concurrent] = await Promise.all([ensureBulkUpdateRegistry(admin), ensureBulkUpdateRegistry(admin)])
+  assert.equal(again.source.id, registry.source.id)
+  assert.equal(concurrent.source.id, registry.source.id)
+  assert.equal(again.batch.id, registry.batch.id)
+
+  await getDatabase().prepare("UPDATE import_sources SET active = 0 WHERE id = ?").run(registry.source.id)
+  const reactivated = await ensureBulkUpdateRegistry(admin)
+  assert.equal(reactivated.source.id, registry.source.id)
+  assert.equal(reactivated.source.active, true)
 
   const audits = await getDatabase().prepare<{ action: string; resource_id: string }>(
     "SELECT action, resource_id FROM audit_events WHERE workspace_id = ? AND action IN ('import.update_previewed','import.update_committed','deal.bulk_updated')",
@@ -203,6 +254,16 @@ test("issue 76: only admins can preview and commit CSV bulk updates; commits are
   assert.ok(audits.some((row) => row.action === "import.update_previewed" && row.resource_id === preview.runId))
   assert.ok(audits.some((row) => row.action === "import.update_committed" && row.resource_id === preview.runId))
   assert.ok(audits.some((row) => row.action === "deal.bulk_updated" && row.resource_id === seeded.visibleDealId))
+
+  await getDatabase().prepare(
+    "DELETE FROM audit_events WHERE workspace_id = ? AND resource_id = ? AND action = 'import.update_committed'",
+  ).run(ids.workspace, preview.runId)
+  const replayed = await commitCsvUpdate(admin, { runId: preview.runId, expectedPreviewRevision: preview.previewRevision })
+  assert.equal(replayed.state, "completed")
+  const replayAudits = await getDatabase().prepare<{ action: string }>(
+    "SELECT action FROM audit_events WHERE workspace_id = ? AND resource_id = ? AND action = 'import.update_committed'",
+  ).all(ids.workspace, preview.runId)
+  assert.equal(replayAudits.length, 1)
 })
 
 test("issue 76: HTTP routes enforce the same export and bulk-update permissions", async () => {
@@ -221,6 +282,11 @@ test("issue 76: HTTP routes enforce the same export and bulk-update permissions"
     body: JSON.stringify({ kind: "deals", correlationId: "issue76-http-rep-deals" }),
   }))
   assert.equal(repDeals.status, 201)
+  const repOffers = await createExport(cookieRequest("/api/mca/exports", "rep-session-token", {
+    method: "POST",
+    body: JSON.stringify({ kind: "offers", correlationId: "issue76-http-rep-offers" }),
+  }))
+  assert.equal(repOffers.status, 201)
 
   const templateDenied = await templateGet(cookieRequest("/api/mca/imports/update/template", "rep-session-token"))
   assert.equal(templateDenied.status, 403)

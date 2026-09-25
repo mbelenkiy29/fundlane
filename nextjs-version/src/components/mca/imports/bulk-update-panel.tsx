@@ -34,6 +34,14 @@ function isAdmin(session: SessionResponse | undefined): boolean {
   return session?.membership?.role === "admin" || session?.membership?.role === "super_admin"
 }
 
+function sameMapping(left: Record<string, string>, right: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) {
+    if ((left[key] ?? "") !== (right[key] ?? "")) return false
+  }
+  return true
+}
+
 export function BulkUpdatePanel() {
   const [session, setSession] = React.useState<SessionResponse>()
   const [source, setSource] = React.useState<ImportSource>()
@@ -135,7 +143,17 @@ export function BulkUpdatePanel() {
           </Button>
           <div className="min-w-56 space-y-1.5">
             <Label htmlFor="bulk-update-file">CSV file</Label>
-            <Input id="bulk-update-file" type="file" accept=".csv,text/csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+            <Input
+              id="bulk-update-file"
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(event) => {
+                setFile(event.target.files?.[0] ?? null)
+                setPreview(null)
+                setMapping({})
+                setResult(null)
+              }}
+            />
           </div>
           <Button disabled={!file || !source || !batch || busy} onClick={() => void previewUpdate()}>
             {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
@@ -152,7 +170,10 @@ export function BulkUpdatePanel() {
                     <span className="truncate text-sm">{header}</span>
                     <Select
                       value={mapping[header] || "unmapped"}
-                      onValueChange={(value) => setMapping({ ...mapping, [header]: value === "unmapped" ? "" : value })}
+                      onValueChange={(value) => {
+                        setMapping({ ...mapping, [header]: value === "unmapped" ? "" : value })
+                        setResult(null)
+                      }}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -185,7 +206,13 @@ export function BulkUpdatePanel() {
                 </div>
               ))}
             </div>
-            <Button disabled={busy || result?.state === "completed"} onClick={() => void commitUpdate()}>
+            {!sameMapping(mapping, preview.mapping) && (
+              <p className="text-sm text-muted-foreground" role="status">{BULK_UPDATE_PANEL_COPY.remapped}</p>
+            )}
+            <Button
+              disabled={busy || result?.state === "completed" || !sameMapping(mapping, preview.mapping)}
+              onClick={() => void commitUpdate()}
+            >
               {result?.state === "failed" ? BULK_UPDATE_PANEL_COPY.retry : BULK_UPDATE_PANEL_COPY.commit}
             </Button>
             {result && <BulkUpdateResult result={result} />}

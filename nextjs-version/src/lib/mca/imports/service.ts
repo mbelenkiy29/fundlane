@@ -1,7 +1,7 @@
 import "server-only"
 
 import { AppError } from "../errors"
-import { newId, nowIso, recordAuditEvent } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent, type DbExecutor } from "../db"
 import type { DealTransactionCheckpoint } from "../deals/repository"
 import type { DealActor, DealStatus, DealWriteInput } from "../deals/schema"
 import { DEAL_STATUSES } from "../deals/schema"
@@ -15,13 +15,48 @@ import { BULK_UPDATE_BATCH_NAME, BULK_UPDATE_SOURCE_NAME, IMPORTABLE_FIELDS } fr
 import { assertMapping, heuristicMapping, mapRow, normalizeHeader } from "./mapping"
 import { parseSpreadsheet } from "./parser"
 import {
-  applyCreateReview, batchesFor, beginCommit, findBatch, findPreview, findSource, findUpdatePreview,
+  activateSource, applyCreateReview, batchesFor, beginCommit, findBatch, findPreview, findSource, findUpdatePreview,
   finishRun, insertBatch, insertPreview, insertSource, insertUpdatePreview, profilesFor, recordRowResult, recordRowResultInTransaction,
   requestCancellation, rowResultsForRun, sourcesFor, storedRunResult, upsertProfile,
 } from "./repository"
 
 function requireAdmin(actor: DealActor): void {
   if (!actor.role || !["admin", "super_admin"].includes(actor.role)) throw new AppError(403, "permission_denied", "Only workspace administrators can configure import sources and batches.")
+}
+
+function uniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false
+  const code = "code" in error ? String((error as { code: unknown }).code) : ""
+  const cause = "cause" in error && error.cause && typeof error.cause === "object" && "code" in error.cause
+    ? String((error.cause as { code: unknown }).code)
+    : ""
+  return code === "23505" || cause === "23505" || (error instanceof Error && /unique/i.test(error.message))
+}
+
+async function importRunAuditExists(workspaceId: string, runId: string, action: string): Promise<boolean> {
+  const row = await getDatabase().prepare<{ id: string }>(
+    "SELECT id FROM audit_events WHERE workspace_id = ? AND resource_type = 'import_run' AND resource_id = ? AND action = ? LIMIT 1",
+  ).get(workspaceId, runId, action)
+  return Boolean(row)
+}
+
+async function recordImportRunAudit(
+  actor: DealActor,
+  action: "import.update_previewed" | "import.update_committed",
+  runId: string,
+  metadata: Record<string, unknown>,
+  executor?: DbExecutor,
+): Promise<void> {
+  if (!executor && await importRunAuditExists(actor.workspaceId, runId, action)) return
+  await recordAuditEvent({
+    context: actor,
+    action,
+    resourceType: "import_run",
+    resourceId: runId,
+    metadata,
+    correlationId: actor.correlationId,
+    executor,
+  })
 }
 async function refreshedActor(actor: DealActor): Promise<DealActor> { return { ...actor, activeMembershipIds: (await listMemberships(actor.workspaceId)).filter((member) => member.status === "active").map((member) => member.id) } }
 
@@ -219,32 +254,60 @@ export async function previewCsvUpdate(actor: DealActor, input:{sourceId:string;
     if(deal&&status)before.status=deal.status
     return{id:newId(),rowNumber:parsed.headerRow+index+1,dealId,expectedVersion,before,changes,status,clearFields,errors}
   }))
-  const preview = await insertUpdatePreview({workspaceId:actor.workspaceId,sourceId:input.sourceId,batchId:input.batchId,filename:input.filename,mapping,headers:parsed.headers,rows})
-  await recordAuditEvent({
-    context: actor,
-    action: "import.update_previewed",
-    resourceType: "import_run",
-    resourceId: preview.runId,
-    metadata: {
+  return insertUpdatePreview({
+    workspaceId: actor.workspaceId,
+    sourceId: input.sourceId,
+    batchId: input.batchId,
+    filename: input.filename,
+    mapping,
+    headers: parsed.headers,
+    rows,
+    afterInsert: (database, runId) => recordImportRunAudit(actor, "import.update_previewed", runId, {
       sourceId: input.sourceId,
       batchId: input.batchId,
       filename: input.filename,
-      rowCount: preview.rows.length,
-      errorCount: preview.rows.filter((row) => row.errors.length).length,
-    },
-    correlationId: actor.correlationId,
+      rowCount: rows.length,
+      errorCount: rows.filter((row) => row.errors.length).length,
+    }, database),
   })
-  return preview
+}
+
+async function resolveBulkUpdateSource(actor: DealActor): Promise<ImportSource> {
+  const existing = (await sourcesFor(actor.workspaceId)).find((item) => item.name === BULK_UPDATE_SOURCE_NAME)
+  if (existing) {
+    if (existing.active) return existing
+    await activateSource(actor.workspaceId, existing.id)
+    return { ...existing, active: true }
+  }
+  try {
+    return await createImportSource(actor, { name: BULK_UPDATE_SOURCE_NAME, kind: "spreadsheet" })
+  } catch (error) {
+    if (!uniqueViolation(error)) throw error
+    const raced = (await sourcesFor(actor.workspaceId)).find((item) => item.name === BULK_UPDATE_SOURCE_NAME)
+    if (!raced) throw error
+    if (raced.active) return raced
+    await activateSource(actor.workspaceId, raced.id)
+    return { ...raced, active: true }
+  }
+}
+
+async function resolveBulkUpdateBatch(actor: DealActor, sourceId: string): Promise<LeadBatch> {
+  const existing = (await batchesFor(actor.workspaceId)).find((item) => item.sourceId === sourceId && item.name === BULK_UPDATE_BATCH_NAME)
+  if (existing) return existing
+  try {
+    return await createLeadBatch(actor, { sourceId, name: BULK_UPDATE_BATCH_NAME })
+  } catch (error) {
+    if (!uniqueViolation(error)) throw error
+    const raced = (await batchesFor(actor.workspaceId)).find((item) => item.sourceId === sourceId && item.name === BULK_UPDATE_BATCH_NAME)
+    if (!raced) throw error
+    return raced
+  }
 }
 
 export async function ensureBulkUpdateRegistry(actor: DealActor): Promise<{ source: ImportSource; batch: LeadBatch }> {
   requireAdmin(actor)
-  const [sources, batches] = await Promise.all([sourcesFor(actor.workspaceId), batchesFor(actor.workspaceId)])
-  const source = sources.find((item) => item.active && item.kind === "spreadsheet" && item.name === BULK_UPDATE_SOURCE_NAME)
-    ?? await createImportSource(actor, { name: BULK_UPDATE_SOURCE_NAME, kind: "spreadsheet" })
-  const batch = batches.find((item) => item.sourceId === source.id && item.name === BULK_UPDATE_BATCH_NAME)
-    ?? await createLeadBatch(actor, { sourceId: source.id, name: BULK_UPDATE_BATCH_NAME })
-  return { source, batch }
+  const source = await resolveBulkUpdateSource(actor)
+  return { source, batch: await resolveBulkUpdateBatch(actor, source.id) }
 }
 
 function nestedDealChanges(changes:Record<string,unknown>,current:Awaited<ReturnType<typeof getDealForDocument>>):DealWriteInput { const result:Record<string,unknown>={},address:Record<string,unknown>={...(current.address??{})};for(const [field,value] of Object.entries(changes)){const resolved=value===null?undefined:value;if(field.startsWith("address."))address[field.slice(8)]=resolved;else result[field]=resolved}if(Object.keys(changes).some((field)=>field.startsWith("address.")))result.address=address;return result as DealWriteInput }
@@ -253,7 +316,11 @@ export async function commitCsvUpdate(actor:DealActor,input:{runId:string;expect
   requireAdmin(actor)
   actor=await refreshedActor(actor)
   const preview=await findUpdatePreview(actor.workspaceId,input.runId);if(!preview)throw new AppError(404,"import_run_not_found","The update run was not found.")
-  if(preview.state==="completed")return await storedRunResult(actor.workspaceId,input.runId)??{runId:input.runId,state:"completed",created:0,skipped:0,failed:0,resultsCsv:"row,state,deal_id,message\r\n"}
+  if(preview.state==="completed"){
+    const stored=await storedRunResult(actor.workspaceId,input.runId)??{runId:input.runId,state:"completed" as const,created:0,skipped:0,failed:0,resultsCsv:"row,state,deal_id,message\r\n"}
+    try{await recordImportRunAudit(actor,"import.update_committed",input.runId,{created:stored.created,skipped:stored.skipped,failed:stored.failed,state:stored.state})}catch{/* Deal writes already persisted; retry writes the missing run-level event. */}
+    return stored
+  }
   const commitToken=await beginCommit(actor.workspaceId,input.runId,input.expectedPreviewRevision);if(!commitToken){const latest=await findUpdatePreview(actor.workspaceId,input.runId);if(latest?.state==="committing")throw new AppError(409,"import_commit_in_progress","This update still has an active commit lease. Retry after two minutes if its worker stopped.");throw new AppError(409,"import_preview_stale","The update preview changed or was already committed.")}
   let created=0,skipped=0,failed=0;const results=[["row","state","deal_id","message"]],checkpoints=await rowResultsForRun(actor.workspaceId,input.runId)
   for(const row of preview.rows){const checkpoint=checkpoints.get(row.id);if(checkpoint&&["updated","skipped"].includes(checkpoint.state)){if(checkpoint.state==="updated")created++;else skipped++;results.push([String(row.rowNumber),checkpoint.state,checkpoint.dealId??"",checkpoint.message??""]);continue}if(row.errors.length){skipped++;await recordCommittedRow(actor.workspaceId,input.runId,row.id,"skipped",null,row.errors.join(" "),commitToken);results.push([String(row.rowNumber),"skipped","",row.errors.join(" ")]);continue}
@@ -261,14 +328,7 @@ export async function commitCsvUpdate(actor:DealActor,input:{runId:string;expect
       created++;results.push([String(row.rowNumber),"updated",next.id,""])
     }catch(error){if(error instanceof AppError&&error.code==="import_commit_lease_lost")throw error;failed++;const message=error instanceof Error?error.message:"Unknown row error";await recordCommittedRow(actor.workspaceId,input.runId,row.id,"failed",null,message,commitToken);results.push([String(row.rowNumber),"failed",row.dealId,message])}}
   const result:ImportCommitResult={runId:input.runId,state:failed?"failed":"completed",created,skipped,failed,resultsCsv:results.map((row)=>row.map(csvCell).join(",")).join("\r\n")};if(!await finishRun(actor.workspaceId,input.runId,result,commitToken))throw new AppError(409,"import_commit_lease_lost","Another worker reclaimed this update before finalization. Refresh its status.")
-  await recordAuditEvent({
-    context: actor,
-    action: "import.update_committed",
-    resourceType: "import_run",
-    resourceId: input.runId,
-    metadata: { created, skipped, failed, state: result.state },
-    correlationId: actor.correlationId,
-  })
+  try{await recordImportRunAudit(actor,"import.update_committed",input.runId,{created,skipped,failed,state:result.state})}catch{/* Deal writes already persisted; a later completed-run retry writes the missing event. */}
   return result
 }
 

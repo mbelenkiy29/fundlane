@@ -124,6 +124,7 @@ export const BULK_UPDATE_PANEL_COPY = {
   retry: "Retry failed updates",
   template: "Download template",
   mapping: "Column mapping",
+  remapped: "Preview again after changing the file or column mapping. Apply uses the last previewed file only.",
 } as const
 
 export const ARCHIVE_CATEGORIES = ["statement", "application", "api_application", "driver_license", "voided_check", "closing_document", "other_stip"] as const
