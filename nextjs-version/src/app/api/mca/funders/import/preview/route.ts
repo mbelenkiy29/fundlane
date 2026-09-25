@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { consumeRequestRateLimit } from "@/lib/mca/auth"
 import { apiError, AppError } from "@/lib/mca/errors"
-import { previewFunderImport, requireFunderImportActor } from "@/lib/mca/funders/import"
+import { MAX_IMPORT_BYTES, previewFunderImport, requireFunderImportActor } from "@/lib/mca/funders/import"
 
 export const runtime = "nodejs"
 const noStore = { "cache-control": "no-store" }
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
       const form = await request.formData()
       const file = form.get("file")
       if (file instanceof File) {
+        if (file.size > MAX_IMPORT_BYTES) throw new AppError(422, "funder_import_file_size", "Funder import files must be 1 MiB or smaller.")
         return NextResponse.json(await previewFunderImport(actor, {
           filename: file.name,
           bytes: new Uint8Array(await file.arrayBuffer()),

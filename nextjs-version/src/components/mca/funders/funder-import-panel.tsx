@@ -46,6 +46,15 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
   const [criteriaErrors, setCriteriaErrors] = React.useState<Record<string, string>>({})
   const fileInput = React.useRef<HTMLInputElement>(null)
   const commitKey = React.useRef(crypto.randomUUID())
+  const previewGeneration = React.useRef(0)
+
+  function resetPreview() {
+    setPreview(undefined)
+    setRows([])
+    setCriteriaText({})
+    setCriteriaErrors({})
+    commitKey.current = crypto.randomUUID()
+  }
 
   React.useEffect(() => {
     void requestJson<SessionResponse>("/api/auth/session")
@@ -68,38 +77,52 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
   }
 
   async function previewFile(file?: File) {
-    if (!file) { setError("Choose a CSV or JSON file of funders."); return }
-    if (file.size > MAX_IMPORT_BYTES) { setError("Funder import files must be 1 MiB or smaller."); return }
+    if (!file) {
+      resetPreview()
+      setError("Choose a CSV or JSON file of funders.")
+      return
+    }
+    if (file.size > MAX_IMPORT_BYTES) {
+      resetPreview()
+      setError("Funder import files must be 1 MiB or smaller.")
+      return
+    }
+    const generation = ++previewGeneration.current
+    resetPreview()
     setBusy(true); setError(""); setNotice("")
     try {
       const next = await requestJson<FunderImportPreview>("/api/mca/funders/import/preview", {
         method: "POST",
         body: JSON.stringify({ text: await file.text() }),
       })
+      if (generation !== previewGeneration.current) return
       applyPreview(next)
       toast.success("Import ready for review")
     } catch (caught) {
-      fail(caught, "The funder file could not be previewed.")
+      if (generation === previewGeneration.current) fail(caught, "The funder file could not be previewed.")
     } finally {
-      setBusy(false)
+      if (generation === previewGeneration.current) setBusy(false)
     }
   }
 
   async function previewJson() {
     if (!jsonText.trim()) { setError("Paste a JSON array of funders or { funders: [] }."); return }
     if (new TextEncoder().encode(jsonText).byteLength > MAX_IMPORT_BYTES) { setError("Funder import files must be 1 MiB or smaller."); return }
+    const generation = ++previewGeneration.current
+    resetPreview()
     setBusy(true); setError(""); setNotice("")
     try {
       const next = await requestJson<FunderImportPreview>("/api/mca/funders/import/preview", {
         method: "POST",
         body: JSON.stringify({ text: jsonText }),
       })
+      if (generation !== previewGeneration.current) return
       applyPreview(next)
       toast.success("Import ready for review")
     } catch (caught) {
-      fail(caught, "The funder JSON could not be previewed.")
+      if (generation === previewGeneration.current) fail(caught, "The funder JSON could not be previewed.")
     } finally {
-      setBusy(false)
+      if (generation === previewGeneration.current) setBusy(false)
     }
   }
 
@@ -196,7 +219,10 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
         </div>
         <div className="space-y-2">
           <Label htmlFor="funder-import-json">Or paste JSON</Label>
-          <Textarea id="funder-import-json" value={jsonText} disabled={busy} rows={5} placeholder='[{"legalName":"Acme Capital","domains":["acme.example"],"criteria":[{"field":"fico","operator":"min","unit":"fico","value":600}]}]' onChange={(event) => setJsonText(event.target.value)} />
+          <Textarea id="funder-import-json" value={jsonText} disabled={busy} rows={5} placeholder='[{"legalName":"Acme Capital","domains":["acme.example"],"criteria":[{"field":"fico","operator":"min","unit":"fico","value":600}]}]' onChange={(event) => {
+            setJsonText(event.target.value)
+            if (preview) resetPreview()
+          }} />
           <Button type="button" variant="outline" disabled={busy || !jsonText.trim()} onClick={() => void previewJson()}>Review pasted funders</Button>
         </div>
       </CardContent>

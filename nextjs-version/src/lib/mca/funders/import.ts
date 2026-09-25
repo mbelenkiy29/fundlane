@@ -35,7 +35,7 @@ import type {
 } from "./contracts"
 
 const MAX_IMPORT_ROWS = 200
-const MAX_IMPORT_BYTES = 1_048_576
+export const MAX_IMPORT_BYTES = 1_048_576
 const PREVIEW_IDEMPOTENCY = "funder-import-preview"
 
 const HEADER_ALIASES: Record<string, keyof MappedRow> = {

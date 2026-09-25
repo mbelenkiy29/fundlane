@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { consumeRequestRateLimit } from "@/lib/mca/auth"
+import { MAX_DOCUMENT_BYTES } from "@/lib/mca/documents/service"
 import { apiError, AppError } from "@/lib/mca/errors"
 import {
   listCriteriaScanDocuments,
@@ -43,6 +44,9 @@ export async function POST(request: Request) {
       const form = await request.formData()
       const file = form.get("file")
       if (!(file instanceof File)) throw new AppError(422, "file_required", "Choose a PDF, PNG, or JPEG criteria sheet.")
+      if (file.size > MAX_DOCUMENT_BYTES) {
+        throw new AppError(413, "document_size_invalid", `Documents must be between 1 byte and ${MAX_DOCUMENT_BYTES} bytes.`)
+      }
       return NextResponse.json(await uploadAndScanFunderCriteria(actor, {
         funderId: String(form.get("funderId") ?? ""),
         dealId: String(form.get("dealId") ?? "") || undefined,
