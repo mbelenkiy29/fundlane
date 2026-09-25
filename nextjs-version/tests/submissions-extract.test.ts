@@ -5,6 +5,7 @@ import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal } from "../src/lib/mca/deals/service"
+import { AppError } from "../src/lib/mca/errors"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { Role } from "../src/lib/mca/types"
 import { storeDocument } from "../src/lib/mca/documents/service"
@@ -27,7 +28,7 @@ import {
   type ReplyOutcomeClassifierInput,
 } from "../src/lib/mca/submissions/extract-outcomes"
 import { POST as repliesRun } from "../src/app/api/mca/submissions/replies/run/route"
-import { GET as extractGet, POST as extractPost } from "../src/app/api/mca/submissions/extract/route"
+import { GET as extractGet, POST as rawExtractPost } from "../src/app/api/mca/submissions/extract/route"
 import { POST as extractPreview } from "../src/app/api/mca/submissions/extract/preview/route"
 import { GET as extractOneGet, PATCH as extractPatch } from "../src/app/api/mca/submissions/extract/[id]/route"
 
@@ -123,7 +124,8 @@ const fixtureClassifier: ReplyOutcomeClassifier = {
       })
     }
     if (hay.includes("unable to offer") || hay.includes("declined")) {
-      return classified({ classification: "decline", summary: "Funder declined the file." })
+      const reason = input.body.split(".")[0]
+      return classified({ classification: "decline", summary: "Funder declined the file.", declineReason: { value: reason, unknown: false, evidence: reason } })
     }
     if (hay.includes("approved")) {
       return classified({ classification: "approval", summary: "Funder approved without sending terms." })
@@ -264,6 +266,20 @@ function replyParams(id: string) {
   return { params: Promise.resolve({ id }) }
 }
 
+async function extractPost(request: Request) {
+  const body = await request.clone().json().catch(() => null) as { replyId?: string } | null
+  if (body?.replyId) {
+    const preview = await extractPreview(new Request("http://localhost/api/mca/submissions/extract/preview", {
+      method: "POST", headers: request.headers, body: JSON.stringify({ replyId: body.replyId }),
+    }))
+    if (preview.ok) {
+      const result = await preview.json() as { classification: string }
+      return rawExtractPost(new Request(request, { body: JSON.stringify({ ...body, confirm: true, expectedClassification: result.classification }) }))
+    }
+  }
+  return rawExtractPost(request)
+}
+
 function assertNoSecret(value: unknown) {
   const text = typeof value === "string" ? value : JSON.stringify(value)
   assert.equal(text.includes(SMTP_PASSWORD), false)
@@ -384,15 +400,15 @@ test("MIC-122: approval without financial terms does not fabricate amounts and r
   const empty = await extractGet(cookieRequest(`/api/mca/submissions/extract?dealId=${deal.id}`, "admin-session-token"))
   assert.equal(empty.status, 200)
   const emptyBody = await empty.json() as ListBody
-  assert.equal(emptyBody.state, "empty")
-  assert.equal(emptyBody.extractions.length, 0)
-  assert.match(emptyBody.message ?? "", /No extracted funder outcomes/)
+  assert.equal(emptyBody.state, "ready")
+  assert.equal(emptyBody.extractions.length, 1)
+  assert.equal(emptyBody.extractions[0]?.state, "preview")
   assertNoSecret(emptyBody)
 
   const before = await extractOneGet(cookieRequest(`/api/mca/submissions/extract/${replyId}`, "admin-session-token"), replyParams(replyId))
   assert.equal(before.status, 200)
   const beforeBody = await before.json() as ExtractBody
-  assert.equal(beforeBody.state, "empty")
+  assert.equal(beforeBody.state, "preview")
   assert.equal(beforeBody.matchedJobId, sent.jobId)
 
   const preview = await extractPreview(cookieRequest("/api/mca/submissions/extract/preview", "admin-session-token", {
@@ -647,8 +663,8 @@ test("MIC-122: unrelated stays unmatched, email is data not instructions, and AP
     method: "POST",
     body: JSON.stringify({ replyId }),
   }))
-  assert.equal(unavailable.status, 503)
-  assert.equal((await unavailable.json() as { error: { code: string } }).error.code, "provider_unavailable")
+  assert.equal(unavailable.status, 200)
+  assert.equal((await unavailable.json() as ExtractBody).provider, "deterministic")
   assert.equal(fetchCalls, 0)
 })
 
@@ -665,6 +681,8 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
         amount: { value: 25_000, unknown: false, evidence: "Approved for 25000" },
         rate: { value: 1.35, unknown: false, evidence: "rate 1.35" },
         term: { value: 10, unknown: false, evidence: "10 months" },
+        paymentAmount: { value: 120, unknown: false, evidence: "payment $120" },
+        stipulations: [{ text: "latest bank statement", evidence: "Please send the latest bank statement" }],
       })
     },
   })
@@ -673,11 +691,17 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
     threadId: "thread-approval-with-terms",
     from: "Underwriting <uw@alpha-extract.example.test>",
     subject: `Application approved for ${deal.displayId}`,
-    body: "Approved for 25000 at rate 1.35 for 10 months.",
+    body: "Approved for 25000 at rate 1.35 for 10 months. Daily payment $120. Please send the latest bank statement.",
   }])
   const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-approval-with-terms")?.id
   assert.ok(replyId)
   assert.equal(ingested.ingested[0]?.state, "matched")
+
+  const unreviewed = await rawExtractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
+    method: "POST", body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(unreviewed.status, 409)
+  assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM deal_offers WHERE deal_id = ?").get(deal.id))?.count, 0)
 
   const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
     method: "POST",
@@ -690,6 +714,8 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
   assert.equal(body.offer?.created, true)
   assert.equal(body.offer?.amount, 25_000)
   assert.equal(body.offer?.source, "email")
+  assert.equal(body.tasks.length, 1)
+  assert.equal(body.tasks[0]?.created, true)
 
   const closing = await getDatabase().prepare<{
     source: string
@@ -698,7 +724,8 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
     amount_cents: number | null
     factor_rate_millionths: number | null
     term_months: number | null
-  }>(`SELECT o.source, o.external_id, o.submission_id, r.amount_cents, r.factor_rate_millionths, r.term_months
+    payment_amount_cents: number | null
+  }>(`SELECT o.source, o.external_id, o.submission_id, r.amount_cents, r.factor_rate_millionths, r.term_months, r.payment_amount_cents
       FROM mca_offers o
       JOIN mca_offer_revisions r ON r.workspace_id = o.workspace_id AND r.id = o.current_revision_id
       WHERE o.deal_id = ?`).get(deal.id)
@@ -707,6 +734,7 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
   assert.equal(closing?.submission_id, sent.jobId)
   assert.equal(closing?.amount_cents, 2_500_000)
   assert.equal(closing?.factor_rate_millionths, 1_350_000)
+  assert.equal(closing?.payment_amount_cents, 12_000)
   assert.equal(closing?.term_months, 10)
 
   const replay = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
@@ -720,6 +748,42 @@ test("confirmed approval with amount bridges mca_offers in integer cents", async
   assert.equal((await getDatabase().prepare<{ count: number }>(
     "SELECT count(*)::int AS count FROM mca_offer_revisions WHERE offer_id IN (SELECT id FROM mca_offers WHERE deal_id = ?)",
   ).get(deal.id))?.count, 1)
+  assert.equal((await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int AS count FROM deal_notes WHERE deal_id = ? AND body LIKE '%mca:stip:%'",
+  ).get(deal.id))?.count, 1)
+})
+
+test("extraction failure leaves an ingested reply available for manual review", async () => {
+  const deal = await seedDeal("Extraction Retry LLC")
+  await sendTo(deal.id)
+  setReplyOutcomeClassifierForTests({
+    name: "failing-fixture",
+    async classify() { throw new Error("fixture provider unavailable") },
+  })
+  const ingested = await ingest([{
+    providerMessageId: "alpha-extraction-failure",
+    from: "uw@alpha-extract.example.test",
+    subject: `Application update for ${deal.displayId}`,
+    body: "Please send the latest bank statement.",
+  }])
+  const replyId = ingested.ingested.find((item) => item.providerMessageId === "alpha-extraction-failure")?.id
+  assert.ok(replyId)
+  assert.equal(ingested.ingested[0]?.state, "matched")
+  const visible = await extractOneGet(cookieRequest(`/api/mca/submissions/extract/${replyId}`, "admin-session-token"), replyParams(replyId))
+  assert.equal(visible.status, 200)
+  assert.equal((await visible.json() as ExtractBody).state, "empty")
+  setReplyOutcomeClassifierForTests({
+    name: "provider-fixture",
+    async classify() { throw new AppError(503, "provider_unavailable", "fixture provider unavailable") },
+  })
+  const retry = await extractPreview(cookieRequest("/api/mca/submissions/extract/preview", "admin-session-token", {
+    method: "POST", body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(retry.status, 200)
+  const fallback = await retry.json() as ExtractBody
+  assert.equal(fallback.classification, "pending")
+  assert.equal(fallback.provider, "deterministic")
+  assert.equal(fallback.tasks.length, 1)
 })
 
 test("confirmed decline maps the submission job to declined", async () => {
@@ -744,6 +808,10 @@ test("confirmed decline maps the submission job to declined", async () => {
   assert.equal(body.classification, "decline")
   assert.equal(body.requiresReview, false)
   assert.equal(body.offer?.status, "declined")
+  const declineEvidence = await getDatabase().prepare<{ evidence_json: string | null }>(
+    "SELECT evidence_json FROM deal_offers WHERE deal_id = ? AND status = 'declined'",
+  ).get(deal.id)
+  assert.match(declineEvidence?.evidence_json ?? "", /unable to offer funding/)
 
   const job = await getDatabase().prepare<{ state: string }>(
     "SELECT state FROM mca_submission_jobs WHERE id = ?",

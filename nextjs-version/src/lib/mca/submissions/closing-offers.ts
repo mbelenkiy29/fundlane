@@ -25,6 +25,7 @@ function termsFromExtract(input: {
   amountDollars: number
   factorRate?: number | null
   termMonths?: number | null
+  paymentAmountDollars?: number | null
   paymentFrequency?: string | null
 }): OfferTermsInput | undefined {
   const amountCents = dollarsToCents(input.amountDollars)
@@ -36,6 +37,7 @@ function termsFromExtract(input: {
   if (typeof input.termMonths === "number" && Number.isInteger(input.termMonths) && input.termMonths > 0) {
     terms.termMonths = input.termMonths
   }
+  if (input.paymentAmountDollars != null) terms.paymentAmountCents = dollarsToCents(input.paymentAmountDollars)
   const frequency = asPaymentFrequency(input.paymentFrequency)
   if (frequency) terms.paymentFrequency = frequency
   return terms
@@ -47,6 +49,7 @@ function currentTerms(offer: OfferRecord): OfferTermsInput {
     amountCents: revision?.amountCents,
     factorRate: revision?.factorRate,
     termMonths: revision?.termMonths,
+    paymentAmountCents: revision?.paymentAmountCents,
     paymentFrequency: revision?.paymentFrequency,
   }
 }
@@ -55,6 +58,7 @@ function sameTerms(left: OfferTermsInput, right: OfferTermsInput): boolean {
   return left.amountCents === right.amountCents
     && left.factorRate === right.factorRate
     && left.termMonths === right.termMonths
+    && left.paymentAmountCents === right.paymentAmountCents
     && left.paymentFrequency === right.paymentFrequency
 }
 
@@ -65,6 +69,7 @@ export async function upsertClosingOfferFromExtract(input: {
   amountDollars: number
   factorRate?: number | null
   termMonths?: number | null
+  paymentAmountDollars?: number | null
   paymentFrequency?: string | null
 }): Promise<OfferRecord | undefined> {
   if (input.job.state === "funded") return undefined
