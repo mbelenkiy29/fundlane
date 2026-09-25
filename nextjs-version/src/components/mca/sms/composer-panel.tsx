@@ -64,7 +64,7 @@ export function smsComposerGate(input: {
 }): { phase: "loading" | "empty" | "blocked" | "validation" | "ready"; sendEnabled: boolean; previewEnabled: boolean; reason: string } {
   if (input.loading) return { phase: "loading", sendEnabled: false, previewEnabled: false, reason: "Loading SMS composer…" }
   if (!input.recipient) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "Save a merchant mobile number on this deal before sending a text." }
-  if (!input.accounts.length) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "No assigned text account is available. Ask an administrator to assign one in Settings → Connections." }
+  if (!input.accounts.length) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "Not connected. No assigned text account is available. Ask an administrator to assign one in Settings → Connections." }
   const selected = input.accounts.find((account) => account.id === input.selectedAccountId)
   if (!selected) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Choose an assigned text account." }
   if (!input.body.trim()) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Enter the exact text the merchant will receive." }

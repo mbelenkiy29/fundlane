@@ -7,6 +7,7 @@ import { SmsConnectionsPanel } from "@/components/mca/sms"
 import { ProvidersPanel } from "@/components/mca/leads/providers-panel"
 import { WebhookConsole } from "@/components/mca/comms/webhook-console"
 import { AdapterCredentialsPanel } from "@/components/mca/submissions/adapter-credentials-panel"
+import { IntegrationConnectionStatus } from "@/components/mca/integrations/connection-status"
 
 export default function ConnectionSettings() {
   return (
@@ -15,6 +16,7 @@ export default function ConnectionSettings() {
         <h2 className="text-xl font-semibold">Connections and imports</h2>
         <p className="text-sm text-muted-foreground">Configure inbound application providers, spreadsheet batches, document packages, Google Drive, email senders, and Data Merch.</p>
       </div>
+      <IntegrationConnectionStatus />
       <SenderConnectionsPanel />
       <SmsOnboardingPanel />
       <details><summary className="cursor-pointer text-sm">Existing manually configured SMS senders</summary><SmsConnectionsPanel /></details>

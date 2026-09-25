@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { SmsAccount, SmsSenderKind } from "@/lib/mca/sms/contracts"
+import { smsChannelStatus } from "@/lib/mca/integrations/connection-status"
+import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 
 type Membership = { id: string; name: string; email: string; role: string; status: string }
 type AccountsPayload = { accounts: SmsAccount[]; canManage: boolean }
@@ -92,10 +94,11 @@ export function SmsConnectionsPanel() {
 
   if (loading) return <Card><CardContent className="flex min-h-40 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading SMS accounts…</CardContent></Card>
 
-  return <Card>
+  const smsStatus = smsChannelStatus({ accounts: payload?.accounts ?? [] })
+  return <Card id="sms-accounts">
     <CardHeader>
       <div className="flex items-start gap-3"><div className="rounded-md bg-muted p-2"><MessageSquareText className="size-5" /></div><div>
-        <CardTitle>Text message accounts</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2">Text message accounts <ConnectionStatusBadge label={smsStatus.label} /></CardTitle>
         <CardDescription>Assign verified Twilio senders to team members. Merchant consent is checked again for every send.</CardDescription>
       </div></div>
     </CardHeader>
@@ -103,7 +106,7 @@ export function SmsConnectionsPanel() {
       {error && <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
       {notice && <div role="status" className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>}
 
-      {!payload?.accounts.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No text message accounts are configured.</div> : <div className="space-y-3">
+      {!payload?.accounts.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Not connected. No text message accounts are configured.</div> : <div className="space-y-3">
         {payload.accounts.map((account) => <div key={account.id} className="rounded-lg border p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><div className="flex flex-wrap items-center gap-2"><p className="font-medium">{account.label}</p>{account.isDefault && <Badge>Default</Badge>}<Badge variant={account.state === "active" ? "secondary" : "destructive"}>{account.state}</Badge><Badge variant={account.providerConfigured ? "default" : "outline"}>{account.providerConfigured ? "Provider configured" : "Credentials absent"}</Badge></div>

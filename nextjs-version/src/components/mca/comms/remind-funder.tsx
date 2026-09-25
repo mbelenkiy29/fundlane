@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { reminderSendGate } from "@/lib/mca/integrations/connection-status"
+import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
 
 type ReminderIneligibleReason = "unsupported_transport" | "not_sent" | "has_response"
 type ReminderThreadMode = "reply" | "fallback"
@@ -114,6 +116,7 @@ export function RemindFunder({ dealId }: { dealId: string }) {
   React.useEffect(() => { void load() }, [load])
 
   const eligible = payload?.jobs.filter((job) => job.eligible && job.remindControl === "remind") ?? []
+  const sendGate = preview ? reminderSendGate({ canSend: preview.canSend, body }) : { enabled: false, missing: [] }
 
   async function openPreview(job: ReminderJobView) {
     setBusy("preview")
@@ -236,15 +239,12 @@ export function RemindFunder({ dealId }: { dealId: string }) {
                 aria-label="Reminder text"
               />
             </div>
+            <MissingPrerequisites missing={sendGate.missing} />
             <div className="flex flex-wrap gap-2">
-              {preview.canSend ? (
-                <Button onClick={() => void send()} disabled={Boolean(busy)} aria-label="Send funder reminder">
-                  {busy === "send" ? <Loader2 className="size-4 animate-spin" /> : <Reply className="size-4" />}
-                  {busy === "send" ? "Sending…" : "Send reminder"}
-                </Button>
-              ) : (
-                <p className="text-sm text-muted-foreground">You can preview this reminder but need deals:write to send.</p>
-              )}
+              <Button onClick={() => void send()} disabled={!sendGate.enabled || Boolean(busy)} aria-label="Send funder reminder">
+                {busy === "send" ? <Loader2 className="size-4 animate-spin" /> : <Reply className="size-4" />}
+                {busy === "send" ? "Sending…" : "Send reminder"}
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => { setPreview(undefined); setBody("") }}

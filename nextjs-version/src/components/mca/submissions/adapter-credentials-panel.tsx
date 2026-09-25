@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { funderSubmissionChannelStatus } from "@/lib/mca/integrations/connection-status"
+import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 
 type AdapterEnvironment = "development" | "production"
 type AdapterCapabilities = { submit: true; statusPoll: boolean; webhooks: boolean; offers: boolean }
@@ -217,11 +219,15 @@ export function AdapterCredentialsPanel() {
   const credentials = payload?.credentials ?? []
   const canManage = payload?.canManage === true
   const funders = payload?.funders ?? []
+  const funderStatus = funderSubmissionChannelStatus({
+    funders: funders.map((funder) => ({ hasApiRoute: funder.hasApiRoute })),
+    credentials,
+  })
 
   return (
-    <Card>
+    <Card id="funder-adapters">
       <CardHeader>
-        <CardTitle>Funder API adapters</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2">Funder API adapters <ConnectionStatusBadge label={funderStatus.label} /></CardTitle>
         <CardDescription>
           Store isolated development and production secrets per funder. Production never falls back to test endpoints or another workspace.
         </CardDescription>
@@ -243,7 +249,7 @@ export function AdapterCredentialsPanel() {
 
         {!loading && credentials.length === 0 && funders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No funder API adapters yet. Add an API route on a funder, then save development or production credentials.
+            Not connected. Add an API route on a funder, then save development or production credentials.
           </div>
         )}
 
