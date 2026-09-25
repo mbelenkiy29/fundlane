@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { consumeRequestRateLimit } from "@/lib/mca/auth"
 import { apiError, AppError } from "@/lib/mca/errors"
 import { previewFunderImport, requireFunderImportActor } from "@/lib/mca/funders/import"
 
@@ -8,6 +9,7 @@ const noStore = { "cache-control": "no-store" }
 export async function POST(request: Request) {
   try {
     const actor = await requireFunderImportActor(request)
+    await consumeRequestRateLimit(`funder-import-preview:${actor.workspaceId}:${actor.membershipId}`, 20)
     const contentType = request.headers.get("content-type") ?? ""
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData()

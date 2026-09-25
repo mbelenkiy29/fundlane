@@ -14,6 +14,8 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 import type { FunderImportCommitResult, FunderImportDraft, FunderImportPreview, FunderImportPreviewRow } from "@/lib/mca/funders/contracts"
 import type { SessionResponse } from "@/lib/mca/types"
 
+const MAX_IMPORT_BYTES = 1_048_576
+
 const TEMPLATE = `legalName,nickname,website,domains,products,active,contactName,contactEmail,contactRole,criteria
 Acme Capital,Acme,https://acme.example,acme.example,MCA,true,Pat Desk,pat@acme.example,ISO,"[{""field"":""fico"",""operator"":""min"",""unit"":""fico"",""value"":600,""unspecified"":false}]"
 `
@@ -28,7 +30,7 @@ function joinList(values: string[]): string {
   return values.join(", ")
 }
 
-function criteriaText(draft: FunderImportDraft): string {
+function criteriaJson(draft: FunderImportDraft): string {
   return draft.criteria?.length ? JSON.stringify(draft.criteria) : ""
 }
 
@@ -40,6 +42,8 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
   const [error, setError] = React.useState("")
   const [notice, setNotice] = React.useState("")
   const [jsonText, setJsonText] = React.useState("")
+  const [criteriaText, setCriteriaText] = React.useState<Record<string, string>>({})
+  const [criteriaErrors, setCriteriaErrors] = React.useState<Record<string, string>>({})
   const fileInput = React.useRef<HTMLInputElement>(null)
   const commitKey = React.useRef(crypto.randomUUID())
 
@@ -57,12 +61,15 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
   function applyPreview(next: FunderImportPreview) {
     setPreview(next)
     setRows(next.rows)
+    setCriteriaText(Object.fromEntries(next.rows.map((row) => [row.key, criteriaJson(row.draft)])))
+    setCriteriaErrors({})
     commitKey.current = crypto.randomUUID()
     setNotice(`Review ${next.summary.ready} ready funder${next.summary.ready === 1 ? "" : "s"} before saving. Duplicates stay excluded.`)
   }
 
   async function previewFile(file?: File) {
     if (!file) { setError("Choose a CSV or JSON file of funders."); return }
+    if (file.size > MAX_IMPORT_BYTES) { setError("Funder import files must be 1 MiB or smaller."); return }
     setBusy(true); setError(""); setNotice("")
     try {
       const next = await requestJson<FunderImportPreview>("/api/mca/funders/import/preview", {
@@ -80,6 +87,7 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
 
   async function previewJson() {
     if (!jsonText.trim()) { setError("Paste a JSON array of funders or { funders: [] }."); return }
+    if (new TextEncoder().encode(jsonText).byteLength > MAX_IMPORT_BYTES) { setError("Funder import files must be 1 MiB or smaller."); return }
     setBusy(true); setError(""); setNotice("")
     try {
       const next = await requestJson<FunderImportPreview>("/api/mca/funders/import/preview", {
@@ -99,9 +107,37 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
     setRows((current) => current.map((row) => row.key === key ? { ...row, draft: { ...row.draft, ...patch } } : row))
   }
 
+  function updateCriteria(key: string, raw: string) {
+    setCriteriaText((current) => ({ ...current, [key]: raw }))
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setCriteriaErrors((current) => {
+        const next = { ...current }
+        delete next[key]
+        return next
+      })
+      updateDraft(key, { criteria: undefined })
+      return
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (!Array.isArray(parsed)) throw new Error("not-array")
+      setCriteriaErrors((current) => {
+        const next = { ...current }
+        delete next[key]
+        return next
+      })
+      updateDraft(key, { criteria: parsed as FunderImportDraft["criteria"] })
+    } catch {
+      setCriteriaErrors((current) => ({ ...current, [key]: "Criteria must be a JSON array of eligibility rules." }))
+    }
+  }
+
   async function commit() {
     const included = rows.filter((row) => row.included)
     if (!included.length) { setError("Select at least one reviewed funder to save."); return }
+    const invalidCriteria = included.find((row) => criteriaErrors[row.key])
+    if (invalidCriteria) { setError(`Row ${invalidCriteria.rowNumber}: Criteria must be a JSON array of eligibility rules.`); return }
     setBusy(true); setError(""); setNotice("")
     try {
       const result = await requestJson<FunderImportCommitResult>("/api/mca/funders/import/commit", {
@@ -117,6 +153,8 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
       setPreview(undefined)
       setRows([])
       setJsonText("")
+      setCriteriaText({})
+      setCriteriaErrors({})
       if (fileInput.current) fileInput.current.value = ""
       commitKey.current = crypto.randomUUID()
       await onImported?.()
@@ -185,18 +223,14 @@ export function FunderImportPanel({ onImported }: { onImported?: () => Promise<v
             </div>
             {row.duplicate && <p className="text-sm text-muted-foreground">Matches {row.duplicate.legalName} by {row.duplicate.match.replace("_", " ")}.</p>}
             {Object.values(row.errors).flat().map((message) => <p key={message} className="text-sm text-destructive">{message}</p>)}
+            {criteriaErrors[row.key] ? <p className="text-sm text-destructive">{criteriaErrors[row.key]}</p> : null}
             <div className="grid gap-2 sm:grid-cols-2">
               <Input aria-label={`Row ${row.rowNumber} legal name`} value={row.draft.legalName} disabled={busy} onChange={(event) => updateDraft(row.key, { legalName: event.target.value })} placeholder="Legal name" />
               <Input aria-label={`Row ${row.rowNumber} nickname`} value={row.draft.nickname ?? ""} disabled={busy} onChange={(event) => updateDraft(row.key, { nickname: event.target.value })} placeholder="Nickname" />
               <Input aria-label={`Row ${row.rowNumber} website`} value={row.draft.website ?? ""} disabled={busy} onChange={(event) => updateDraft(row.key, { website: event.target.value })} placeholder="Website" />
               <Input aria-label={`Row ${row.rowNumber} domains`} value={joinList(row.draft.domains)} disabled={busy} onChange={(event) => updateDraft(row.key, { domains: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} placeholder="Domains" />
               <Input aria-label={`Row ${row.rowNumber} products`} value={joinList(row.draft.products)} disabled={busy} onChange={(event) => updateDraft(row.key, { products: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} placeholder="Products" />
-              <Input aria-label={`Row ${row.rowNumber} criteria JSON`} value={criteriaText(row.draft)} disabled={busy} onChange={(event) => {
-                const raw = event.target.value.trim()
-                if (!raw) { updateDraft(row.key, { criteria: undefined }); return }
-                try { updateDraft(row.key, { criteria: JSON.parse(raw) }); }
-                catch { updateDraft(row.key, { criteria: row.draft.criteria }) }
-              }} placeholder='Criteria JSON, e.g. [{"field":"fico","operator":"min","unit":"fico","value":600}]' />
+              <Input aria-label={`Row ${row.rowNumber} criteria JSON`} value={criteriaText[row.key] ?? ""} disabled={busy} onChange={(event) => updateCriteria(row.key, event.target.value)} placeholder='Criteria JSON, e.g. [{"field":"fico","operator":"min","unit":"fico","value":600}]' />
             </div>
           </div>)}
         </div>}

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
-import { newId, recordAuditEvent, withImmediateTransaction } from "../db"
+import { newId, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { parseSpreadsheet } from "../imports/parser"
@@ -151,6 +151,22 @@ function fieldErrorsFrom(error: unknown): Record<string, string[]> | undefined {
   return undefined
 }
 
+type ParsedDraft = { draft: FunderImportDraft; parseErrors?: Record<string, string[]> }
+
+function draftSkeleton(value: unknown): FunderImportDraft {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  return {
+    legalName: text(row.legalName ?? row.legal_name ?? row.name),
+    nickname: text(row.nickname ?? row.dba) || undefined,
+    website: text(row.website ?? row.url) || undefined,
+    domains: splitList(row.domains ?? row.domain),
+    products: splitList(row.products ?? row.product),
+    active: true,
+    contacts: [],
+    routes: [],
+  }
+}
+
 function draftFromUnknown(value: unknown): FunderImportDraft {
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
   const contactFallback: FunderContactInput[] = []
@@ -174,8 +190,22 @@ function draftFromUnknown(value: unknown): FunderImportDraft {
   }
 }
 
-function mappedDraft(row: MappedRow): FunderImportDraft {
-  return draftFromUnknown(row)
+function tryDraftFromUnknown(value: unknown): ParsedDraft {
+  try {
+    return { draft: draftFromUnknown(value) }
+  } catch (error) {
+    return {
+      draft: draftSkeleton(value),
+      parseErrors: fieldErrorsFrom(error) ?? { _row: ["This row could not be parsed."] },
+    }
+  }
+}
+
+function assertImportByteSize(value: string | Uint8Array): void {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value).byteLength : value.byteLength
+  if (bytes > MAX_IMPORT_BYTES) {
+    throw new AppError(422, "funder_import_file_size", "Funder import files must be 1 MiB or smaller.")
+  }
 }
 
 function mapCsvHeaders(headers: string[]): { fields: Array<keyof MappedRow | undefined>; warning?: string } {
@@ -190,7 +220,7 @@ function mapCsvHeaders(headers: string[]): { fields: Array<keyof MappedRow | und
   }
 }
 
-function draftsFromJsonText(raw: string): { drafts: FunderImportDraft[]; warnings: string[] } {
+function draftsFromJsonText(raw: string): { drafts: ParsedDraft[]; warnings: string[] } {
   try {
     return draftsFromPayload({ funders: JSON.parse(raw) as unknown })
   } catch (error) {
@@ -199,7 +229,7 @@ function draftsFromJsonText(raw: string): { drafts: FunderImportDraft[]; warning
   }
 }
 
-function draftsFromCsv(filename: string, bytes: Uint8Array): { drafts: FunderImportDraft[]; warnings: string[] } {
+function draftsFromCsv(filename: string, bytes: Uint8Array): { drafts: ParsedDraft[]; warnings: string[] } {
   const parsed = parseSpreadsheet({ filename, bytes })
   if (parsed.rows.length > MAX_IMPORT_ROWS) {
     throw new AppError(422, "funder_import_row_limit", `Import at most ${MAX_IMPORT_ROWS} funders at a time.`)
@@ -211,16 +241,14 @@ function draftsFromCsv(filename: string, bytes: Uint8Array): { drafts: FunderImp
       if (!field) return
       row[field] = cells[index] ?? ""
     })
-    return mappedDraft(row)
+    return tryDraftFromUnknown(row)
   })
   return { drafts, warnings: [...parsed.warnings, ...(mapped.warning ? [mapped.warning] : [])] }
 }
 
-function draftsFromPayload(input: { funders?: unknown; filename?: string; bytes?: Uint8Array; text?: string }): { drafts: FunderImportDraft[]; warnings: string[] } {
+function draftsFromPayload(input: { funders?: unknown; filename?: string; bytes?: Uint8Array; text?: string }): { drafts: ParsedDraft[]; warnings: string[] } {
   if (input.bytes && input.bytes.byteLength) {
-    if (input.bytes.byteLength > MAX_IMPORT_BYTES) {
-      throw new AppError(422, "funder_import_file_size", "Funder import files must be 1 MiB or smaller.")
-    }
+    assertImportByteSize(input.bytes)
     const filename = text(input.filename) || "funders.csv"
     if (filename.toLowerCase().endsWith(".json") || text(input.text).startsWith("{") || text(input.text).startsWith("[")) {
       const decoded = new TextDecoder("utf-8", { fatal: false }).decode(input.bytes)
@@ -230,6 +258,7 @@ function draftsFromPayload(input: { funders?: unknown; filename?: string; bytes?
   }
   if (text(input.text)) {
     const raw = text(input.text)
+    assertImportByteSize(raw)
     if (raw.startsWith("{") || raw.startsWith("[")) return draftsFromJsonText(raw)
     return draftsFromCsv("funders.csv", new TextEncoder().encode(raw))
   }
@@ -242,7 +271,8 @@ function draftsFromPayload(input: { funders?: unknown; filename?: string; bytes?
   if (!list) throw new AppError(422, "funder_import_empty", "Provide a CSV file or a JSON array of funders.")
   if (list.length > MAX_IMPORT_ROWS) throw new AppError(422, "funder_import_row_limit", `Import at most ${MAX_IMPORT_ROWS} funders at a time.`)
   if (!list.length) throw new AppError(422, "funder_import_empty", "The import does not contain any funders.")
-  return { drafts: list.map(draftFromUnknown), warnings: [] }
+  assertImportByteSize(JSON.stringify(list))
+  return { drafts: list.map(tryDraftFromUnknown), warnings: [] }
 }
 
 function draftDomains(draft: FunderImportDraft): string[] {
@@ -327,19 +357,21 @@ function detectDuplicates(
   })
 }
 
-function previewRows(drafts: FunderImportDraft[], existing: FunderRecord[]): FunderImportPreviewRow[] {
+function previewRows(parsed: ParsedDraft[], existing: FunderRecord[]): FunderImportPreviewRow[] {
+  const drafts = parsed.map((item) => item.draft)
   const duplicates = detectDuplicates(drafts, existing)
-  return drafts.map((draft, index) => {
-    const validated = validateDraft(draft)
+  return parsed.map((item, index) => {
+    const validated = validateDraft(item.draft)
+    const errors = { ...item.parseErrors, ...validated.errors }
     const duplicate = funderIdentityKey(validated.draft.legalName) ? duplicates[index] : undefined
-    const status = Object.keys(validated.errors).length ? "invalid" : duplicate ? "duplicate" : "ready"
+    const status = Object.keys(errors).length ? "invalid" : duplicate ? "duplicate" : "ready"
     return {
       key: newId(),
       rowNumber: index + 1,
       draft: validated.draft,
       status,
       included: status === "ready",
-      errors: validated.errors,
+      errors,
       ...(duplicate ? { duplicate } : {}),
     }
   })
@@ -371,6 +403,50 @@ export async function previewFunderImport(actor: DealActor, input: {
   const existing = await listFunders(actor, { includeInactive: true })
   const rows = previewRows(parsed.drafts, existing)
   return { rows, warnings: parsed.warnings, summary: summarize(rows) }
+}
+
+function parseJsonList(value: string | null | undefined): string[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) ? parsed.map((item) => text(item)).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+async function assertNoIdentityClash(database: DbExecutor, workspaceId: string, funder: FunderRecord): Promise<void> {
+  const nameClash = await database.prepare<{ id: string; legal_name: string }>(
+    "SELECT id, legal_name FROM mca_funders WHERE workspace_id = ? AND lower(legal_name) = lower(?) AND id <> ? LIMIT 1",
+  ).get(workspaceId, funder.legalName, funder.id)
+  if (nameClash) {
+    throw new AppError(422, "funder_import_review_required", "Some reviewed funders are invalid or already exist. Remove them before saving.", {
+      legalName: [`${nameClash.legal_name} is already in this workspace.`],
+    })
+  }
+  const ours = new Set(draftDomains({
+    legalName: funder.legalName,
+    website: funder.website,
+    domains: funder.domains,
+    products: funder.products,
+    active: funder.active,
+    contacts: funder.contacts,
+    routes: funder.routes,
+  }))
+  if (!ours.size) return
+  const others = await database.prepare<{ legal_name: string; website: string | null; domains: string }>(
+    "SELECT legal_name, website, domains FROM mca_funders WHERE workspace_id = ? AND id <> ?",
+  ).all(workspaceId, funder.id)
+  for (const other of others) {
+    const theirDomains = new Set([...parseJsonList(other.domains), other.website ?? ""].map(funderDomainKey).filter(Boolean))
+    for (const domain of ours) {
+      if (theirDomains.has(domain)) {
+        throw new AppError(422, "funder_import_review_required", "Some reviewed funders are invalid or already exist. Remove them before saving.", {
+          legalName: [`${other.legal_name} is already in this workspace.`],
+        })
+      }
+    }
+  }
 }
 
 function rowIdempotencyKey(commitKey: string, rowKey: string): string {
@@ -454,14 +530,7 @@ export async function commitFunderImport(actor: DealActor, input: {
       }
       const result = await createFunder(actor, payload)
       if (result.created) {
-        const nameClash = await database.prepare<{ id: string; legal_name: string }>(
-          "SELECT id, legal_name FROM mca_funders WHERE workspace_id = ? AND lower(legal_name) = lower(?) AND id <> ? LIMIT 1",
-        ).get(actor.workspaceId, result.funder.legalName, result.funder.id)
-        if (nameClash) {
-          throw new AppError(422, "funder_import_review_required", "Some reviewed funders are invalid or already exist. Remove them before saving.", {
-            legalName: [`${nameClash.legal_name} is already in this workspace.`],
-          })
-        }
+        await assertNoIdentityClash(database, actor.workspaceId, result.funder)
         created.push(result.funder)
       } else replayed.push(result.funder)
       if (row.draft.criteria?.length) {

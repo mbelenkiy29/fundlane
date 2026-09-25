@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { consumeRequestRateLimit } from "@/lib/mca/auth"
 import { apiError, AppError } from "@/lib/mca/errors"
 import {
   listCriteriaScanDocuments,
@@ -36,6 +37,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const actor = await requireCriteriaScanActor(request, "write")
+    await consumeRequestRateLimit(`funder-criteria-scan:${actor.workspaceId}:${actor.membershipId}`, 10)
     const contentType = request.headers.get("content-type") ?? ""
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData()

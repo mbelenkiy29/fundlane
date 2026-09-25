@@ -217,6 +217,25 @@ test("invalid rows stay out of the saved set and HTTP enforces admin plus worksp
   assert.equal(preview.rows[1]?.status, "invalid")
   assert.equal(preview.rows[2]?.status, "ready")
 
+  const mixed = await previewFunderImport(actor(), {
+    filename: "mixed.csv",
+    text: [
+      "legalName,active,criteria",
+      "Good Row LLC,true,",
+      "Bad Active LLC,maybe,",
+      'Bad Criteria LLC,true,"{""not"":""array""}"',
+    ].join("\n"),
+  })
+  assert.equal(mixed.summary.invalid, 2)
+  assert.equal(mixed.rows[0]?.status, "ready")
+  assert.equal(mixed.rows[1]?.status, "invalid")
+  assert.equal(mixed.rows[2]?.status, "invalid")
+
+  await assert.rejects(
+    () => previewFunderImport(actor(), { text: `${"x".repeat(1_048_577)}` }),
+    (error: { status?: number; code?: string }) => error.status === 422 && error.code === "funder_import_file_size",
+  )
+
   const httpPreview = await previewPost(cookieRequest("/api/mca/funders/import/preview", "import-admin-session", {
     method: "POST",
     body: JSON.stringify({ funders: [{ legalName: "HTTP Import LLC" }] }),
