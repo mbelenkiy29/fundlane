@@ -1,6 +1,8 @@
 /* Fundlane dark marketing composition. Legacy layout attribution: licenses/luro-ai-MIT.txt.
    All selectors belong to the public marketing shell. */
 .fundlane {
+  width: 100%;
+  max-width: 100%;
   --fl-ink: #ededed;
   --fl-muted: #999999;
   --fl-blue: #52a8ff;
@@ -23,7 +25,7 @@
 .fundlane p { color: var(--fl-muted); }
 .fundlane a { text-decoration: none; }
 .fundlane :focus-visible { outline: 2px solid var(--fl-blue); outline-offset: 5px; }
-.fl-container { width: min(1200px, calc(100% - 64px)); margin-inline: auto; }
+.fl-container { width: min(1200px, calc(100% - 64px)); max-width: 100%; margin-inline: auto; }
 .fl-header { border-bottom: 1px solid #ffffff0b; background: #0a0a0aed; position: relative; z-index: 10; }
 .fl-nav { height: 88px; display: flex; align-items: center; gap: 48px; }
 .fl-brand { display: inline-flex; gap: 10px; align-items: center; font-size: 26px; font-weight: 750; letter-spacing: -1.2px; line-height: 1; }
@@ -315,7 +317,7 @@
 
 /* Dark tech composition and shared marketing primitives. */
 .fl-header { background: #000; border: 0; padding-inline: 56px; }
-.fl-nav { width: 100%; max-width: none; height: 100px; gap: 32px; }
+.fl-nav { width: 100%; max-width: 100%; min-width: 0; height: 100px; gap: 32px; }
 .fl-immersive { position: relative; }
 .fl-immersive .fl-header { position: absolute; top: 38px; inset-inline: 0; background: transparent; }
 .fl-immersive .fl-nav { height: 44px; }
@@ -344,7 +346,7 @@
 .fl-hero .fl-button svg { width: 12px; height: 12px; }
 .fl-audience { border: 0; border-radius: 100px; background: #1f1f1f; padding: 4px 10px; color: #ededed !important; font-size: 12px; }
 .fl-audience span { background: #62c073; box-shadow: none; }
-.fl-hero-foot { display: flex; justify-content: space-between; gap: 24px; padding: 24px 0; border-top: 1px solid var(--fl-line); font-size: 12px; color: #999; font-family: var(--font-marketing-mono), monospace; }
+.fl-hero-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 24px; padding: 24px 0; border-top: 1px solid var(--fl-line); font-size: 12px; color: #999; font-family: var(--font-marketing-mono), monospace; }
 .fl-hero-foot a { color: #ededed; display: flex; gap: 24px; }
 .fl-workflow-section, .fl-team-section { background: #0a0a0a; border-color: var(--fl-line); }
 .fl-closing { background: radial-gradient(ellipse at 50% 100%, #52a8ff15, transparent 70%), #000; border-color: var(--fl-line); }
@@ -372,7 +374,7 @@
 .fl-chip-success > span { background: #62c073; }
 .fl-chip-active > span { background: #52a8ff; }
 .fl-chip-error > span { background: #ededed; }
-.fl-stream { background: #0a0a0a; border: 1px solid var(--fl-line); font-size: 12px; box-shadow: 0 -50px 120px -100px #52a8ff; }
+.fl-stream { background: #0a0a0a; border: 1px solid var(--fl-line); font-size: 12px; box-shadow: 0 -50px 120px -100px #52a8ff; min-width: 0; overflow-x: auto; }
 .fl-stream-header { padding: 20px 24px; border-bottom: 1px solid var(--fl-line); display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .fl-stream-header > span, .fl-stream-header > div { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .fl-stream-header > div > span:first-child { color: #999; }
@@ -385,7 +387,7 @@
 .fl-stream-sidebar small { display: block; color: #999; font-size: 10px; margin-top: 5px; }
 .fl-event-dot { width: 6px; height: 6px; background: #999; border-radius: 50%; flex-shrink: 0; }
 .fl-event-dot.is-success { background: #62c073; }
-.fl-stream-table-wrap { min-width: 0; padding: 12px 24px 24px; --background: var(--fl-paper); --muted: #1f1f1f; --muted-foreground: var(--fl-muted); --border: var(--fl-line); }
+.fl-stream-table-wrap { min-width: 0; overflow-x: auto; padding: 12px 24px 24px; --background: var(--fl-paper); --muted: #1f1f1f; --muted-foreground: var(--fl-muted); --border: var(--fl-line); }
 .fl-stream-table { min-width: 540px; }
 .fl-stream-table th { font-weight: 400; }
 .fl-stream-table th:first-child { width: 48%; }

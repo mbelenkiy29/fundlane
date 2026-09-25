@@ -34,14 +34,14 @@ export function DashboardHeader({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
             <CardTitle className="text-3xl font-bold">Overview</CardTitle>
             <CardDescription className="text-base mt-2">
               Funded volume, commissions, and pipeline activity for the selected range
             </CardDescription>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="cursor-pointer">
               <Clock className="h-3 w-3 mr-1" />
               Live Data
@@ -55,13 +55,13 @@ export function DashboardHeader({
         
         <Separator className="my-4" />
         
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="text-sm text-muted-foreground">Date Range:</span>
               <Select value={range} onValueChange={(value) => handleRange(value as Dashboard2DateRange)}>
-                <SelectTrigger className="w-40 cursor-pointer">
+                <SelectTrigger className="w-40 max-w-full cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

@@ -13,8 +13,8 @@ export function TopProducts({ funders }: { funders?: Dashboard2FunderRow[] }) {
 
   return (
     <Card className="cursor-pointer">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <div>
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <CardTitle>Top Products</CardTitle>
           <CardDescription>Best performing funders this period</CardDescription>
         </div>

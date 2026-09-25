@@ -18,8 +18,8 @@ export function RecentTransactions({ activity }: { activity?: Dashboard2Activity
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <div>
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <CardTitle>Recent Transactions</CardTitle>
           <CardDescription>Latest funding and payment activity</CardDescription>
         </div>

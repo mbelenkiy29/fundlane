@@ -177,7 +177,7 @@ export function SubmissionsDashboard() {
   const choices = data?.choices
   const deals = data?.deals ?? []
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 px-4 lg:px-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1

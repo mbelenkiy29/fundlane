@@ -45,7 +45,7 @@ export function AssistantButton({ onOpen }: { onOpen?: () => void } = {}) {
       aria-label="Open assistant"
     >
       <MessageSquare className="size-4" />
-      <span className="hidden sm:inline">Assistant</span>
+      <span className="hidden md:inline">Assistant</span>
     </Button>
   )
 }
