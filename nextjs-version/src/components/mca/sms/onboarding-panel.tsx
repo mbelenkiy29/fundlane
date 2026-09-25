@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { requestJson } from "@/lib/mca/client"
+import { smsChannelStatus } from "@/lib/mca/integrations/connection-status"
+import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 type Status = {
   optOutReady: boolean
   emailVerified: boolean
@@ -111,16 +113,22 @@ export function SmsOnboardingPanel() {
         </CardContent>
       </Card>
     )
+  const smsStatus = smsChannelStatus({ onboarding: status })
   return (
-    <Card>
+    <Card id="company-sms">
       <CardHeader>
-        <CardTitle>Company SMS</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          Company SMS <ConnectionStatusBadge label={smsStatus.label} />
+        </CardTitle>
         <CardDescription>
           Verify your company, register application updates, and assign a
           dedicated number to each employee.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {!smsStatus.ready && (
+          <p className="rounded border bg-muted p-3 text-sm">{smsStatus.detail}</p>
+        )}
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline">
             Email: {status.emailVerified ? "verified" : "not verified"}

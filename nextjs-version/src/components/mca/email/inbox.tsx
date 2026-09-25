@@ -15,6 +15,8 @@ import type {
   ConversationSummary,
 } from "@/lib/mca/email-conversations/contracts"
 import { PersonalEmailConnections } from "./connections"
+import { emailComposerGate } from "@/lib/mca/integrations/connection-status"
+import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
 
 type ComposerContext = {
   dealId: string
@@ -293,6 +295,17 @@ export function EmailInbox({
   }
   const currentSender = context?.senders.find((s) => s.id === senderId)
   const waiting = detail?.messages.some((m) => pendingStates.has(m.state))
+  const sendGate = emailComposerGate({
+    loading: isNew && Boolean(composeDeal) && !context,
+    isNew,
+    dealId: composeDeal,
+    recipient: context?.recipient,
+    senders: context?.senders ?? [],
+    senderId,
+    subject,
+    body,
+    waiting: Boolean(waiting),
+  })
   return (
     <section className="space-y-4" aria-label="Email conversations">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -632,16 +645,9 @@ export function EmailInbox({
                   status above before replying.
                 </p>
               )}
+              <MissingPrerequisites missing={sendGate.missing} />
               <Button
-                disabled={
-                  busy ||
-                  !body.trim() ||
-                  (isNew
-                    ? !context?.recipient ||
-                      !currentSender?.conversationReady ||
-                      !subject.trim()
-                    : Boolean(waiting))
-                }
+                disabled={busy || !sendGate.enabled}
                 onClick={() => void send()}
               >
                 <Send className="size-4" />

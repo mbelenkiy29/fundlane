@@ -20,6 +20,7 @@ import type { TwilioSmsTransport } from "../sms/twilio"
 import { assertOfferRevisionEligibleForClosing, assertOfferRevisionValidity, getOfferRevisionForClosing, listOfferRevisionsForClosing } from "../offers/service"
 import { isOfferRevisionOpenForMerchantPreview, type OfferRevisionForClosing } from "../offers/contracts"
 import { pickHighestMerchantOffer } from "../offers/rank"
+import { psfProviderReady } from "../integrations/connection-status"
 import { closingTransport, contentHash, deliveryCorrelationId, postmarkConnectionConfigured } from "./delivery"
 import type { ClosingTransport, ClosingTransportRequest } from "./delivery"
 import { createMerchantOfferSmsTransport } from "./offer-sms"
@@ -104,8 +105,15 @@ async function message(row: Row, actor: DealActor): Promise<OfferMessagePreview>
 export async function getClosingSnapshot(actor: DealActor, dealId: string): Promise<ClosingSnapshot> {
   const deal = await getDealForDocument(actor, dealId)
   const database = getDatabase()
-  const psfConfig = await database.prepare<Row>("SELECT visible_to_reps FROM mca_psf_config WHERE workspace_id=?").get(actor.workspaceId)
+  const psfConfig = await database.prepare<Row>("SELECT visible_to_reps, enabled, destination_cipher, signing_secret_cipher FROM mca_psf_config WHERE workspace_id=?").get(actor.workspaceId)
   const mayViewPsf = actor.source !== "api_key" && (actor.role === "admin" || actor.role === "super_admin" || (Number(psfConfig?.visible_to_reps) === 1 && (actor.role === "rep" || actor.role === "manager")))
+  const docuSealConfigured = docuSealPsfConnectionConfigured(actor.workspaceId)
+  const psfDeliveryReady = psfProviderReady({
+    docuSealConfigured,
+    enabled: Number(psfConfig?.enabled) === 1,
+    destinationConfigured: Boolean(psfConfig?.destination_cipher),
+    signingSecretConfigured: Boolean(psfConfig?.signing_secret_cipher),
+  })
   const [stipRows, contractRows, psfRows, messageRows, deliveryRows, pitchRows] = await Promise.all([
     database.prepare<Row>("SELECT * FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? ORDER BY created_at DESC").all(actor.workspaceId, dealId),
     database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND deal_id=? ORDER BY created_at DESC").all(actor.workspaceId, dealId),
@@ -125,6 +133,7 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
     psfRequests: await Promise.all(psfRows.map((row) => psf(row, actor))), messagePreviews: await Promise.all(messageRows.map((row) => message(row, actor))),
     deliveries: deliveryRows.map(delivery), pitchedRevisionIds: pitchRows.map((row) => String(row.offer_revision_id)),
     capabilities: { psfVisible: mayViewPsf, psfAdmin: actor.source !== "api_key" && (actor.role === "admin" || actor.role === "super_admin") },
+    psfDeliveryReady,
     merchantContact: { email: deal.contactEmail, phone: deal.contactPhone },
     assignableOwners: ownerRows.filter((row) => allowedOwnerIds.has(String(row.id))).map((row) => ({ id: String(row.id), name: String(row.name) })),
     merchantSmsAccounts: smsAccounts.map((item) => ({ id: item.id, label: item.label, senderMasked: item.senderMasked, providerConfigured: item.providerConfigured, isDefault: item.isDefault })),
@@ -132,7 +141,13 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
       merchantEmail: postmarkConfigured || process.env.MCA_MERCHANT_EMAIL_WEBHOOK_URL ? "configured; verify delivery before production use" : "unavailable: connect merchant email in Settings",
       merchantSms: smsProviderConfigured ? "ready when merchant text consent is recorded" : "unavailable: connect and assign merchant text messaging in Settings",
       contractDelivery: emailTransportConfigured ? "configured; verify delivery before production use" : "unavailable: connect contract delivery in Settings",
-      psfDelivery: docuSealPsfConnectionConfigured(actor.workspaceId) ? "DocuSeal is configured; enable PSF delivery before sending" : "available after an administrator connects and validates the PSF provider",
+      psfDelivery: docuSealConfigured
+        ? (psfDeliveryReady
+          ? "DocuSeal is configured; verify delivery before production use"
+          : "DocuSeal is configured; enable PSF delivery before sending")
+        : psfDeliveryReady
+          ? "webhook is configured; verify delivery before production use"
+          : "available after an administrator connects and validates the PSF provider",
     },
   }
 }

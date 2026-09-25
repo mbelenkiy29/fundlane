@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { submissionConfirmGate } from "@/lib/mca/integrations/connection-status"
+import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
 
 type JobState =
   | "preflight_failed"
@@ -151,6 +153,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
 
   const funders = payload?.funders ?? []
   const jobs = payload?.jobs ?? []
+  const gate = submissionConfirmGate({ loading, selectedIds: selected, funders })
 
   return (
     <Card>
@@ -161,18 +164,19 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
             Confirming freezes deal version {payload?.dealVersion ?? "—"} and document checksums. Each funder is queued independently.
           </CardDescription>
         </div>
-        <Button onClick={() => void confirm()} disabled={loading || busy} aria-label="Confirm submissions">
+        <Button onClick={() => void confirm()} disabled={!gate.enabled || busy} aria-label="Confirm submissions">
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
           {busy ? "Confirming…" : "Confirm submissions"}
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         {loading && <p role="status" className="text-sm text-muted-foreground">Loading submission destinations…</p>}
+        {!loading && <MissingPrerequisites missing={gate.missing} />}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}
         {!loading && !error && funders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No active funders are available. Add a funder route before submitting.
+            Not connected. No active funders are available. Add a funder route before submitting.
           </div>
         )}
         {funders.length > 0 && (

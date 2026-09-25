@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { emailChannelStatus } from "@/lib/mca/integrations/connection-status"
+import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 
 type SenderProvider = "google" | "microsoft" | "smtp" | "sendgrid"
 type SenderPurpose = "merchant" | "submission" | "fallback"
@@ -238,11 +240,12 @@ export function SenderConnectionsPanel() {
   const canManage = payload?.canManage === true
   const needsSmtp = form.provider === "smtp"
   const needsSendGrid = form.provider === "sendgrid"
+  const emailStatus = emailChannelStatus(senders)
 
   return (
-    <Card>
+    <Card id="email-senders">
       <CardHeader>
-        <CardTitle>Email senders</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2">Email senders <ConnectionStatusBadge label={emailStatus.label} /></CardTitle>
         <CardDescription>
           Connect Google, Microsoft, SMTP, or SendGrid. Share senders with selected members, set a default per purpose, and reconnect without dropping the record.
         </CardDescription>
@@ -254,7 +257,7 @@ export function SenderConnectionsPanel() {
 
         {!loading && senders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No email senders yet. {canManage ? "Connect a provider to send merchant, submission, or fallback mail." : "An administrator can share a sender with you."}
+            Not connected. {canManage ? "Connect a provider to send merchant, submission, or fallback mail." : "An administrator can share a sender with you."}
           </div>
         )}
 
