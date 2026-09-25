@@ -15,7 +15,7 @@ import {
   findDealByIdempotencyKey,
   insertDeal,
   insertNote,
-  listDealRecords,
+  listDealIndexRecords,
   managedMembershipIds,
   updateDeal,
 } from "./repository"
@@ -79,7 +79,7 @@ export function toDealDetail(record: DealRecord): DealDetail {
   return { ...record, ein: maskEin(record.ein), owners: record.owners.map(protectOwner), idempotencyKey: undefined }
 }
 
-export function toDealListItem(record: DealRecord): DealListItem {
+export function toDealListItem(record: Pick<DealRecord, "id" | "displayId" | "legalName" | "dbaName" | "status" | "pipelineVersion" | "requestedAmount" | "monthlyRevenue" | "draftState" | "missingRequiredFields" | "assignments" | "submissions" | "version" | "createdAt" | "updatedAt">): DealListItem {
   return {
     id: record.id,
     displayId: record.displayId,
@@ -222,7 +222,7 @@ function mergeOmittedWriteFields(input: CreateDealInput, fields: DealWriteInput)
 
 export async function listDeals(actor: DealActor, filters: DealFilters): Promise<DealListResponse> {
   await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
-  const visible = (await listDealRecords(actor.workspaceId, filters)).filter((record) => canActorAccessDeal(actor, record))
+  const visible = (await listDealIndexRecords(actor.workspaceId, filters)).filter((record) => canActorAccessDeal(actor, record))
   const deals = visible.map(toDealListItem)
   const counts = reconcilePipelineCounts(deals)
   return { deals, counts, total: deals.length, filters }

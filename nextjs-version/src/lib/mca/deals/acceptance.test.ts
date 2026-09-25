@@ -3,7 +3,7 @@ import type { DealActor, DealAssignment, DealRecord } from "./schema"
 import assert from "node:assert/strict"
 
 import { canActorAccessDeal, normalizePrimaryAssignments, permittedAssignmentIds } from "./access-policy"
-import { inclusiveUtcDateBounds, reconcilePipelineCounts } from "./filters"
+import { dealListQueryString, inclusiveUtcDateBounds, parseDealListFilters, reconcilePipelineCounts } from "./filters"
 import { allowedTransitions, canTransition } from "./pipeline"
 import {
   describeMissingRequiredFields,
@@ -149,6 +149,32 @@ test("SEN-35: the inclusive date filter uses stable UTC day boundaries", () => {
     from: "2026-09-01T00:00:00.000Z",
     toExclusive: "2026-09-08T00:00:00.000Z",
   })
+})
+
+test("pipeline list query ignores UI-only params and drops invalid optional filters", () => {
+  const search = new URLSearchParams("view=kanban&deal=11111111-1111-1111-1111-111111111111&tab=submissions&create=1&status=all&from=09/25/2026&q=harbor&funder=rapid")
+  assert.equal(dealListQueryString(search), "q=harbor&funder=rapid")
+  const rejected = parseDealListFilters(new URLSearchParams("status=all&view=table"), "reject")
+  assert.equal(rejected.ok, false)
+  if (!rejected.ok) assert.equal(rejected.field, "status")
+  const emptyStatus = parseDealListFilters(new URLSearchParams("status=&view=table"), "reject")
+  assert.equal(emptyStatus.ok, true)
+  const omitted = parseDealListFilters(new URLSearchParams("status=all&from=2026-09-01&to=not-a-date"), "omit")
+  assert.equal(omitted.ok, true)
+  if (omitted.ok) {
+    assert.equal(omitted.filters.statuses, undefined)
+    assert.equal(omitted.filters.createdFrom, "2026-09-01")
+    assert.equal(omitted.filters.createdTo, undefined)
+  }
+  const bookmarkDates = parseDealListFilters(new URLSearchParams("from=09/25/2026&to=2026-09-25"), "omit")
+  assert.equal(bookmarkDates.ok, true)
+  if (bookmarkDates.ok) {
+    assert.equal(bookmarkDates.filters.createdFrom, undefined)
+    assert.equal(bookmarkDates.filters.createdTo, "2026-09-25")
+  }
+  const funded = parseDealListFilters(new URLSearchParams("status=funded&assignee=member-1"), "reject")
+  assert.equal(funded.ok, true)
+  if (funded.ok) assert.deepEqual(funded.filters.statuses, ["funded"])
 })
 
 test("SEN-35: table total and Kanban counts reconcile from the identical filtered set", () => {

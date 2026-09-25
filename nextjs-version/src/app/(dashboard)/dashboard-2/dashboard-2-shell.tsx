@@ -4,7 +4,7 @@ import * as React from "react"
 import { useNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { HomeKpis } from "@/lib/mca/home/kpi-contracts"
-import { mapDashboard2, periodForDateRange, type Dashboard2DateRange } from "@/lib/mca/dashboard2/map-kpis"
+import { formatDashboardTimestamp, mapDashboard2, periodForDateRange, type Dashboard2DateRange } from "@/lib/mca/dashboard2/map-kpis"
 import { HomeEmptyState } from "@/components/mca/home/home-empty-state"
 import { NeedsAction } from "@/components/mca/home/needs-action"
 import { CustomerInsights } from "./components/customer-insights"
@@ -32,7 +32,7 @@ export function Dashboard2Shell({
   const [error, setError] = React.useState<string>()
   const period = periodForDateRange(dateRange)
   const view = mapDashboard2(kpis, { dateRange })
-  const lastUpdated = kpis?.asOf ? new Date(kpis.asOf).toLocaleString() : "—"
+  const lastUpdated = kpis?.asOf ? formatDashboardTimestamp(kpis.asOf, kpis.timezone) : "—"
 
   const refresh = React.useCallback(async () => {
     setRefreshing(true)

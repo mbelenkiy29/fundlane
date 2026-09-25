@@ -299,8 +299,7 @@ export async function managedMembershipIds(workspaceId: string, managerMembershi
   return (await db().prepare<{ id: string }>("SELECT id FROM memberships WHERE workspace_id = ? AND manager_membership_id = ? AND status = 'active'").all(workspaceId, managerMembershipId)).map((row) => row.id)
 }
 
-export async function listDealRecords(workspaceId: string, filters: DealFilters): Promise<DealRecord[]> {
-  const database = db()
+function dealListWhere(workspaceId: string, filters: DealFilters): { clauses: string[]; values: Array<string | number> } {
   const clauses = ["d.workspace_id = ?"]
   const values: Array<string | number> = [workspaceId]
   if (filters.search) {
@@ -323,8 +322,90 @@ export async function listDealRecords(workspaceId: string, filters: DealFilters)
     clauses.push("EXISTS (SELECT 1 FROM deal_submissions ds WHERE ds.workspace_id=d.workspace_id AND ds.deal_id=d.id AND LOWER(ds.funder_name) LIKE ?)")
     values.push(`%${filters.funder.toLowerCase()}%`)
   }
+  return { clauses, values }
+}
+
+export type DealIndexRecord = Pick<DealRecord,
+  "id" | "workspaceId" | "displayId" | "legalName" | "dbaName" | "status" | "pipelineVersion" |
+  "requestedAmount" | "monthlyRevenue" | "draftState" | "missingRequiredFields" | "assignments" |
+  "submissions" | "version" | "createdAt" | "updatedAt"
+>
+
+export async function listDealRecords(workspaceId: string, filters: DealFilters): Promise<DealRecord[]> {
+  const database = db()
+  const { clauses, values } = dealListWhere(workspaceId, filters)
   const rows = await database.prepare<Row>(`SELECT d.* FROM deals d WHERE ${clauses.join(" AND ")} ORDER BY d.updated_at DESC`).all(...values)
   return Promise.all(rows.map((row) => hydrate(database, row)))
+}
+
+export async function listDealIndexRecords(workspaceId: string, filters: DealFilters): Promise<DealIndexRecord[]> {
+  const database = db()
+  const { clauses, values } = dealListWhere(workspaceId, filters)
+  const rows = await database.prepare<Row>(
+    `SELECT d.id, d.workspace_id, d.display_id, d.legal_name, d.dba_name, d.status, d.requested_amount,
+            d.monthly_revenue, d.draft_state, d.missing_required_json, d.version, d.created_at, d.updated_at
+     FROM deals d WHERE ${clauses.join(" AND ")} ORDER BY d.updated_at DESC`,
+  ).all(...values)
+  const dealIds = rows.map((row) => String(row.id))
+  const assignmentsByDeal = new Map<string, DealAssignment[]>()
+  const submissionsByDeal = new Map<string, DealSubmissionSummary[]>()
+  if (dealIds.length) {
+    const placeholders = dealIds.map(() => "?").join(",")
+    const [assignmentRows, submissionRows] = await Promise.all([
+      database.prepare<Row>(
+        `SELECT id, deal_id, membership_id, kind, is_primary, assigned_at, assigned_by_user_id
+         FROM deal_assignments WHERE workspace_id = ? AND deal_id IN (${placeholders}) ORDER BY assigned_at, id`,
+      ).all(workspaceId, ...dealIds),
+      database.prepare<Row>(
+        `SELECT id, deal_id, funder_name, status FROM deal_submissions
+         WHERE workspace_id = ? AND deal_id IN (${placeholders}) ORDER BY id`,
+      ).all(workspaceId, ...dealIds),
+    ])
+    for (const item of assignmentRows) {
+      const dealId = String(item.deal_id)
+      const list = assignmentsByDeal.get(dealId) ?? []
+      list.push({
+        id: String(item.id),
+        membershipId: String(item.membership_id),
+        kind: item.kind as DealAssignment["kind"],
+        isPrimary: Boolean(item.is_primary),
+        assignedAt: String(item.assigned_at),
+        assignedByUserId: item.assigned_by_user_id ? String(item.assigned_by_user_id) : null,
+      })
+      assignmentsByDeal.set(dealId, list)
+    }
+    for (const item of submissionRows) {
+      const dealId = String(item.deal_id)
+      const list = submissionsByDeal.get(dealId) ?? []
+      list.push({
+        id: String(item.id),
+        funderName: String(item.funder_name),
+        status: item.status as DealSubmissionSummary["status"],
+      })
+      submissionsByDeal.set(dealId, list)
+    }
+  }
+  return rows.map((row) => {
+    const dealId = String(row.id)
+    return {
+      id: dealId,
+      workspaceId: String(row.workspace_id),
+      displayId: String(row.display_id),
+      legalName: row.legal_name ? String(row.legal_name) : undefined,
+      dbaName: row.dba_name ? String(row.dba_name) : undefined,
+      status: row.status as DealStatus,
+      pipelineVersion: 1,
+      requestedAmount: row.requested_amount === null ? undefined : Number(row.requested_amount),
+      monthlyRevenue: row.monthly_revenue === null ? undefined : Number(row.monthly_revenue),
+      draftState: row.draft_state as DealRecord["draftState"],
+      missingRequiredFields: parseJson(row.missing_required_json, []),
+      assignments: assignmentsByDeal.get(dealId) ?? [],
+      submissions: submissionsByDeal.get(dealId) ?? [],
+      version: Number(row.version),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    }
+  })
 }
 
 export async function addSyntheticSubmission(workspaceId: string, dealId: string, funderName: string): Promise<void> {

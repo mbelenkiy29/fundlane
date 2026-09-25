@@ -6,6 +6,7 @@ import {
   NA_LABEL,
   NO_ACTIVITY_YET,
   RESTRICTED_LABEL,
+  formatDashboardTimestamp,
   formatPercent,
   formatRelativeTimestamp,
   mapDashboard2,
@@ -203,4 +204,14 @@ test("transaction actions retain the deal and export exact status without exposi
   assert.match(transactionReceipt(pending), /Status: expected/)
   assert.ok(transactionReceipt(pending).includes(RESTRICTED_LABEL))
   assert.ok(!transactionReceipt(pending).includes("$10,000"))
+})
+
+test("dashboard timestamps use a stable locale and timezone", () => {
+  const utc = formatDashboardTimestamp("2026-03-15T17:00:00.000Z", "UTC")
+  const eastern = formatDashboardTimestamp("2026-03-15T17:00:00.000Z", "America/New_York")
+  assert.match(utc, /Mar 15, 2026/)
+  assert.match(utc, /5:00/)
+  assert.match(eastern, /1:00/)
+  assert.notEqual(utc, eastern)
+  assert.equal(formatDashboardTimestamp("not-a-date"), "—")
 })
