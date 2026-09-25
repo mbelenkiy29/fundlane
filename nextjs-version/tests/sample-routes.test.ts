@@ -4,6 +4,11 @@ import { randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
+import {
+  PUBLIC_PAGE_PREFIXES,
+  PROTECTED_APP_PREFIXES,
+  anonymousRequestDisposition,
+} from "../src/lib/mca/app-paths"
 import { sampleRouteRedirects } from "../src/lib/mca/sample-route-redirects"
 import { safeAuthReturnTo } from "../src/lib/mca/auth-navigation"
 
@@ -71,10 +76,15 @@ test("old sample URLs redirect to live product routes", () => {
 
 test("sidebar and auth return paths cannot land on removed sample routes", () => {
   const sidebar = readFileSync(resolve(root, "src/components/app-sidebar.tsx"), "utf8")
+  const prefixes = new Set<string>([...PUBLIC_PAGE_PREFIXES, ...PROTECTED_APP_PREFIXES])
   for (const source of expectedRedirects.map((redirect) => redirect.source)) {
     assert.equal(sidebar.includes(`url: "${source}"`), false, source)
+    assert.equal(prefixes.has(source), false, source)
     assert.equal(safeAuthReturnTo(source), "/dashboard", source)
     assert.equal(safeAuthReturnTo(`${source}/next`), "/dashboard", `${source}/next`)
+  }
+  for (const path of ["/sign-in-2", "/sign-up-3", "/forgot-password-2", "/users", "/tasks", "/chat", "/faqs"]) {
+    assert.equal(anonymousRequestDisposition(path), "not-found", path)
   }
 })
 
