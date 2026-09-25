@@ -399,6 +399,33 @@ test("same deal and funder stay blocked for 24 hours; another deal with the same
   assert.notEqual(renewed.jobs[0]?.jobId, originalId)
 })
 
+test("replaying a blocked confirmation key keeps eligibleAt after the window expires", async () => {
+  setClock(() => T0)
+  const deal = await seedDeal()
+  const first = await enqueue(deal.id, [portalFunderId])
+  assert.equal(first.jobs[0]?.state, "pending_portal")
+
+  const replayKey = confirmationKey("replay-block")
+  const blocked = await enqueue(deal.id, [portalFunderId], { confirmationKey: replayKey })
+  const retryAt = plus(T0, TWO_MIN_MS)
+  assert.equal(blocked.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(blocked.jobs[0]?.eligibleAt, retryAt)
+  assert.equal((blocked.jobs[0]?.reason ?? "").includes(retryAt), true)
+
+  setClock(() => plus(T0, DAY_MS))
+  const replayed = await enqueue(deal.id, [portalFunderId], { confirmationKey: replayKey })
+  assert.equal(replayed.jobs[0]?.jobId, blocked.jobs[0]?.jobId)
+  assert.equal(replayed.jobs[0]?.state, "blocked_duplicate")
+  assert.equal(replayed.jobs[0]?.eligibleAt, retryAt)
+  assert.equal((replayed.jobs[0]?.reason ?? "").includes(retryAt), true)
+
+  setClock(() => plus(T0, DAY_MS + TWO_MIN_MS))
+  const renewed = await enqueue(deal.id, [portalFunderId])
+  assert.equal(renewed.jobs[0]?.state, "pending_portal")
+  assert.notEqual(renewed.jobs[0]?.jobId, first.jobs[0]?.jobId)
+  assert.notEqual(renewed.jobs[0]?.jobId, blocked.jobs[0]?.jobId)
+})
+
 test("concurrent queueSubmissions accept one attempt and block the rest", async () => {
   setClock(() => T0)
   const deal = await seedDeal()

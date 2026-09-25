@@ -31,9 +31,41 @@ export type DuplicateWindowJob = {
   createdAt: string
 }
 
+const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/
+
 function parseTime(iso: string): number {
   const ms = Date.parse(iso)
   return Number.isFinite(ms) ? ms : Number.NaN
+}
+
+/** Recover the retry time from a stored blocked-duplicate reason when the live check no longer blocks. */
+export function eligibleAtFromReason(reason: string | undefined): string | undefined {
+  if (!reason) return undefined
+  const match = reason.match(ISO_INSTANT)
+  if (!match) return undefined
+  const parsed = parseTime(match[0])
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined
+}
+
+export function confirmationAttemptFingerprint(input: {
+  funderIds: readonly string[]
+  override24h: boolean
+  overrideReason: string
+}): string {
+  return JSON.stringify({
+    funderIds: [...input.funderIds].sort(),
+    override24h: input.override24h,
+    overrideReason: input.override24h ? input.overrideReason.trim() : "",
+  })
+}
+
+export function confirmationKeyForAttempt(
+  pending: { fingerprint: string; key: string } | null,
+  fingerprint: string,
+  createKey: () => string,
+): { fingerprint: string; key: string } {
+  if (pending?.fingerprint === fingerprint && pending.key) return pending
+  return { fingerprint, key: createKey() }
 }
 
 export function isCountingSubmissionState(state: string): boolean {

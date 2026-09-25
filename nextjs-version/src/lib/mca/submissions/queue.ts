@@ -16,6 +16,7 @@ import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../und
 import type { QueueSubmissionsInput, QueueSubmissionsResult, QueuedJobSummary, SubmissionJob } from "./contracts"
 import { enqueueSubmissionDelivery } from "./delivery-job"
 import { assertDuplicatePolicy, privilegedOverrideAllowed } from "./duplicate-policy"
+import { eligibleAtFromReason } from "./duplicate-rules"
 import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
@@ -121,6 +122,12 @@ function asOptionalText(value: unknown, field: string, max: number): string | un
 function independentReason(error: unknown): string {
   if (error instanceof AppError) return error.message
   return "This destination could not be queued."
+}
+
+function withEligibleAt(summary: QueuedJobSummary, eligibleAt?: string): QueuedJobSummary {
+  const next = eligibleAt
+    ?? (summary.state === "blocked_duplicate" ? eligibleAtFromReason(summary.reason) : undefined)
+  return next ? { ...summary, eligibleAt: next } : summary
 }
 
 function toJobView(job: SubmissionJob): SubmissionJobView {
@@ -242,8 +249,8 @@ async function queueDestination(input: {
   })
   await audit(input.actor, saved.job, saved.created)
   const summary = toQueuedSummary(saved.job)
-  if (!saved.created) return eligibleAt ? { ...summary, eligibleAt } : summary
-  if (saved.job.state !== "queued") return eligibleAt ? { ...summary, eligibleAt } : summary
+  if (!saved.created) return withEligibleAt(summary, eligibleAt)
+  if (saved.job.state !== "queued") return withEligibleAt(summary, eligibleAt)
   if (input.deferDelivery) {
     if (backgroundJobsEnabled()) await enqueueSubmissionDelivery(saved.job)
     return toQueuedSummary(saved.job)

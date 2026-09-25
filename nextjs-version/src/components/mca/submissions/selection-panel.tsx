@@ -11,7 +11,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { submissionConfirmGate } from "@/lib/mca/integrations/connection-status"
 import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
-import { DUPLICATE_RULE_COPY } from "@/lib/mca/submissions/duplicate-rules"
+import {
+  confirmationAttemptFingerprint,
+  confirmationKeyForAttempt,
+  DUPLICATE_RULE_COPY,
+} from "@/lib/mca/submissions/duplicate-rules"
 
 type JobState =
   | "preflight_failed"
@@ -102,7 +106,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   const [results, setResults] = React.useState<ConfirmPayload["jobs"]>()
   const [override24h, setOverride24h] = React.useState(false)
   const [overrideReason, setOverrideReason] = React.useState("")
-  const [confirmationKey, setConfirmationKey] = React.useState(() => crypto.randomUUID())
+  const pendingConfirmation = React.useRef<{ fingerprint: string; key: string } | null>(null)
 
   const load = React.useCallback(async () => {
     setError(undefined)
@@ -140,17 +144,27 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
       setBusy(false)
       return
     }
+    const pending = confirmationKeyForAttempt(
+      pendingConfirmation.current,
+      confirmationAttemptFingerprint({
+        funderIds: selected,
+        override24h,
+        overrideReason,
+      }),
+      () => crypto.randomUUID(),
+    )
+    pendingConfirmation.current = pending
     try {
       const next = await requestJson<ConfirmPayload>(`/api/mca/submissions/${encodeURIComponent(dealId)}`, {
         method: "POST",
         body: JSON.stringify({
           funderIds: selected,
-          confirmationKey,
+          confirmationKey: pending.key,
           privilegedRetry: override24h,
           privilegedReason: override24h ? overrideReason.trim() : undefined,
         }),
       })
-      setConfirmationKey(crypto.randomUUID())
+      pendingConfirmation.current = null
       setResults(next.jobs)
       const failed = next.jobs.filter((job) => job.state === "failed" || job.state === "preflight_failed" || job.state === "blocked_duplicate").length
       const ok = next.jobs.length - failed
