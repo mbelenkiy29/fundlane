@@ -346,9 +346,11 @@ test("trialing webhook receipts once, grants seats, and trial seat changes avoid
   }}} as unknown as StripeBillingClient
   for(const type of ["customer.subscription.created","customer.subscription.trial_will_end","invoice.paid"]) {
     const event={id:`evt_${randomUUID()}`,type,livemode:false,data:{object:{customer:f.customerId}}} as Stripe.Event
-    assert.deepEqual(await processStripeBillingEvent(event,client),{reconciled:true})
+    const queued=await processStripeBillingEvent(event,client)
+    assert.ok("queued" in queued && queued.queued)
     assert.deepEqual(await processStripeBillingEvent(event,client),{duplicate:true})
   }
+  await syncWorkspaceBilling(f.workspaceId,client)
   assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM stripe_billing_events WHERE workspace_id=?").get(f.workspaceId))?.n,3)
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"trialing")
   assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,5)

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {randomUUID} from "node:crypto"
 import {createPostgresTestDatabase} from "./helpers/postgres-test-db.mjs"
 import {getDatabase,nowIso,closeDatabaseForTests} from "../src/lib/mca/db"
-import {TRIAL_DAYS,TRIAL_SEATS} from "../src/lib/mca/billing-catalog"
+import {BILLING_CATALOG,TRIAL_DAYS,TRIAL_SEATS} from "../src/lib/mca/billing-catalog"
 const userId=randomUUID(),sessionId=randomUUID()
 const stripeEnv={MCA_STRIPE_BILLING_ENABLED:"true",MCA_STRIPE_MODE:"test",STRIPE_SECRET_KEY:"rk_test_fixture",STRIPE_BASE_PRICE_ID:"price_base",STRIPE_ADDITIONAL_SEAT_PRICE_ID:"price_seats",STRIPE_BILLING_WEBHOOK_SECRET:"whsec_fixture",MCA_APP_ORIGIN:"http://localhost:3000"}
 const stripeEnvKeys=Object.keys(stripeEnv)
@@ -17,7 +17,8 @@ let completeCompanyOnboarding:typeof import("../src/lib/mca/supabase-auth").comp
 let getCompanyAccess:typeof import("../src/lib/mca/company-access").getCompanyAccess
 let GET:typeof import("../src/app/api/onboarding/route").GET
 let POST:typeof import("../src/app/api/onboarding/route").POST
-let billing:typeof import("../src/lib/mca/billing")
+let createOnboardingCheckoutUrl:typeof import("../src/lib/mca/billing").createOnboardingCheckoutUrl
+let getStripeClient:typeof import("../src/lib/mca/billing").getStripeClient
 function clearStripeEnv(){
   for(const key of stripeEnvKeys) delete process.env[key]
 }
@@ -36,7 +37,7 @@ before(async()=>{
   ;({completeCompanyOnboarding}=await import("../src/lib/mca/supabase-auth"))
   ;({getCompanyAccess}=await import("../src/lib/mca/company-access"))
   ;({GET,POST}=await import("../src/app/api/onboarding/route"))
-  billing=await import("../src/lib/mca/billing")
+  ;({createOnboardingCheckoutUrl,getStripeClient}=await import("../src/lib/mca/billing"))
 })
 after(async()=>{clearStripeEnv();await closeDatabaseForTests();await database?.close()})
 test("company creation stores a >5 paid quantity and starts one five-seat trial atomically",async()=>{
@@ -105,14 +106,12 @@ test("GET /api/onboarding exposes cardRequiredTrial from the shared helper",asyn
 })
 test("unconfigured POST onboarding starts a local trial and never constructs Stripe",async()=>{
   clearStripeEnv()
-  const stripe=mock.method(billing,"getStripeClient",()=>{throw new Error("Stripe client constructed")})
-  const checkout=mock.method(billing,"createBillingCheckout",async()=>{throw new Error("Stripe checkout constructed")})
   const warnings:string[]=[]
   const warn=mock.method(console,"warn",(message:string)=>{warnings.push(String(message))})
   try {
     const created=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:"Legacy onboarding company",selectedSeats:4})})))
     assert.equal(created.status,200)
-    assert.equal("checkoutUrl" in created.body && created.body.checkoutUrl!=null,false)
+    assert.equal(created.body.checkoutUrl,undefined)
     assert.equal(created.body.billingEnabled,false)
     const access=await getCompanyAccess(String(created.body.workspaceId))
     assert.equal(access.allowed,true);assert.equal(access.status,"trial")
@@ -120,23 +119,27 @@ test("unconfigured POST onboarding starts a local trial and never constructs Str
     assert.ok(state?.trial_ends_at)
     assert.ok(Math.abs(Date.parse(state.trial_ends_at)-Date.now()-TRIAL_DAYS*86400000)<60_000)
     assert.equal(state.seat_limit,TRIAL_SEATS)
-    assert.equal(stripe.mock.callCount(),0)
-    assert.equal(checkout.mock.callCount(),0)
+    assert.equal(await createOnboardingCheckoutUrl(String(created.body.workspaceId),String(created.body.role),4),undefined)
+    assert.throws(()=>getStripeClient(),/not enabled/)
     assert.match(warnings.join("\n"),/using the legacy no-card 14-day trial/)
-  } finally {stripe.mock.restore();checkout.mock.restore();warn.mock.restore()}
+  } finally {warn.mock.restore()}
 })
-test("configured POST onboarding returns a mocked Checkout URL and finish_setup access",async()=>{
+test("configured onboarding returns a mocked Checkout URL and finish_setup access",async()=>{
   setStripeEnv()
-  const stripe=mock.method(billing,"getStripeClient",()=>{throw new Error("Stripe client constructed")})
-  const checkout=mock.method(billing,"createBillingCheckout",async()=>({url:"https://checkout.stripe.com/test"}))
+  const client={
+    customers:{create:async()=>({id:"cus_onboard",livemode:false})},
+    prices:{retrieve:async(id:string)=>({id,active:true,livemode:false,currency:"usd",unit_amount:id==="price_base"?BILLING_CATALOG.base.unitAmountCents:null,billing_scheme:id==="price_base"?"per_unit":"tiered",tiers_mode:"graduated",tiers:BILLING_CATALOG.additionalSeats.tiers.map(tier=>({up_to:tier.upTo,unit_amount:tier.unitAmountCents})),recurring:{interval:"month",interval_count:1,usage_type:"licensed"}})},
+    subscriptions:{list:async()=>({data:[],has_more:false})},
+    invoices:{list:async()=>({data:[],has_more:false})},
+    invoicePayments:{list:async()=>({data:[],has_more:false})},
+    charges:{list:async()=>({data:[],has_more:false})},
+    checkout:{sessions:{create:async()=>({id:"cs_onboard",livemode:false,url:"https://checkout.stripe.com/test"}),retrieve:async()=>({id:"cs_onboard",status:"open",url:"https://checkout.stripe.com/test"})}},
+  }
   try {
-    const created=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:"Checkout onboarding company",selectedSeats:8})})))
-    assert.equal(created.status,200)
-    assert.equal(created.body.checkoutUrl,"https://checkout.stripe.com/test")
-    assert.equal(created.body.billingEnabled,true)
-    const access=await getCompanyAccess(String(created.body.workspaceId))
+    const context=await completeCompanyOnboarding("Checkout onboarding company",8)
+    const access=await getCompanyAccess(context.workspaceId)
     assert.equal(access.allowed,false);assert.equal(access.reason,"finish_setup")
-    assert.equal(checkout.mock.callCount(),1)
-    assert.equal(stripe.mock.callCount(),0)
-  } finally {stripe.mock.restore();checkout.mock.restore();clearStripeEnv()}
+    const checkoutUrl=await createOnboardingCheckoutUrl(context.workspaceId,context.role,1,client as never)
+    assert.equal(checkoutUrl,"https://checkout.stripe.com/test")
+  } finally {clearStripeEnv()}
 })

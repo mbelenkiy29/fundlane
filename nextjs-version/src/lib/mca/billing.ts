@@ -286,6 +286,15 @@ function liveTrialHistory(list: Stripe.ApiList<Stripe.Subscription>) {
   return list.data.some(subscription => Boolean(subscription.trial_start || subscription.trial_end))
 }
 
+export async function createOnboardingCheckoutUrl(workspaceId: string, role: string, selectedSeats: number, providedClient?: StripeBillingClient) {
+  if (!isStripeCheckoutTrialConfigured()) return undefined
+  const access = await getCompanyAccess(workspaceId)
+  if (!access.allowed && ["admin","super_admin"].includes(role) && access.reason === "finish_setup") {
+    const state = await getDatabase().prepare<{selected_seats:number}>("SELECT selected_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+    return (await createBillingCheckout(workspaceId,state?.selected_seats??selectedSeats,true,providedClient)).url
+  }
+}
+
 export async function createBillingCheckout(workspaceId: string, selectedSeats: number, onboarding = false, providedClient?: StripeBillingClient) {
   monthlyPriceCents(selectedSeats)
   const client = providedClient ?? getStripeClient()

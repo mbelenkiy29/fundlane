@@ -3,9 +3,7 @@ import { z } from "zod"
 import { completeCompanyOnboarding, listSupabaseWorkspaces, setActiveWorkspace, supabaseIdentity } from "@/lib/mca/supabase-auth"
 import { assertTrustedMutation } from "@/lib/mca/auth"
 import { readJson } from "@/lib/mca/http"
-import { billingEnabled, billingTrialDays, createBillingCheckout, isStripeCheckoutTrialConfigured } from "@/lib/mca/billing"
-import { getCompanyAccess } from "@/lib/mca/company-access"
-import { getDatabase } from "@/lib/mca/db"
+import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
 export async function GET() {
   try {
@@ -22,14 +20,7 @@ export async function POST(request: Request) {
     const identity=await supabaseIdentity()
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
     const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name,input.selectedSeats)
-    let checkoutUrl: string | undefined
-    if (isStripeCheckoutTrialConfigured()) {
-      const access = await getCompanyAccess(context.workspaceId)
-      if (!access.allowed && ["admin","super_admin"].includes(context.role) && access.reason === "finish_setup") {
-        const state = await getDatabase().prepare<{selected_seats:number}>("SELECT selected_seats FROM company_subscription_state WHERE workspace_id=?").get(context.workspaceId)
-        checkoutUrl = (await createBillingCheckout(context.workspaceId,state?.selected_seats??("name" in input?input.selectedSeats:1),true)).url
-      }
-    }
+    const checkoutUrl = await createOnboardingCheckoutUrl(context.workspaceId,context.role,"name" in input?input.selectedSeats:1)
     return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl })
   } catch(error) { return apiError(error) }
 }
