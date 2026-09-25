@@ -167,6 +167,9 @@ export function WebhookConsole() {
   }
 
   async function removeEndpoint(endpointId: string) {
+    if (!window.confirm("Remove this webhook endpoint? Pending deliveries will fail. Historical deliveries stay in the log.")) {
+      return
+    }
     setBusyId(endpointId)
     setError(undefined)
     setMessage(undefined)

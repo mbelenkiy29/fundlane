@@ -16,7 +16,9 @@ export async function GET(request: Request) {
       throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     }
     const clock = new URL(request.url).searchParams.get("nowIso")
-    return NextResponse.json(await runScheduledCommsJobs(clock && Number.isFinite(Date.parse(clock)) ? clock : undefined), {
+    const allowClockOverride = process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT)
+    const nowIsoValue = allowClockOverride && clock && Number.isFinite(Date.parse(clock)) ? clock : undefined
+    return NextResponse.json(await runScheduledCommsJobs(nowIsoValue), {
       headers: { "cache-control": "no-store" },
     })
   } catch (error) {
