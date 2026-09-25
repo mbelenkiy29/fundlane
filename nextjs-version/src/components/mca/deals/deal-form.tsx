@@ -10,6 +10,7 @@ import {
   type DealOwnerInput,
   type DealWriteInput,
 } from "@/lib/mca/deals/schema"
+import { submissionMissingFields } from "@/lib/mca/deals/validation"
 
 export interface DraftForm {
   legalName: string; dbaName: string; ein: string; entityType: string; line1: string; city: string; state: string; postalCode: string
@@ -71,8 +72,30 @@ export function formPayload(form: DraftForm) {
   }
 }
 
-function FormField({ label, value, onChange, type = "text", placeholder, error }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string; error?: string }) {
-  return <div className="space-y-1.5"><Label>{label}</Label><Input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} aria-invalid={Boolean(error)} />{error && <p className="text-xs text-destructive">{error}</p>}</div>
+export function draftMissingRequiredFields(form: DraftForm): string[] {
+  const payload = formPayload(form)
+  return submissionMissingFields({
+    legalName: payload.legalName,
+    entityType: payload.entityType as DealWriteInput["entityType"],
+    address: payload.address,
+    contactPhone: payload.contactPhone,
+    startDate: payload.startDate,
+    industry: payload.industry,
+    monthlyRevenue: payload.monthlyRevenue,
+    requestedAmount: payload.requestedAmount,
+    fundingPurpose: payload.fundingPurpose,
+    owners: (payload.owners ?? []).map((owner, index) => ({
+      id: owner.id ?? `draft-owner-${index}`,
+      firstName: owner.firstName,
+      lastName: owner.lastName,
+      ownershipPercent: owner.ownershipPercent,
+    })),
+  })
+}
+
+function FormField({ id, label, value, onChange, type = "text", placeholder, error }: { id?: string; label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string; error?: string }) {
+  const inputId = id ? `${id}-input` : undefined
+  return <div id={id} className="scroll-mt-4 space-y-1.5"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} aria-invalid={Boolean(error)} />{error && <p className="text-xs text-destructive">{error}</p>}</div>
 }
 
 export function DealForm({ form, setForm, fieldErrors }: { form: DraftForm; setForm: (value: DraftForm) => void; fieldErrors: Record<string, string[]> }) {
@@ -81,30 +104,30 @@ export function DealForm({ form, setForm, fieldErrors }: { form: DraftForm; setF
   return <div className="space-y-6 py-2">
     <section className="space-y-3"><div><h3 className="font-medium">Business</h3><p className="text-xs text-muted-foreground">Save at any point. Missing submission fields stay flagged on the record.</p></div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <FormField label="Legal name" value={form.legalName} onChange={(value) => set("legalName", value)} error={fieldErrors.legalName?.[0]} />
+        <FormField id="deal-field-legalName" label="Legal name" value={form.legalName} onChange={(value) => set("legalName", value)} error={fieldErrors.legalName?.[0]} />
         <FormField label="DBA" value={form.dbaName} onChange={(value) => set("dbaName", value)} />
         <FormField label="EIN" value={form.ein} onChange={(value) => set("ein", value)} placeholder="12-3456789" error={fieldErrors.ein?.[0]} />
-        <div className="space-y-1.5"><Label>Entity type</Label><Select value={form.entityType} onValueChange={(value) => set("entityType", value)}><SelectTrigger><SelectValue placeholder="Choose type" /></SelectTrigger><SelectContent>{ENTITY_TYPES.map((item) => <SelectItem value={item} key={item}>{item.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
+        <div id="deal-field-entityType" className="scroll-mt-4 space-y-1.5"><Label htmlFor="deal-field-entityType-trigger">Entity type</Label><Select value={form.entityType} onValueChange={(value) => set("entityType", value)}><SelectTrigger id="deal-field-entityType-trigger"><SelectValue placeholder="Choose type" /></SelectTrigger><SelectContent>{ENTITY_TYPES.map((item) => <SelectItem value={item} key={item}>{item.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
         <FormField label="Contact name" value={form.contactName} onChange={(value) => set("contactName", value)} />
         <FormField label="Contact email" value={form.contactEmail} onChange={(value) => set("contactEmail", value)} type="email" error={fieldErrors.contactEmail?.[0]} />
-        <FormField label="Contact phone" value={form.contactPhone} onChange={(value) => set("contactPhone", value)} />
-        <FormField label="Business start date" value={form.startDate} onChange={(value) => set("startDate", value)} type="date" error={fieldErrors.startDate?.[0]} />
+        <FormField id="deal-field-contactPhone" label="Contact phone" value={form.contactPhone} onChange={(value) => set("contactPhone", value)} />
+        <FormField id="deal-field-startDate" label="Business start date" value={form.startDate} onChange={(value) => set("startDate", value)} type="date" error={fieldErrors.startDate?.[0]} />
       </div>
     </section>
     <section className="space-y-3"><h3 className="font-medium">Address & criteria</h3><div className="grid gap-3 sm:grid-cols-2">
-      <FormField label="Street address" value={form.line1} onChange={(value) => set("line1", value)} /><FormField label="City" value={form.city} onChange={(value) => set("city", value)} />
-      <FormField label="State" value={form.state} onChange={(value) => set("state", value)} /><FormField label="ZIP code" value={form.postalCode} onChange={(value) => set("postalCode", value)} />
-      <FormField label="Industry" value={form.industry} onChange={(value) => set("industry", value)} /><FormField label="NAICS" value={form.naicsCode} onChange={(value) => set("naicsCode", value)} error={fieldErrors.naicsCode?.[0]} />
-      <FormField label="Monthly revenue" value={form.monthlyRevenue} onChange={(value) => set("monthlyRevenue", value)} type="number" error={fieldErrors.monthlyRevenue?.[0]} />
+      <FormField id="deal-field-line1" label="Street address" value={form.line1} onChange={(value) => set("line1", value)} /><FormField id="deal-field-city" label="City" value={form.city} onChange={(value) => set("city", value)} />
+      <FormField id="deal-field-state" label="State" value={form.state} onChange={(value) => set("state", value)} /><FormField id="deal-field-postalCode" label="ZIP code" value={form.postalCode} onChange={(value) => set("postalCode", value)} />
+      <FormField id="deal-field-industry" label="Industry" value={form.industry} onChange={(value) => set("industry", value)} /><FormField label="NAICS" value={form.naicsCode} onChange={(value) => set("naicsCode", value)} error={fieldErrors.naicsCode?.[0]} />
+      <FormField id="deal-field-monthlyRevenue" label="Monthly revenue" value={form.monthlyRevenue} onChange={(value) => set("monthlyRevenue", value)} type="number" error={fieldErrors.monthlyRevenue?.[0]} />
       <FormField label="FICO" value={form.ficoScore} onChange={(value) => set("ficoScore", value)} type="number" error={fieldErrors.ficoScore?.[0]} />
-      <FormField label="Requested funding" value={form.requestedAmount} onChange={(value) => set("requestedAmount", value)} type="number" error={fieldErrors.requestedAmount?.[0]} />
-      <FormField label="Use of funds" value={form.fundingPurpose} onChange={(value) => set("fundingPurpose", value)} />
+      <FormField id="deal-field-requestedAmount" label="Requested funding" value={form.requestedAmount} onChange={(value) => set("requestedAmount", value)} type="number" error={fieldErrors.requestedAmount?.[0]} />
+      <FormField id="deal-field-fundingPurpose" label="Use of funds" value={form.fundingPurpose} onChange={(value) => set("fundingPurpose", value)} />
     </div></section>
-    <section className="space-y-3"><div className="flex items-center justify-between"><h3 className="font-medium">Owners</h3><Button type="button" variant="outline" size="sm" onClick={() => setForm({ ...form, owners: [...form.owners, { isPrimary: form.owners.length === 0 }] })}><Plus className="mr-1 size-3.5" />Add owner</Button></div>
+    <section id="deal-field-owners" className="scroll-mt-4 space-y-3"><div className="flex items-center justify-between"><h3 className="font-medium">Owners</h3><Button type="button" variant="outline" size="sm" onClick={() => setForm({ ...form, owners: [...form.owners, { isPrimary: form.owners.length === 0 }] })}><Plus className="mr-1 size-3.5" />Add owner</Button></div>
       {form.owners.length === 0 ? <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">No owners yet.</div> : form.owners.map((owner, index) => <div className="relative grid gap-3 rounded-lg border p-3 sm:grid-cols-2" key={owner.id ?? index}>
         <Button type="button" variant="ghost" size="icon" aria-label={`Remove owner ${index + 1}`} className="absolute right-1 top-1 size-7" onClick={() => setForm({ ...form, owners: form.owners.filter((_, ownerIndex) => ownerIndex !== index) })}><X className="size-3.5" /></Button>
-        <FormField label="First name" value={owner.firstName ?? ""} onChange={(value) => updateOwner(index, { firstName: value })} error={fieldErrors[`owners.${index}.firstName`]?.[0]} /><FormField label="Last name" value={owner.lastName ?? ""} onChange={(value) => updateOwner(index, { lastName: value })} error={fieldErrors[`owners.${index}.lastName`]?.[0]} />
-        <FormField label="Ownership %" value={owner.ownershipPercent?.toString() ?? ""} onChange={(value) => updateOwner(index, { ownershipPercent: value ? Number(value) : undefined })} type="number" error={fieldErrors[`owners.${index}.ownershipPercent`]?.[0]} />
+        <FormField id={`deal-field-owners-${index}-firstName`} label="First name" value={owner.firstName ?? ""} onChange={(value) => updateOwner(index, { firstName: value })} error={fieldErrors[`owners.${index}.firstName`]?.[0]} /><FormField id={`deal-field-owners-${index}-lastName`} label="Last name" value={owner.lastName ?? ""} onChange={(value) => updateOwner(index, { lastName: value })} error={fieldErrors[`owners.${index}.lastName`]?.[0]} />
+        <FormField id={`deal-field-owners-${index}-ownershipPercent`} label="Ownership %" value={owner.ownershipPercent?.toString() ?? ""} onChange={(value) => updateOwner(index, { ownershipPercent: value ? Number(value) : undefined })} type="number" error={fieldErrors[`owners.${index}.ownershipPercent`]?.[0]} />
         <FormField label="Date of birth" value={owner.dateOfBirth ?? ""} onChange={(value) => updateOwner(index, { dateOfBirth: value })} type={owner.dateOfBirth?.includes("•") ? "text" : "date"} error={fieldErrors[`owners.${index}.dateOfBirth`]?.[0]} />
         <FormField label="Identity last 4" value={owner.identityLast4 ?? ""} onChange={(value) => updateOwner(index, { identityLast4: value })} error={fieldErrors[`owners.${index}.identityLast4`]?.[0]} /><FormField label="Email" value={owner.email ?? ""} onChange={(value) => updateOwner(index, { email: value })} error={fieldErrors[`owners.${index}.email`]?.[0]} />
         <FormField label="Phone" value={owner.phone ?? ""} onChange={(value) => updateOwner(index, { phone: value })} />

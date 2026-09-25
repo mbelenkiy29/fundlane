@@ -75,6 +75,108 @@ export function submissionMissingFields(record: Pick<DealRecord,
   return missing
 }
 
+const SUBMISSION_MISSING_FIELD_LABELS: Record<string, string> = {
+  legalName: "Legal name",
+  entityType: "Entity type",
+  "address.line1": "Street address",
+  "address.city": "City",
+  "address.state": "State",
+  "address.postalCode": "ZIP code",
+  contactPhone: "Contact phone",
+  startDate: "Business start date",
+  industry: "Industry",
+  monthlyRevenue: "Monthly revenue",
+  requestedAmount: "Requested funding",
+  fundingPurpose: "Use of funds",
+  owners: "Owners",
+}
+
+const SUBMISSION_MISSING_FIELD_ANCHORS: Record<string, string> = {
+  legalName: "deal-field-legalName",
+  entityType: "deal-field-entityType",
+  "address.line1": "deal-field-line1",
+  "address.city": "deal-field-city",
+  "address.state": "deal-field-state",
+  "address.postalCode": "deal-field-postalCode",
+  contactPhone: "deal-field-contactPhone",
+  startDate: "deal-field-startDate",
+  industry: "deal-field-industry",
+  monthlyRevenue: "deal-field-monthlyRevenue",
+  requestedAmount: "deal-field-requestedAmount",
+  fundingPurpose: "deal-field-fundingPurpose",
+  owners: "deal-field-owners",
+}
+
+const OWNER_FIELD_LABELS = {
+  firstName: "first name",
+  lastName: "last name",
+  ownershipPercent: "ownership %",
+} as const
+
+function ownerMissingField(field: string) {
+  const match = /^owners\.(\d+)\.(firstName|lastName|ownershipPercent)$/.exec(field)
+  if (!match) return null
+  return { index: match[1], part: match[2] as keyof typeof OWNER_FIELD_LABELS }
+}
+
+/** Human name for a `submissionMissingFields` key. */
+export function missingRequiredFieldLabel(field: string): string {
+  const mapped = SUBMISSION_MISSING_FIELD_LABELS[field]
+  if (mapped) return mapped
+  const owner = ownerMissingField(field)
+  if (owner) return `Owner ${Number(owner.index) + 1} ${OWNER_FIELD_LABELS[owner.part]}`
+  return field.replace(/[._]/g, " ")
+}
+
+/** Form element id for a `submissionMissingFields` key. */
+export function missingRequiredFieldAnchor(field: string): string {
+  const mapped = SUBMISSION_MISSING_FIELD_ANCHORS[field]
+  if (mapped) return mapped
+  const owner = ownerMissingField(field)
+  if (owner) return `deal-field-owners-${owner.index}-${owner.part}`
+  return "deal-field-owners"
+}
+
+type FieldAnchorLookup = {
+  getElementById(id: string): FocusableFieldNode | null
+}
+
+type FocusableFieldNode = {
+  matches?(selectors: string): boolean
+  querySelector?(selectors: string): FocusableFieldNode | null
+  scrollIntoView?(options?: ScrollIntoViewOptions): void
+  focus?(): void
+}
+
+/** Prefer the field control; if an owner row was removed, use the owners section. */
+export function resolveMissingRequiredFieldAnchor(field: string, lookup: FieldAnchorLookup): string {
+  const preferred = missingRequiredFieldAnchor(field)
+  if (lookup.getElementById(preferred)) return preferred
+  if (ownerMissingField(field) && lookup.getElementById("deal-field-owners")) return "deal-field-owners"
+  return preferred
+}
+
+export function focusMissingRequiredField(field: string, lookup: FieldAnchorLookup): { anchor: string; focused: boolean } {
+  const anchor = resolveMissingRequiredFieldAnchor(field, lookup)
+  const node = lookup.getElementById(anchor)
+  if (!node) return { anchor, focused: false }
+  node.scrollIntoView?.({ behavior: "smooth", block: "center" })
+  const focusable = node.matches?.("input, textarea, button, select")
+    ? node
+    : node.querySelector?.("input, textarea, button, select") ?? null
+  if (!focusable?.focus) return { anchor, focused: false }
+  focusable.focus()
+  return { anchor, focused: true }
+}
+
+export function describeMissingRequiredFields(fields: string[]) {
+  return fields.map((key) => ({
+    key,
+    label: missingRequiredFieldLabel(key),
+    anchor: missingRequiredFieldAnchor(key),
+  }))
+}
+
 export function assertDealStatus(value: unknown): value is (typeof DEAL_STATUSES)[number] {
   return typeof value === "string" && DEAL_STATUSES.includes(value as (typeof DEAL_STATUSES)[number])
 }
