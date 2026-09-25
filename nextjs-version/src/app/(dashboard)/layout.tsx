@@ -1,6 +1,6 @@
 import { assistantEnabled } from "@/lib/mca/assistant/security"
 import { headers } from "next/headers"
-import { redirect } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import { DashboardChrome } from "@/components/mca/dashboard-chrome"
 import { NewDealProvider } from "@/components/mca/deals/new-deal-provider"
 import { authenticateSupabaseSession, supabaseIdentity } from "@/lib/mca/supabase-auth"
@@ -10,6 +10,7 @@ import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
 import { getCompanyAccess } from "@/lib/mca/company-access"
 import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
 import { CompanyPaused } from "@/components/mca/company-paused"
+import { unauthenticatedPageGate } from "@/lib/mca/app-paths"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard" || pathname === "/dashboard-2" || pathname.startsWith("/dashboard-2/")) return "dashboard"
@@ -25,12 +26,16 @@ function pageForPath(pathname: string): PageKey | null {
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const headerStore = await headers()
+  const pathname = headerStore.get("x-mca-pathname") ?? "/dashboard"
   const context = await authenticateSupabaseSession()
   if (!context && await supabaseIdentity({ allowPasswordSetup: true })) redirect("/onboarding")
-  if (!context) redirect(`/sign-in?returnTo=${encodeURIComponent(headerStore.get("x-mca-return-to") ?? "/dashboard")}`)
+  if (!context) {
+    const gate = unauthenticatedPageGate(pathname, headerStore.get("x-mca-return-to") ?? "/dashboard")
+    if (gate.action === "sign-in") redirect(gate.location)
+    notFound()
+  }
 
   const session = await getSessionResponse(context)
-  const pathname = headerStore.get("x-mca-pathname") ?? "/dashboard"
   if (pathname.startsWith("/settings/billing") && !["admin", "super_admin"].includes(context.role)) redirect("/errors/forbidden")
   const access = await getCompanyAccess(context.workspaceId)
   if (!access.allowed && !isCompanyRecoveryPage(pathname)) {

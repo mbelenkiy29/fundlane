@@ -6,6 +6,7 @@ import { Logo } from "@/components/logo"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
+import { DEALS_PAGE_TITLE } from "@/lib/mca/app-paths"
 import type { SessionResponse } from "@/lib/mca/types"
 
 const groups = [
@@ -14,7 +15,7 @@ const groups = [
     { title: "AI Assistant", url: "/assistant", icon: Bot, page: "deals" },
     { title: "Applications", url: "/applications", icon: FileCheck2, page: "deals" },
     { title: "Application Intake", url: "/intake", icon: FileCheck2, page: "deals" },
-    { title: "Deals", url: "/deals", icon: BriefcaseBusiness, page: "deals" },
+    { title: DEALS_PAGE_TITLE, url: "/deals", icon: BriefcaseBusiness, page: "deals" },
     { title: "Pipeline", url: "/pipeline", icon: Columns3, page: "deals" },
     { title: "Calendar", url: "/calendar", icon: CalendarDays, page: "deals" },
     { title: "Submissions", url: "/submissions", icon: FileCheck2, page: "deals" },

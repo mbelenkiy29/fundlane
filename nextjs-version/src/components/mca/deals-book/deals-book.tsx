@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { DEALS_PAGE_TITLE } from "@/lib/mca/app-paths"
 import { requestJson } from "@/lib/mca/client"
 import type { BookDetail, BookListResponse, BookRow, BookWindow, ServicingStatus } from "@/lib/mca/deals/book-contracts"
 import type { SessionResponse } from "@/lib/mca/types"
@@ -107,8 +108,7 @@ export function DealsBook() {
     <div className="space-y-5 px-4 lg:px-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground"><Building2 className="size-3.5" />Funded book</div>
-          <h1 className="text-2xl font-bold tracking-tight">Deals</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{DEALS_PAGE_TITLE}</h1>
           <p className="text-sm text-muted-foreground">The library of where your money is. Search merchants, watch payments, and open a name for documents.</p>
         </div>
         {canImport && <Button variant="outline" onClick={() => setImportOpen(true)}><Upload className="size-4" />Upload CSV</Button>}
