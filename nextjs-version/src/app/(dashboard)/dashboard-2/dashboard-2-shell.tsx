@@ -7,6 +7,8 @@ import type { HomeKpis } from "@/lib/mca/home/kpi-contracts"
 import { formatDashboardTimestamp, mapDashboard2, periodForDateRange, type Dashboard2DateRange } from "@/lib/mca/dashboard2/map-kpis"
 import { HomeEmptyState } from "@/components/mca/home/home-empty-state"
 import { NeedsAction } from "@/components/mca/home/needs-action"
+import { SetupChecklist } from "@/components/mca/setup/setup-checklist"
+import type { WorkspaceSetup } from "@/lib/mca/setup/contracts"
 import { CustomerInsights } from "./components/customer-insights"
 import { DashboardHeader } from "./components/dashboard-header"
 import { MetricsOverview } from "./components/metrics-overview"
@@ -18,16 +20,20 @@ import { TopProducts } from "./components/top-products"
 
 export function Dashboard2Shell({
   initialKpis,
+  initialSetup = null,
   firstName,
   canCreateDeal = true,
 }: {
   initialKpis: HomeKpis | null
+  initialSetup?: WorkspaceSetup | null
   firstName?: string
   canCreateDeal?: boolean
 }) {
   const newDeal = useNewDeal()
   const [dateRange, setDateRange] = React.useState<Dashboard2DateRange>("30d")
   const [kpis, setKpis] = React.useState<HomeKpis | null>(initialKpis)
+  const [setup, setSetup] = React.useState<WorkspaceSetup | null>(initialSetup)
+  const [dismissing, setDismissing] = React.useState(false)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState<string>()
   const period = periodForDateRange(dateRange)
@@ -38,7 +44,12 @@ export function Dashboard2Shell({
     setRefreshing(true)
     setError(undefined)
     try {
-      setKpis(await requestJson<HomeKpis>(`/api/mca/home/kpis?period=${period}`))
+      const [nextKpis, nextSetup] = await Promise.all([
+        requestJson<HomeKpis>(`/api/mca/home/kpis?period=${period}`),
+        requestJson<WorkspaceSetup>("/api/mca/setup").catch(() => null),
+      ])
+      setKpis(nextKpis)
+      if (nextSetup) setSetup(nextSetup)
     } catch (caught) {
       setError(caught instanceof RequestError ? caught.message : "Could not load dashboard metrics.")
     } finally {
@@ -77,8 +88,28 @@ export function Dashboard2Shell({
         <div className="@container/main space-y-6">
           <MetricsOverview metrics={view.metrics} />
 
+          {setup && !setup.dismissed ? (
+            <SetupChecklist
+              setup={setup}
+              dismissing={dismissing}
+              onDismiss={() => {
+                setDismissing(true)
+                void requestJson<WorkspaceSetup>("/api/mca/setup", {
+                  method: "POST",
+                  body: JSON.stringify({ dismissed: true }),
+                }).then((next) => setSetup(next)).catch((caught) => {
+                  setError(caught instanceof RequestError ? caught.message : "Could not hide the setup checklist.")
+                }).finally(() => setDismissing(false))
+              }}
+            />
+          ) : null}
+
           {kpis?.empty ? (
-            <HomeEmptyState canCreateDeal={canCreateDeal} onCreate={() => newDeal.open()} />
+            <HomeEmptyState
+              canCreateDeal={canCreateDeal}
+              onCreate={() => newDeal.open()}
+              nextStep={setup?.dismissed ? null : setup?.nextStep}
+            />
           ) : (
             <NeedsAction />
           )}

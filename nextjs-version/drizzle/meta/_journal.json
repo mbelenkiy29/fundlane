@@ -337,6 +337,13 @@
       "when": 1790035200003,
       "tag": "0049_application_review_catchup",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1790299200000,
+      "tag": "0050_workspace_setup_checklist",
+      "breakpoints": true
     }
   ]
 }

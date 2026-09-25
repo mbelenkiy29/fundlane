@@ -310,7 +310,7 @@ export function FunderDirectoryPanel() {
             {canManage && <Button type="button" variant="outline" onClick={startCreate}><Plus />New funder</Button>}
           </CardHeader>
           <CardContent>
-            {!visibleFunders.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{funders.length ? "No active funders. Turn on Show inactive to review archived profiles." : "No funders yet. Add the first funder profile to start routing submissions."}</div> : <div className="space-y-2">
+            {!visibleFunders.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground" data-testid="mca-funders-empty">{funders.length ? "No active funders. Turn on Show inactive to review archived profiles." : <div className="space-y-3"><p>No funders yet. Add the first funder profile to start routing submissions.</p>{canManage ? <Button type="button" onClick={startCreate}><Plus />Add your first funder</Button> : null}</div>}</div> : <div className="space-y-2">
               {visibleFunders.map((funder) => <button key={funder.id} type="button" onClick={() => editFunder(funder)} className={`flex w-full items-start justify-between gap-2 rounded-lg border p-3 text-left text-sm ${selectedId === funder.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"} ${isSandboxFunder(funder) ? "border-amber-500/50" : ""}`}>
                 <span><span className="font-medium">{funder.legalName}</span>{funder.nickname ? <span className="block text-xs text-muted-foreground">{funder.nickname}</span> : null}</span>
                 <span className="flex shrink-0 flex-col items-end gap-1">
