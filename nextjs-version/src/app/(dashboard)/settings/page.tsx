@@ -10,10 +10,11 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { requestJson } from "@/lib/mca/client"
+import { DEALS_PAGE_TITLE } from "@/lib/mca/app-paths"
 import type { SessionResponse, WorkspaceSettings } from "@/lib/mca/types"
 
 const pageLabels: Record<keyof WorkspaceSettings["pageVisibility"], string> = {
-  dashboard: "Home", deals: "Deals", users: "Team settings", reports: "Reports", payments: "Payments", workspace: "Workspace settings", integrations: "API keys",
+  dashboard: "Home", deals: DEALS_PAGE_TITLE, users: "Team settings", reports: "Reports", payments: "Payments", workspace: "Workspace settings", integrations: "API keys",
 }
 
 export default function WorkspaceSettingsPage() {
