@@ -88,6 +88,45 @@ export interface UpdatePreview {
   rows: UpdateRowPreview[]
 }
 
+export const UPDATE_CSV_FIELDS = [
+  "dealId",
+  "expectedVersion",
+  "legalName",
+  "dbaName",
+  "contactName",
+  "contactEmail",
+  "contactPhone",
+  "industry",
+  "naicsCode",
+  "monthlyRevenue",
+  "ficoScore",
+  "fundingPurpose",
+  "requestedAmount",
+  "address.line1",
+  "address.line2",
+  "address.city",
+  "address.state",
+  "address.postalCode",
+  "originatorMembershipId",
+  "status",
+  "clearFields",
+] as const
+
+export const BULK_UPDATE_SOURCE_NAME = "Deal bulk updates"
+export const BULK_UPDATE_BATCH_NAME = "Updates"
+
+export const BULK_UPDATE_PANEL_COPY = {
+  title: "Bulk update deals",
+  description: "Upload a CSV to change deal fields. Review the preview and fix validation errors before anything is applied.",
+  adminOnly: "Only workspace administrators can bulk-update deals from a CSV.",
+  preview: "Preview changes",
+  commit: "Apply validated updates",
+  retry: "Retry failed updates",
+  template: "Download template",
+  mapping: "Column mapping",
+  remapped: "Preview again after changing the file or column mapping. Apply uses the last previewed file only.",
+} as const
+
 export const ARCHIVE_CATEGORIES = ["statement", "application", "api_application", "driver_license", "voided_check", "closing_document", "other_stip"] as const
 export type ArchiveCategory = (typeof ARCHIVE_CATEGORIES)[number]
 export interface ArchiveEntryPreview {

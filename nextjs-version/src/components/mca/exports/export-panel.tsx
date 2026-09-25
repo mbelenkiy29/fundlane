@@ -25,7 +25,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "The export could not be completed."
 }
 
-export function ExportPanel({ filters }: { filters?: DealFilters }) {
+export function ExportPanel({ filters, scopeNote }: { filters?: DealFilters; scopeNote?: string }) {
   const [capabilities, setCapabilities] = React.useState<ExportCapabilities>()
   const [jobs, setJobs] = React.useState<ExportJobView[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -128,7 +128,7 @@ export function ExportPanel({ filters }: { filters?: DealFilters }) {
     <Card data-testid="mca-export-panel">
       <CardHeader>
         <CardTitle>{EXPORT_PANEL_COPY.title}</CardTitle>
-        <CardDescription>{EXPORT_PANEL_COPY.description} {EXPORT_PANEL_COPY.notPayment}</CardDescription>
+        <CardDescription>{EXPORT_PANEL_COPY.description}{scopeNote ? ` ${scopeNote}` : ""} {EXPORT_PANEL_COPY.notPayment}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {view.status === "loading" ? (

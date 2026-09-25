@@ -106,13 +106,27 @@ export async function applyCreateReview(workspaceId: string, runId: string, expe
   })
 }
 
-export async function insertUpdatePreview(input: { workspaceId: string; sourceId: string; batchId: string; filename: string; mapping: Record<string, string>; headers: string[]; rows: UpdateRowPreview[] }): Promise<UpdatePreview> {
+export async function activateSource(workspaceId: string, id: string): Promise<void> {
+  await db().prepare("UPDATE import_sources SET active = 1 WHERE workspace_id = ? AND id = ?").run(workspaceId, id)
+}
+
+export async function insertUpdatePreview(input: {
+  workspaceId: string
+  sourceId: string
+  batchId: string
+  filename: string
+  mapping: Record<string, string>
+  headers: string[]
+  rows: UpdateRowPreview[]
+  afterInsert?: (database: DbExecutor, runId: string) => Promise<void>
+}): Promise<UpdatePreview> {
   const runId = newId(); const timestamp = nowIso(); const revision = 1
   await withImmediateTransaction(async (database) => {
     await database.prepare(`INSERT INTO import_runs (id,workspace_id,source_id,batch_id,mode,filename,format,state,preview_revision,mapping_json,confidence_json,mapping_provider,mapping_warnings_json,assignment_pool_json,created_at,updated_at)
       VALUES (?,?,?,?,?,?,'csv','preview',?,?,?,'manual','[]','[]',?,?)`).run(runId, input.workspaceId, input.sourceId, input.batchId, "update", input.filename, revision, JSON.stringify(input.mapping), JSON.stringify({ headers: input.headers }), timestamp, timestamp)
     const insert = database.prepare(`INSERT INTO import_rows (id,workspace_id,run_id,row_number,application_json,source_values_json,assignment_membership_id,errors_json,warnings_json,duplicate_ids_json,update_json) VALUES (?,?,?,?,'{}','{}',NULL,?,'[]','[]',?)`)
     for (const row of input.rows) await insert.run(row.id, input.workspaceId, runId, row.rowNumber, JSON.stringify(row.errors), encryptSensitive(JSON.stringify(row), input.workspaceId))
+    await input.afterInsert?.(database, runId)
   })
   return { runId, previewRevision: revision, state: "preview", mapping: input.mapping, headers: input.headers, rows: input.rows }
 }
