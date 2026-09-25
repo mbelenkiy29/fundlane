@@ -66,6 +66,7 @@ export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"dat
   const subjects: Record<string,string> = {
     renewal_payment_failed:"Action needed: Fundlane renewal payment", billing_paused:"Your Fundlane company access is paused",
     billing_recovered:"Fundlane billing payment received", trial_ending:"Your Fundlane trial ends soon", trial_ended:"Your Fundlane trial has ended",
+    payment_action_required:"Action needed: authenticate your Fundlane payment", payment_failed:"Action needed: update your Fundlane payment method",
   }
   const kind = String(message.data.kind)
   const subject = subjects[kind]
@@ -76,9 +77,12 @@ export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"dat
     billing_recovered:"All applicable overdue invoices have been verified paid. Billing suspension has been cleared. Any separate administrative suspension remains in effect. Payment does not restart a canceled subscription.",
     trial_ending:"Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
     trial_ended:"Your trial has ended and company operations are paused. Your data remains available for recovery. Choose your paid subscription in Plans & Billing.",
+    payment_action_required:"Your invoice needs payment authentication. Complete the payment on Stripe's hosted invoice page. Seats and access update after Stripe confirms payment.",
+    payment_failed:"Your invoice payment failed. Open Plans & Billing, then Payment settings & invoices to update your card in the Billing Portal. Seats and access update after Stripe confirms payment.",
   }
   const deadline = message.data.graceEndsAt ?? message.data.trialEndsAt
-  const text = [descriptions[kind], typeof deadline === "string" ? `Deadline: ${deadline}` : "", `Plans & Billing: ${message.actionUrl}`].filter(Boolean).join("\n\n")
+  const invoiceUrl = kind === "payment_action_required" && typeof message.data.invoiceUrl === "string" && /^https:\/\//.test(message.data.invoiceUrl) ? message.data.invoiceUrl : null
+  const text = [descriptions[kind], typeof deadline === "string" ? `Deadline: ${deadline}` : "", invoiceUrl ? `Complete payment: ${invoiceUrl}` : "", `Plans & Billing: ${message.actionUrl}`].filter(Boolean).join("\n\n")
   const escape = (value:string) => value.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]!)
-  return {subject,text,html:`<p>${escape(descriptions[kind])}</p>${typeof deadline==="string"?`<p>Deadline: ${escape(deadline)}</p>`:""}<p><a href="${escape(message.actionUrl)}">Open Plans &amp; Billing</a></p>`}
+  return {subject,text,html:`<p>${escape(descriptions[kind])}</p>${typeof deadline==="string"?`<p>Deadline: ${escape(deadline)}</p>`:""}${invoiceUrl?`<p><a href="${escape(invoiceUrl)}">Complete payment</a></p>`:""}<p><a href="${escape(message.actionUrl)}">Open Plans &amp; Billing</a></p>`}
 }

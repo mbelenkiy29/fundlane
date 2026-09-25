@@ -82,12 +82,14 @@ test("Supabase session and local roles govern billing and real Stripe Checkout n
   for (const [path, method, body] of [["/api/billing", "GET"], ["/api/billing/sync", "POST"], ["/api/billing/checkout", "POST", { selectedSeats: 5 }], ["/api/billing/portal", "POST", {}], ["/api/billing/cancel", "POST", {}]])
     assert.equal((await request(path, { method, body, cookie: employee.cookie })).response.status, 403)
 })
-test("webhook tampering is rejected and duplicate or outdated events read live Stripe state", async () => {
+test("webhook tampering is rejected and duplicate or outdated events queue for live Stripe reconciliation", async () => {
   stripe.subscriptions.set(customer().id, [subscription(customer().id, 20)])
   const body = JSON.stringify({ id: "evt_billing_http", type: "customer.subscription.updated", livemode: false, data: { object: { customer: customer().id, status: "canceled" } } })
   const signature = signatureClient.webhooks.generateTestHeaderString({ payload: body, secret: "whsec_fixture" })
   assert.equal((await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body + " ", headers: { "stripe-signature": signature } })).response.status, 400)
   for (let i = 0; i < 2; i++) assert.equal((await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body, headers: { "stripe-signature": signature } })).response.status, 200)
+  assert.equal((await request("/api/billing")).payload.billing.seatLimit, 5)
+  assert.equal((await request("/api/billing/sync", { method: "POST" })).response.status, 200)
   assert.equal((await request("/api/billing")).payload.billing.seatLimit, 20)
   assert.equal((await db.query("SELECT count(*)::int n FROM stripe_billing_events WHERE event_id='evt_billing_http'")).rows[0].n, 1)
 })
