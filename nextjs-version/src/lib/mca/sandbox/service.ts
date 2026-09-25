@@ -1,12 +1,13 @@
 import "server-only"
 
 import { AppError } from "../errors"
-import { newId, nowIso, recordAuditEvent } from "../db"
+import { newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { canManageWorkspace } from "../policy"
 import type { FunderRecord } from "../funders/contracts"
 import {
   findFunderByIdempotencyKey,
+  findFunderByIdempotencyKeyForUpdate,
   insertFunder,
   toFunderRecord,
   updateFunderRecord,
@@ -68,67 +69,68 @@ export async function getSandboxFunderStatus(actor: DealActor): Promise<SandboxF
 
 export async function setSandboxFunderEnabled(actor: DealActor, enabled: boolean): Promise<SandboxFunderStatus> {
   assertManage(actor)
-  const now = nowIso()
-  const existing = await findFunderByIdempotencyKey(actor.workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY)
-  if (!enabled) {
-    if (existing?.active) {
-      await updateFunderRecord({
-        ...existing,
-        ...sandboxProfile(existing),
-        active: false,
-        profileVersion: existing.profileVersion + 1,
-        updatedAt: now,
-      })
-      await recordAuditEvent({
-        context: actor,
-        action: "sandbox_funder.disabled",
-        resourceType: "funder",
-        resourceId: existing.id,
-        metadata: { sandbox: true },
-        correlationId: actor.correlationId,
-      })
+  await withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`${actor.workspaceId}:sandbox-funder`)
+    const existing = await findFunderByIdempotencyKeyForUpdate(database, actor.workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY)
+    const now = nowIso()
+    if (!enabled) {
+      if (existing?.active) {
+        await updateFunderRecord({
+          ...existing,
+          ...sandboxProfile(existing),
+          active: false,
+          profileVersion: existing.profileVersion + 1,
+          updatedAt: now,
+        })
+        await recordAuditEvent({
+          context: actor,
+          action: "sandbox_funder.disabled",
+          resourceType: "funder",
+          resourceId: existing.id,
+          metadata: { sandbox: true },
+          correlationId: actor.correlationId,
+        })
+      }
+      return
     }
-    return getSandboxFunderStatus(actor)
-  }
-
-  if (existing) {
-    if (!existing.active || existing.legalName !== SANDBOX_LEGAL_NAME) {
-      await updateFunderRecord({
-        ...existing,
-        ...sandboxProfile(existing),
-        active: true,
-        profileVersion: existing.profileVersion + 1,
-        updatedAt: now,
-      })
-      await recordAuditEvent({
-        context: actor,
-        action: existing.active ? "sandbox_funder.relabeled" : "sandbox_funder.enabled",
-        resourceType: "funder",
-        resourceId: existing.id,
-        metadata: { sandbox: true, created: false },
-        correlationId: actor.correlationId,
-      })
+    if (existing) {
+      if (!existing.active || existing.legalName !== SANDBOX_LEGAL_NAME || existing.routes.some((route) => route.active && route.destination !== SANDBOX_ROUTE_DESTINATION)) {
+        await updateFunderRecord({
+          ...existing,
+          ...sandboxProfile(existing),
+          active: true,
+          profileVersion: existing.profileVersion + 1,
+          updatedAt: now,
+        })
+        await recordAuditEvent({
+          context: actor,
+          action: existing.active ? "sandbox_funder.relabeled" : "sandbox_funder.enabled",
+          resourceType: "funder",
+          resourceId: existing.id,
+          metadata: { sandbox: true, created: false },
+          correlationId: actor.correlationId,
+        })
+      }
+      return
     }
-    return getSandboxFunderStatus(actor)
-  }
-
-  const saved = await insertFunder({
-    id: newId(),
-    workspaceId: actor.workspaceId,
-    idempotencyKey: SANDBOX_FUNDER_IDEMPOTENCY_KEY,
-    ...sandboxProfile(),
-    criteriaVersion: 1,
-    profileVersion: 1,
-    createdAt: now,
-    updatedAt: now,
-  })
-  await recordAuditEvent({
-    context: actor,
-    action: "sandbox_funder.enabled",
-    resourceType: "funder",
-    resourceId: saved.record.id,
-    metadata: { sandbox: true, created: saved.inserted },
-    correlationId: actor.correlationId,
+    const saved = await insertFunder({
+      id: newId(),
+      workspaceId: actor.workspaceId,
+      idempotencyKey: SANDBOX_FUNDER_IDEMPOTENCY_KEY,
+      ...sandboxProfile(),
+      criteriaVersion: 1,
+      profileVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await recordAuditEvent({
+      context: actor,
+      action: "sandbox_funder.enabled",
+      resourceType: "funder",
+      resourceId: saved.record.id,
+      metadata: { sandbox: true, created: saved.inserted },
+      correlationId: actor.correlationId,
+    })
   })
   return getSandboxFunderStatus(actor)
 }

@@ -212,6 +212,23 @@ test("regular create/update cannot impersonate or relabel the sandbox funder", a
     () => updateFunder(actor(), status.funder!.id, { legalName: "Everyday Advance LLC" }),
     (error: { status?: number }) => error.status === 422,
   )
+  await assert.rejects(
+    () => updateFunder(actor(), status.funder!.id, {
+      routes: [
+        { kind: "api", label: "Sandbox", destination: SANDBOX_ROUTE_DESTINATION, documentExceptions: [], active: true },
+        { kind: "email", label: "Live", destination: "subs@example.test", documentExceptions: [], active: true },
+      ],
+    }),
+    (error: { status?: number }) => error.status === 422,
+  )
+  await assert.rejects(
+    () => createFunder(actor(), {
+      idempotencyKey: "named-like-sandbox",
+      legalName: "[SANDBOX] Everyday Advance LLC",
+      routes: [{ kind: "email", label: "Subs", destination: "subs@example.test", documentExceptions: [], active: true }],
+    }),
+    (error: { status?: number }) => error.status === 422,
+  )
 })
 
 test("sandbox submission returns a synthetic offer and never touches the network", async () => {
@@ -288,6 +305,12 @@ test("sample bank statements are labeled synthetic PDFs", async () => {
 })
 
 test("sandbox HTTP enable, isolation, and statement download stay on the session workspace", async () => {
+  const invalid = await sandboxPost(cookieRequest("/api/mca/sandbox", "admin-session-token", {
+    method: "POST",
+    body: "null",
+  }))
+  assert.equal(invalid.status, 422)
+
   const forbidden = await sandboxPost(cookieRequest("/api/mca/sandbox", "rep-session-token", {
     method: "POST",
     body: JSON.stringify({ enabled: true }),

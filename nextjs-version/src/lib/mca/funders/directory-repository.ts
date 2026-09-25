@@ -104,6 +104,11 @@ export async function findFunderByIdempotencyKey(workspaceId: string, key: strin
   return row ? fromFunderRow(row) : undefined
 }
 
+export async function findFunderByIdempotencyKeyForUpdate(database: DbExecutor, workspaceId: string, key: string): Promise<StoredFunder | undefined> {
+  const row = await database.prepare<FunderRow>("SELECT * FROM mca_funders WHERE workspace_id = ? AND idempotency_key = ? FOR UPDATE").get(workspaceId, key)
+  return row ? fromFunderRow(row) : undefined
+}
+
 export async function listFunderRecords(workspaceId: string, includeInactive = false): Promise<StoredFunder[]> {
   const sql = includeInactive
     ? "SELECT * FROM mca_funders WHERE workspace_id = ? ORDER BY active DESC, lower(legal_name), created_at"

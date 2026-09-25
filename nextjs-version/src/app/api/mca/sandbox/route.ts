@@ -27,15 +27,16 @@ export async function POST(request: Request) {
       ...await actorForDeals(await requireWorkspaceAccess(request, { sessionOnly: true, roles: ["admin", "super_admin"] })),
       correlationId: requestCorrelationId(request),
     }
-    let body: { enabled?: unknown }
+    let parsed: unknown
     try {
-      body = await request.json() as { enabled?: unknown }
+      parsed = await request.json()
     } catch {
       throw new AppError(400, "invalid_json", "Request body must be valid JSON.")
     }
-    if (typeof body.enabled !== "boolean") {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || typeof (parsed as { enabled?: unknown }).enabled !== "boolean") {
       throw new AppError(422, "validation_failed", "Review the highlighted fields.", { enabled: ["Choose whether the sandbox funder is enabled."] })
     }
+    const body = parsed as { enabled: boolean }
     return NextResponse.json(await setSandboxFunderEnabled(actor, body.enabled), { headers: noStore })
   } catch (error) {
     return apiError(error)

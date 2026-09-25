@@ -27,8 +27,8 @@ function sandboxActor(job: SubmissionJob): DealActor {
   }
 }
 
-export function isSandboxSubmissionJob(job: Pick<SubmissionJob, "route" | "displayFunderName">): boolean {
-  return isSandboxDestination(job.route.destination) || job.displayFunderName.includes("[SANDBOX]")
+export function isSandboxSubmissionJob(job: Pick<SubmissionJob, "route">): boolean {
+  return isSandboxDestination(job.route.destination)
 }
 
 async function loadDealLegalName(workspaceId: string, dealId: string): Promise<string> {
