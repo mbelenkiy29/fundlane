@@ -283,6 +283,34 @@ export async function getFunder(actor: DealActor, id: string): Promise<FunderRec
   return toFunderRecord(record)
 }
 
+export function validateCreateFunderInput(input: CreateFunderInput): CreateFunderInput {
+  const idempotencyKey = requiredText(input.idempotencyKey, "idempotencyKey", "Provide a stable retry key.", 128)
+  const profile = profileFromInput(input)
+  return {
+    idempotencyKey,
+    legalName: profile.legalName,
+    nickname: profile.nickname,
+    website: profile.website,
+    domains: profile.domains,
+    products: profile.products,
+    active: profile.active,
+    contacts: profile.contacts,
+    routes: profile.routes,
+  }
+}
+
+export function funderIdentityKey(legalName: string): string {
+  return legalName.trim().toLowerCase().replace(/\s+/g, " ")
+}
+
+export function funderDomainKey(value: string): string {
+  return text(value)
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "")
+}
+
 export async function createFunder(actor: DealActor, input: CreateFunderInput): Promise<{ funder: FunderRecord; created: boolean }> {
   assertManage(actor)
   assertReservedSandboxIdentity(input)

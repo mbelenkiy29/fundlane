@@ -236,16 +236,21 @@ export async function listFunderCriteria(actor: DealActor, funderId: string): Pr
   }
 }
 
-export async function publishFunderCriteria(actor: DealActor, funderId: string, rulesInput: EligibilityRuleInput[]): Promise<FunderCriteria> {
-  assertManage(actor)
+export function normalizeEligibilityRules(funderId: string, rulesInput: EligibilityRuleInput[]): EligibilityRule[] {
   if (!Array.isArray(rulesInput)) invalid("rules", "Provide a list of eligibility rules.")
   if (rulesInput.length > 200) invalid("rules", "Use at most 200 rules.")
+  const rules = rulesInput.map((rule, index) => normalizeRule(rule, index, funderId))
+  assertNoConflicts(rules)
+  return rules
+}
+
+export async function publishFunderCriteria(actor: DealActor, funderId: string, rulesInput: EligibilityRuleInput[]): Promise<FunderCriteria> {
+  assertManage(actor)
   return withImmediateTransaction(async (database) => {
     const storedFunder = await findFunderByIdForUpdate(database, actor.workspaceId, funderId)
     if (!storedFunder) throw new AppError(404, "funder_not_found", "The requested funder was not found.")
     const funder = toFunderRecord(storedFunder)
-    const rules = rulesInput.map((rule, index) => normalizeRule(rule, index, funder.id))
-    assertNoConflicts(rules)
+    const rules = normalizeEligibilityRules(funder.id, rulesInput)
     const stored = await listCriteriaRules(actor.workspaceId, funder.id)
     const nextFingerprint = fingerprint(rules)
     const unchanged = stored.fingerprint === nextFingerprint

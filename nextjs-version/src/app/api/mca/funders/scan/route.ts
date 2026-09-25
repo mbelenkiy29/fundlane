@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       if (!(file instanceof File)) throw new AppError(422, "file_required", "Choose a PDF, PNG, or JPEG criteria sheet.")
       return NextResponse.json(await uploadAndScanFunderCriteria(actor, {
         funderId: String(form.get("funderId") ?? ""),
-        dealId: String(form.get("dealId") ?? ""),
+        dealId: String(form.get("dealId") ?? "") || undefined,
         idempotencyKey: String(form.get("idempotencyKey") ?? ""),
         filename: file.name,
         mimeType: file.type,

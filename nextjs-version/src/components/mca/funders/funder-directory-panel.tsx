@@ -18,6 +18,7 @@ import { FUNDER_ROUTE_KINDS, type FunderContact, type FunderGroup, type FunderRe
 import { FUNDER_FIELD_LIMITS, firstFieldError, remapIndexedFieldErrors, validateFunderProfile, validateGroupName } from "@/lib/mca/funders/validation"
 import { CriteriaPanel } from "@/components/mca/funders/criteria-panel"
 import { CriteriaScanPanel } from "@/components/mca/funders/criteria-scan-panel"
+import { FunderImportPanel } from "@/components/mca/funders/funder-import-panel"
 import { SandboxFunderCard } from "@/components/mca/funders/sandbox-funder-card"
 import { isSandboxFunder } from "@/lib/mca/sandbox/labels"
 import type { SessionResponse } from "@/lib/mca/types"
@@ -297,7 +298,7 @@ export function FunderDirectoryPanel() {
     </div>}
 
     <Tabs value={section} onValueChange={setSection}>
-      <TabsList><TabsTrigger value="directory">Directory</TabsTrigger><TabsTrigger value="groups">Groups</TabsTrigger></TabsList>
+      <TabsList><TabsTrigger value="directory">Directory</TabsTrigger><TabsTrigger value="import">Import</TabsTrigger><TabsTrigger value="groups">Groups</TabsTrigger></TabsList>
       <TabsContent value="directory" className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_1fr]">
         <Card>
           <CardHeader className="space-y-3">
@@ -448,6 +449,10 @@ export function FunderDirectoryPanel() {
             {selectedId ? <div className="mt-6 space-y-6"><CriteriaPanel funderId={selectedId} /><CriteriaScanPanel funderId={selectedId} /></div> : null}
           </CardContent>
         </Card>
+      </TabsContent>
+
+      <TabsContent value="import">
+        <FunderImportPanel onImported={() => load({ keepSelection: true })} />
       </TabsContent>
 
       <TabsContent value="groups" className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_1fr]">

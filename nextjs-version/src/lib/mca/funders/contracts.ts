@@ -101,3 +101,58 @@ export interface CriteriaScanProposal {
   requestId?: string
   status: "proposed" | "accepted" | "rejected"
 }
+
+export interface FunderImportDraft {
+  legalName: string
+  nickname?: string
+  website?: string
+  domains: string[]
+  products: string[]
+  active: boolean
+  contacts: Array<{ name?: string; email?: string; phone?: string; role?: string }>
+  routes: Array<{
+    kind?: string
+    label?: string
+    destination?: string
+    documentExceptions?: string[]
+    active?: boolean
+  }>
+  criteria?: Array<{
+    id?: string
+    field: string
+    operator: string
+    unit: string
+    value?: string | number | string[] | boolean | null
+    sourceText?: string
+    unspecified?: boolean
+  }>
+}
+
+export interface FunderImportDuplicate {
+  match: "legal_name" | "domain" | "batch"
+  legalName: string
+  funderId?: string
+}
+
+export interface FunderImportPreviewRow {
+  key: string
+  rowNumber: number
+  draft: FunderImportDraft
+  status: "ready" | "invalid" | "duplicate"
+  included: boolean
+  errors: Record<string, string[]>
+  duplicate?: FunderImportDuplicate
+}
+
+export interface FunderImportPreview {
+  rows: FunderImportPreviewRow[]
+  warnings: string[]
+  summary: { ready: number; invalid: number; duplicate: number; included: number }
+}
+
+export interface FunderImportCommitResult {
+  created: FunderRecord[]
+  replayed: FunderRecord[]
+  skipped: number
+  criteriaPublished: number
+}
