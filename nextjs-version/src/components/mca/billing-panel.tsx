@@ -8,7 +8,7 @@ import { formatBillingMoney, validSelectedSeats, type BillingRecovery } from "@/
 import { monthlyPriceCents } from "@/lib/mca/billing-catalog"
 import type { CompanyAccess } from "@/lib/mca/company-access"
 
-type BillingResponse = { enabled: boolean; testMode: boolean; occupiedSeats: number; activeSeats:number;pendingInvitationSeats:number; canManagePayment: boolean; access: CompanyAccess; recovery: BillingRecovery; actionRequiredInvoice: null | {id:string;url:string|null}; state: null | {selected_seats:number;pending_seats:number|null;pending_seats_at:string|null}; billing: null | { subscriptionId: string | null; status: string; seatLimit: number; paymentPastDue: number; periodEnd:string|null } }
+type BillingResponse = { enabled: boolean; testMode: boolean; occupiedSeats: number; activeSeats:number;pendingInvitationSeats:number; canManagePayment: boolean; cardRequiredTrial?: boolean; access: CompanyAccess; recovery: BillingRecovery; actionRequiredInvoice: null | {id:string;url:string|null}; state: null | {selected_seats:number;pending_seats:number|null;pending_seats_at:string|null}; billing: null | { subscriptionId: string | null; status: string; seatLimit: number; paymentPastDue: number; periodEnd:string|null } }
 const date = (value:string) => new Date(value).toLocaleString()
 export function BillingCancellation({ enabled, busy, onCancel }: { enabled:boolean;busy:boolean;onCancel:()=>void }) {
   return <div className="space-y-2"><Button variant="outline" disabled={!enabled||busy} onClick={onCancel}>Cancel at period end</Button><p className="text-sm text-muted-foreground">Cancellation remains available while company access is paused, including when a seat reduction is scheduled. Cancellation replaces the pending reduction. Monthly fees continue until the effective cancellation date. Outstanding invoices and administrative suspensions remain in effect.</p></div>
@@ -40,14 +40,14 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
     catch(e){setError(e instanceof Error?e.message:"Billing action failed.")}finally{setBusy(false)}
   },[load,onboarding,seats])
   useEffect(()=>{if(!autoPortalOpened.current&&state?.canManagePayment&&new URLSearchParams(window.location.search).get("billingAction")==="portal") {autoPortalOpened.current=true;void action("portal")}},[action,state?.canManagePayment])
-  return <div className="space-y-6"><header><h1 className="text-3xl font-bold">{onboarding?"Your company trial is ready":"Plans & Billing"}</h1><p className="mt-2 text-muted-foreground">One monthly plan for your company. Active members and pending invitations reserve seats.</p></header>
+  return <div className="space-y-6"><header><h1 className="text-3xl font-bold">{onboarding?(state?.cardRequiredTrial?"Finish company setup":"Your company trial is ready"):"Plans & Billing"}</h1><p className="mt-2 text-muted-foreground">One monthly plan for your company. Active members and pending invitations reserve seats.</p></header>
     {error&&<p role="alert" className="text-destructive">{error}</p>}{notice&&<p role="status">{notice}</p>}
     {!state?<Button variant="outline" onClick={()=>void load().catch(e=>setError(e.message))}>Load billing</Button>:<>
       {state.enabled&&state.testMode&&<p className="rounded-lg bg-muted p-3 text-sm">Test mode — no real payments are collected.</p>}
       {state.actionRequiredInvoice&&<p role="alert" className="rounded-lg border border-amber-500 p-3 text-sm">Invoice {state.actionRequiredInvoice.id} needs payment authentication. {state.actionRequiredInvoice.url?<a className="underline" href={state.actionRequiredInvoice.url}>Complete payment on Stripe</a>:"Open Payment settings & invoices below to review it."} Seats and access update after payment is verified.</p>}
       <Card><CardHeader><CardTitle>Company access: {state.access.status.replaceAll("_"," ")}</CardTitle></CardHeader><CardContent className="space-y-2">
         {!state.access.allowed&&<p role="alert" className="text-destructive">Access is paused: {state.access.reason?.replaceAll("_"," ")}. {state.access.manualPaused?"Contact support to resolve this suspension.":"Review outstanding invoices and subscription status below to resolve billing. Payment must be verified before eligible access resumes."}</p>}
-        {state.access.trialEndsAt&&<p>Trial ends {date(state.access.trialEndsAt)}. No card required; up to 5 trial users.</p>}
+        {state.access.trialEndsAt&&<p>Trial ends {date(state.access.trialEndsAt)}.{state.cardRequiredTrial?"":" No card required; up to 5 trial users."}</p>}
         {state.access.graceEndsAt&&<p>Payment grace ends {date(state.access.graceEndsAt)}. Settle outstanding invoices to keep access.</p>}
         <p>{state.activeSeats} active members + {state.pendingInvitationSeats} pending invitations = {state.occupiedSeats} seats reserved · Current invitation limit: {state.access.seatLimit}</p>
         <p>Selected paid seats: {state.state?.selected_seats??1} · Purchased seats: {state.billing?.subscriptionId?state.billing.seatLimit:0}</p>
@@ -57,13 +57,13 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
       </CardContent></Card>
       <BillingRecoveryDetails recovery={state.recovery}/>
       <Card><CardHeader><CardTitle>Monthly subscription</CardTitle></CardHeader><CardContent className="space-y-4"><SeatSelector value={seats} onChange={setSeats} minimum={Math.max(1,state.occupiedSeats)}/>
-        <p className="text-sm text-muted-foreground">Checkout activates paid access immediately and ends the no-card trial. Seat increases are prorated and activate after payment. Reductions apply at renewal and cannot go below active members plus pending invitations.</p>
+        <p className="text-sm text-muted-foreground">{state.cardRequiredTrial?"Checkout collects a card and starts the trial shown there for new companies. After the trial, Stripe charges for the selected seats unless you cancel. Trial seat changes take effect immediately; paid increases activate after payment and reductions apply at renewal.":"Checkout activates paid access immediately and ends the no-card trial. Seat increases are prorated and activate after payment. Reductions apply at renewal and cannot go below active members plus pending invitations."}</p>
         <div className="flex flex-wrap gap-3"><Button disabled={!state.enabled||busy||!validSelectedSeats(seats)||seats<state.occupiedSeats||state.billing?.status==="incomplete"} onClick={()=>void action(hasSubscription?"seats":"checkout")}>{hasSubscription?"Update paid seats":"Subscribe now"}</Button>{state.canManagePayment&&<Button variant="outline" disabled={busy||!state.enabled} onClick={()=>void action("portal")}>Payment settings & invoices</Button>}<Button variant="outline" disabled={busy} onClick={()=>void action("sync")}>Refresh billing</Button></div>
         {state.billing?.status==="incomplete"&&<p className="text-sm text-muted-foreground">Your initial payment is incomplete. Resolve it in payment settings before changing seats.</p>}
         {state.canManagePayment&&<BillingCancellation enabled={state.enabled} busy={busy} onCancel={()=>void action("cancel")}/>}
         {!state.enabled&&<p className="text-sm text-muted-foreground">Online checkout is not enabled yet. Contact support for subscription help.</p>}
         <p className="text-sm text-muted-foreground">Use Cancel at period end to stop renewal, or Payment settings &amp; invoices to manage payment. Monthly fees continue during suspension until the effective cancellation date, normally the current period end. Cancellation does not restart a trial or forgive outstanding invoices. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access resumes.</p>
       </CardContent></Card>
-    </>}{onContinue&&<Button onClick={onContinue}>Continue to employee invitations</Button>}
+    </>}{onContinue&&(!state||!state.cardRequiredTrial||state.access.allowed)&&<Button onClick={onContinue}>Continue to employee invitations</Button>}
   </div>
 }

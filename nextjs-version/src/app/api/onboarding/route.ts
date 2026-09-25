@@ -3,13 +3,14 @@ import { z } from "zod"
 import { completeCompanyOnboarding, listSupabaseWorkspaces, setActiveWorkspace, supabaseIdentity } from "@/lib/mca/supabase-auth"
 import { assertTrustedMutation } from "@/lib/mca/auth"
 import { readJson } from "@/lib/mca/http"
-import { billingEnabled } from "@/lib/mca/billing"
+import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
 export async function GET() {
   try {
     const identity=await supabaseIdentity({ allowPasswordSetup:true })
     if (!identity) return NextResponse.json({ authenticated:false,workspaces:[] },{ headers:{ "Cache-Control":"no-store" } })
-    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "" },{ headers:{ "Cache-Control":"no-store" } })
+    const cardRequiredTrial=isStripeCheckoutTrialConfigured()
+    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",cardRequiredTrial,...(cardRequiredTrial?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
   } catch(error) { return apiError(error) }
 }
 export async function POST(request: Request) {
@@ -19,6 +20,7 @@ export async function POST(request: Request) {
     const identity=await supabaseIdentity()
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
     const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name,input.selectedSeats)
-    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled() })
+    const checkoutUrl = await createOnboardingCheckoutUrl(context.workspaceId,context.role,"name" in input?input.selectedSeats:1)
+    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl })
   } catch(error) { return apiError(error) }
 }

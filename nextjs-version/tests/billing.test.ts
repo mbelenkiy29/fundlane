@@ -10,9 +10,9 @@ import { createStripeHttpFixture } from "./helpers/stripe-http.mjs"
 import { getDatabase, closeDatabaseForTests, nowIso, withTransaction } from "../src/lib/mca/db"
 import { createWorkspaceWithAdmin } from "../src/lib/mca/workspaces"
 import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catalog"
-import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed } from "../src/lib/mca/company-access"
+import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
-import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
+import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -39,7 +39,7 @@ async function fixture(mapped = true) {
   if (mapped) await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(local.workspaceId,customerId,nowIso())
   const sub = subscription(customerId)
   const invoice = { id:`in_${suffix}`,customer:customerId,livemode:false,status:"paid",billing_reason:"subscription_create",currency:"usd",amount_due:71500,amount_paid:71500,amount_remaining:0,hosted_invoice_url:null,period_start:sub.items.data[0].current_period_start,period_end:sub.items.data[0].current_period_end,created:Math.floor(Date.now()/1000),parent:{subscription_details:{subscription:sub.id}},attempt_count:1,due_date:null,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:Math.floor(Date.now()/1000) as number|null} }
-   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
+   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,expires:0,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,checkoutKey:undefined as string|undefined,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
   const client = {
     customers:{ create:async()=>{state.createdCustomers++;return{id:customerId,livemode:false}},retrieve:async()=>({id:customerId,livemode:false,metadata:{workspace_id:local.workspaceId}}) },
     subscriptions:{ list:async()=>{if(state.fail)throw new Error("outage");return{data:state.subscriptions,has_more:false}},retrieve:async(id:string)=>state.subscriptions.find(s=>s.id===id),update:async(_id:string,params:Record<string,unknown>)=>{state.updates.push(params);if("pause_collection" in params)sub.pause_collection=params.pause_collection ? {behavior:"keep_as_draft"} : null;return sub} },
@@ -48,7 +48,7 @@ async function fixture(mapped = true) {
     invoices:{list:async()=>{state.invoiceReads++;return{data:structuredClone(state.invoices),has_more:false}},finalizeInvoice:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.finalizations.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params,{status:"open",hosted_invoice_url:`https://invoice.stripe.com/i/${id}`,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:null}});return structuredClone(target)},update:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.invoiceUpdates.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params);return structuredClone(target)}},
     invoicePayments:{list:async(params:{invoice?:string;payment?:{payment_intent?:string}})=>({data:state.processing?state.invoices.filter(i=>i.amount_remaining>0 && (!params.invoice || params.invoice===i.id) && (!params.payment?.payment_intent || params.payment.payment_intent===`pi_${i.id}`)).map(i=>({id:`ip_${i.id}`,invoice:i.id,livemode:false,status:"open",amount_requested:i.amount_remaining,amount_paid:null,currency:"usd",payment:{type:"payment_intent",payment_intent:`pi_${i.id}`}})):[],has_more:false})},
     paymentIntents:{retrieve:async(id:string)=>({id,customer:customerId,livemode:false,currency:"usd",amount:71500,amount_received:0,status:"processing"})},
-    checkout:{sessions:{create:async(params:Record<string,unknown>)=>{state.checkouts++;state.checkoutParams=params;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:"open",url:"https://checkout.stripe.com/test"}),expire:async()=>({})}},
+    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:"open",url:"https://checkout.stripe.com/test"}),expire:async()=>{state.expires++;return{}}}},
     subscriptionSchedules:{create:async(params:Record<string,unknown>)=>{assert.deepEqual(params,{from_subscription:sub.id});return{id:`sched_${suffix}`,customer:customerId,subscription:sub.id,livemode:false,status:"active",metadata:{},phases:[{start_date:sub.items.data[0].current_period_start,end_date:sub.items.data[0].current_period_end}]}},update:async()=>({})},
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
@@ -144,6 +144,31 @@ test("explicit key mode and subscription mode must agree",()=>{
   assert.ok(getStripeClient())
   assert.throws(()=>subscriptionEntitlement(subscription()),/mode/)
   process.env.MCA_STRIPE_MODE="test";process.env.STRIPE_SECRET_KEY="rk_test_fixture"
+})
+function restoreConfiguredStripe(){
+  Object.assign(process.env,{MCA_STRIPE_BILLING_ENABLED:"true",MCA_STRIPE_MODE:"test",STRIPE_SECRET_KEY:"rk_test_fixture",STRIPE_BASE_PRICE_ID:"price_base",STRIPE_ADDITIONAL_SEAT_PRICE_ID:"price_seats",STRIPE_BILLING_WEBHOOK_SECRET:"whsec_fixture"})
+}
+test("stripeCheckoutTrialConfiguration reports each missing setting by name",()=>{
+  restoreConfiguredStripe()
+  assert.deepEqual(stripeCheckoutTrialConfiguration(),{configured:true,missing:[]})
+  assert.equal(isStripeCheckoutTrialConfigured(),true)
+  process.env.MCA_STRIPE_BILLING_ENABLED="false"
+  assert.equal(isStripeCheckoutTrialConfigured(),false)
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["MCA_STRIPE_BILLING_ENABLED"])
+  restoreConfiguredStripe();delete process.env.STRIPE_SECRET_KEY
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_SECRET_KEY"])
+  restoreConfiguredStripe();process.env.STRIPE_SECRET_KEY="sk_live_fixture"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_SECRET_KEY"])
+  restoreConfiguredStripe();delete process.env.STRIPE_BASE_PRICE_ID
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BASE_PRICE_ID"])
+  restoreConfiguredStripe();process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID="not-a-price"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_ADDITIONAL_SEAT_PRICE_ID"])
+  restoreConfiguredStripe();process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID="price_base"
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BASE_PRICE_ID","STRIPE_ADDITIONAL_SEAT_PRICE_ID"])
+  restoreConfiguredStripe();delete process.env.STRIPE_BILLING_WEBHOOK_SECRET
+  assert.deepEqual(stripeCheckoutTrialConfiguration().missing,["STRIPE_BILLING_WEBHOOK_SECRET"])
+  restoreConfiguredStripe()
+  assert.equal(isStripeCheckoutTrialConfigured(),true)
 })
 for(const mode of ["classic","flexible"]) test(`SDK ${mode} cancellation atomically replaces the reduction with a final current phase`,async()=>{
   const f=await fixture(),http=await createStripeHttpFixture(),url=new URL(http.origin)
@@ -272,11 +297,110 @@ test("checkout reuses customer and open session and includes base plus additiona
   await initializeCompanyTrial(f.workspaceId,5)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
-  assert.equal(f.state.createdCustomers,1);assert.equal(f.state.checkouts,1)
+  assert.equal(f.state.createdCustomers,1);assert.equal(f.state.checkouts,1);assert.equal(f.state.expires,0)
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
   assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:4}])
   assert.deepEqual(f.state.checkoutParams.subscription_data,{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"}})
   assert.match(String(f.state.checkoutParams.integration_identifier),/^fundlane_company_subscription_[a-z]{8}$/)
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"trial")
+})
+test("new company Checkout requires a card and one Stripe trial; retries reuse the session",async()=>{
+  const f=await fixture(false)
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(f.workspaceId,nowIso())
+  assert.equal((await getCompanyAccess(f.workspaceId)).reason,"finish_setup")
+  await createBillingCheckout(f.workspaceId,8,true,f.client)
+  await createBillingCheckout(f.workspaceId,8,true,f.client)
+  assert.equal(f.state.checkouts,1);assert.equal(f.state.expires,0)
+  assert.equal(f.state.checkoutParams.payment_method_collection,"always")
+  assert.deepEqual(f.state.checkoutParams.subscription_data,{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"},trial_period_days:14,trial_settings:{end_behavior:{missing_payment_method:"pause"}}})
+  assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:7}])
+  assert.equal(f.state.checkoutParams.client_reference_id,f.workspaceId)
+  process.env.MCA_BILLING_TRIAL_DAYS="21"
+  assert.equal(billingTrialDays(),21)
+  process.env.MCA_BILLING_TRIAL_DAYS="0"
+  assert.throws(billingTrialDays,/Trial days/)
+  delete process.env.MCA_BILLING_TRIAL_DAYS
+})
+test("changing checkout seats expires the open session and creates a new one",async()=>{
+  const f=await fixture(false)
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(f.workspaceId,nowIso())
+  await createBillingCheckout(f.workspaceId,8,true,f.client)
+  await createBillingCheckout(f.workspaceId,2,true,f.client)
+  assert.equal(f.state.checkouts,2);assert.equal(f.state.expires,1)
+  assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:1}])
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:2-cs_[-\\w]+-\\d+$`))
+})
+test("Stripe status access table and trial quantity use provider state",()=>{
+  const end=new Date(Date.now()+86400000).toISOString()
+  const expired=new Date(Date.now()-86400000).toISOString()
+  const row={legacy_exempt:0,trial_ends_at:null,manual_paused:0,access_extended_until:null,grace_ends_at:null,processing_extension_until:null,pending_seats:null,status:"none",period_end:end,seat_limit:12}
+  for(const [status,expected] of Object.entries(STRIPE_ACCESS)) {
+    const access=evaluateCompanyAccess({...row,status})
+    assert.equal(access.allowed,expected.allowed,status)
+    assert.equal(access.reason,expected.reason,status)
+    assert.equal(access.seatLimit,12,status)
+  }
+  assert.equal(evaluateCompanyAccess({...row,status:"past_due",grace_ends_at:end}).allowed,true)
+  assert.equal(evaluateCompanyAccess({...row,status:"trialing",grace_ends_at:"2000-01-01"}).allowed,true)
+  assert.equal(evaluateCompanyAccess({...row,status:"none"}).reason,"finish_setup")
+  for (const status of ["incomplete","incomplete_expired"] as const) {
+    const granted=evaluateCompanyAccess({...row,status,trial_ends_at:end})
+    assert.equal(granted.allowed,true,status)
+    assert.equal(granted.status,"trial",status)
+    assert.equal(granted.reason,null,status)
+    assert.equal(granted.seatLimit,5,status)
+    const denied=evaluateCompanyAccess({...row,status,trial_ends_at:expired})
+    assert.equal(denied.allowed,false,status)
+    assert.equal(denied.status,"paused",status)
+    assert.equal(denied.reason,STRIPE_ACCESS[status].reason,status)
+  }
+  const unpaidGrace=evaluateCompanyAccess({...row,status:"unpaid",grace_ends_at:end})
+  assert.equal(unpaidGrace.allowed,true)
+  assert.equal(unpaidGrace.status,"grace")
+  const unpaidExpired=evaluateCompanyAccess({...row,status:"unpaid",grace_ends_at:expired})
+  assert.equal(unpaidExpired.allowed,false)
+  assert.equal(unpaidExpired.status,"paused")
+  assert.equal(unpaidExpired.reason,"payment_overdue")
+})
+test("trialing webhook receipts once, grants seats, and trial seat changes avoid invoices",async()=>{
+  const f=await fixture()
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,5,?)").run(f.workspaceId,nowIso())
+  const sub=f.state.subscriptions[0]
+  sub.status="trialing";sub.trial_start=Math.floor(Date.now()/1000);sub.trial_end=sub.trial_start+14*86400
+  Object.assign(f.state.invoices[0],{amount_due:0,amount_paid:0})
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:{proration_behavior:string;items:Array<{quantity?:number}>})=>{
+    assert.equal(params.proration_behavior,"none")
+    sub.items.data[1].quantity=params.items[0].quantity
+    return sub
+  }}} as unknown as StripeBillingClient
+  for(const type of ["customer.subscription.created","customer.subscription.trial_will_end","invoice.paid"]) {
+    const event={id:`evt_${randomUUID()}`,type,livemode:false,data:{object:{customer:f.customerId}}} as Stripe.Event
+    const queued=await processStripeBillingEvent(event,client)
+    assert.ok("queued" in queued && queued.queued)
+    assert.deepEqual(await processStripeBillingEvent(event,client),{duplicate:true})
+  }
+  await syncWorkspaceBilling(f.workspaceId,client)
+  assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM stripe_billing_events WHERE workspace_id=?").get(f.workspaceId))?.n,3)
+  assert.equal((await getCompanyAccess(f.workspaceId)).status,"trialing")
+  assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,5)
+  assert.equal(subscriptionEntitlement(sub).periodEnd,new Date(sub.trial_end*1000).toISOString())
+  await changeBillingSeats(f.workspaceId,8,f.userId,client)
+  assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,8)
+  await changeBillingSeats(f.workspaceId,3,f.userId,client)
+  assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,3)
+  assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed'").get(f.workspaceId))?.n,2)
+})
+test("a workspace with prior Stripe trial gets a new Checkout without another trial",async()=>{
+  const f=await fixture(false)
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,1,?)").run(f.workspaceId,nowIso())
+  await createBillingCheckout(f.workspaceId,1,true,f.client)
+  const prior=subscription(f.customerId,1,"canceled")
+  prior.trial_start=Math.floor(Date.now()/1000)-20*86400;prior.trial_end=prior.trial_start+14*86400
+  f.state.subscriptions.push(prior)
+  const client={...f.client,checkout:{sessions:{...f.client.checkout.sessions,retrieve:async()=>({id:"cs_expired",status:"expired"})}}} as unknown as StripeBillingClient
+  await createBillingCheckout(f.workspaceId,1,true,client)
+  assert.equal(f.state.checkouts,2)
+  assert.equal((f.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined)
 })
 test("SDK Checkout request explicitly selects flexible billing with a stable flow identifier",async()=>{
   const http=await createStripeHttpFixture(),url=new URL(http.origin)
@@ -1069,6 +1193,15 @@ test("an active subscription without paid invoice evidence never activates a new
   const current=await syncWorkspaceBilling(f.workspaceId,f.client)
   assert.equal(current.status,"incomplete")
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"trial")
+})
+test("an active subscriber whose first paid invoice is $0 from a coupon keeps access",async()=>{
+  const f=await fixture()
+  Object.assign(f.state.invoices[0],{amount_due:0,amount_paid:0,amount_remaining:0})
+  const current=await syncWorkspaceBilling(f.workspaceId,f.client)
+  assert.equal(current.status,"active")
+  const access=await getCompanyAccess(f.workspaceId)
+  assert.equal(access.allowed,true)
+  assert.equal(access.status,"active")
 })
 test("outbox retries use a stable receiver idempotency key and deliver to the explicit owner",async()=>{
   const f=await fixture(false)
