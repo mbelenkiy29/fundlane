@@ -2,7 +2,7 @@ import "server-only"
 import Stripe from "stripe"
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from "./db"
 import { AppError } from "./errors"
-import { BILLING_CATALOG, monthlyPriceCents } from "./billing-catalog"
+import { BILLING_CATALOG, monthlyPriceCents, TRIAL_DAYS } from "./billing-catalog"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 export { initializeCompanyTrial } from "./company-access"
 import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-reconciliation"
@@ -66,6 +66,8 @@ export interface BillingSubscription {
   cancel_at?: number | null
   current_period_start?: number | null
   current_period_end?: number | null
+  trial_start?: number | null
+  trial_end?: number | null
   items: { data: Array<{ id?: string; quantity?: number | null; current_period_start?: number; current_period_end?: number; price: { id: string } }> }
 }
 export interface BillingEntitlement {
@@ -108,13 +110,13 @@ export function subscriptionEntitlement(subscription: BillingSubscription): Bill
   // Scheduled cancellations remain active at Stripe until period end. Immediately canceled
   // subscriptions must not retain extra seats just because a future period_end remains set.
   if (["canceled", "incomplete_expired"].includes(subscription.status)) return { ...freeEntitlement(), status: subscription.status }
-  if (!["active", "past_due", "unpaid", "incomplete", "paused"].includes(subscription.status))
+  if (!["active", "trialing", "past_due", "unpaid", "incomplete", "paused"].includes(subscription.status))
     throw new AppError(503, "billing_subscription_unavailable", "This subscription requires administrator review.")
   const { item, additional } = fundlaneSubscriptionItems(subscription)
   if (subscription.status === "incomplete") return { ...freeEntitlement(), status: "incomplete", paymentPastDue: true }
   return { subscriptionId: subscription.id, planId: item.price.id, planSlug: "fundlane", planName: "Fundlane", status: subscription.status,
-    periodStart: iso(item.current_period_start ?? subscription.current_period_start), periodEnd: iso(item.current_period_end ?? subscription.current_period_end),
-    seatLimit: 1 + (additional?.quantity ?? 0), paymentPastDue: subscription.status !== "active" || Boolean(subscription.pause_collection) }
+    periodStart: iso(subscription.status === "trialing" ? subscription.trial_start : item.current_period_start ?? subscription.current_period_start), periodEnd: iso(subscription.status === "trialing" ? subscription.trial_end : item.current_period_end ?? subscription.current_period_end),
+    seatLimit: 1 + (additional?.quantity ?? 0), paymentPastDue: !["active", "trialing"].includes(subscription.status) || Boolean(subscription.pause_collection) }
 }
 
 function currentEntitlement(subscriptions: BillingSubscription[], customerId: string) {
@@ -198,9 +200,10 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
     // leave the original items in place until their proration invoice is paid.
     const previous = await db.prepare<{ seat_limit: number }>("SELECT seat_limit FROM workspace_billing_entitlements WHERE workspace_id=?").get(workspaceId)
     const unpaid = reconciled.hasUnpaidInvoices
-    const paid = current.subscriptionId ? await db.prepare<{paid_at:string|null}>("SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' ORDER BY created_at LIMIT 1").get(workspaceId, current.subscriptionId) : null
+    const paid = current.subscriptionId ? await db.prepare<{paid_at:string|null}>("SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' AND amount_due>0 ORDER BY created_at LIMIT 1").get(workspaceId, current.subscriptionId) : null
     if (current.status === "active" && !paid) { current.status = "incomplete"; current.paymentPastDue = true; current.seatLimit = previous?.seat_limit ?? 1 }
-    if (unpaid && current.seatLimit > (previous?.seat_limit ?? 1)) current.seatLimit = previous?.seat_limit ?? 1
+    if (unpaid && current.status !== "trialing" && current.seatLimit > (previous?.seat_limit ?? 1)) current.seatLimit = previous?.seat_limit ?? 1
+    if (subscription?.status === "trialing") await db.prepare("UPDATE company_subscription_state SET selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
     if (subscription && current.status === "active" && !unpaid) {
       await captureCompanyPauseBoundary(workspaceId,db,paid?.paid_at ? Date.parse(paid.paid_at) : Date.now())
       const converted = await db.prepare("UPDATE company_subscription_state SET legacy_exempt=0 WHERE workspace_id=? AND legacy_exempt=1").run(workspaceId)
@@ -270,6 +273,18 @@ function billingReturnUrl(onboarding: boolean) {
 // One company-subscription flow across onboarding/settings. The eight-letter suffix
 // was randomly generated once; keep it stable across sessions, retries and releases.
 const COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER = "fundlane_company_subscription_ndmotxpw"
+export const MISSING_TRIAL_PAYMENT_METHOD: "pause" | "cancel" = "pause"
+export function billingTrialDays() {
+  const raw = process.env.MCA_BILLING_TRIAL_DAYS
+  if (raw === undefined || raw === "") return TRIAL_DAYS
+  const days = Number(raw)
+  if (!Number.isSafeInteger(days) || days < 1 || days > 730) throw new AppError(503, "billing_trial_days_invalid", "Trial days must be an integer between 1 and 730.")
+  return days
+}
+function liveTrialHistory(list: Stripe.ApiList<Stripe.Subscription>) {
+  if (list.has_more) throw new AppError(503, "billing_subscription_unavailable", "Subscription history requires administrator review.")
+  return list.data.some(subscription => Boolean(subscription.trial_start || subscription.trial_end))
+}
 
 export async function createBillingCheckout(workspaceId: string, selectedSeats: number, onboarding = false, providedClient?: StripeBillingClient) {
   monthlyPriceCents(selectedSeats)
@@ -295,9 +310,10 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     if (mapping.checkout_session_id) {
       const pending = await client.checkout.sessions.retrieve(mapping.checkout_session_id)
       if (pending.status === "open") {
-        if (mapping.checkout_plan_slug === slug && pending.url) return { url: pending.url }
-        await client.checkout.sessions.expire(pending.id)
-      } else if (pending.status === "complete") {
+        if (!pending.url) throw new AppError(503,"billing_checkout_unavailable","Checkout is temporarily unavailable.")
+        return { url: pending.url }
+      }
+      if (pending.status === "complete") {
         const subscriptionId = typeof pending.subscription === "string" ? pending.subscription : pending.subscription?.id
         const previous = subscriptionId ? await client.subscriptions.retrieve(subscriptionId) : null
         // Allow a new plan after a previous subscription actually ended. A completed
@@ -306,13 +322,18 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
           throw new AppError(409, "billing_checkout_pending", "Your checkout is being reconciled. Retry billing sync before starting another checkout.")
       }
     }
+    // Subscription history and the original trial marker prevent a second trial after
+    // a canceled subscription or an expired Checkout. Neither is reset by retrying.
+    const history = await db.prepare<{trial_started_at:string|null}>("SELECT trial_started_at FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+    const trialDays = !history?.trial_started_at && !liveTrialHistory(await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})) ? billingTrialDays() : null
     const slot = Math.floor(Date.now() / 1800000)
     const session = await client.checkout.sessions.create({ mode: "subscription", customer: mapping.stripe_customer_id,
       integration_identifier: COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER,
-      client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" } },
+      client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
+      subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
       line_items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])],
       success_url: returnUrl, cancel_url: returnUrl, expires_at: (slot + 2) * 1800,
-    }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}-${slot}` })
+    }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}` })
     if (session.livemode !== stripeLiveMode() || !session.url) throw new AppError(503, "billing_checkout_unavailable", "Checkout is temporarily unavailable.")
     await db.prepare("UPDATE workspace_stripe_customers SET checkout_session_id = ?, checkout_plan_slug = ? WHERE workspace_id = ?").run(session.id, slug, workspaceId)
     return { url: session.url }
@@ -501,6 +522,19 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
     await assertOccupiedSeats(workspaceId, selectedSeats, db)
     const current = await syncWorkspaceBilling(workspaceId, client)
+    if (current.status === "trialing" && current.subscriptionId) {
+      const sub = await client.subscriptions.retrieve(current.subscriptionId)
+      if (sub.status !== "trialing" || sub.pending_update || sub.cancel_at_period_end || sub.cancel_at || sub.schedule) throw new AppError(409,"billing_change_pending","Resolve the pending subscription change before changing seats.")
+      if (selectedSeats === current.seatLimit) return getWorkspaceBilling(workspaceId)
+      const additional = sub.items.data.find(i => i.price.id === ids.seats)
+      await client.subscriptions.update(sub.id, { proration_behavior: "none", items: selectedSeats === 1
+        ? additional?.id ? [{ id: additional.id, deleted: true }] : []
+        : [{ ...(additional?.id ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }] },
+      { idempotencyKey: `fundlane-trial-seats-${sub.id}-${current.seatLimit}-${selectedSeats}` })
+      await recordAuditEvent({context:{workspaceId,userId:actorUserId},action:"billing.seats_changed",resourceType:"workspace",resourceId:workspaceId,metadata:{from:current.seatLimit,to:selectedSeats,effective:"trial_immediate"},executor:db})
+      await syncWorkspaceBilling(workspaceId,client)
+      return getWorkspaceBilling(workspaceId)
+    }
     if (!current.subscriptionId || current.status !== "active" || current.paymentPastDue) throw new AppError(409, "billing_payment_required", "An active paid subscription is required to change purchased seats.")
     const state = await db.prepare<{ pending_seats: number | null; stripe_schedule_id: string | null }>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     if (state?.pending_seats) {

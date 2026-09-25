@@ -13,6 +13,12 @@ export interface CompanyAccessRow {
   processing_extension_until: string | null; pending_seats: number | null
   status: string | null; period_end: string | null; seat_limit: number
 }
+export const STRIPE_ACCESS = {
+  trialing: { allowed: true, reason: null }, active: { allowed: true, reason: null },
+  past_due: { allowed: false, reason: "payment_overdue" }, unpaid: { allowed: false, reason: "payment_overdue" },
+  incomplete: { allowed: false, reason: "finish_payment" }, incomplete_expired: { allowed: false, reason: "subscription_required" },
+  canceled: { allowed: false, reason: "subscription_required" }, paused: { allowed: false, reason: "add_payment_method" },
+} as const
 /** Deterministic local gate: no provider requests and no reliance on cron punctuality. */
 export function evaluateCompanyAccess(row: CompanyAccessRow, now = Date.now()): CompanyAccess {
   const future = (value: string | null) => Boolean(value && Date.parse(value) > now)
@@ -20,14 +26,22 @@ export function evaluateCompanyAccess(row: CompanyAccessRow, now = Date.now()): 
   let status = "paused", reason: string | null = "subscription_required", allowed = false
   if (row.legacy_exempt) { allowed = true; status = "legacy_exempt"; reason = null }
   else if (future(row.access_extended_until)) { allowed = true; status = "extended"; reason = null }
-  else if (row.grace_ends_at) { allowed = future(grace); status = allowed ? "grace" : "paused"; reason = allowed ? null : "payment_overdue" }
+  else if (row.status === "trialing" && future(row.period_end)) { allowed = true; status = "trialing"; reason = null }
+  else if (row.grace_ends_at && ["active","past_due"].includes(row.status ?? "")) { allowed = future(grace); status = allowed ? "grace" : "paused"; reason = allowed ? null : "payment_overdue" }
   else if (row.status === "active" && future(row.period_end)) { allowed = true; status = "active"; reason = null }
-  else if (!row.status || ["none", "incomplete", "incomplete_expired"].includes(row.status)) {
-    allowed = future(row.trial_ends_at); status = allowed ? "trial" : "paused"; reason = allowed ? null : "trial_expired"
+  else if (row.status === "incomplete" && future(row.trial_ends_at)) { allowed = true; status = "trial"; reason = null }
+  else if (row.status && row.status in STRIPE_ACCESS) {
+    const policy = STRIPE_ACCESS[row.status as keyof typeof STRIPE_ACCESS]
+    allowed = policy.allowed && future(row.period_end)
+    status = allowed ? row.status : "paused"
+    reason = allowed ? null : policy.reason ?? "subscription_required"
+  }
+  else if (!row.status || row.status === "none") {
+    allowed = future(row.trial_ends_at); status = allowed ? "trial" : "paused"; reason = allowed ? null : row.trial_ends_at ? "trial_expired" : "finish_setup"
   }
   if (row.manual_paused) { allowed = false; status = "paused"; reason = "manual_suspension" }
   const trialCapacity = status === "trial" || (status === "extended" && !!row.trial_ends_at && (!row.status || ["none","incomplete","incomplete_expired"].includes(row.status)))
-  return { allowed, status, reason, seatLimit: trialCapacity ? TRIAL_SEATS : Math.min(row.seat_limit, row.pending_seats ?? row.seat_limit), trialEndsAt: row.trial_ends_at, graceEndsAt: grace, manualPaused: !!row.manual_paused }
+  return { allowed, status, reason, seatLimit: trialCapacity ? TRIAL_SEATS : Math.min(row.seat_limit, row.pending_seats ?? row.seat_limit), trialEndsAt: row.status === "trialing" ? row.period_end : row.trial_ends_at, graceEndsAt: grace, manualPaused: !!row.manual_paused }
 }
 export async function getCompanyAccess(workspaceId: string): Promise<CompanyAccess> {
   const row = await getDatabase().prepare<CompanyAccessRow>(`SELECT COALESCE(s.legacy_exempt,1) legacy_exempt, s.trial_ends_at,

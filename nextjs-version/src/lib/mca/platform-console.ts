@@ -28,7 +28,8 @@ export async function platformCompanies(query:PlatformQuery) {
       'access:' || CASE WHEN s.manual_paused=1 THEN 'paused'
       WHEN COALESCE(s.legacy_exempt,1)=1 THEN 'legacy_exempt'
       WHEN s.access_extended_until::timestamptz>now() THEN 'extended'
-      WHEN s.grace_ends_at IS NOT NULL THEN CASE WHEN GREATEST(s.grace_ends_at::timestamptz,s.processing_extension_until::timestamptz)>now() THEN 'grace' ELSE 'paused' END
+      WHEN e.status='trialing' AND e.period_end::timestamptz>now() THEN 'trialing'
+      WHEN s.grace_ends_at IS NOT NULL AND e.status IN ('active','past_due') THEN CASE WHEN GREATEST(s.grace_ends_at::timestamptz,s.processing_extension_until::timestamptz)>now() THEN 'grace' ELSE 'paused' END
       WHEN e.status='active' AND e.period_end::timestamptz>now() THEN 'active'
       WHEN COALESCE(e.status,'none') IN ('none','incomplete','incomplete_expired') AND s.trial_ends_at::timestamptz>now() THEN 'trial'
       ELSE 'paused' END=?)

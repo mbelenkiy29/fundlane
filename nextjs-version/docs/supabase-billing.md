@@ -2,11 +2,11 @@
 
 ## Contract and migration
 
-One monthly USD plan: **$399 including the first user**, graduated additional users 2–10 at $79 each, 11–20 at $69 each, 21+ at $59 each. Active and pending memberships reserve seats. The public `monthlyPriceCents(seats)` function quotes the total. New companies receive a no-card, app-managed 14-day trial capped at five users including the owner. Early checkout charges immediately; no Stripe trial is created.
+One monthly USD plan: **$399 including the first user**, graduated additional users 2–10 at $79 each, 11–20 at $69 each, 21+ at $59 each. Active and pending memberships reserve seats. The public `monthlyPriceCents(seats)` function quotes the total. New companies create a workspace in a finish-setup state, then enter Stripe Checkout with a card to start a 14-day trial for the selected quantity. Stripe owns the trial end and charges the saved card after it. `MCA_BILLING_TRIAL_DAYS` can override the 14-day default with an integer from 1 to 730. A missing payment method at trial end pauses the subscription by default; the typed setting can be changed to `cancel` in code.
 
 These are the current engineering catalog amounts, not an approved launch pricing decision. All application and Stripe setup price amounts live in `src/lib/mca/billing-catalog.ts`; owner approval is pending in #79. Change the catalog only after that decision is recorded, then provision new Stripe Price objects and update the configured price IDs through a reviewed release.
 
-Onboarding must call `initializeCompanyTrial(workspaceId, selectedSeats, executor?)` inside company creation. Also re-exported by `billing.ts`. Repeated initialization is a no-op; database triggers protect original trial start/end. Operator extensions use a separate field.
+Onboarding inserts `company_subscription_state` with `legacy_exempt=0` and the selected seats, then opens Checkout. Retrying creation reuses the workspace; Checkout retries reuse an open session, even if seat selection changed. A completed session with an unresolved subscription blocks another Checkout. Subscription trial history prevents a second Stripe trial for the workspace after cancellation. `initializeCompanyTrial` remains only for historical or operator-managed local trials; database triggers protect those original trial dates. Operator extensions use a separate field.
 
 Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **0048_billing_recovery** before deploying recovery code, plus the existing runtime-security release step. Migration 0047 explicitly backfills all existing companies as `legacy_exempt=1`; it never starts a trial, creates a customer or charges them. Migration 0048 adds the durable processing-extension grant marker and backfills existing extensions. Missing state retains legacy access for older creation paths; production onboarding must initialize trials. Verified paid conversion removes exemption. Historical Clerk/Stripe rows are retained. Unknown historical Stripe prices require an explicit operator migration rather than silent contract conversion.
 
@@ -14,6 +14,7 @@ Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **
 
 ```dotenv
 MCA_STRIPE_BILLING_ENABLED=true
+MCA_BILLING_TRIAL_DAYS=14
 MCA_STRIPE_MODE=test
 STRIPE_SECRET_KEY=rk_test_...
 STRIPE_BASE_PRICE_ID=price_...
@@ -46,7 +47,7 @@ New company-subscription Checkout requests explicitly set `subscription_data.bil
 
 Reviewed with Stripe CLI 1.51.1 on 2026-09-21 against installed `stripe` 22.6.0 types and API `2026-08-26.dahlia`:
 
-- [Checkout create](https://docs.stripe.com/api/checkout/sessions/create): `integration_identifier` is a reusable string (maximum 200 characters); flexible mode is nested under `subscription_data.billing_mode`. Checkout keeps dynamic payment methods and the app-managed trial.
+- [Checkout create](https://docs.stripe.com/api/checkout/sessions/create): `integration_identifier` is a reusable string (maximum 200 characters); flexible mode is nested under `subscription_data.billing_mode`. New-company Checkout sets `payment_method_collection=always`, `subscription_data.trial_period_days`, and `trial_settings.end_behavior.missing_payment_method=pause`.
 - [Billing mode](https://docs.stripe.com/billing/subscriptions/billing-mode): flexible mode supports this API version. A schedule created with `from_subscription` inherits the subscription's mode; supplying `billing_mode` with it is an error. Seat updates/schedules therefore omit mode changes, preserving both classic and flexible subscriptions.
 - [Pending updates](https://docs.stripe.com/billing/subscriptions/pending-updates): paid increases retain `pending_if_incomplete` plus `always_invoice`. Pending updates require automatic collection and a supported payment method. Real configured methods, SCA, failed payments and successful settlement must be exercised in task 4.2; SDK fixture contracts alone do not prove provider acceptance.
 - Catalog review: `scripts/stripe/setup-catalog.ts` creates the existing licensed monthly USD base and graduated additional-seat prices; `verifyBillingPrices` checks the actual prices/tiers. Billing mode belongs to subscriptions, so no price changes are needed. The dedicated Portal configuration permits payment methods, invoices and period-end cancellation and disables subscription updates, matching the runtime validator.
@@ -76,7 +77,7 @@ Company billing routes use existing session membership authorization and trusted
 - `POST /api/billing/cancel`: strict empty JSON object `{}`; owner/admin session, trusted origin, mapped company only. Returns `{ cancelAt: ISO-string | null, alreadyCanceled: boolean }` after fresh provider verification. This exact route is in the paused-company recovery allowlist; members, deactivated users and API keys cannot use it.
 - `GET /api/cron/billing`: exact `Authorization: Bearer ${CRON_SECRET}`; missing secret fails closed.
 
-HTTP selected quantity is capped at 100000. Checkout locks the company, uses stable Stripe idempotency keys, reuses identical open sessions, expires replaced sessions and refuses a second active/incomplete subscription or unresolved completed checkout. Checkout and seat changes reject quantities below active+pending usage and are audited.
+HTTP selected quantity is capped at 100000. Checkout locks the company, uses stable Stripe idempotency keys, reuses any open session and refuses a second active/incomplete subscription or unresolved completed checkout. Checkout and seat changes reject quantities below active+pending usage and are audited.
 
 `company-access.ts` exports:
 
@@ -94,7 +95,7 @@ The assertion throws `AppError(402, 'company_paused', ...)`. Gate reads are loca
 
 For outbound workers, pass the durable user approval/creation timestamp to `assertCompanyOutboundAllowed`, never a lease/retry/last-sync timestamp. It first enforces current access, then rejects missing/invalid/future approval timestamps or approvals at/before `company_subscription_state.last_paused_at` with **409 `company_outbound_reapproval_required`**. The persisted boundary is monotonic, database-protected pause history, not billing freshness. Manual pauses capture it immediately. Trial conversion, grace recovery, late-paid renewals and observed cancellation gaps preserve the effective expired deadline even if workers were offline throughout. Timely payments observed late do not manufacture a pause; ordinary sync never advances the boundary. Fresh reapproval after recovery remains valid. Trial extensions keep five-user capacity even if an incomplete checkout cached a one-seat entitlement.
 
-Increases use Stripe `pending_if_incomplete` and `always_invoice`: original items remain until proration is paid. Reconciliation also blocks capacity increases while unpaid invoices exist and requires paid invoice evidence for activation. Reductions use a next-renewal subscription schedule without proration. The lower pending ceiling constrains invitations immediately. A differing second reduction is refused until renewal. Membership records are never deleted by billing.
+During `trialing`, seat changes update Stripe subscription items immediately with `proration_behavior:none`; the purchased quantity is the invitation limit. For active paid subscriptions, increases use Stripe `pending_if_incomplete` and `always_invoice`: original items remain until proration is paid. Reconciliation blocks paid capacity increases while unpaid invoices exist and requires a positive-amount paid invoice for `active` access; the trial's $0 invoice is not paid-period evidence. Reductions use a next-renewal subscription schedule without proration. The lower pending ceiling constrains invitations immediately. A differing second reduction is refused until renewal. Membership records are never deleted by billing.
 
 ### Application period-end cancellation (R5.1)
 

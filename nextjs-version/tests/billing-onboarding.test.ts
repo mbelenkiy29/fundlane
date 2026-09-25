@@ -19,17 +19,17 @@ before(async()=>{
   ;({completeCompanyOnboarding}=await import("../src/lib/mca/supabase-auth"))
 })
 after(async()=>{await closeDatabaseForTests();await database?.close()})
-test("company creation stores a >5 paid quantity and starts one five-seat trial atomically",async()=>{
+test("company creation stores the selected quantity without starting a local trial",async()=>{
   const context=await completeCompanyOnboarding("Large selected company",21)
-  const state=await getDatabase().prepare<{selected_seats:number;trial_started_at:string;trial_ends_at:string;legacy_exempt:number;seat_limit:number}>("SELECT s.*,w.seat_limit FROM company_subscription_state s JOIN workspaces w ON w.id=s.workspace_id WHERE s.workspace_id=?").get(context.workspaceId)
-  assert.equal(state?.selected_seats,21);assert.equal(state?.seat_limit,5);assert.equal(state?.legacy_exempt,0)
-  assert.equal(Date.parse(state!.trial_ends_at)-Date.parse(state!.trial_started_at),14*86400000)
+  const state=await getDatabase().prepare<{selected_seats:number;trial_started_at:string|null;trial_ends_at:string|null;legacy_exempt:number;seat_limit:number}>("SELECT s.*,w.seat_limit FROM company_subscription_state s JOIN workspaces w ON w.id=s.workspace_id WHERE s.workspace_id=?").get(context.workspaceId)
+  assert.equal(state?.selected_seats,21);assert.equal(state?.seat_limit,1);assert.equal(state?.legacy_exempt,0)
+  assert.equal(state?.trial_started_at,null);assert.equal(state?.trial_ends_at,null)
   assert.equal((await completeCompanyOnboarding("Large selected company",50)).workspaceId,context.workspaceId)
   const unchanged=await getDatabase().prepare<{selected_seats:number;trial_started_at:string}>("SELECT selected_seats,trial_started_at FROM company_subscription_state WHERE workspace_id=?").get(context.workspaceId)
   assert.equal(unchanged?.selected_seats,21);assert.equal(unchanged?.trial_started_at,state?.trial_started_at)
   assert.ok(await getDatabase().prepare("SELECT membership_id FROM workspace_owners WHERE workspace_id=?").get(context.workspaceId))
 })
-test("initializer failure rolls back company creation",async()=>{
+test("invalid selected seats cannot create a company",async()=>{
   await assert.rejects(completeCompanyOnboarding("Invalid seats company",0),RangeError)
   assert.equal(await getDatabase().prepare("SELECT id FROM workspaces WHERE name=?").get("Invalid seats company"),undefined)
 })
