@@ -48,13 +48,25 @@ export async function resolveAppUserId(supabaseUserId: string): Promise<string |
   return row?.id ?? null;
 }
 
+export function isGoogleOauthCallback(input: {
+  hasCode: boolean;
+  hasTokenHash: boolean;
+  type: string | null;
+  provider?: string | null;
+  next?: string | null;
+}): boolean {
+  if (!input.hasCode || input.hasTokenHash || input.provider !== "google") return false;
+  if (input.type === "email" || input.type === "signup" || input.type === "recovery") return false;
+  return !input.next?.startsWith("/reset-password");
+}
+
 export async function getTotpAccessState(input: {
   userId: string | null;
   sessionId: string | null;
   workspaceId?: string | null;
 }): Promise<TotpAccessState> {
   const available = totpEncryptionAvailable();
-  if (!available || !input.userId) {
+  if (!input.userId) {
     return {
       available,
       enrolled: false,
@@ -88,7 +100,7 @@ export async function getTotpAccessState(input: {
     pending: factor?.status === "pending",
     recoveryRemaining: remaining?.count ?? 0,
     enrollmentRequired: require2fa && !enrolled,
-    challengeRequired: enrolled && session?.method === "pending",
+    challengeRequired: enrolled && !sessionVerified,
     sessionVerified,
   };
 }
@@ -99,13 +111,11 @@ export async function assertSessionTotpAccess(input: {
   workspaceId: string;
 }): Promise<void> {
   const state = await getTotpAccessState(input);
-  if (!state.available) return;
   if (state.enrollmentRequired) throw new AppError(403, "totp_enrollment_required", "Your company requires two-factor authentication. Enroll an authenticator to continue.");
   if (state.challengeRequired) throw new AppError(403, "totp_required", "Enter an authenticator or recovery code to finish signing in.");
 }
 
 export async function startPasswordTotpChallenge(identity: SupabaseIdentity): Promise<{ mfaRequired: boolean }> {
-  if (!totpEncryptionAvailable()) return { mfaRequired: false };
   const userId = await resolveAppUserId(identity.user.id);
   if (!userId) return { mfaRequired: false };
   const factor = await getDatabase().prepare<FactorRow>("SELECT user_id, status, secret_cipher, last_used_counter, confirmed_at FROM user_totp_factors WHERE user_id = ? AND status = 'enabled'").get(userId);
@@ -115,7 +125,6 @@ export async function startPasswordTotpChallenge(identity: SupabaseIdentity): Pr
 }
 
 export async function markGoogleTotpSession(identity: SupabaseIdentity): Promise<void> {
-  if (!totpEncryptionAvailable()) return;
   const userId = await resolveAppUserId(identity.user.id);
   if (!userId) return;
   await upsertSessionTotp(identity.sessionId, userId, "google", nowIso());
@@ -236,7 +245,6 @@ async function upsertSessionTotp(
 }
 
 export async function sessionHasAppTotp(sessionId: string, userId: string): Promise<boolean> {
-  if (!totpEncryptionAvailable()) return false;
   const row = await getDatabase().prepare<{ method: TotpSessionMethod; verified_at: string | null }>("SELECT method, verified_at FROM auth_session_totp WHERE session_id = ? AND user_id = ?")
     .get(sessionId, userId);
   return Boolean(row?.verified_at) && (row?.method === "totp" || row?.method === "recovery");

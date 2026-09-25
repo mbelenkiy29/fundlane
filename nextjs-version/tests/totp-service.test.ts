@@ -13,6 +13,7 @@ import {
   confirmTotpEnrollment,
   disableTotp,
   getTotpAccessState,
+  isGoogleOauthCallback,
   markGoogleTotpSession,
   regenerateRecoveryCodes,
   startPasswordTotpChallenge,
@@ -85,6 +86,44 @@ test("password sign-in requires a challenge that consumes a recovery code once",
   assert.equal(used.method, "recovery")
   await assertSessionTotpAccess({ userId: local.userId, sessionId: nextSession, workspaceId: local.workspaceId })
   await assert.rejects(challengeTotp(local.userId, randomUUID(), recoveryCodes[0]), { code: "totp_verification_failed" })
+})
+
+test("enrolled users without a session marker must complete a challenge", async () => {
+  const { local } = await fixture()
+  const enrollment = await beginTotpEnrollment(local.userId, "owner@example.test")
+  await confirmTotpEnrollment(local.userId, generateTotpCode(enrollment.secret))
+  const otherSession = randomUUID()
+  const state = await getTotpAccessState({ userId: local.userId, sessionId: otherSession, workspaceId: local.workspaceId })
+  assert.equal(state.challengeRequired, true)
+  await assert.rejects(assertSessionTotpAccess({ userId: local.userId, sessionId: otherSession, workspaceId: local.workspaceId }), { code: "totp_required" })
+})
+
+test("missing encryption key fail-closes enrolled accounts instead of skipping TOTP", async () => {
+  const { local, identity } = await fixture()
+  const enrollment = await beginTotpEnrollment(local.userId, identity.email)
+  await confirmTotpEnrollment(local.userId, generateTotpCode(enrollment.secret))
+  const previousKey = process.env.MCA_DATA_ENCRYPTION_KEY
+  process.env.MCA_DATA_ENCRYPTION_KEY = "invalid-totp-key"
+  try {
+    const nextSession = randomUUID()
+    const started = await startPasswordTotpChallenge({ ...identity, sessionId: nextSession })
+    assert.equal(started.mfaRequired, true)
+    const state = await getTotpAccessState({ userId: local.userId, sessionId: nextSession, workspaceId: local.workspaceId })
+    assert.equal(state.available, false)
+    assert.equal(state.enrolled, true)
+    assert.equal(state.challengeRequired, true)
+    await assert.rejects(assertSessionTotpAccess({ userId: local.userId, sessionId: nextSession, workspaceId: local.workspaceId }), { code: "totp_required" })
+  } finally {
+    process.env.MCA_DATA_ENCRYPTION_KEY = previousKey
+  }
+})
+
+test("only Google OAuth code callbacks skip TOTP; email and recovery stay challenged", () => {
+  assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: null, provider: "google", next: "/onboarding" }), true)
+  assert.equal(isGoogleOauthCallback({ hasCode: false, hasTokenHash: true, type: "email", provider: "google", next: "/onboarding" }), false)
+  assert.equal(isGoogleOauthCallback({ hasCode: false, hasTokenHash: true, type: "recovery", provider: "google", next: "/reset-password?next=%2Fonboarding" }), false)
+  assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: null, provider: "google", next: "/reset-password?next=%2Fonboarding" }), false)
+  assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: "signup", provider: "google", next: "/onboarding" }), false)
 })
 
 test("Google sign-in does not require a second factor after Google authentication", async () => {

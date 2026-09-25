@@ -49,33 +49,34 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
   }
 
   if (!state && !error) return <p>Loading account security…</p>
-  if (state && !state.available) {
-    return <p role="status">Two-factor authentication is unavailable on this deployment. Ask an operator to configure the existing data encryption key.</p>
-  }
 
-  const challenge = mode === "challenge" || state?.challengeRequired
-  const mustEnroll = mode === "enroll" || state?.enrollmentRequired
+  const appTotp = Boolean(state?.available)
+  const challenge = Boolean(appTotp && state?.enrolled && !state.sessionVerified && (mode === "challenge" || state.challengeRequired))
+  const mustEnroll = Boolean(appTotp && (mode === "enroll" || state?.enrollmentRequired) && !state?.enrolled)
+  const showLegacy = Boolean(factorId && state?.factors.length && (!state.enrolled || !state.available))
 
   return <div className="space-y-5">
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    {mustEnroll && !state?.enrolled && <p role="status">Your company requires an authenticator app before you can use the workspace.</p>}
-    {challenge && state?.enrolled && !state.sessionVerified && <p role="status">Enter an authenticator or recovery code to finish signing in.</p>}
-    {state?.enrolled && !recoveryCodes && !challenge && <p role="status">Authenticator-app two-factor authentication is on. {state.recoveryRemaining} unused recovery codes remain.</p>}
+    {state && !state.available && <p role="status">Application authenticator enrollment is unavailable on this deployment. Ask an operator to configure the existing data encryption key. An existing platform authenticator can still be verified below.</p>}
+    {mustEnroll && <p role="status">Your company requires an authenticator app before you can use the workspace.</p>}
+    {challenge && <p role="status">Enter an authenticator or recovery code to finish signing in.</p>}
+    {state?.sessionVerified && mode === "challenge" && !challenge && <p role="status">Authenticator verification is complete. Continue to your workspace.</p>}
+    {appTotp && state?.enrolled && !recoveryCodes && !challenge && <p role="status">Authenticator-app two-factor authentication is on. {state.recoveryRemaining} unused recovery codes remain.</p>}
     {recoveryCodes && <div className="space-y-3">
       <p>Store these single-use recovery codes now. They will not be shown again.</p>
       <ul className="grid gap-2 font-mono text-sm">{recoveryCodes.map(item => <li key={item} className="rounded border p-2">{item}</li>)}</ul>
       <Button type="button" variant="outline" onClick={() => setRecoveryCodes(null)}>I have saved these codes</Button>
     </div>}
-    {enrollment && <div className="space-y-3">
+    {appTotp && enrollment && <div className="space-y-3">
       <p>Scan this QR code with your authenticator app, or enter the setup key manually. Keep this key private.</p>
       <Image unoptimized src={enrollment.qrCode} alt="Authenticator setup QR code" width={200} height={200} />
       <code className="block break-all rounded border p-3">{enrollment.secret}</code>
     </div>}
-    {!state?.enrolled && !enrollment && <Button disabled={busy} onClick={() => run(async () => {
+    {appTotp && !state?.enrolled && !enrollment && <Button disabled={busy} onClick={() => run(async () => {
       const data = await requestJson<{ secret: string; qrCode: string }>("/api/auth/mfa", { method: "POST", body: JSON.stringify({ action: "enroll" }) })
       setEnrollment(data)
     })}>Set up authenticator</Button>}
-    {(enrollment || (challenge && state?.enrolled)) && <form className="space-y-4" onSubmit={e => { e.preventDefault(); void run(async () => {
+    {appTotp && (enrollment || challenge) && <form className="space-y-4" onSubmit={e => { e.preventDefault(); void run(async () => {
       if (enrollment) {
         const result = await requestJson<{ recoveryCodes: string[] }>("/api/auth/mfa", { method: "POST", body: JSON.stringify({ action: "confirm", code }) })
         setRecoveryCodes(result.recoveryCodes)
@@ -91,7 +92,7 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
       </Label>
       <Button disabled={busy || !code}>{busy ? "Verifying…" : enrollment ? "Confirm authenticator" : "Verify and continue"}</Button>
     </form>}
-    {state?.enrolled && !challenge && !recoveryCodes && <div className="flex flex-wrap gap-2">
+    {appTotp && state?.enrolled && !challenge && !recoveryCodes && <div className="flex flex-wrap gap-2">
       <form className="space-y-3 rounded border p-4" onSubmit={e => { e.preventDefault(); void run(async () => {
         const result = await requestJson<{ recoveryCodes: string[] }>("/api/auth/mfa", { method: "POST", body: JSON.stringify({ action: "regenerate", code }) })
         setRecoveryCodes(result.recoveryCodes)
@@ -110,7 +111,7 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
         <Button type="submit" variant="destructive" disabled={busy}>Disable authenticator</Button>
       </form>
     </div>}
-    {factorId && !state?.enrolled && state?.factors.length ? <form className="space-y-4" onSubmit={e => { e.preventDefault(); void run(async () => {
+    {showLegacy && state ? <form className="space-y-4" onSubmit={e => { e.preventDefault(); void run(async () => {
       await requestJson("/api/auth/mfa", { method: "POST", body: JSON.stringify({ action: "verify", factorId, code }) })
       setCode("")
       await refresh()
