@@ -11,7 +11,8 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
       role="region"
       aria-label={props["aria-label"] ?? "Scrollable table"}
       tabIndex={0}
-      className="relative isolate max-h-96 w-full min-w-0 overflow-auto bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+<<<<<<< HEAD
+      className="relative isolate max-h-96 w-full min-w-0 max-w-full overflow-auto bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
     >
       <table
         data-slot="table"

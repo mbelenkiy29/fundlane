@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
 import type { MembershipSummary } from "@/lib/mca/types"
 
 const STAGES = ["created", "submitted", "approved", "funded"] as const
@@ -159,7 +160,7 @@ export function RepFunnelView(props: {
         </p>
       )}
       {status === "empty" && (
-        <p className="text-sm text-muted-foreground">{REP_FUNNEL_COPY.empty}</p>
+        <ReportEmptyState title={REP_FUNNEL_COPY.empty} detail="Try another date range, basis, or rep filter." />
       )}
       {report && !report.permission.paymentsVisible && (
         <p role="status" className="rounded-md border border-dashed p-3 text-sm">
@@ -174,7 +175,7 @@ export function RepFunnelView(props: {
       {report && !report.period.complete && (
         <p className="text-sm text-muted-foreground">{report.period.label}</p>
       )}
-      {report && (status === "success" || status === "empty") && (
+      {report && status === "success" && (
         <>
             <Table>
               <TableHeader>
@@ -198,15 +199,15 @@ export function RepFunnelView(props: {
                     {STAGES.map((stage) => (
                       <TableCell key={stage}>
                         <div>{row.stages[stage].dealCount}</div>
-                        <div className="text-xs text-muted-foreground">{formatFunnelAmount(row.stages[stage])}</div>
+                        <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunnelAmount(row.stages[stage]))}</div>
                       </TableCell>
                     ))}
                     <TableCell className="text-xs">
                       {row.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatConversionRate(item.rate)}</div>
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {explainedReportValue(formatConversionRate(item.rate))}</div>
                       ))}
                     </TableCell>
-                    <TableCell>{formatDistributions(row.distributions)}</TableCell>
+                    <TableCell>{explainedReportValue(formatDistributions(row.distributions))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -216,15 +217,15 @@ export function RepFunnelView(props: {
                     {STAGES.map((stage) => (
                       <TableCell key={stage}>
                         <div>{report.totals.stages[stage].dealCount}</div>
-                        <div className="text-xs text-muted-foreground">{formatFunnelAmount(report.totals.stages[stage])}</div>
+                        <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunnelAmount(report.totals.stages[stage]))}</div>
                       </TableCell>
                     ))}
                     <TableCell className="text-xs">
                       {report.totals.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatConversionRate(item.rate)}</div>
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {explainedReportValue(formatConversionRate(item.rate))}</div>
                       ))}
                     </TableCell>
-                    <TableCell>{formatDistributions(report.totals.distributions)}</TableCell>
+                    <TableCell>{explainedReportValue(formatDistributions(report.totals.distributions))}</TableCell>
                   </TableRow>
                 </TableFooter>)}
             </Table>
@@ -252,7 +253,7 @@ export function RepFunnelView(props: {
                         </TableCell>
                         <TableCell>{deal.occurredOn ?? "Unknown"}</TableCell>
                         <TableCell>
-                          {drillMetric?.restricted ? "Restricted" : deal.amountCents == null ? "Unknown" : formatCents(deal.amountCents)}
+                          {drillMetric?.restricted ? explainedReportValue("Restricted") : deal.amountCents == null ? "Unknown" : formatCents(deal.amountCents)}
                           {deal.shared && <Badge variant="outline" className="ml-2">Shared</Badge>}
                         </TableCell>
                         <TableCell className="text-xs">{deal.attributedMembershipIds.length || "Unassigned"}</TableCell>
@@ -324,7 +325,7 @@ export function RepFunnel() {
   }
 
   return (
-    <Card id="mca-reports-rep-funnel">
+    <Card id="mca-reports-rep-funnel" className="min-w-0 overflow-hidden">
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Rep performance funnel</CardTitle>

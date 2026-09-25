@@ -10,6 +10,7 @@ import type { SessionResponse } from "@/lib/mca/types"
 export function DashboardChrome({ children, session, assistantEnabled = false, assistantDomainKey = "", assistantRuntime = "chatkit", fullBleed = false }: { children: React.ReactNode; session: SessionResponse; assistantEnabled?: boolean; assistantDomainKey?: string; assistantRuntime?: "chatkit" | "supabase"; fullBleed?: boolean }) {
   const chrome = <SidebarProvider style={{ "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}>
     <AppSidebar variant="sidebar" collapsible="icon" side="left" session={session} />
+<<<<<<< HEAD
     <SidebarInset className={fullBleed ? "min-h-svh min-w-0 overflow-hidden" : "min-w-0 overflow-x-clip"}>
       <SiteHeader session={session} />
       {fullBleed

@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
 
 const DRILLDOWN_KINDS = ["submissions", "approvals", "advances", "payments"] as const
 type DrilldownKind = (typeof DRILLDOWN_KINDS)[number]
@@ -230,7 +231,7 @@ export function FunderAnalyticsView(props: {
         </p>
       )}
       {status === "empty" && (
-        <p className="text-sm text-muted-foreground">{FUNDER_ANALYTICS_COPY.empty}</p>
+        <ReportEmptyState title={FUNDER_ANALYTICS_COPY.empty} detail="Try another date range, basis, or funder filter." />
       )}
       {report && !report.permission.paymentsVisible && (
         <p role="status" className="rounded-md border border-dashed p-3 text-sm">
@@ -245,7 +246,7 @@ export function FunderAnalyticsView(props: {
       {report && !report.period.complete && (
         <p className="text-sm text-muted-foreground">{report.period.label}</p>
       )}
-      {report && (status === "success" || status === "empty") && (
+      {report && status === "success" && (
         <>
           <p className="text-xs text-muted-foreground">{FUNDER_ANALYTICS_COPY.missingTerms}</p>
             <Table>
@@ -279,19 +280,19 @@ export function FunderAnalyticsView(props: {
                     <TableCell>{row.uniqueMerchants.count}</TableCell>
                     <TableCell>
                       <div>{row.approvals.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(row.approvals)}</div>
+                      <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunderAmount(row.approvals))}</div>
                     </TableCell>
                     <TableCell>
                       <div>{row.fundings.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(row.fundings)}</div>
+                      <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunderAmount(row.fundings))}</div>
                     </TableCell>
                     <TableCell className="text-xs">API {row.channels.api} · Email {row.channels.email}</TableCell>
                     <TableCell className="text-xs">
                       {row.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatFunderRate(item.rate)}</div>
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {explainedReportValue(formatFunderRate(item.rate))}</div>
                       ))}
                     </TableCell>
-                    <TableCell>{formatCommissions(row.commissions)}</TableCell>
+                    <TableCell>{explainedReportValue(formatCommissions(row.commissions))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -306,19 +307,19 @@ export function FunderAnalyticsView(props: {
                     <TableCell>{report.totals.uniqueMerchants.count}</TableCell>
                     <TableCell>
                       <div>{report.totals.approvals.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.approvals)}</div>
+                      <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunderAmount(report.totals.approvals))}</div>
                     </TableCell>
                     <TableCell>
                       <div>{report.totals.fundings.count}</div>
-                      <div className="text-xs text-muted-foreground">{formatFunderAmount(report.totals.fundings)}</div>
+                      <div className="text-xs text-muted-foreground">{explainedReportValue(formatFunderAmount(report.totals.fundings))}</div>
                     </TableCell>
                     <TableCell className="text-xs">API {report.totals.channels.api} · Email {report.totals.channels.email}</TableCell>
                     <TableCell className="text-xs">
                       {report.totals.conversions.map((item) => (
-                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatFunderRate(item.rate)}</div>
+                        <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {explainedReportValue(formatFunderRate(item.rate))}</div>
                       ))}
                     </TableCell>
-                    <TableCell>{formatCommissions(report.totals.commissions)}</TableCell>
+                    <TableCell>{explainedReportValue(formatCommissions(report.totals.commissions))}</TableCell>
                   </TableRow>
                 </TableFooter>)}
             </Table>
@@ -536,7 +537,7 @@ export function FunderAnalytics() {
   }
 
   return (
-    <Card id="mca-reports-funders">
+    <Card id="mca-reports-funders" className="min-w-0 overflow-hidden">
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Funder analytics</CardTitle>

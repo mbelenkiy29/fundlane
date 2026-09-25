@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
 import type { MembershipSummary } from "@/lib/mca/types"
 
 const STAGES = ["created", "submitted", "approved", "funded"] as const
@@ -211,7 +212,7 @@ export function TeamProfitView(props: {
         </p>
       )}
       {status === "empty" && (
-        <p className="text-sm text-muted-foreground">{TEAM_PROFIT_COPY.empty}</p>
+        <ReportEmptyState title={TEAM_PROFIT_COPY.empty} detail="Try another date range, recognition mode, or rep filter." />
       )}
       {report && !report.permission.paymentsVisible && (
         <p role="status" className="rounded-md border border-dashed p-3 text-sm">
@@ -226,7 +227,7 @@ export function TeamProfitView(props: {
       {report && !report.period.complete && (
         <p className="text-sm text-muted-foreground">{report.period.label}</p>
       )}
-      {report && (status === "success" || status === "empty") && (
+      {report && status === "success" && (
         <>
           <dl className="grid gap-3 rounded-md border p-3 text-sm sm:grid-cols-2">
             <div>
@@ -249,19 +250,19 @@ export function TeamProfitView(props: {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Commission and fees</p>
-              <p className="text-lg font-medium">{formatMoney(report.company.revenue, recognition)}</p>
+              <p className="text-lg font-medium">{explainedReportValue(formatMoney(report.company.revenue, recognition))}</p>
             </div>
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Distributions</p>
-              <p className="text-lg font-medium">{formatDistributions(report.company.distributions, recognition)}</p>
+              <p className="text-lg font-medium">{explainedReportValue(formatDistributions(report.company.distributions, recognition))}</p>
             </div>
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Gross contribution</p>
-              <p className="text-lg font-medium">{formatMoney(report.company.grossContribution, recognition)}</p>
+              <p className="text-lg font-medium">{explainedReportValue(formatMoney(report.company.grossContribution, recognition))}</p>
             </div>
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Other operating costs</p>
-              <p className="text-lg font-medium">{formatOperatingCosts(report.otherOperatingCosts)}</p>
+              <p className="text-lg font-medium">{explainedReportValue(formatOperatingCosts(report.otherOperatingCosts))}</p>
               <p className="text-xs text-muted-foreground">Excluded from gross contribution</p>
             </div>
           </div>
@@ -287,9 +288,9 @@ export function TeamProfitView(props: {
                     {STAGES.map((stage) => (
                       <TableCell key={stage}>{row.stages[stage].dealCount}</TableCell>
                     ))}
-                    <TableCell>{formatMoney(row.revenue, recognition)}</TableCell>
-                    <TableCell>{formatDistributions(row.distributions, recognition)}</TableCell>
-                    <TableCell>{formatMoney(row.grossContribution, recognition)}</TableCell>
+                    <TableCell>{explainedReportValue(formatMoney(row.revenue, recognition))}</TableCell>
+                    <TableCell>{explainedReportValue(formatDistributions(row.distributions, recognition))}</TableCell>
+                    <TableCell>{explainedReportValue(formatMoney(row.grossContribution, recognition))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -302,9 +303,9 @@ export function TeamProfitView(props: {
                     {STAGES.map((stage) => (
                       <TableCell key={stage}>{report.company.stages[stage].dealCount}</TableCell>
                     ))}
-                    <TableCell>{formatMoney(report.company.revenue, recognition)}</TableCell>
-                    <TableCell>{formatDistributions(report.company.distributions, recognition)}</TableCell>
-                    <TableCell>{formatMoney(report.company.grossContribution, recognition)}</TableCell>
+                    <TableCell>{explainedReportValue(formatMoney(report.company.revenue, recognition))}</TableCell>
+                    <TableCell>{explainedReportValue(formatDistributions(report.company.distributions, recognition))}</TableCell>
+                    <TableCell>{explainedReportValue(formatMoney(report.company.grossContribution, recognition))}</TableCell>
                   </TableRow>
                 </TableFooter>)}
             </Table>
@@ -312,7 +313,7 @@ export function TeamProfitView(props: {
             <h3 className="mb-2 text-sm font-medium">Ledger evidence</h3>
             {report.evidence.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                {report.permission.paymentsVisible ? "No voided payments, reversals, or adjustments in this period." : "Restricted"}
+                {report.permission.paymentsVisible ? "No voided payments, reversals, or adjustments in this period." : explainedReportValue("Restricted")}
               </p>
             ) : (
                 <Table>
@@ -398,7 +399,7 @@ export function TeamProfit() {
   }
 
   return (
-    <Card id="mca-reports-team-profit">
+    <Card id="mca-reports-team-profit" className="min-w-0 overflow-hidden">
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Team performance and company profit</CardTitle>

@@ -3,8 +3,8 @@ import type { DealWriteInput } from "../deals/schema"
 import type { FunnelStepId, OptionalFields } from "./form-schema"
 
 export const invitationInput = z.object({
-  clientName: z.string().trim().min(1).max(150),
-  email: z.string().trim().email().max(254),
+  clientName: z.string().trim().min(1, "Enter the business name.").max(150, "Use at most 150 characters."),
+  email: z.string().trim().email("Enter a valid email address.").max(254, "Use at most 254 characters."),
   integrationId: z.string().min(1).max(100),
   requestKey: z.uuid(),
 }).strict()

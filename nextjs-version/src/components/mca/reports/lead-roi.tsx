@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Table, TableFooter, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatCents } from "@/components/mca/accounting/format"
 import { RequestError, requestJson } from "@/lib/mca/client"
+import { explainedReportValue, ReportEmptyState } from "@/components/mca/reports/report-ui"
 
 const DRILLDOWN_KEYS = ["acquired", "submitted", "approved", "funded", "followOn", "unassigned"] as const
 type DrilldownKey = (typeof DRILLDOWN_KEYS)[number]
@@ -189,22 +190,22 @@ function MetricRow(props: { row: LeadRoiRow; paymentsVisible: boolean }) {
       <TableCell>{row.approvedCount}</TableCell>
       <TableCell>{row.fundedDealCount}</TableCell>
       <TableCell>{row.fundedMerchantCount}</TableCell>
-      <TableCell>{formatMoney(economics.purchaseCostCents, true)}</TableCell>
-      <TableCell>{formatCostPer(economics.costPerFundedMerchantCents)}</TableCell>
-      <TableCell>{formatCostPer(economics.costPerFundedDealCents)}</TableCell>
-      <TableCell>{formatMoney(economics.collectedCommissionCents, paymentsVisible && economics.paymentsVisible)}</TableCell>
+      <TableCell>{explainedReportValue(formatMoney(economics.purchaseCostCents, true))}</TableCell>
+      <TableCell>{explainedReportValue(formatCostPer(economics.costPerFundedMerchantCents))}</TableCell>
+      <TableCell>{explainedReportValue(formatCostPer(economics.costPerFundedDealCents))}</TableCell>
+      <TableCell>{explainedReportValue(formatMoney(economics.collectedCommissionCents, paymentsVisible && economics.paymentsVisible))}</TableCell>
       <TableCell>
-        <div>{formatRoiDisplay(economics.collectedRoi, economics.collectedRoiDisplay, paymentsVisible && economics.paymentsVisible)}</div>
+        <div>{explainedReportValue(formatRoiDisplay(economics.collectedRoi, economics.collectedRoiDisplay, paymentsVisible && economics.paymentsVisible))}</div>
         <div className="text-xs text-muted-foreground">
-          Expected-value {formatRoiDisplay(economics.expectedRoi, economics.expectedRoiDisplay, paymentsVisible && economics.paymentsVisible)}
+          Expected-value {explainedReportValue(formatRoiDisplay(economics.expectedRoi, economics.expectedRoiDisplay, paymentsVisible && economics.paymentsVisible))}
         </div>
         <div className="text-xs text-muted-foreground">
-          Including follow-on {formatRoiDisplay(economics.followOnCollectedRoi, economics.followOnRoiDisplay, paymentsVisible && economics.paymentsVisible)}
+          Including follow-on {explainedReportValue(formatRoiDisplay(economics.followOnCollectedRoi, economics.followOnRoiDisplay, paymentsVisible && economics.paymentsVisible))}
         </div>
       </TableCell>
       <TableCell className="text-xs">
         {row.conversions.map((item) => (
-          <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {formatConversionRate(item.rate)}</div>
+          <div key={`${item.from}-${item.to}`}>{item.from}→{item.to} {explainedReportValue(formatConversionRate(item.rate))}</div>
         ))}
       </TableCell>
     </TableRow>
@@ -240,7 +241,7 @@ export function LeadRoiView(props: {
         </p>
       )}
       {status === "empty" && (
-        <p className="text-sm text-muted-foreground">{LEAD_ROI_COPY.empty}</p>
+        <ReportEmptyState title={LEAD_ROI_COPY.empty} detail="Try another date range, basis, source, or batch filter." />
       )}
       {report && !report.permission.paymentsVisible && (
         <p role="status" className="rounded-md border border-dashed p-3 text-sm">
@@ -260,7 +261,7 @@ export function LeadRoiView(props: {
       {report && !report.period.complete && (
         <p className="text-sm text-muted-foreground">{report.period.label}</p>
       )}
-      {report && (status === "success" || status === "empty") && (
+      {report && status === "success" && (
         <>
           <p className="text-sm text-muted-foreground">{LEAD_ROI_COPY.attribution}</p>
             <Table>
@@ -331,7 +332,7 @@ export function LeadRoiView(props: {
                         </TableCell>
                         <TableCell>{deal.fundedOn ?? (deal.funded ? "Yes" : "—")}</TableCell>
                         <TableCell>
-                          {formatMoney(deal.collectedCommissionCents, paymentsVisible)}
+                          {explainedReportValue(formatMoney(deal.collectedCommissionCents, paymentsVisible))}
                           {deal.expectedCommissionCents != null && paymentsVisible && (
                             <div className="text-xs text-muted-foreground">Expected {formatCents(deal.expectedCommissionCents)}</div>
                           )}
@@ -394,7 +395,7 @@ export function LeadRoi() {
   }
 
   return (
-    <Card id="mca-reports-lead-roi">
+    <Card id="mca-reports-lead-roi" className="min-w-0 overflow-hidden">
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Lead source CAC and ROI</CardTitle>
