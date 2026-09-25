@@ -31,6 +31,7 @@ import {
 } from "../src/lib/mca/funders/criteria-scan"
 import { getSubmissionSelection } from "../src/lib/mca/submissions/queue"
 import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
+import { evaluateFunderScore, type ScoringInputs } from "../src/lib/mca/underwriting/scoring"
 import { GET as scanGet, POST as scanPost } from "../src/app/api/mca/funders/scan/route"
 import { GET as scanItemGet } from "../src/app/api/mca/funders/scan/[id]/route"
 import { POST as scanAccept } from "../src/app/api/mca/funders/scan/[id]/accept/route"
@@ -606,4 +607,95 @@ test("MIC-194 HTTP permissions, isolation, accept/reject, and retries", async ()
   }), params(rejectBody.id))
   assert.equal(rejected.status, 200)
   assert.equal((await rejected.json() as { status: string }).status, "rejected")
+})
+
+function matchingInputs(fico: number): ScoringInputs {
+  return {
+    dealId: "deal-funder-import",
+    dealVersion: 1,
+    state: "NY",
+    entity: "llc",
+    industry: "restaurants",
+    defaultFlag: false,
+    tibMonths: 80,
+    fico,
+    requestedAmount: 50_000,
+    termMonths: 12,
+    monthlyRevenue: 20_000,
+    revenueUnknown: false,
+    averageDailyBalance: 8_000,
+    adbUnknown: false,
+    nsfCount: 1,
+    nsfUnknown: false,
+    negativeDays: 0,
+    negativeUnknown: false,
+    depositCount: 12,
+    depositUnknown: false,
+    worstMonthNsf: 1,
+    positionCount: 0,
+    proposedPositionCount: 0,
+    availableMonthlyRevenue: 20_000,
+    availableUnknown: false,
+  }
+}
+
+test("guideline PDF upload without a deal can be edited before matching uses the confirmed rules", async () => {
+  const funder = (await createFunder(actor(), { idempotencyKey: "inline-scan-funder", legalName: "Inline Scan Capital LLC" })).funder
+  extraction({
+    filename: "inline-guidelines.pdf",
+    rules: [rule({ field: "fico", operator: "min", unit: "fico", value: 620, unspecified: false, sourceText: "FICO 620" })],
+  })
+  const proposed = await uploadAndScanFunderCriteria(actor(), {
+    funderId: funder.id,
+    idempotencyKey: "inline-guidelines",
+    filename: "inline-guidelines.pdf",
+    mimeType: "application/pdf",
+    bytes: pdf("inline-guidelines"),
+  })
+  assert.equal(proposed.status, "proposed")
+  assert.equal(proposed.documentId.startsWith("inline:"), true)
+  assert.equal(findRule(proposed.rules, "fico")?.value, 620)
+
+  const replay = await uploadAndScanFunderCriteria(actor(), {
+    funderId: funder.id,
+    idempotencyKey: "inline-guidelines-retry",
+    filename: "inline-guidelines.pdf",
+    mimeType: "application/pdf",
+    bytes: pdf("inline-guidelines"),
+  })
+  assert.equal(replay.id, proposed.id)
+
+  const accepted = await acceptCriteriaScan(actor(), proposed.id, [
+    { field: "fico", operator: "min", unit: "fico", value: 700, unspecified: false, sourceText: "Reviewed FICO 700" },
+  ])
+  assert.equal(accepted.proposal.status, "accepted")
+  assert.equal(findRule(accepted.criteria.rules, "fico")?.value, 700)
+  const published = await listFunderCriteria(actor(), funder.id)
+  assert.equal(findRule(published.rules, "fico")?.value, 700)
+  const blocked = await evaluateFunderScore(actor(), matchingInputs(680), funder, published.rules)
+  assert.equal(blocked.eligible, false)
+  const allowed = await evaluateFunderScore(actor(), matchingInputs(720), funder, published.rules)
+  assert.equal(allowed.eligible, true)
+
+  setDocumentScannerForTests(scanner("infected"))
+  await assert.rejects(
+    () => uploadAndScanFunderCriteria(actor(), {
+      funderId: funder.id,
+      idempotencyKey: "inline-dirty",
+      filename: "dirty-inline.pdf",
+      mimeType: "application/pdf",
+      bytes: pdf("dirty-inline"),
+    }),
+    (error: { status?: number; code?: string }) => error.status === 422 && error.code === "file_quarantined",
+  )
+  await assert.rejects(
+    () => uploadAndScanFunderCriteria(actor(), {
+      funderId: funder.id,
+      idempotencyKey: "inline-mismatch",
+      filename: "not-a-pdf.pdf",
+      mimeType: "application/pdf",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6]),
+    }),
+    (error: { status?: number; code?: string }) => error.status === 422 && error.code === "document_content_mismatch",
+  )
 })

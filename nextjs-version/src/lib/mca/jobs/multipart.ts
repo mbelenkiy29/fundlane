@@ -48,7 +48,7 @@ export async function processMultipartTask(actor: DealActor, input: MultipartTas
     case "/api/mca/imports/archives/apply": return applyArchiveMatches(actor, { runId: fields.runId ?? "", archives: files.filter((item) => item.field === "archives"), confirmations: json("confirmations", []) })
     case "/api/mca/funders/scan": {
       if (!file) throw new AppError(422, "file_required", "Choose a criteria sheet.")
-      return uploadAndScanFunderCriteria(actor, { ...file, funderId: fields.funderId ?? "", dealId: fields.dealId ?? "", idempotencyKey: fields.idempotencyKey ?? input.files[0].uploadId })
+      return uploadAndScanFunderCriteria(actor, { ...file, funderId: fields.funderId ?? "", dealId: fields.dealId || undefined, idempotencyKey: fields.idempotencyKey ?? input.files[0].uploadId })
     }
   }
 }

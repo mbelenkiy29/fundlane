@@ -1,5 +1,6 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
 import { isDocumentReady } from "../documents/contracts"
 
 import { z } from "zod"
@@ -8,7 +9,8 @@ import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction 
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import type { DocumentSummary, ExtractionFileInput } from "../documents/contracts"
-import { getDocumentContent, listDocuments, storeDocument } from "../documents/service"
+import { getDocumentContent, listDocuments, MAX_DOCUMENT_BYTES, storeDocument } from "../documents/service"
+import { documentScanner } from "../documents/scanner"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { canManageWorkspace } from "../policy"
@@ -352,23 +354,15 @@ export async function getCriteriaScan(actor: DealActor, id: string): Promise<Cri
   return toReview(record, await loadCriteria(actor, funder.id), funder.contacts)
 }
 
-export async function scanFunderCriteria(actor: DealActor, input: { funderId: string; documentId: string }): Promise<CriteriaScanReview> {
-  assertManage(actor)
-  const funder = await loadFunder(actor, input.funderId)
+async function proposeFromExtraction(
+  actor: DealActor,
+  funder: Awaited<ReturnType<typeof loadFunder>>,
+  documentId: string,
+  extraction: CriteriaExtraction,
+): Promise<CriteriaScanReview> {
   const contacts = funder.contacts
-  const existing = await findProposedScanForDocument(actor.workspaceId, funder.id, input.documentId)
+  const existing = await findProposedScanForDocument(actor.workspaceId, funder.id, documentId)
   if (existing) return toReview(existing, await loadCriteria(actor, funder.id), contacts)
-  const { document, bytes } = await getDocumentContent(actor, input.documentId)
-  if (!ALLOWED_MIME_TYPES.has(document.mimeType)) {
-    throw new AppError(415, "unsupported_document_type", "Scan a clean PDF, PNG, or JPEG criteria sheet.")
-  }
-  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
-  const extraction = await criteriaScanProvider().extractCriteria(actor, {
-    filename: document.originalFilename,
-    mimeType: document.mimeType,
-    bytes,
-    sourceReference: `${document.id}:v${document.version}`,
-  })
   const current = await loadCriteria(actor, funder.id)
   const warnings = [...extraction.warnings]
   const evidence: CriteriaScanProposal["evidence"] = {}
@@ -389,7 +383,7 @@ export async function scanFunderCriteria(actor: DealActor, input: { funderId: st
       id: newId(),
       workspaceId: actor.workspaceId,
       funderId: funder.id,
-      documentId: document.id,
+      documentId,
       version: await nextScanVersion(actor.workspaceId, funder.id),
       status: "proposed",
       rules,
@@ -404,7 +398,7 @@ export async function scanFunderCriteria(actor: DealActor, input: { funderId: st
       updatedAt: now,
     })
   } catch (error) {
-    const replay = isUniqueViolation(error) ? await findProposedScanForDocument(actor.workspaceId, funder.id, document.id) : undefined
+    const replay = isUniqueViolation(error) ? await findProposedScanForDocument(actor.workspaceId, funder.id, documentId) : undefined
     if (!replay) throw error
     return toReview(replay, current, contacts)
   }
@@ -414,32 +408,102 @@ export async function scanFunderCriteria(actor: DealActor, input: { funderId: st
     action: "funder.criteria_scan_proposed",
     resourceType: "funder",
     resourceId: funder.id,
-    metadata: { scanId: record.id, documentId: document.id, version: record.version, warningCount: record.warnings.length, ruleCount: record.rules.length, provider: record.provider, requestId: record.requestId ?? null },
+    metadata: { scanId: record.id, documentId, version: record.version, warningCount: record.warnings.length, ruleCount: record.rules.length, provider: record.provider, requestId: record.requestId ?? null },
     correlationId: actor.correlationId,
   })
   return toReview(record, current, contacts)
 }
 
+function mimeFromUpload(filename: string, mimeType: string): string {
+  const provided = mimeType.trim().toLowerCase()
+  if (ALLOWED_MIME_TYPES.has(provided)) return provided
+  const extension = filename.toLowerCase().split(".").pop()
+  if (extension === "pdf") return "application/pdf"
+  if (extension === "png") return "image/png"
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg"
+  return provided
+}
+
+function matchesDeclaredType(mimeType: string, bytes: Uint8Array): boolean {
+  if (mimeType === "application/pdf") return bytes.length >= 5 && Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-"
+  if (mimeType === "image/png") return bytes.length >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  return false
+}
+
+async function assertCleanCriteriaUpload(filename: string, mimeType: string, bytes: Uint8Array): Promise<void> {
+  if (!bytes.byteLength || bytes.byteLength > MAX_DOCUMENT_BYTES) {
+    throw new AppError(413, "document_size_invalid", `Documents must be between 1 byte and ${MAX_DOCUMENT_BYTES} bytes.`)
+  }
+  if (!matchesDeclaredType(mimeType, bytes)) {
+    throw new AppError(422, "document_content_mismatch", "The file contents do not match the declared PDF or image type.")
+  }
+  const scan = await documentScanner().scan(bytes, filename)
+  if (scan.status === "infected") throw new AppError(422, "file_quarantined", "Security scanning rejected this file.")
+  if (scan.status !== "clean") throw new AppError(503, "scanner_unavailable", "Security scanning must succeed before this file can be processed.")
+}
+
+function inlineDocumentId(workspaceId: string, funderId: string, bytes: Uint8Array): string {
+  return `inline:${createHash("sha256").update(workspaceId).update(funderId).update(bytes).digest("hex")}`
+}
+
+export async function scanFunderCriteria(actor: DealActor, input: { funderId: string; documentId: string }): Promise<CriteriaScanReview> {
+  assertManage(actor)
+  const funder = await loadFunder(actor, input.funderId)
+  const existing = await findProposedScanForDocument(actor.workspaceId, funder.id, input.documentId)
+  if (existing) return toReview(existing, await loadCriteria(actor, funder.id), funder.contacts)
+  const { document, bytes } = await getDocumentContent(actor, input.documentId)
+  if (!ALLOWED_MIME_TYPES.has(document.mimeType)) {
+    throw new AppError(415, "unsupported_document_type", "Scan a clean PDF, PNG, or JPEG criteria sheet.")
+  }
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  const extraction = await criteriaScanProvider().extractCriteria(actor, {
+    filename: document.originalFilename,
+    mimeType: document.mimeType,
+    bytes,
+    sourceReference: `${document.id}:v${document.version}`,
+  })
+  return proposeFromExtraction(actor, funder, document.id, extraction)
+}
+
 export async function uploadAndScanFunderCriteria(actor: DealActor, input: {
   funderId: string
-  dealId: string
+  dealId?: string
   idempotencyKey: string
   filename: string
   mimeType: string
   bytes: Uint8Array
 }): Promise<CriteriaScanReview> {
   assertManage(actor)
-  await loadFunder(actor, input.funderId)
-  const document = await storeDocument(actor, {
-    dealId: input.dealId,
-    idempotencyKey: input.idempotencyKey,
+  const funder = await loadFunder(actor, input.funderId)
+  const mimeType = mimeFromUpload(input.filename, input.mimeType)
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+    throw new AppError(415, "unsupported_document_type", "Scan a clean PDF, PNG, or JPEG criteria sheet.")
+  }
+  if (!text(input.dealId)) await assertCleanCriteriaUpload(input.filename, mimeType, input.bytes)
+  if (text(input.dealId)) {
+    const document = await storeDocument(actor, {
+      dealId: text(input.dealId),
+      idempotencyKey: input.idempotencyKey,
+      filename: input.filename,
+      mimeType,
+      bytes: input.bytes,
+      category: "other_stip",
+      source: "funder_criteria_scan",
+    })
+    return scanFunderCriteria(actor, { funderId: funder.id, documentId: document.id })
+  }
+  const documentId = inlineDocumentId(actor.workspaceId, funder.id, input.bytes)
+  const existing = await findProposedScanForDocument(actor.workspaceId, funder.id, documentId)
+  if (existing) return toReview(existing, await loadCriteria(actor, funder.id), funder.contacts)
+  await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+  const extraction = await criteriaScanProvider().extractCriteria(actor, {
     filename: input.filename,
-    mimeType: input.mimeType,
+    mimeType,
     bytes: input.bytes,
-    category: "other_stip",
-    source: "funder_criteria_scan",
+    sourceReference: documentId,
   })
-  return scanFunderCriteria(actor, { funderId: input.funderId, documentId: document.id })
+  return proposeFromExtraction(actor, funder, documentId, extraction)
 }
 
 export async function acceptCriteriaScan(actor: DealActor, id: string, rulesInput?: EligibilityRuleInput[]): Promise<CriteriaScanAcceptResult> {
