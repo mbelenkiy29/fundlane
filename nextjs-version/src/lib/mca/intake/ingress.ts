@@ -21,6 +21,38 @@ import { ingestApplication, scheduleAttachment } from "./service"
 import { withTransaction } from "../db"
 import { claimInvitationSubmission, completeInvitationSubmission } from "../applications/service"
 
+export const MAX_PROVIDER_BODY_BYTES = 1024 * 1024
+
+export async function readProviderBody(request: Request): Promise<string> {
+  const declared = request.headers.get("content-length")
+  if (declared && Number(declared) > MAX_PROVIDER_BODY_BYTES) {
+    throw new AppError(413, "provider_payload_too_large", "Webhook body must be at most 1 MiB.")
+  }
+  if (!request.body) return ""
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > MAX_PROVIDER_BODY_BYTES) throw new AppError(413, "provider_payload_too_large", "Webhook body must be at most 1 MiB.")
+      chunks.push(value)
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined)
+    throw error
+  } finally {
+    reader.releaseLock()
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))
+  } catch {
+    throw new AppError(400, "provider_payload_invalid", "Webhook body must use UTF-8 text.")
+  }
+}
+
 async function actorForIntegration(workspaceId: string): Promise<DealActor> {
   const context: AuthContext = {
     authType: "api_key",
@@ -34,7 +66,16 @@ async function actorForIntegration(workspaceId: string): Promise<DealActor> {
   return actorForDeals(context)
 }
 
-function parsePayload(rawBody: string): unknown {
+export async function parseProviderPayload(request: Request, provider: string, rawBody: string): Promise<unknown> {
+  const contentType = request.headers.get("content-type") ?? ""
+  if (provider === "jotform" && /^(multipart\/form-data|application\/x-www-form-urlencoded)\b/i.test(contentType)) {
+    try {
+      const form = await new Request(request.url, { method: "POST", headers: { "content-type": contentType }, body: rawBody }).formData()
+      return Object.fromEntries([...form.entries()].filter(([, value]) => typeof value === "string"))
+    } catch {
+      throw new AppError(400, "provider_payload_invalid", "Jotform webhook form data is invalid.")
+    }
+  }
   try {
     return JSON.parse(rawBody)
   } catch {
@@ -84,7 +125,7 @@ export async function ingestProviderDelivery(input: {
   const actor = await actorForIntegration(integration.workspaceId)
   let normalized
   try {
-    normalized = normalizeProviderPayload(input.provider, parsePayload(input.rawBody), integration)
+    normalized = normalizeProviderPayload(input.provider, await parseProviderPayload(input.request, input.provider, input.rawBody), integration)
   } catch (error) {
     if (error instanceof AppError && error.status !== 202) await rejectToReview(actor, integration.id, input.provider, input.rawBody, error)
     throw error

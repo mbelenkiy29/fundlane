@@ -177,7 +177,7 @@ export async function rotateIntegrationCredentials(actor: MembershipContext, id:
   assertAdmin(actor)
   const prior = await getIntegration(actor.workspaceId, id, true)
   if (!prior) throw new AppError(404, "integration_not_found", "The intake integration was not found.")
-  if (!input.credential && !input.admissionSecret) throw new AppError(422, "rotation_value_missing", "Provide a new read credential or webhook secret.")
+  if (prior.provider === "highlevel" && !input.credential) throw new AppError(422, "rotation_value_missing", "Provide a new read credential.")
   const admissionSecret = input.admissionSecret ?? (prior.provider === "highlevel" ? undefined : createOpaqueToken())
   const next = await saveIntegration({
     ...prior,
