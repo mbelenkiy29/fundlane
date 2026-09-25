@@ -35,6 +35,7 @@ All paths below are relative to `nextjs-version/`.
 | Underwriting and funder matching | `src/lib/mca/underwriting/`, `funders/`, `datamerch/` |
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | In-app email conversations and worker | `src/lib/mca/email-conversations/`, `src/components/mca/email/`, `src/app/api/mca/email/`, `scripts/messaging/`, `docs/email-conversations.md` |
+| Outbound workflow webhooks and daily report email | `src/lib/mca/comms/webhooks.ts`, `workflow-events.ts`, `digest.ts`, `scheduler.ts`, `src/components/mca/comms/webhook-console.tsx`, `digest-settings.tsx`, `/api/mca/comms/`, `/api/cron/comms`, `docs/outbound-webhooks-and-daily-reports.md` |
 | Closing, offer messaging and SMS routing | `src/lib/mca/closing/`, `sms/`, `src/components/mca/closing/`, `src/components/mca/sms/` |
 | Company SMS onboarding, provisioning and inbox | `src/lib/mca/sms/onboarding.ts`, `provisioning.ts`, `inbox.ts`, `src/lib/mca/db/sms-onboarding.ts`, `docs/sms/company-onboarding.md` |
 | Vercel frontend | Next.js App Router on Vercel; runtime pool defaults to two connections when `VERCEL` is set |

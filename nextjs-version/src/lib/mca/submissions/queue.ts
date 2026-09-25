@@ -248,6 +248,9 @@ async function queueDestination(input: {
     actor: input.actor,
   })
   await audit(input.actor, saved.job, saved.created)
+  if (saved.created) {
+    await (await import("../comms/workflow-events")).emitSubmissionCreatedWebhook(input.actor, saved.job)
+  }
   const summary = toQueuedSummary(saved.job)
   if (!saved.created) return withEligibleAt(summary, eligibleAt)
   if (saved.job.state !== "queued") return withEligibleAt(summary, eligibleAt)

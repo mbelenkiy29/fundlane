@@ -355,6 +355,9 @@ export async function updateDealRecord(actor: DealActor, id: string, input: Upda
   merged.draftState = merged.missingRequiredFields.length ? "partial" : "submission_ready"
   const saved = await updateDeal(merged, input.expectedVersion, activity(actor, input.assignments ? "assigned" : "updated", `Updated fields: ${changed.join(", ") || "none"}`, merged.version, now))
   await recordAuditEvent({ context: actor, action: "deal.updated", resourceType: "deal", resourceId: id, metadata: { version: saved.version, fields: changed }, correlationId: actor.correlationId })
+  if (input.assignments) {
+    await (await import("../comms/workflow-events")).emitDealAssignedWebhook(actor, id)
+  }
   return toDealDetail(saved)
 }
 
@@ -390,6 +393,15 @@ export async function applyBulkDealUpdate(actor: DealActor, id: string, input: {
   const summary = statusChanged ? `Status changed: ${current.status} → ${nextStatus}. ${input.reason}` : `Bulk update: ${changed.join(", ") || "no fields"}`
   const saved = await updateDeal(merged, input.expectedVersion, activity(actor, statusChanged ? "status_changed" : updateInput.assignments ? "assigned" : "updated", summary, merged.version, now, statusChanged ? { from: current.status, to: nextStatus } : undefined), input.transactionCheckpoint)
   await recordAuditEvent({ context: actor, action: "deal.bulk_updated", resourceType: "deal", resourceId: id, metadata: { version: saved.version, fields: changed, fromStatus: current.status, toStatus: nextStatus }, correlationId: actor.correlationId })
+  if (statusChanged) {
+    await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
+      dealId: id,
+      fromStatus: current.status,
+      toStatus: nextStatus,
+    })
+  } else if (updateInput.assignments) {
+    await (await import("../comms/workflow-events")).emitDealAssignedWebhook(actor, id)
+  }
   return toDealDetail(saved)
 }
 
@@ -404,6 +416,11 @@ export async function transitionDeal(actor: DealActor, id: string, input: Transi
   const summary = input.reason?.trim() ? `Status changed: ${current.status} → ${input.status}. ${input.reason.trim()}` : `Status changed: ${current.status} → ${input.status}`
   const saved = await updateDeal(next, input.expectedVersion, activity(actor, "status_changed", summary, next.version, now, { from: current.status, to: input.status }))
   await recordAuditEvent({ context: actor, action: "deal.status_changed", resourceType: "deal", resourceId: id, metadata: { from: current.status, to: input.status, version: saved.version }, correlationId: actor.correlationId })
+  await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
+    dealId: id,
+    fromStatus: current.status,
+    toStatus: input.status,
+  })
   return { deal: toDealDetail(saved), sideEffects: { advanceCreated: false, commissionCreated: false } }
 }
 

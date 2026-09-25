@@ -14,7 +14,7 @@ export default function ConnectionSettings() {
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold">Connections and imports</h2>
-        <p className="text-sm text-muted-foreground">Configure inbound application providers, spreadsheet batches, document packages, Google Drive, email senders, and Data Merch.</p>
+        <p className="text-sm text-muted-foreground">Configure inbound application providers, spreadsheet batches, document packages, Google Drive, email senders, outbound workflow webhooks, and Data Merch.</p>
       </div>
       <IntegrationConnectionStatus />
       <SenderConnectionsPanel />

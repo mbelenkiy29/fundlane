@@ -98,7 +98,8 @@ export async function confirmOfferFunding(
   const paymentConfiguration = [input.paymentCount, input.paymentFrequency, input.calendarConvention]
   if (paymentConfiguration.some((value) => value !== undefined) && paymentConfiguration.some((value) => value === undefined)) throw new AppError(422, "validation_failed", "Payment count, frequency, and calendar convention must be supplied together.", { paymentCount: ["Complete all payment schedule fields."] })
 
-  return withImmediateTransaction(async (database) => {
+  let statusChange: { fromStatus: string; toStatus: string } | undefined
+  const result = await withImmediateTransaction(async (database) => {
     const lockedOffer = await database.prepare<{ source: string; submission_id: string | null }>("SELECT source, submission_id FROM mca_offers WHERE workspace_id = ? AND deal_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, input.dealId, input.offerId)
     if (!lockedOffer) throw new AppError(404, "offer_not_found", "The offer was not found for this deal.")
     const replay = await existingFunding(database, actor.workspaceId, input.idempotencyKey.trim())
@@ -185,6 +186,7 @@ export async function confirmOfferFunding(
     if (!deal) throw new AppError(404, "deal_not_found", "The requested deal was not found.")
     const nextVersion = Number(deal.version) + (deal.status === "funded" ? 0 : 1)
     if (deal.status !== "funded") {
+      statusChange = { fromStatus: deal.status, toStatus: "funded" }
       await database.prepare("UPDATE deals SET status = 'funded', version = ?, updated_at = ? WHERE workspace_id = ? AND id = ?").run(nextVersion, createdAt, actor.workspaceId, input.dealId)
       await database.prepare(`INSERT INTO deal_activity
         (id, workspace_id, deal_id, action, actor_user_id, source, summary, from_status, to_status, record_version, correlation_id, created_at)
@@ -197,6 +199,14 @@ export async function confirmOfferFunding(
     if (!saved) throw new Error("Funding event was not persisted")
     return rowResult(saved, false)
   })
+  if (statusChange) {
+    await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
+      dealId: input.dealId,
+      fromStatus: statusChange.fromStatus,
+      toStatus: statusChange.toStatus,
+    })
+  }
+  return result
 }
 
 export async function getFundingForDeal(actor: DealActor, dealId: string): Promise<FundingResult[]> {
@@ -210,7 +220,8 @@ export async function reverseFundingEvent(actor: DealActor, input: { fundingEven
   const reason = input.reason?.trim()
   if (!reason || reason.length > 500) throw new AppError(422, "validation_failed", "A correction reason of at most 500 characters is required.", { reason: ["Explain why the funding is being reversed."] })
   const reversedAt = validDate(input.reversedAt, "reversedAt")
-  return withImmediateTransaction(async (database) => {
+  let statusChange: { dealId: string; fromStatus: string; toStatus: string } | undefined
+  const result = await withImmediateTransaction(async (database) => {
     const row = await database.prepare<FundingRow>("SELECT * FROM mca_funding_events WHERE workspace_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, input.fundingEventId)
     if (!row) throw new AppError(404, "funding_event_not_found", "The funding event was not found.")
     await getDealForDocument(actor, row.deal_id)
@@ -243,7 +254,10 @@ export async function reverseFundingEvent(actor: DealActor, input: { fundingEven
     const otherCommitted = await database.prepare<{ count: number }>("SELECT count(*)::int count FROM mca_funding_events WHERE workspace_id = ? AND deal_id = ? AND state = 'committed'").get(actor.workspaceId, row.deal_id)
     const resetsDeal = deal?.status === "funded" && (otherCommitted?.count ?? 0) === 0
     const activityVersion = Number(deal?.version ?? 0) + (resetsDeal ? 1 : 0)
-    if (resetsDeal) await database.prepare("UPDATE deals SET status = 'offer', version = ?, updated_at = ? WHERE workspace_id = ? AND id = ?").run(activityVersion, reversedAt, actor.workspaceId, row.deal_id)
+    if (resetsDeal && deal) {
+      statusChange = { dealId: row.deal_id, fromStatus: deal.status, toStatus: "offer" }
+      await database.prepare("UPDATE deals SET status = 'offer', version = ?, updated_at = ? WHERE workspace_id = ? AND id = ?").run(activityVersion, reversedAt, actor.workspaceId, row.deal_id)
+    }
     if (deal) await database.prepare(`INSERT INTO deal_activity
       (id, workspace_id, deal_id, action, actor_user_id, source, summary, from_status, to_status, record_version, correlation_id, created_at)
       VALUES (?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
@@ -256,4 +270,12 @@ export async function reverseFundingEvent(actor: DealActor, input: { fundingEven
     if (!saved) throw new Error("Reversed funding event disappeared")
     return rowResult(saved, false)
   })
+  if (statusChange) {
+    await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
+      dealId: statusChange.dealId,
+      fromStatus: statusChange.fromStatus,
+      toStatus: statusChange.toStatus,
+    })
+  }
+  return result
 }
