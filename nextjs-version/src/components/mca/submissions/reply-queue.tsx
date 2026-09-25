@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { RequestError, requestJson } from "@/lib/mca/client"
 
@@ -63,6 +65,135 @@ type QueuePayload = {
   candidateJobs: CandidateJob[]
   canReview: boolean
   canManage: boolean
+}
+
+type Proposal = {
+  state: "empty" | "preview" | "success" | "unmatched"
+  classification: "approval" | "decline" | "pending" | "unparseable" | "unrelated"
+  requiresReview: boolean
+  extraction: {
+    terms: {
+      amount: { value: number | null }
+      rate: { value: number | null }
+      term: { value: number | null }
+      paymentAmount?: { value: number | null }
+      frequency: { value: string | null }
+      declineReason?: { value: string | null }
+    }
+    stipulations: Array<{ text: string }>
+    warnings: string[]
+    summary: string
+  }
+}
+
+function ReplyProposal({ reply, onSaved }: { reply: FunderReply; onSaved: () => Promise<void> }) {
+  const [proposal, setProposal] = React.useState<Proposal>()
+  const [classification, setClassification] = React.useState<Proposal["classification"]>("unparseable")
+  const [amount, setAmount] = React.useState("")
+  const [rate, setRate] = React.useState("")
+  const [term, setTerm] = React.useState("")
+  const [paymentAmount, setPaymentAmount] = React.useState("")
+  const [frequency, setFrequency] = React.useState("")
+  const [declineReason, setDeclineReason] = React.useState("")
+  const [stipulations, setStipulations] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string>()
+  const [saved, setSaved] = React.useState(false)
+
+  const showProposal = React.useCallback((result: Proposal) => {
+    setProposal(result)
+    setClassification(result.classification)
+    setAmount(String(result.extraction.terms.amount.value ?? ""))
+    setRate(String(result.extraction.terms.rate.value ?? ""))
+    setTerm(String(result.extraction.terms.term.value ?? ""))
+    setPaymentAmount(String(result.extraction.terms.paymentAmount?.value ?? ""))
+    setFrequency(result.extraction.terms.frequency.value ?? "")
+    setDeclineReason(result.extraction.terms.declineReason?.value ?? "")
+    setStipulations(result.extraction.stipulations.map((item) => item.text).join("\n"))
+    setSaved(false)
+  }, [])
+
+  const preview = React.useCallback(async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const result = await requestJson<Proposal>("/api/mca/submissions/extract/preview", { method: "POST", body: JSON.stringify({ replyId: reply.id }) })
+      showProposal(result)
+    } catch (caught) { setError(errorMessage(caught, "Reply could not be parsed.")) }
+    finally { setBusy(false) }
+  }, [reply.id, showProposal])
+
+  React.useEffect(() => {
+    if (!reply.matchedJobId || reply.state === "processed") return
+    let active = true
+    void requestJson<Proposal>(`/api/mca/submissions/extract/${encodeURIComponent(reply.id)}`)
+      .then(async (current) => current.state === "empty"
+        ? requestJson<Proposal>("/api/mca/submissions/extract/preview", { method: "POST", body: JSON.stringify({ replyId: reply.id }) })
+        : current)
+      .then((result) => { if (active) showProposal(result) })
+      .catch((caught) => { if (active) setError(errorMessage(caught, "Reply could not be parsed.")) })
+    return () => { active = false }
+  }, [reply.id, reply.matchedJobId, reply.state, showProposal])
+
+  async function confirm() {
+    if (!proposal) return
+    setBusy(true)
+    setError(undefined)
+    const original = proposal.extraction.terms
+    const changed = classification !== proposal.classification
+      || amount !== String(original.amount.value ?? "") || rate !== String(original.rate.value ?? "")
+      || term !== String(original.term.value ?? "") || paymentAmount !== String(original.paymentAmount?.value ?? "")
+      || frequency !== (original.frequency.value ?? "") || declineReason !== (original.declineReason?.value ?? "")
+      || stipulations !== proposal.extraction.stipulations.map((item) => item.text).join("\n")
+    const numeric = (value: string) => {
+      if (!value.trim()) return null
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Enter positive numbers for offer terms, or leave them blank.")
+      return parsed
+    }
+    try {
+      await requestJson(changed ? `/api/mca/submissions/extract/${encodeURIComponent(reply.id)}` : "/api/mca/submissions/extract", {
+        method: changed ? "PATCH" : "POST",
+        body: JSON.stringify(changed ? {
+          classification, amount: numeric(amount), rate: numeric(rate), term: numeric(term),
+          paymentAmount: numeric(paymentAmount), frequency, declineReason,
+          stipulations: stipulations.split("\n").map((text) => text.trim()).filter(Boolean).map((text) => ({ text })),
+        } : { replyId: reply.id, confirm: true, expectedClassification: proposal.classification }),
+      })
+      setSaved(true)
+      await onSaved()
+    } catch (caught) { setError(errorMessage(caught, "Outcome could not be confirmed.")) }
+    finally { setBusy(false) }
+  }
+
+  const offerFields = [
+    { id: "amount", label: "Amount", value: amount, onChange: setAmount },
+    { id: "rate", label: "Factor/rate", value: rate, onChange: setRate },
+    { id: "term", label: "Term (months)", value: term, onChange: setTerm },
+    { id: "payment-amount", label: "Payment amount", value: paymentAmount, onChange: setPaymentAmount },
+    { id: "frequency", label: "Payment frequency", value: frequency, onChange: setFrequency },
+  ]
+
+  return <div className="space-y-3 border-t pt-3">
+    <Button size="sm" variant="outline" disabled={busy} onClick={() => void preview()}>{busy ? "Working…" : "Propose outcome"}</Button>
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {saved && <p role="status" className="text-sm text-emerald-700">Outcome confirmed and saved.</p>}
+    {proposal && !saved && <div className="space-y-3 rounded-md bg-muted/40 p-3">
+      <p className="text-sm font-medium">Review proposal against the original reply before saving</p>
+      <p className="text-xs text-muted-foreground">{proposal.extraction.summary}</p>
+      {proposal.extraction.warnings.map((warning, index) => <p key={index} className="text-xs text-amber-700">{warning}</p>)}
+      <div className="space-y-1"><Label>Outcome</Label><Select value={classification} onValueChange={(value) => setClassification(value as Proposal["classification"])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
+        <SelectItem value="approval">Offer</SelectItem><SelectItem value="decline">Decline</SelectItem><SelectItem value="pending">Stip request</SelectItem><SelectItem value="unparseable">Manual review</SelectItem><SelectItem value="unrelated">Unrelated</SelectItem>
+      </SelectContent></Select></div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {offerFields.map((field) => <div key={field.id} className="space-y-1"><Label htmlFor={`${reply.id}-${field.id}`}>{field.label}</Label><Input id={`${reply.id}-${field.id}`} value={field.value} onChange={(event) => field.onChange(event.target.value)} /></div>)}
+      </div>
+      <div className="space-y-1"><Label>Decline reason</Label><Input value={declineReason} onChange={(event) => setDeclineReason(event.target.value)} /></div>
+      <div className="space-y-1"><Label>Stip requests, one per line</Label><Textarea value={stipulations} onChange={(event) => setStipulations(event.target.value)} /></div>
+      {proposal.requiresReview && <p className="text-xs text-amber-700">This reply needs manual review. Link a submission and correct the outcome before confirming.</p>}
+      <Button size="sm" disabled={busy || !reply.matchedJobId || classification === "unparseable" || classification === "unrelated"} onClick={() => void confirm()}>Confirm outcome</Button>
+    </div>}
+  </div>
 }
 
 function errorMessage(caught: unknown, fallback: string): string {
@@ -297,6 +428,7 @@ export function ReplyQueue({ dealId }: { dealId: string }) {
                 </Button>
               </div>
             )}
+            {payload?.canReview && reply.state !== "ignored" && <ReplyProposal reply={reply} onSaved={load} />}
           </div>
         ))}
       </CardContent>

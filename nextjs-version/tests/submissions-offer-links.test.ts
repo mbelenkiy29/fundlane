@@ -32,6 +32,7 @@ import {
 } from "../src/lib/mca/submissions/offer-links"
 import { POST as repliesRun } from "../src/app/api/mca/submissions/replies/run/route"
 import { POST as extractPost } from "../src/app/api/mca/submissions/extract/route"
+import { POST as extractPreview } from "../src/app/api/mca/submissions/extract/preview/route"
 import { GET as linksGet, POST as linksPost } from "../src/app/api/mca/submissions/extract/links/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -372,9 +373,14 @@ async function ingest(messages: MailboxMessage[]) {
 }
 
 async function persistExtract(replyId: string) {
+  const preview = await extractPreview(cookieRequest("/api/mca/submissions/extract/preview", "admin-session-token", {
+    method: "POST", body: JSON.stringify({ replyId }),
+  }))
+  assert.equal(preview.status, 200)
+  const proposed = await preview.json() as { classification: string }
   const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
     method: "POST",
-    body: JSON.stringify({ replyId }),
+    body: JSON.stringify({ replyId, confirm: true, expectedClassification: proposed.classification }),
   }))
   assert.equal(extracted.status, 200)
   return await extracted.json() as { offer?: { id: string; amount: number | null; termsUnknown: boolean; source: string; offerLink?: string | null }; termsUnknown?: boolean }

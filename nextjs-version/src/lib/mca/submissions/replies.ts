@@ -1075,6 +1075,17 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
     try {
       const result = await ingestSender(actor, sender, checkpoint)
       ingested.push(...result.ingested)
+      for (const item of result.ingested) {
+        if (!item.created || item.state !== "matched") continue
+        try {
+          const { previewReplyExtraction } = await import("./extract-outcomes")
+          await previewReplyExtraction(actor, { replyId: item.id })
+        } catch (error) {
+          await audit(actor, "funder_reply.extraction_failed", item.id, {
+            code: error instanceof AppError ? error.code : "unexpected_error",
+          })
+        }
+      }
     } catch (error) {
       const message = error instanceof AppError ? error.message : "Mailbox ingest failed."
       await saveCheckpoint(sender, { ...checkpoint, lastRunAt: nowIso(), lastError: message })
