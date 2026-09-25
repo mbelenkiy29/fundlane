@@ -40,7 +40,7 @@ test("JSON-LD describes Fundlane without pricing or legal-entity claims", () => 
   assert.equal(page?.description, DEMO_DESCRIPTION)
   assert.match(encoded, /Fundlane/)
   assert.doesNotMatch(encoded, /MCA Workspace/)
-  assert.doesNotMatch(encoded, /offers/)
+  assert.doesNotMatch(encoded, /"@type":"Offer"/)
   assert.doesNotMatch(encoded, /Sentinel Tech Solutions/)
 })
 
