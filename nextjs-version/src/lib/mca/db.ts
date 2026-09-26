@@ -201,6 +201,30 @@ const poolExecutor = createExecutor({
 
 export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
 
+/** Hold a cross-instance lock on a separate transaction, including through a transaction pooler. */
+export async function withTransactionAdvisoryLock<T>(key: string, operation: () => Promise<T>): Promise<{ busy: true } | { busy: false; result: T }> {
+  const client = await getPool().connect();
+  let discard = false;
+  try {
+    await client.query("BEGIN");
+    try {
+      const lock = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_xact_lock(hashtext($1)) locked", [key]);
+      if (!lock.rows[0]?.locked) {
+        await client.query("COMMIT");
+        return { busy: true };
+      }
+      const result = await operation();
+      await client.query("COMMIT");
+      return { busy: false, result };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch { discard = true; }
+      throw error;
+    }
+  } finally {
+    client.release(discard);
+  }
+}
+
 /** Run work on the pool even if AsyncLocalStorage still holds a transaction
  * executor (for example Next.js `after()`, which restores request ALS after
  * COMMIT and client release). */

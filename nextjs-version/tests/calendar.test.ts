@@ -3,7 +3,7 @@ import test,{before,after,beforeEach} from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { getDatabase,closeDatabaseForTests,nowIso } from "../src/lib/mca/db"
+import { getDatabase,closeDatabaseForTests,nowIso,withTransaction,runOutsideTransaction } from "../src/lib/mca/db"
 import { encryptSensitive,hashOpaqueToken } from "../src/lib/mca/crypto"
 import { actorForDeals,createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
@@ -13,6 +13,8 @@ import { calendarFeed,saveActivity,projectFollowups } from "../src/lib/mca/calen
 import { beginGoogleAuthorization,finishGoogleAuthorization,changeGoogleConnection,connectionFor,googleConnectionView,receiveGoogleNotification,setCalendarFetchForTests,GOOGLE_CALENDAR_SCOPES,type GoogleEvent } from "../src/lib/mca/calendar/google"
 import { syncConnection,resolveCalendarConflict,stableEventId,syncDecision } from "../src/lib/mca/calendar/sync"
 import { GET as getCalendar,POST as postCalendar } from "../src/app/api/mca/calendar/route"
+import { GET as runCalendarCron } from "../src/app/api/cron/calendar/route"
+import { calendarHealth } from "../src/lib/mca/operations/status"
 
 let database:Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let admin:DealActor,rep:DealActor,otherRep:DealActor,manager:DealActor,outsider:DealActor,dealId:string,otherDealId:string
@@ -198,6 +200,54 @@ test("private overlays, pagination, token reset, expired token, and disconnect",
   await changeGoogleConnection(rep,{action:"disconnect"})
   assert.equal(await connectionFor(rep),undefined)
   assert.equal((await calendarFeed(rep,query())).events.filter(e=>e.kind==="google").length,0)
+})
+test("calendar cron is gated, authenticated, single-consumer, and resumes due sync",async()=>{
+  const request=(authorization?:string)=>new Request("https://fundlane.example.test/api/cron/calendar",{headers:authorization?{authorization}:{}})
+  const previous=process.env.MCA_CALENDAR_RUNTIME
+  const previousSecret=process.env.CRON_SECRET
+  try {
+    delete process.env.MCA_CALENDAR_RUNTIME
+    assert.deepEqual(await (await runCalendarCron(request())).json(),{enabled:false})
+    process.env.MCA_CALENDAR_RUNTIME="vercel_cron"
+    delete process.env.CRON_SECRET
+    assert.equal((await runCalendarCron(request())).status,503)
+    process.env.CRON_SECRET="synthetic-calendar-cron"
+    assert.equal((await runCalendarCron(request("Bearer wrong"))).status,401)
+    const activity=await saveActivity(admin,input()),c=await connect()
+    await withTransaction(async db=>{
+      await db.prepare("SELECT pg_advisory_xact_lock(hashtext('calendar:cron:consumer'))").get()
+      const busy=await runOutsideTransaction(()=>runCalendarCron(request("Bearer synthetic-calendar-cron")))
+      assert.deepEqual((await busy.json()).busy,true)
+    })
+    const result=await runCalendarCron(request("Bearer synthetic-calendar-cron"))
+    assert.equal(result.status,200)
+    assert.equal((await result.json()).processed,1)
+    assert.ok(remote.has("fundlane:"+stableEventId(c.id,activity.id)))
+    assert.equal((await calendarFeed(otherRep,query())).events.filter(e=>e.kind==="google").length,0)
+    const idle=await runCalendarCron(request("Bearer synthetic-calendar-cron"))
+    assert.equal((await idle.json()).processed,0)
+    const previousWatch=await getDatabase().prepare<{channel_id:string}>("SELECT channel_id FROM mca_calendar_sources WHERE connection_id=? AND calendar_id='primary'").get(c.id)
+    await getDatabase().prepare("UPDATE mca_calendar_sources SET channel_expires_at='2020-01-01' WHERE connection_id=? AND calendar_id='primary'").run(c.id)
+    await getDatabase().prepare("UPDATE mca_calendar_connections SET credential_cipher=?,next_sync_at=? WHERE id=?").run(encryptSensitive(JSON.stringify({accessToken:"expired",refreshToken:"refresh-secret",expiresAt:0}),"workspace"),nowIso(),c.id)
+    const renewed=await runCalendarCron(request("Bearer synthetic-calendar-cron"))
+    assert.equal((await renewed.json()).processed,1)
+    assert.equal(oauthRefreshes,1)
+    const currentWatch=await getDatabase().prepare<{channel_id:string;channel_expires_at:string}>("SELECT channel_id,channel_expires_at FROM mca_calendar_sources WHERE connection_id=? AND calendar_id='primary'").get(c.id)
+    assert.notEqual(currentWatch?.channel_id,previousWatch?.channel_id)
+    assert.ok(Date.parse(currentWatch!.channel_expires_at)>Date.now()+86400000)
+  } finally {
+    if(previous===undefined) delete process.env.MCA_CALENDAR_RUNTIME;else process.env.MCA_CALENDAR_RUNTIME=previous
+    if(previousSecret===undefined) delete process.env.CRON_SECRET;else process.env.CRON_SECRET=previousSecret
+  }
+})
+test("owner calendar health reports stale, failed and expiring connections without credentials",async()=>{
+  const c=await connect()
+  await syncConnection(c.id)
+  await getDatabase().prepare("UPDATE mca_calendar_connections SET last_sync_at='2020-01-01',failures=2,status='error' WHERE id=?").run(c.id)
+  await getDatabase().prepare("UPDATE mca_calendar_sources SET channel_expires_at='2020-01-01' WHERE connection_id=? AND selected=1").run(c.id)
+  const health=await calendarHealth(getDatabase())
+  assert.deepEqual(health,{connections:1,stale:1,failures:1,reconnect:0,expiringWatches:2})
+  assert.equal(JSON.stringify(health).includes("credential"),false)
 })
 test("webhook channel authentication and duplicate notifications only schedule reconciliation",async()=>{
   const c=await connect();await syncConnection(c.id)

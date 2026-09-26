@@ -4,6 +4,10 @@ let stopping=false
 process.on("SIGTERM",()=>{stopping=true})
 process.on("SIGINT",()=>{stopping=true})
 async function main() {
+  if (process.env.MCA_CALENDAR_RUNTIME === "vercel_cron") {
+    await closeDatabaseForTests()
+    return
+  }
   do {
     try { await runCalendarWorkerOnce() } catch { console.error(JSON.stringify({event:"calendar_worker_failed"})) }
     if(process.argv.includes("--once")) break
