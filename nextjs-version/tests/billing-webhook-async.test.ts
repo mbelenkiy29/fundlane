@@ -225,3 +225,52 @@ test("verified invoice notices wait for refresh and suppress settled out-of-orde
     assert.equal((await getDatabase().prepare<{delivered_at:string|null}>("SELECT delivered_at FROM company_billing_notifications WHERE workspace_id=? AND data::jsonb->>'invoiceId'=?").get(row.workspace_id,failedId))?.delivered_at,null)
   } finally {delete process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES}
 })
+
+test("failed-payment banner waits for an invoice snapshot newer than the failure event",async()=>{
+  const owner=await createWorkspaceWithAdmin({workspaceName:"Stale invoice",adminName:"Owner",adminEmail:`${randomUUID()}@example.test`,password:"Unused fixture password 99!",role:"admin"})
+  const customer=`cus_${randomUUID()}`,invoiceId=`in_${randomUUID()}`
+  await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(owner.workspaceId,customer,nowIso())
+  await getDatabase().prepare("INSERT INTO company_billing_invoices(stripe_invoice_id,workspace_id,status,currency,amount_due,amount_paid,amount_remaining,created_at,synced_at) VALUES (?,?,'open','usd',1000,0,1000,?,?)").run(invoiceId,owner.workspaceId,nowIso(),"2000-01-01T00:00:00.000Z")
+  process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES="true"
+  try {
+    await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"invoice.payment_failed",livemode:false,data:{object:{id:invoiceId,customer}}} as Stripe.Event)
+    assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).paymentFailedInvoice,null)
+    await getDatabase().prepare("UPDATE company_billing_invoices SET synced_at=? WHERE workspace_id=? AND stripe_invoice_id=?").run("2100-01-01T00:00:00.000Z",owner.workspaceId,invoiceId)
+    assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).paymentFailedInvoice?.id,invoiceId)
+  } finally {delete process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES}
+})
+
+test("verified notice retry suppresses frozen email after invoice settlement",async()=>{
+  const owner=await createWorkspaceWithAdmin({workspaceName:"Settled retry",adminName:"Owner",adminEmail:`${randomUUID()}@example.test`,password:"Unused fixture password 99!",role:"admin"})
+  const customer=`cus_${randomUUID()}`,invoiceId=`in_${randomUUID()}`
+  await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(owner.workspaceId,customer,nowIso())
+  await getDatabase().prepare("INSERT INTO workspace_owners (workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(owner.workspaceId,owner.membershipId,nowIso())
+  const requests:number[]=[]
+  const server=createServer((_request,response)=>{requests.push(1);response.writeHead(503);response.end()})
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+  const address=server.address();assert.ok(address&&typeof address!=="string")
+  process.env.MCA_EMAIL_WEBHOOK_URL=`http://127.0.0.1:${address.port}`
+  process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES="true"
+  try {
+    await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"invoice.payment_failed",livemode:false,data:{object:{id:invoiceId,customer}}} as Stripe.Event)
+    await getDatabase().prepare("INSERT INTO company_billing_invoices(stripe_invoice_id,workspace_id,status,currency,amount_due,amount_paid,amount_remaining,created_at,synced_at) VALUES (?,?,'open','usd',1000,0,1000,?,?)").run(invoiceId,owner.workspaceId,nowIso(),"2100-01-01T00:00:00.000Z")
+    const first=await deliverBillingNotifications()
+    assert.equal(first.delivered,0)
+    assert.equal(requests.length,1)
+    const notice=await getDatabase().prepare<{id:string;delivery_payload:string|null;delivered_at:string|null}>("SELECT id,delivery_payload,delivered_at FROM company_billing_notifications WHERE workspace_id=? AND data::jsonb->>'invoiceId'=?").get(owner.workspaceId,invoiceId)
+    assert.ok(notice?.delivery_payload)
+    assert.equal(notice.delivered_at,null)
+    await getDatabase().prepare("UPDATE company_billing_invoices SET status='paid',amount_paid=1000,amount_remaining=0,synced_at=? WHERE workspace_id=? AND stripe_invoice_id=?").run("2100-01-02T00:00:00.000Z",owner.workspaceId,invoiceId)
+    await getDatabase().prepare("UPDATE company_billing_notifications SET available_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z",notice.id)
+    const retry=await deliverBillingNotifications()
+    assert.equal(retry.delivered,0)
+    assert.equal(requests.length,1)
+    const suppressed=await getDatabase().prepare<{delivery_payload:string;delivered_at:string|null}>("SELECT delivery_payload,delivered_at FROM company_billing_notifications WHERE id=?").get(notice.id)
+    assert.equal(suppressed?.delivery_payload,notice.delivery_payload)
+    assert.ok(suppressed?.delivered_at)
+  } finally {
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    delete process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES
+    await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))
+  }
+})

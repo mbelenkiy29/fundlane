@@ -20,7 +20,7 @@ export async function deliverBillingNotifications(limit = 50) {
   let delivered = 0
   for (const row of claimed) {
     try {
-      if (process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES === "true" && (row.kind === "payment_action_required" || row.kind === "payment_failed") && !row.delivery_payload) {
+      if (process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES === "true" && (row.kind === "payment_action_required" || row.kind === "payment_failed")) {
         const data = JSON.parse(row.data) as { invoiceId?: string; receivedAt?: string }
         const invoice = await getDatabase().prepare<{ status: string; amount_remaining: number; synced_at: string }>("SELECT status,amount_remaining,synced_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_invoice_id=?").get(row.workspace_id,data.invoiceId)
         if (!invoice || Date.parse(invoice.synced_at) < Date.parse(data.receivedAt ?? row.created_at)) {
