@@ -106,7 +106,7 @@ test("unconfigured Stripe keeps the no-card trial wording", () => {
     const onboarding = readFileSync(join(sourceRoot, "app/(auth)/onboarding/page.tsx"), "utf8")
     const panel = readFileSync(join(sourceRoot, "components/mca/billing-panel.tsx"), "utf8")
     assert.match(onboarding, /Start a 14-day trial with no card\. Trial access includes up to 5 users, even if you select more paid seats\. No automatic charge; subscribe when ready\./)
-    assert.match(panel, unconfiguredCheckout.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    assert.ok(panel.includes(unconfiguredCheckout))
   })
 })
 
@@ -132,7 +132,7 @@ test("configured Stripe Checkout discloses the card-required trial on onboarding
     assert.match(onboarding, /licensed seats/)
     assert.match(onboarding, /cancel before then/)
     const panel = readFileSync(join(sourceRoot, "components/mca/billing-panel.tsx"), "utf8")
-    assert.match(panel, configuredCheckout.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    assert.ok(panel.includes(configuredCheckout))
     assert.doesNotMatch(panel, /14-day trial/)
   })
 })
