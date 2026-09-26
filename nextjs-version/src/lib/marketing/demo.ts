@@ -8,6 +8,7 @@ import {
 import { AppError } from "../mca/errors"
 import { getDemoConfiguration } from "./config"
 import { demoSchema } from "./demo-schema"
+import { notifyDemoSubmission, storeDemoSubmission } from "./demo-storage"
 
 const MAX_BODY_BYTES = 12_000
 const RETRY_SECONDS = 60
@@ -17,7 +18,9 @@ type Dependencies = {
   rateLimit: typeof consumeRequestRateLimit
   fetch: typeof fetch
   timeout: () => AbortSignal
-  metric: (event: "accepted" | "delivery_failed", requestId: string) => void
+  store: typeof storeDemoSubmission
+  notify: typeof notifyDemoSubmission
+  metric: (event: "accepted" | "delivery_failed" | "notification_failed" | "notification_skipped", requestId: string) => void
 }
 
 const defaults: Dependencies = {
@@ -25,6 +28,8 @@ const defaults: Dependencies = {
   rateLimit: consumeRequestRateLimit,
   fetch: (...args) => fetch(...args),
   timeout: () => AbortSignal.timeout(10_000),
+  store: storeDemoSubmission,
+  notify: notifyDemoSubmission,
   metric: (event, requestId) =>
     console.info(
       JSON.stringify({ event: `marketing_demo_${event}`, requestId })
@@ -95,7 +100,7 @@ export function createDemoHandler(overrides: Partial<Dependencies> = {}) {
     try {
       assertTrustedMutation(request)
       const config = deps.configuration()
-      if (!config.enabled || !config.webhookUrl || !config.token)
+      if (!config.enabled || (!config.databaseEnabled && (!config.webhookUrl || !config.token)))
         return json(
           {
             error:
@@ -123,19 +128,36 @@ export function createDemoHandler(overrides: Partial<Dependencies> = {}) {
         message,
       } = result.data
       const contact = { name, email, brokerage, teamSize, message }
+      if (config.databaseEnabled) {
+        try {
+          const inserted = await deps.store(clientId, contact)
+          if (inserted) {
+            try {
+              if (!await deps.notify(clientId, contact)) deps.metric("notification_skipped", clientId)
+            } catch {
+              deps.metric("notification_failed", clientId)
+            }
+          }
+        } catch {
+          deps.metric("delivery_failed", clientId)
+          return json({ error: "Demo requests are temporarily unavailable. Please try again shortly." }, 503)
+        }
+        deps.metric("accepted", clientId)
+        return json({ accepted: true, requestId: clientId }, 202)
+      }
       // Bind the ID to the normalized payload so editing a failed form creates a
       // different operation. The key never contains contact data or credentials.
-      const requestId = createHmac("sha256", config.token)
+      const requestId = createHmac("sha256", config.token!)
         .update(JSON.stringify({ clientId, ...contact }))
         .digest("hex")
       try {
-        const response = await deps.fetch(config.webhookUrl, {
+        const response = await deps.fetch(config.webhookUrl!, {
           method: "POST",
           redirect: "error",
           signal: deps.timeout(),
           headers: {
             "content-type": "application/json",
-            authorization: `Bearer ${config.token}`,
+            authorization: `Bearer ${config.token!}`,
             "Idempotency-Key": requestId,
           },
           body: JSON.stringify({

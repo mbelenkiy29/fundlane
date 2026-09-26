@@ -4,15 +4,44 @@ The public homepage is `/`; `/landing` permanently redirects to it. `/demo` host
 
 ## Enable demo requests
 
+Direct database delivery is available after migration `0056_marketing_demo_submissions.sql`.
+Set `MCA_DEMO_DB_SUBMISSIONS_ENABLED=true` to accept requests into the private
+`marketing_demo_submissions` table. Its default is `false`, retaining the
+existing webhook route until the migration is released. When enabled, the page
+checks database availability before enabling the form. A successful API response
+means the row was stored; email notification is best effort. Repeated request IDs
+with identical normalized fields are accepted without creating another row or
+resending email. Rows contain only form fields, an opaque request ID, a payload
+digest, and creation time; no raw IP address is stored.
+
+Set `MCA_DEMO_NOTIFY_EMAIL` to the monitored sales inbox. Notifications use
+the existing `MCA_USESEND_API_KEY` and `MCA_USESEND_FROM` settings. Missing
+configuration or provider failure emits a `marketing_demo_notification_skipped`
+or `marketing_demo_notification_failed` metric and does not reject a stored lead.
+Review the private table for leads until email delivery has been verified with
+a synthetic submission. `MCA_SUPPORT_EMAIL`, already used by the help center,
+provides the `/demo` mailto fallback when storage is unavailable. If it is
+unset, the page shows a neutral unavailable message without an invented address.
+
+The database path retains the existing same-origin, JSON/body-size, validation,
+honeypot, and shared rate-limit checks. The new table has RLS enabled and no
+grants to `anon` or `authenticated`; only the server role has table access.
+Apply the migration to the intended deployment through the reviewed release
+process. Verify hosted database access and a synthetic notification before
+enabling the flag in production. No hosted migration or provider send is part of
+the local test suite.
+
+The legacy webhook path remains available when the flag is unset:
+
 Configure these server-only values in the intended deployment:
 
 - `MCA_DEMO_WEBHOOK_URL`: dedicated HTTPS sales receiver URL. Redirects and embedded URL credentials are rejected.
 - `MCA_DEMO_WEBHOOK_TOKEN`: bearer credential for that receiver.
 - `MCA_MARKETING_PRIVACY_URL`: HTTPS URL of the approved privacy notice. Do not point this at a placeholder page.
 
-All three must be valid before the form accepts requests. With missing configuration, the form is visibly unavailable and its API returns 503. There is no preview-success mode. The homepage privacy link is rendered at build time; rebuild after configuring it. `/demo` reads configuration at request time.
+All three must be valid before the legacy webhook path accepts requests. With missing configuration and the database flag unset, the form is visibly unavailable and its API returns 503. There is no preview-success mode. The homepage privacy link is rendered at build time; rebuild after configuring it. `/demo` reads configuration at request time.
 
-The existing Neon `request_rate_windows` table provides shared limits across application instances: five attempts per client address per minute and 120 total attempts per minute. Configure the ingress to overwrite forwarded client-address headers. Rate-store outages fail closed. No new migration is needed. The endpoint also validates same-origin browser requests, content type, an actual 12 KB streamed body limit, allowed fields, and a honeypot. Do not reuse this anonymous endpoint for authenticated merchant intake.
+The existing Postgres `request_rate_windows` table provides shared limits across application instances: five attempts per client address per minute and 120 total attempts per minute. Configure the ingress to overwrite forwarded client-address headers. Rate-store outages fail closed. No separate rate-limit migration is needed. The endpoint also validates same-origin browser requests, content type, an actual 12 KB streamed body limit, allowed fields, and a honeypot. Do not reuse this anonymous endpoint for authenticated merchant intake.
 
 ## Sales receiver contract
 
@@ -63,12 +92,13 @@ The harness prints a synthetic development login for `http://localhost:3010`. Us
 
 ```sh
 node --conditions=react-server --import tsx --test tests/marketing-demo.test.ts
+node --experimental-test-module-mocks --conditions=react-server --import tsx --test tests/marketing-demo-form.test.ts tests/marketing-demo-storage.test.ts tests/migration-branch-merge.test.mjs
 pnpm typecheck
 pnpm lint
 pnpm build
 ```
 
-The demo tests cover accepted delivery, normalized payloads, receiver deduplication and ambiguous retries, validation, honeypot, body limits, rate rejection, cross-origin requests, failed configuration/storage, provider errors and aborts. Browser checks cover desktop/tablet/390px, keyboard workflow controls, no-JavaScript navigation/FAQ, demo states, redirects and metadata. Test external sales acceptance only with a controlled synthetic address. No live sales message is sent by the test suite.
+The demo tests cover database persistence, duplicate request IDs, best-effort notification with a mocked UseSend API, fallback copy, accepted webhook delivery, normalized payloads, receiver deduplication and ambiguous retries, validation, honeypot, body limits, rate rejection, cross-origin requests, failed configuration/storage, provider errors and aborts. Browser checks cover desktop/tablet/390px, keyboard workflow controls, no-JavaScript navigation/FAQ, demo states, redirects and metadata. Test external sales acceptance only with a controlled synthetic address. No live sales message is sent by the test suite.
 
 
 ## Bundled receiver and private sales inbox

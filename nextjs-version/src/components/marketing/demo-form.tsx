@@ -4,15 +4,20 @@ import { useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { ArrowUpRight, CheckCircle2 } from "lucide-react"
 import { demoSchema, TEAM_SIZES } from "@/lib/marketing/demo-schema"
+import { DemoFallback } from "./demo-fallback"
 
 type Errors = Record<string, string[] | undefined>
 
 export function DemoForm({
   enabled,
   privacyUrl,
+  supportEmail,
+  requestTimeoutMs,
 }: {
   enabled: boolean
   privacyUrl: string | null
+  supportEmail: string | null
+  requestTimeoutMs: number
 }) {
   const [busy, setBusy] = useState(false)
   const [accepted, setAccepted] = useState(false)
@@ -53,7 +58,7 @@ export function DemoForm({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload.data),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       })
       const result = await response.json()
       if (!response.ok || result.accepted !== true) {
@@ -92,15 +97,11 @@ export function DemoForm({
 
   return (
     <form className="fl-form" onSubmit={submit} noValidate aria-busy={busy}>
-      {!enabled && (
-        <p className="fl-form-notice" role="status">
-          Demo requests are temporarily unavailable. Please check back soon.
-        </p>
-      )}
+      {!enabled && <DemoFallback supportEmail={supportEmail} />}
       <noscript>
         <p className="fl-form-notice">
-          Enable JavaScript to send your demo request. You can still explore the
-          product and workflow on our homepage.
+          Enable JavaScript to send your demo request.
+          {supportEmail ? <> You can also email <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.</> : " You can still explore the product and workflow on our homepage."}
         </p>
         <style>{`.fl-form button[type="submit"]{display:none}`}</style>
       </noscript>
@@ -221,7 +222,7 @@ export function DemoForm({
       </div>
       {error && (
         <p className="fl-form-notice fl-form-error" role="alert">
-          {error}
+          {error} {supportEmail && <>If this continues, email <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.</>}
         </p>
       )}
       {privacyUrl && (

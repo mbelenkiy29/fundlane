@@ -7,6 +7,7 @@ import { getDemoConfiguration } from "../src/lib/marketing/config"
 
 const configuration = () => ({
   enabled: true,
+  databaseEnabled: false,
   privacyUrl: "https://fundlane.io/privacy",
   webhookUrl: "https://sales.example.test/demo",
   token: "synthetic-test-token",
@@ -192,6 +193,59 @@ test("provider rejection, network failure and abort never produce false success 
   }
 })
 
+test("database mode stores normalized requests and attempts notification", async () => {
+  const stored: Array<{ id: string; email: string }> = []
+  const notified: string[] = []
+  const f = fixture({
+    configuration: () => ({ ...configuration(), databaseEnabled: true, webhookUrl: null, token: null }),
+    store: async (id, contact) => { stored.push({ id, email: contact.email }); return true },
+    notify: async (id) => { notified.push(id); return true },
+  })
+  const payload = valid()
+  const response = await f.handler(request(payload))
+  assert.equal(response.status, 202)
+  assert.deepEqual(stored, [{ id: payload.requestId, email: "alex@example.test" }])
+  assert.deepEqual(notified, [payload.requestId])
+  assert.deepEqual(f.metrics, ["accepted"])
+  assert.equal(f.sent.length, 0)
+})
+
+test("notification failures and missing delivery configuration do not lose a stored request", async () => {
+  for (const notify of [async () => { throw new Error("provider secret") }, async () => false]) {
+    let stored = 0
+    const f = fixture({
+      configuration: () => ({ ...configuration(), databaseEnabled: true }),
+      store: async () => { stored++; return true },
+      notify,
+    })
+    assert.equal((await f.handler(request())).status, 202)
+    assert.equal(stored, 1)
+    assert.equal(f.metrics[1], "accepted")
+    assert.ok(["notification_failed", "notification_skipped"].includes(f.metrics[0]))
+  }
+})
+
+test("database mode keeps validation, rate limits, and storage failures closed", async () => {
+  let stores = 0
+  const f = fixture({
+    configuration: () => ({ ...configuration(), databaseEnabled: true }),
+    store: async () => { stores++; throw new Error("private database error") },
+    notify: async () => { throw new Error("must not notify") },
+  })
+  assert.equal((await f.handler(request({ ...valid(), name: " " }))).status, 400)
+  assert.equal(stores, 0)
+  const response = await f.handler(request())
+  assert.equal(response.status, 503)
+  assert.equal((await response.text()).includes("private database"), false)
+  assert.equal(stores, 1)
+  const limited = fixture({
+    configuration: () => ({ ...configuration(), databaseEnabled: true }),
+    rateLimit: async () => { throw new AppError(429, "rate_limit_exceeded", "Too many attempts.") },
+    store: async () => { throw new Error("must not store") },
+  })
+  assert.equal((await limited.handler(request())).status, 429)
+})
+
 test("production configuration requires HTTPS destination, token and approved privacy URL", () => {
   const keys = [
     "MCA_DEMO_WEBHOOK_URL",
@@ -199,7 +253,9 @@ test("production configuration requires HTTPS destination, token and approved pr
     "MCA_MARKETING_PRIVACY_URL",
   ] as const
   const old = keys.map((key) => process.env[key])
+  const oldFlag = process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED
   try {
+    delete process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED
     process.env.MCA_DEMO_WEBHOOK_URL = "https://sales.example.test/demo"
     process.env.MCA_DEMO_WEBHOOK_TOKEN = "synthetic"
     process.env.MCA_MARKETING_PRIVACY_URL = "https://fundlane.io/privacy"
@@ -215,7 +271,13 @@ test("production configuration requires HTTPS destination, token and approved pr
     process.env.MCA_DEMO_WEBHOOK_URL =
       "https://user:secret@sales.example.test/demo"
     assert.equal(getDemoConfiguration().enabled, false)
+    process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED = "TRUE"
+    assert.equal(getDemoConfiguration().databaseEnabled, false)
+    process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED = "true"
+    assert.equal(getDemoConfiguration().enabled, true)
   } finally {
+    if (oldFlag === undefined) delete process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED
+    else process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED = oldFlag
     keys.forEach((key, i) => {
       if (old[i] === undefined) delete process.env[key]
       else process.env[key] = old[i]
