@@ -74,7 +74,13 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
         AND i.provider IN ('jotform','highlevel','zoho','custom','fundlane','native','fillout','docuseal')) automatic_processing_forms,
       (SELECT count(*)::int FROM intake_events e JOIN deals d ON d.id=e.deal_id AND d.workspace_id=e.workspace_id WHERE e.workspace_id=w.id AND e.state IN ('created','file_pending') AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) created_intakes,
       (SELECT count(*)::int FROM intake_events e WHERE e.workspace_id=w.id AND e.state='error') failed_intakes,
-      (SELECT count(*)::int FROM mca_documents d JOIN deals deal ON deal.id=d.deal_id AND deal.workspace_id=d.workspace_id WHERE d.workspace_id=w.id AND d.processing_state IN ('ready','clean') AND (deal.legal_name ILIKE '[SANDBOX]%' OR deal.legal_name ILIKE '[SYNTHETIC]%')) ready_documents,
+      (SELECT count(*)::int FROM mca_documents d JOIN deals deal ON deal.id=d.deal_id AND deal.workspace_id=d.workspace_id
+        WHERE d.workspace_id=w.id AND d.processing_state IN ('ready','clean') AND (deal.legal_name ILIKE '[SANDBOX]%' OR deal.legal_name ILIKE '[SYNTHETIC]%')
+        AND EXISTS (SELECT 1 FROM intake_events e
+          JOIN intake_processing p ON p.intake_id=e.id AND p.workspace_id=e.workspace_id
+          JOIN mca_background_jobs j ON j.id=p.job_id AND j.workspace_id=p.workspace_id AND j.kind='intake_process' AND j.resource_id=e.id AND j.state='complete'
+          WHERE e.workspace_id=d.workspace_id AND e.deal_id=d.deal_id
+            AND p.progress_json::jsonb #>> '{stages,documents,state}' = 'complete')) ready_documents,
       (SELECT count(*)::int FROM mca_documents d WHERE d.workspace_id=w.id AND d.processing_state IN ('upload_failed','scan_failed')) failed_documents,
       (SELECT count(*)::int FROM mca_email_senders s WHERE s.workspace_id=w.id AND s.state='verified') verified_senders,
       (SELECT count(*)::int FROM mca_email_senders s WHERE s.workspace_id=w.id AND s.state IN ('expired','revoked')) broken_senders,
