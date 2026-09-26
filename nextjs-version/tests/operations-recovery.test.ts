@@ -10,7 +10,7 @@ import { operationalEvent } from "../src/lib/mca/operations/telemetry"
 import type { Metrics } from "../src/lib/mca/operations/contracts"
 import { GET as recoveryGet } from "../src/app/api/platform/companies/[id]/failed-jobs/route"
 
-const metrics: Metrics = { queued: 0, running: 0, failed: 0, retrying: 0, billingRetrying: 0, expired: 0, oldestSeconds: 0, emailQueued: 0, emailAccepted: 0, emailFailed: 0, emailBlocked: 0, emailUnknown: 0, reconnect: 2, recentEmailFailures: 2, recentErrors: 0, documentWorkerHeartbeatAgeSeconds: 91, queueAgeByKind: { document_scan: 700, export: 200 }, billingMaintenanceFailures: 2, assistantRuns: 101 }
+const metrics: Metrics = { queued: 0, running: 0, failed: 0, retrying: 0, billingRetrying: 0, expired: 0, oldestSeconds: 0, emailQueued: 0, emailAccepted: 0, emailFailed: 0, emailBlocked: 0, emailUnknown: 0, reconnect: 2, recentEmailFailures: 2, recentErrors: 0, documentWorkerHeartbeatAgeSeconds: 91, documentFailed: 0, scannerUnavailable: 0, queueAgeByKind: { document_scan: 700, export: 200 }, billingMaintenanceFailures: 2, assistantRuns: 101 }
 const config = { origin: "https://fundlane.io", token: "x".repeat(40), alerts: true, recoveryAlerts: true, assistantEnabled: true, thresholds: { workerSeconds: 90, queueSeconds: 600, queueByKind: { export: 100 }, providerFailures: 2, billingFailures: 2, assistantRuns: 100 } }
 test("recovery alert rules respect every threshold, kind override, flag and assistant activation", () => {
   assert.equal(workerHeartbeatStale(metrics, config), true)

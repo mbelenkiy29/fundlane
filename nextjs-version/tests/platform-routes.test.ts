@@ -6,8 +6,14 @@ import { z } from "zod"
 let denial:AppError|null=new AppError(403,"platform_admin_required","Platform access required.")
 let reads=0,mutations=0,originChecks=0
 let demoReads=0
+let recoveryReads=0,recoveryDecisions=0
 mock.module(new URL("../src/lib/mca/platform-auth.ts",import.meta.url).href,{namedExports:{requirePlatformAdmin:async()=>{if(denial)throw denial;return {userId:"operator"}}}})
-mock.module(new URL("../src/lib/mca/auth.ts",import.meta.url).href,{namedExports:{assertTrustedMutation:(request:Request)=>{originChecks++;if(request.headers.get("origin")!=="https://app.example")throw new AppError(403,"untrusted_origin","Untrusted origin.")}}})
+mock.module(new URL("../src/lib/mca/auth.ts",import.meta.url).href,{namedExports:{assertTrustedMutation:(request:Request)=>{originChecks++;if(request.headers.get("origin")!=="https://app.example")throw new AppError(403,"untrusted_origin","Untrusted origin.")},consumeRequestRateLimit:async()=>{}}})
+mock.module(new URL("../src/lib/mca/operations/job-recovery.ts",import.meta.url).href,{namedExports:{
+  recoveryActionSchema:z.object({action:z.enum(["replay","external_effect_confirmed","external_effect_absent"])}),
+  failedJobs:async()=>{recoveryReads++;return []},
+  recoverFailedJob:async(workspaceId:string,jobId:string,actor:string,action:string)=>{recoveryDecisions++;return {workspaceId,jobId,actor,action}},
+}})
 mock.module(new URL("../src/lib/marketing/demo-storage.ts",import.meta.url).href,{namedExports:{listDemoSubmissions:async()=>{demoReads++;return [{request_id:"synthetic",contact:{email:"demo@example.test"},notification_status:"failed"}]},hasUnnotifiedDemoSubmissions:async()=>true}})
 mock.module(new URL("../src/lib/mca/platform-console.ts",import.meta.url).href,{namedExports:{
   platformQuerySchema:z.object({q:z.string().default(""),status:z.string().default(""),offset:z.coerce.number().int().min(0).default(0)}),
@@ -20,7 +26,8 @@ let company:typeof import("../src/app/api/platform/companies/[id]/route")
 let payments:typeof import("../src/app/api/platform/payments/route")
 let audit:typeof import("../src/app/api/platform/audit/route")
 let demo:typeof import("../src/app/api/platform/demo-requests/route")
-before(async()=>{[companies,company,payments,audit,demo]=await Promise.all([import("../src/app/api/platform/companies/route"),import("../src/app/api/platform/companies/[id]/route"),import("../src/app/api/platform/payments/route"),import("../src/app/api/platform/audit/route"),import("../src/app/api/platform/demo-requests/route")])})
+let recovery:typeof import("../src/app/api/platform/companies/[id]/failed-jobs/route")
+before(async()=>{[companies,company,payments,audit,demo,recovery]=await Promise.all([import("../src/app/api/platform/companies/route"),import("../src/app/api/platform/companies/[id]/route"),import("../src/app/api/platform/payments/route"),import("../src/app/api/platform/audit/route"),import("../src/app/api/platform/demo-requests/route"),import("../src/app/api/platform/companies/[id]/failed-jobs/route")])})
 const context={params:Promise.resolve({id:"company"})}
 const request=(body?:object,origin="https://app.example")=>new Request("https://app.example/api/platform/companies/company",{method:body?"POST":"GET",headers:{origin,"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{})})
 test("all platform routes reject absent grants and AAL1 before reading or mutating records",async()=>{
@@ -51,4 +58,29 @@ test("authorized routes retain origin protection, reason validation and trusted 
   assert.equal(response.status,200);assert.deepEqual(await response.json(),{id:"company",actor:"operator"});assert.equal(mutations,1)
   const resolution=await company.POST(request({action:"resolve_missing_state",resolution:"start_trial_required",reason:"Owner decision",actor:"forged"}),context)
   assert.equal(resolution.status,200);assert.deepEqual(await resolution.json(),{id:"company",actor:"operator"});assert.equal(mutations,2)
+})
+test("enabled failed-job route requires platform MFA, validates decisions, and checks mutation origin",async()=>{
+  const previous=process.env.MCA_JOB_RECOVERY_ENABLED
+  process.env.MCA_JOB_RECOVERY_ENABLED="true"
+  const post=(body:object,origin="https://app.example")=>recovery.POST(request(body,origin),context)
+  try {
+    denial=new AppError(403,"mfa_required","Complete MFA.")
+    assert.equal((await recovery.GET(request(),context)).status,403)
+    assert.equal((await post({jobId:"job-1",action:"replay"})).status,403)
+    assert.equal(recoveryReads,0);assert.equal(recoveryDecisions,0)
+    denial=null
+    assert.equal((await recovery.GET(request(),context)).status,200)
+    assert.equal(recoveryReads,1)
+    assert.equal((await post({jobId:"job-1",action:"replay"},"https://evil.example")).status,403)
+    assert.equal((await post({jobId:"",action:"replay"})).status,400)
+    assert.equal((await post({jobId:"job-1",action:"send_again"})).status,400)
+    assert.equal(recoveryDecisions,0)
+    const response=await post({jobId:"job-1",action:"replay",actor:"forged"})
+    assert.equal(response.status,200)
+    assert.deepEqual(await response.json(),{workspaceId:"company",jobId:"job-1",actor:"operator",action:"replay"})
+    assert.equal(recoveryDecisions,1)
+  } finally {
+    if(previous===undefined)delete process.env.MCA_JOB_RECOVERY_ENABLED
+    else process.env.MCA_JOB_RECOVERY_ENABLED=previous
+  }
 })
