@@ -15,7 +15,7 @@ import { processJobDelivery } from "../submissions/outbox"
 import { createExportJob, processExportJob } from "../exports/service"
 import type { CreateExportInput } from "../exports/contracts"
 import { commitCsvUpdate, commitSpreadsheetImport } from "../imports/service"
-import { claimBackgroundJob, completeBackgroundJob, currentJobActor, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob } from "./queue"
+import { claimBackgroundJob, completeBackgroundJob, currentJobActor, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob, type BackgroundJobKind } from "./queue"
 import { processMultipartTask } from "./multipart"
 import { quarantineBucket, storageClient, validateStorageKey } from "../documents/storage"
 import { documentScanner } from "../documents/scanner"
@@ -105,8 +105,8 @@ export async function touchDocumentWorkerHeartbeat(): Promise<void> {
   await getDatabase().prepare("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=? WHERE id").run(nowIso())
 }
 
-export async function runNextBackgroundJob(): Promise<boolean> {
-  const job = await claimBackgroundJob()
+export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<boolean> {
+  const job = await claimBackgroundJob(kinds)
   if (!job) return false
   const heartbeat = setInterval(() => { void heartbeatBackgroundJob(job).catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {

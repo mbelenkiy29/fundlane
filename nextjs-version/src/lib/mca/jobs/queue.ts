@@ -109,13 +109,15 @@ export async function currentJobActor(actor: DealActor): Promise<DealActor> {
   return actorForDeals({ authType: "session", userId: actor.userId, membershipId: actor.membershipId, workspaceId: actor.workspaceId, role: member.role, scopes: [...actor.scopes ?? []], sessionId: actor.sessionId })
 }
 
-export async function claimBackgroundJob(): Promise<BackgroundJob | undefined> {
+export async function claimBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<BackgroundJob | undefined> {
+  if (kinds?.length === 0) return undefined
   const now = nowIso()
-  const companies = await getDatabase().prepare<{ workspace_id: string }>("SELECT DISTINCT workspace_id FROM mca_background_jobs WHERE kind<>'billing_reconcile' AND state IN ('queued','running')").all()
+  const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""
+  const companies = await getDatabase().prepare<{ workspace_id: string }>(`SELECT DISTINCT workspace_id FROM mca_background_jobs WHERE kind<>'billing_reconcile'${kindFilter} AND state IN ('queued','running')`).all(...(kinds ?? []))
   const allowed: string[] = []
   for (const company of companies) {
     if ((await getCompanyAccess(company.workspace_id)).allowed) allowed.push(company.workspace_id)
-    else {
+    else if (!kinds || kinds.some(kind => ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(kind))) {
       // Outbound intent is not replayed after recovery. Keep the idempotency row and
       // require a fresh reviewed request; never consume an attempt for a pause.
       await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='company_paused',updated_at=?
@@ -125,12 +127,12 @@ export async function claimBackgroundJob(): Promise<BackgroundJob | undefined> {
     }
   }
   if (!allowed.length) return undefined
-  await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE kind<>'billing_reconcile' AND state='running' AND lease_expires_at<? AND attempts>=3 AND workspace_id IN (${allowed.map(() => "?").join(",")})`).run(now, now, ...allowed)
+  await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='retry_limit',updated_at=? WHERE kind<>'billing_reconcile'${kindFilter} AND state='running' AND lease_expires_at<? AND attempts>=3 AND workspace_id IN (${allowed.map(() => "?").join(",")})`).run(now, ...(kinds ?? []), now, ...allowed)
   return getDatabase().prepare<BackgroundJob>(`WITH candidate AS (
-    SELECT id FROM mca_background_jobs WHERE kind<>'billing_reconcile' AND ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3 AND workspace_id IN (${allowed.map(() => "?").join(",")})
+    SELECT id FROM mca_background_jobs WHERE kind<>'billing_reconcile'${kindFilter} AND ((state='queued' AND available_at<=?) OR (state='running' AND lease_expires_at<?)) AND attempts<3 AND workspace_id IN (${allowed.map(() => "?").join(",")})
     ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
   ) UPDATE mca_background_jobs j SET state='running',attempts=attempts+1,lease_token=?,lease_expires_at=?,updated_at=?
-    FROM candidate c WHERE j.id=c.id RETURNING j.*`).get(now, now, ...allowed, newId(), new Date(Date.now() + 600_000).toISOString(), now)
+    FROM candidate c WHERE j.id=c.id RETURNING j.*`).get(...(kinds ?? []), now, now, ...allowed, newId(), new Date(Date.now() + 600_000).toISOString(), now)
 }
 
 export async function heartbeatBackgroundJob(job: BackgroundJob): Promise<void> {
@@ -147,8 +149,9 @@ export async function completeBackgroundJob(job: BackgroundJob, result: unknown)
     await putPrivateArtifact(key, bytes, "application/json")
     serialized = JSON.stringify({ _resultObjectKey: key, checksum })
   }
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',result_json=?,lease_token=NULL,lease_expires_at=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
+  const completed = await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',result_json=?,lease_token=NULL,lease_expires_at=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
     .run(serialized, nowIso(), job.id, job.lease_token)
+  if (!completed.changes) throw new Error("background_job_lease_lost")
 }
 
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {

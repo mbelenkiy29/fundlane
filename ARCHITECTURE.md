@@ -47,7 +47,7 @@ The most connected symbols in the graph (treat as the real core):
 | Files | Private Supabase Storage (`fundlane-documents`, `fundlane-quarantine`, `fundlane-assistant`) | Production filesystem `/data/documents` |
 | Malware scan | Optional Cloudmersive / configured scanner; deal docs become ready after upload validation | Required live ClamAV in the web process |
 | Billing | Stripe **test** keys only (`MCA_STRIPE_BILLING_ENABLED`) | Clerk Billing as the live catalog |
-| Workers | Postgres-backed `mca_background_jobs`; Render Docker workers retained | Always-on in-process queue, Redis |
+| Workers | Postgres-backed `mca_background_jobs`; gated Vercel export cron; native cutover pending | Render workers as active, always-on in-process queue, Redis |
 | Python ChatKit | Source in `chatkit-service/` for rollback | Deployed production assistant |
 | Encryption | AES-256-GCM, workspace ID as AAD (`MCA_DATA_ENCRYPTION_KEY`) | Unencrypted PII in deal owner fields |
 
@@ -122,6 +122,7 @@ flowchart TB
     P[proxy.ts cookie refresh]
     UI[App Router pages]
     API["/api and /api/mca"]
+    CRON["/api/cron/jobs - opt-in exports"]
     SVC["src/lib/mca services"]
     P --> UI
     UI --> API
@@ -129,10 +130,6 @@ flowchart TB
   end
   DB[(Supabase Postgres)]
   ST[(Private Storage buckets)]
-  subgraph R[Render workers - retained]
-    DW[document worker]
-    MW[messaging worker]
-  end
   EXT[Optional providers: OpenAI, Stripe test, email, SMS, DocuSeal, Google, funder APIs]
   B --> P
   B --> M
@@ -141,16 +138,12 @@ flowchart TB
   SVC <--> A
   SVC --> DB
   SVC --> ST
-  DW --> DB
-  DW --> ST
-  MW --> DB
+  CRON --> DB
   API -->|webhooks| EXT
   SVC --> EXT
-  DW --> EXT
-  MW --> EXT
 ```
 
-**Web** serves UI and most APIs. **Durable work** is a row in `mca_background_jobs`. On Vercel, `backgroundJobsEnabled()` is true (`MCA_BACKGROUND_JOBS=enabled` or `VERCEL` set). Workers claim jobs; they re-check the original actor's live authorization (`currentJobActor`). Root `render.yaml` defines `fundlane-document-worker` and `fundlane-messaging-worker` with auto-deploy off. Treat worker health as unverified until `docs/render-deployment.md` says otherwise.
+**Web** serves UI and most APIs. **Durable work** is a row in `mca_background_jobs`. On Vercel, `backgroundJobsEnabled()` is true (`MCA_BACKGROUND_JOBS=enabled` or `VERCEL` set). The opt-in `/api/cron/jobs` claims only private export jobs when `MCA_JOB_RUNTIME=vercel_cron`; its schedule is not installed by this repository. Workers re-check the original actor's live authorization (`currentJobActor`). Native document and other worker cutovers remain pending in `nextjs-version/docs/background-job-runtime.md`. Root `render.yaml` is historical, not an active runtime declaration.
 
 There is no Redis. Job state, rate limits, and leases live in Postgres.
 
@@ -607,7 +600,7 @@ God nodes (highest degree on last cluster): `apiError`, `getDatabase`, `nowIso`,
 | Setup and env | `nextjs-version/README.md`, `.env.example` |
 | Module table / Linear / graphify install | `WORKSPACE_NAVIGATION.md` |
 | Agent rules | `Agents.md` |
-| Live deploy / workers | `DEPLOYMENT.md`, `docs/render-deployment.md`, root `render.yaml` |
+| Live deploy / workers | `nextjs-version/docs/supabase-vercel-migration.md`, `nextjs-version/docs/background-job-runtime.md`; Render files are historical |
 | Auth details | `docs/supabase-auth.md` |
 | Billing | `docs/supabase-billing.md` |
 | Historical hosting options | `nextjs-version/ARCHITECTURE.md` (not current ops) |

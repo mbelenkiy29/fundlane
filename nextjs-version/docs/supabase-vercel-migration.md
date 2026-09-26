@@ -1,5 +1,7 @@
 # Fundlane production deployment
 
+Render is historical only in the active architecture. See [background job runtime](background-job-runtime.md) for scheduler ownership, activation order, and native worker acceptance.
+
 GitHub `mbelenkiy29/fundlane`, branch `main`, deploys automatically to the existing Vercel `fundlane` project. The root is `nextjs-version`; Node 24 and pnpm 11.1.2 are pinned. Use `pnpm install --frozen-lockfile` and `pnpm build`.
 
 ## Authoritative services
