@@ -3,6 +3,7 @@ import {
   text,
   integer,
   primaryKey,
+  index,
   uniqueIndex,
   check,
 } from "drizzle-orm/pg-core"
@@ -32,8 +33,12 @@ export const smsCompanies = pgTable(
     registration_limit_cents: integer().notNull().default(0),
     created_at: text().notNull(),
     updated_at: text().notNull(),
+    refresh_attempted_at: text(),
   },
   (t) => [
+    index("sms_companies_refresh_cursor_idx")
+      .on(t.refresh_attempted_at.asc().nullsFirst(), t.workspace_id)
+      .where(sql`${t.provider_cipher} IS NOT NULL`),
     check(
       "sms_company_limits",
       sql`${t.number_limit} >= 0 AND ${t.monthly_limit_cents} >= 0 AND ${t.registration_limit_cents} >= 0`

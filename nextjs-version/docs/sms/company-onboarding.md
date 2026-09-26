@@ -10,7 +10,7 @@ Platform operators use `/settings/sms-review`. Operator authorization is an exac
 
 ## Deployment prerequisites
 
-1. Apply the checked Drizzle migrations through the controlled Supabase release process. The cron consumer itself needs no migration.
+1. Apply the checked Drizzle migrations through the controlled Supabase release process. Migration `0064_sms_refresh_cursor` adds a company refresh cursor, leaving the operator review timestamp unchanged by routine refresh attempts.
 2. Configure `MCA_APP_ORIGIN` / `MCA_SMS_PUBLIC_BASE_URL` as a clean public HTTPS origin and the existing workspace encryption key. Configure the email delivery webhook to accept `company_email_verification`. A development email preview is not evidence of delivery; use an email capture webhook during development.
 3. Configure `MCA_PLATFORM_OPERATOR_USER_IDS` with trusted user IDs, not email addresses or workspace roles.
 4. Complete Twilio's primary-profile ISV setup and obtain an eligibility decision for the actual MCA application-update traffic. The observed account was Direct, with no submitted A2P campaigns. Record that decision in `MCA_SMS_ELIGIBILITY_REFERENCE`, set the approved primary profile SID in `MCA_TWILIO_PRIMARY_PROFILE_SID`, and only then set `MCA_SMS_ISV_APPROVED=true`.
