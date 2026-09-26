@@ -3,9 +3,11 @@ import assert from "node:assert/strict"
 import { randomBytes, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { readFile } from "node:fs/promises"
 import { decryptSensitive } from "../src/lib/mca/crypto"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
-import { deliverStoredDemoSubmission, hasUnnotifiedDemoSubmissions, isDemoStorageAvailable, listDemoSubmissions, notifyDemoSubmission, retryUnsentDemoSubmissions, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
+import { deliverStoredDemoSubmission, hasUnnotifiedDemoSubmissions, isDemoSubmissionTracked, isDemoStorageAvailable, listDemoSubmissions, notifyDemoSubmission, retryUnsentDemoSubmissions, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
+import { createDemoHandler } from "../src/lib/marketing/demo"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 test("demo submissions persist once and reject conflicting request IDs", async () => {
@@ -19,12 +21,13 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     const id = randomUUID()
     const contact = { name: "Alex Morgan", email: "alex@example.test", brokerage: "Synthetic Capital", teamSize: "2–5" as const, message: "Follow-ups" }
     assert.equal(await storeDemoSubmission(id, contact), true)
+    assert.equal(await isDemoSubmissionTracked(id), true)
     assert.equal(await storeDemoSubmission(id, contact), false)
     await assert.rejects(storeDemoSubmission(id, { ...contact, brokerage: "Different" }))
     const rows = await db.query("SELECT * FROM marketing_demo_submissions")
     assert.equal(rows.rows.length, 1)
     const row = rows.rows[0] as { request_id: string; payload_cipher: string; payload_digest: string; created_at: Date }
-    assert.deepEqual(Object.keys(row).sort(), ["created_at", "notification_attempts", "notification_error", "notification_lease_until", "notified_at", "payload_cipher", "payload_digest", "request_id"])
+    assert.deepEqual(Object.keys(row).sort(), ["created_at", "notification_attempts", "notification_error", "notification_lease_until", "notification_tracking_enabled", "notified_at", "payload_cipher", "payload_digest", "request_id"])
     assert.equal(row.request_id, id)
     assert.ok(row.payload_cipher.startsWith("v1."))
     assert.deepEqual(JSON.parse(decryptSensitive(row.payload_cipher, `marketing-demo-submission:${id}`)), contact)
@@ -44,6 +47,53 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     else process.env.DATABASE_URL = previous
     if (previousKey === undefined) delete process.env.MCA_DATA_ENCRYPTION_KEY
     else process.env.MCA_DATA_ENCRYPTION_KEY = previousKey
+    await db.close()
+  }
+})
+
+test("pre-migration submissions keep best-effort email and remain visible", async () => {
+  const db = await createPostgresTestDatabase("demo_before_tracking")
+  const keys = ["DATABASE_URL", "MCA_DATA_ENCRYPTION_KEY", "MCA_DEMO_NOTIFY_EMAIL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_DEMO_VISIBILITY_ENABLED"] as const
+  const previous = keys.map(key => process.env[key])
+  const originalFetch = globalThis.fetch
+  process.env.DATABASE_URL = db.databaseUrl
+  process.env.MCA_DATA_ENCRYPTION_KEY = randomBytes(32).toString("base64url")
+  process.env.MCA_DEMO_NOTIFY_EMAIL = "sales@example.test"
+  process.env.MCA_USESEND_API_KEY = "test-key"
+  process.env.MCA_USESEND_FROM = "sender@example.test"
+  delete process.env.MCA_DEMO_VISIBILITY_ENABLED
+  let sends = 0
+  globalThis.fetch = async () => { sends++; return Response.json({ emailId: "synthetic" }) }
+  try {
+    await db.query("ALTER TABLE marketing_demo_submissions DROP COLUMN notified_at, DROP COLUMN notification_error, DROP COLUMN notification_attempts, DROP COLUMN notification_lease_until, DROP COLUMN notification_tracking_enabled")
+    const id = randomUUID()
+    const contact = { requestId: id, name: "Alex", email: "alex@example.test", brokerage: "Synthetic", teamSize: "1", message: "Call", website: "" }
+    const handler = createDemoHandler({
+      configuration: () => ({ enabled: true, databaseEnabled: true, privacyUrl: "https://fundlane.io/privacy", webhookUrl: null, token: null }),
+      rateLimit: async () => {},
+      metric: () => {},
+    })
+    const request = new Request("https://fundlane.io/api/marketing/demo", { method: "POST", headers: { "content-type": "application/json", origin: "https://fundlane.io" }, body: JSON.stringify(contact) })
+    assert.equal((await handler(request)).status, 202)
+    assert.equal(await isDemoSubmissionTracked(id), false)
+    assert.equal(sends, 1)
+    assert.equal((await listDemoSubmissions())[0].notification_status, "unknown")
+    assert.equal(await hasUnnotifiedDemoSubmissions(), true)
+    const inbox = await promisify(execFile)(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/marketing/inbox.ts", "list"], { env: process.env })
+    assert.equal(JSON.parse(inbox.stdout).find((row: { request_id: string }) => row.request_id === id).notification_status, "unknown")
+    const migration = await readFile("drizzle/0064_demo_notification_status.sql", "utf8")
+    for (const statement of migration.split("--> statement-breakpoint")) await db.query(statement)
+    assert.equal(await isDemoSubmissionTracked(id), false)
+    assert.equal((await listDemoSubmissions())[0].notification_status, "unknown")
+    process.env.MCA_DEMO_VISIBILITY_ENABLED = "true"
+    assert.equal(await retryUnsentDemoSubmissions(), 0)
+    assert.equal(await deliverStoredDemoSubmission(id), false)
+    assert.equal(sends, 1)
+    assert.equal(await hasUnnotifiedDemoSubmissions(), true)
+  } finally {
+    globalThis.fetch = originalFetch
+    await closeDatabaseForTests()
+    keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index] })
     await db.close()
   }
 })

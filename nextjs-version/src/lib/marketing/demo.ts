@@ -7,8 +7,8 @@ import {
 } from "../mca/auth"
 import { AppError } from "../mca/errors"
 import { getDemoConfiguration } from "./config"
-import { demoSchema, type DemoRequest } from "./demo-schema"
-import { deliverStoredDemoSubmission, demoVisibilityEnabled, storeDemoSubmission } from "./demo-storage"
+import { demoSchema } from "./demo-schema"
+import { deliverStoredDemoSubmission, demoVisibilityEnabled, isDemoSubmissionTracked, notifyDemoSubmission, storeDemoSubmission } from "./demo-storage"
 
 const MAX_BODY_BYTES = 12_000
 const RETRY_SECONDS = 60
@@ -19,7 +19,9 @@ type Dependencies = {
   fetch: typeof fetch
   timeout: () => AbortSignal
   store: typeof storeDemoSubmission
-  notify: (requestId: string, contact: Pick<DemoRequest, "name" | "email" | "brokerage" | "teamSize" | "message">) => Promise<boolean>
+  notify: typeof notifyDemoSubmission
+  deliver: typeof deliverStoredDemoSubmission
+  isTracked: typeof isDemoSubmissionTracked
   metric: (event: "accepted" | "delivery_failed" | "notification_failed" | "notification_skipped", requestId: string) => void
 }
 
@@ -29,7 +31,9 @@ const defaults: Dependencies = {
   fetch: (...args) => fetch(...args),
   timeout: () => AbortSignal.timeout(10_000),
   store: storeDemoSubmission,
-  notify: deliverStoredDemoSubmission,
+  notify: notifyDemoSubmission,
+  deliver: deliverStoredDemoSubmission,
+  isTracked: isDemoSubmissionTracked,
   metric: (event, requestId) =>
     (event === "notification_failed" || event === "notification_skipped" ? console.warn : console.info)(
       JSON.stringify({ event: `marketing_demo_${event}`, requestId })
@@ -133,7 +137,15 @@ export function createDemoHandler(overrides: Partial<Dependencies> = {}) {
           const inserted = await deps.store(clientId, contact)
           if (inserted || demoVisibilityEnabled()) {
             try {
-              if (!await deps.notify(clientId, contact) && inserted) deps.metric("notification_skipped", clientId)
+              const tracked = await deps.isTracked(clientId)
+              if (inserted) {
+                const delivered = tracked
+                  ? await deps.deliver(clientId)
+                  : await deps.notify(clientId, contact)
+                if (!delivered) deps.metric("notification_skipped", clientId)
+              } else if (demoVisibilityEnabled() && tracked) {
+                await deps.deliver(clientId)
+              }
             } catch {
               deps.metric("notification_failed", clientId)
             }

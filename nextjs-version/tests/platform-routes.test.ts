@@ -5,10 +5,10 @@ import { z } from "zod"
 
 let denial:AppError|null=new AppError(403,"platform_admin_required","Platform access required.")
 let reads=0,mutations=0,originChecks=0
-let demoReads=0,demoEnabled=true
+let demoReads=0
 mock.module(new URL("../src/lib/mca/platform-auth.ts",import.meta.url).href,{namedExports:{requirePlatformAdmin:async()=>{if(denial)throw denial;return {userId:"operator"}}}})
 mock.module(new URL("../src/lib/mca/auth.ts",import.meta.url).href,{namedExports:{assertTrustedMutation:(request:Request)=>{originChecks++;if(request.headers.get("origin")!=="https://app.example")throw new AppError(403,"untrusted_origin","Untrusted origin.")}}})
-mock.module(new URL("../src/lib/marketing/demo-storage.ts",import.meta.url).href,{namedExports:{demoVisibilityEnabled:()=>demoEnabled,listDemoSubmissions:async()=>{demoReads++;return [{request_id:"synthetic",contact:{email:"demo@example.test"},notification_status:"failed"}]},hasUnnotifiedDemoSubmissions:async()=>true}})
+mock.module(new URL("../src/lib/marketing/demo-storage.ts",import.meta.url).href,{namedExports:{listDemoSubmissions:async()=>{demoReads++;return [{request_id:"synthetic",contact:{email:"demo@example.test"},notification_status:"failed"}]},hasUnnotifiedDemoSubmissions:async()=>true}})
 mock.module(new URL("../src/lib/mca/platform-console.ts",import.meta.url).href,{namedExports:{
   platformQuerySchema:z.object({q:z.string().default(""),status:z.string().default(""),offset:z.coerce.number().int().min(0).default(0)}),
   platformActionSchema:z.discriminatedUnion("action",[z.object({action:z.literal("access"),reason:z.string().min(1),manualPaused:z.boolean()}),z.object({action:z.literal("resolve_missing_state"),resolution:z.enum(["start_trial_required","mark_internal","legacy_exempt"]),reason:z.string().min(1)})]),
@@ -33,12 +33,8 @@ test("all platform routes reject absent grants and AAL1 before reading or mutati
   assert.equal(reads,0);assert.equal(mutations,0);assert.equal(originChecks,0)
   assert.equal(demoReads,0)
 })
-test("demo list is platform-admin gated and disabled by default",async()=>{
+test("demo list is platform-admin gated and available without a feature flag",async()=>{
   denial=null
-  demoEnabled=false
-  assert.equal((await demo.GET()).status,404)
-  assert.equal(demoReads,0)
-  demoEnabled=true
   const response=await demo.GET()
   assert.equal(response.status,200)
   assert.equal(response.headers.get("cache-control"),"private, no-store")
