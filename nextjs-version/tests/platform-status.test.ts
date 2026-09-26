@@ -166,6 +166,23 @@ test("real aggregates distinguish no history, health, errors and current queues"
     0
   )
 })
+test("owner status exposes email runtime checks only when the consumer is enabled", async () => {
+  const previous = process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME
+  try {
+    delete process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME
+    assert.equal((await platformStatus("24h")).emailRuntime, null)
+    process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = "vercel_cron"
+    await database.query("INSERT INTO mca_email_runtime_lease(id,token,expires_at,last_started_at,last_completed_at) VALUES(1,'test',now(),now()-interval '12 minutes',now()-interval '12 minutes') ON CONFLICT(id) DO UPDATE SET last_completed_at=EXCLUDED.last_completed_at")
+    const status = (await platformStatus("24h")).emailRuntime
+    assert.equal(status?.queued, 0)
+    assert.equal(status?.syncFailures, 0)
+    assert.equal(status?.staleSyncs, 0)
+    assert.ok(status?.lastCompletedAt)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME
+    else process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = previous
+  }
+})
 test("overlapping invocations cannot collect or send twice", async () => {
   let release: () => void = () => {}
   const barrier = new Promise<void>((r) => (release = r))

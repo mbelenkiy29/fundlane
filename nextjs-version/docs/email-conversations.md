@@ -32,24 +32,29 @@ Inbound messages are fetched from known provider threads and must reference an a
 
 ## Worker and deployment
 
-Use the current Supabase/Postgres runtime. Apply all preceding checked migrations in order before migration 0036, then run the existing `db:secure` release command to grant the restricted `mca_app` role access to the new tables and sequence. The browser Supabase roles have no direct table access. Do not rotate the existing encryption key.
+Use the current Vercel and Supabase runtime. Migration 0036 creates the conversation tables; apply additive migration `0063_email_conversation_runtime.sql` with the checked migration history and run `db:secure` as a reviewed release step. The browser Supabase roles have no direct table access. Do not rotate the existing encryption key.
 
-Required on both the web application and messaging worker:
+Required on the Vercel web application and scheduled consumer:
 
 - `DATABASE_URL`: restricted application role, same Supabase project.
 - `MCA_DATA_ENCRYPTION_KEY`: same existing key.
 - `MCA_APP_ORIGIN`: canonical HTTPS application origin.
+- `SUPABASE_URL` and `SUPABASE_SECRET_KEY`: server-only credentials for the same Supabase project; retain `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for browser Auth.
+- `CRON_SECRET`: server-only bearer secret used by Vercel cron.
+- `MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron`: enable the consumer only after pilot approval; unset or any other value returns `{enabled:false}` and performs no work.
 - `MCA_GOOGLE_SENDER_CLIENT_ID` and `MCA_GOOGLE_SENDER_CLIENT_SECRET` for Google.
 - `MCA_MICROSOFT_SENDER_CLIENT_ID` and `MCA_MICROSOFT_SENDER_CLIENT_SECRET` for Microsoft.
 - OAuth callback: `${MCA_APP_ORIGIN}/api/mca/senders/oauth/callback`.
 
-Register each OAuth application, configure the exact callback and complete provider consent/verification before broad use. Google's mailbox read scope is restricted; see [Gmail scope requirements](https://developers.google.com/workspace/gmail/api/auth/scopes). Reconnect a controlled pilot account with the required grants. Provider secrets belong in Vercel/Render secret configuration, not browser variables or source files.
+In Google Cloud Console, register an OAuth web application with the exact authorized redirect URI `${MCA_APP_ORIGIN}/api/mca/senders/oauth/callback`, configure the consent screen and approve `gmail.send`, `gmail.readonly`, identity and offline access. Google's mailbox read scope is restricted; see [Gmail scope requirements](https://developers.google.com/workspace/gmail/api/auth/scopes). In Microsoft Entra, register a web redirect at the same URI and grant delegated `Mail.Send`, `Mail.Read`, `User.Read` and `offline_access`, then complete required tenant consent. Configure the corresponding client IDs and secrets in Vercel's server-only environment. Reconnect a controlled pilot account with the new read grants. Do not place provider secrets in browser variables or source files.
 
-Run `pnpm messaging:worker`; `--once` runs one bounded sender batch. `pnpm messaging:worker:build` bundles the production worker. `Dockerfile.messaging` builds an independent non-root Node 24 worker; `render.yaml` includes `fundlane-messaging-worker` with automatic deployment initially off. Use the reviewed application release commit for the web app and worker. This worker does not need an HTTP ingress, Redis, Supabase service-role key or document-scanning dependencies.
+On an approved synthetic staging project, apply migration 0063 and verify the restricted role's grants. Deploy the reviewed revision to Vercel with the flag unset. Install exactly one Vercel cron schedule for `GET /api/cron/email-conversations` every five minutes (`*/5 * * * *`), using Vercel's `CRON_SECRET` bearer authentication; no `vercel.json` entry is committed. Set `MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron` only after checking that the historical Render worker, Supabase Messaging Edge schedule, and any manual `messaging:worker` process are stopped. Never overlap consumers during cutover. `Dockerfile.messaging`, `render.yaml`, and `pnpm messaging:worker` are historical/manual tools, not the active hosted schedule.
 
 Normal reply polling is every 60 seconds; the UI refreshes visible conversation data every 15 seconds. Provider throttling honors Retry-After with bounded backoff. Rejected credentials mark the sender expired, retain queued work, and expose reconnection. SIGTERM stops claiming new conversations and drains the current operation; a hard interruption is recovered through leases and reconciliation.
 
-Worker logs include queued/accepted/unknown/blocked, sync-failure, unsynced-conversation and expired-sender counts and oldest queued/synced timestamps. Monitor worker failures, queue age, missing or stale sync timestamps, expired sender connections, and unknown sends. A stopped worker leaves messages visibly queued. Operations can investigate provider Sent mail using the persisted correlation ID; do not turn an unknown message back into a queued message without conclusive evidence it was never sent.
+The owner `/admin/status` page shows queued count/age, expired and revoked senders, sync failures, conversations not synced in five minutes, and the last completed cron tick. A missing tick or one older than ten minutes is marked stale. Monitor unknown sends separately. A stopped worker leaves messages visibly queued. Operations can investigate provider Sent mail using the persisted correlation ID; do not turn an unknown message back into a queued message without conclusive evidence it was never sent. Roll back by unsetting `MCA_EMAIL_CONVERSATIONS_RUNTIME` or removing the schedule; retain rows and inspect provider receipts before any manual replay.
+
+For the hosted pilot, record the deployment revision and a dedicated Google/Microsoft test account identifier without message bodies or secrets. Connect or reconnect the sender, send a synthetic conversation, confirm Sent-mail reconciliation, receive a reply in `/mail`, revoke access and confirm the sender expires, then repeat through a worker restart and duplicate tick. Confirm queued, accepted, unknown and company-pause states. These provider and Vercel checks require hosted accounts and cannot be established by local mocks.
 
 ## Verification and rollout status
 

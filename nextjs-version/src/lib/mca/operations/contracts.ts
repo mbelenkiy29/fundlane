@@ -74,6 +74,16 @@ export type Status = {
     opened_at: string | null
     delivery_state: string | null
   }[]
+  emailRuntime?: {
+    queued: number
+    oldestQueuedSeconds: number | null
+    expiredSenders: number
+    revokedSenders: number
+    syncFailures: number
+    staleSyncs: number
+    lastCompletedAt: string | null
+    lastStartedAt: string | null
+  } | null
 }
 export function parseWindow(value: string | null): Window {
   if (value === null) return "24h"

@@ -159,6 +159,25 @@ export function StatusDashboard({ preview }: { preview?: Status }) {
           Document worker has not claimed work recently.
         </p>
       )}
+      {data?.emailRuntime && (
+        <section className="rounded-xl border bg-card p-5">
+          <h2 className="font-semibold">Email conversation worker</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Last completed tick: {data.emailRuntime.lastCompletedAt ? stamp(data.emailRuntime.lastCompletedAt) : "Never"}
+            {(!data.emailRuntime.lastCompletedAt || Date.now() - Date.parse(data.emailRuntime.lastCompletedAt) > 600_000) && " · Worker stale or stopped"}
+          </p>
+          <dl className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {[
+              ["Queued", number(data.emailRuntime.queued)],
+              ["Oldest queued", data.emailRuntime.oldestQueuedSeconds == null ? "None" : `${Math.floor(data.emailRuntime.oldestQueuedSeconds / 60)} min`],
+              ["Expired senders", number(data.emailRuntime.expiredSenders)],
+              ["Revoked senders", number(data.emailRuntime.revokedSenders)],
+              ["Sync failures", number(data.emailRuntime.syncFailures)],
+              ["Stale or never synced", number(data.emailRuntime.staleSyncs)],
+            ].map(([title, value]) => <div key={title}><dt className="text-sm text-muted-foreground">{title}</dt><dd className="mt-1 text-xl font-semibold">{value}</dd></div>)}
+          </dl>
+        </section>
+      )}
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
         <div className="flex items-center gap-3">
           <span

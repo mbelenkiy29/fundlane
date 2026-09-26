@@ -65,6 +65,18 @@ export async function platformStatus(window: Window): Promise<Status> {
         "SELECT component,opened_at::text,delivery_state FROM mca_private.ops_incidents WHERE opened_at IS NOT NULL OR pending_kind IS NOT NULL OR delivery_state IN ('unknown','rejected') ORDER BY component"
       )
     ).rows
+    const emailRuntime = process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME === "vercel_cron"
+      ? await one<NonNullable<Status["emailRuntime"]>>(
+        `SELECT
+          (SELECT count(*)::int FROM mca_email_messages WHERE direction='outbound' AND state='queued') queued,
+          (SELECT extract(epoch FROM now()-min(created_at::timestamptz))::int FROM mca_email_messages WHERE direction='outbound' AND state='queued') "oldestQueuedSeconds",
+          (SELECT count(*)::int FROM mca_email_senders WHERE state='expired') "expiredSenders",
+          (SELECT count(*)::int FROM mca_email_senders WHERE state='revoked') "revokedSenders",
+          (SELECT count(*)::int FROM mca_email_conversations WHERE sync_error IS NOT NULL) "syncFailures",
+          (SELECT count(*)::int FROM mca_email_conversations WHERE last_synced_at IS NULL OR last_synced_at::timestamptz < now()-interval '5 minutes') "staleSyncs",
+          (SELECT last_completed_at::text FROM mca_email_runtime_lease WHERE id=1) "lastCompletedAt",
+          (SELECT last_started_at::text FROM mca_email_runtime_lease WHERE id=1) "lastStartedAt"`)
+      : null
     return {
       asOf,
       startedAt: control.started_at,
@@ -85,6 +97,7 @@ export async function platformStatus(window: Window): Promise<Status> {
       health,
       usage: daily,
       incidents,
+      emailRuntime,
     }
   })
 }
