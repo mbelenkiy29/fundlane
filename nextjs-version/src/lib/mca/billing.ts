@@ -832,6 +832,7 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     const state = await db.prepare<{ pending_seats: number | null; stripe_schedule_id: string | null }>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     const reviseAutomaticReduction = automatic && !!state?.pending_seats && (selectedSeats !== state.pending_seats || repairReduction) && selectedSeats <= current.seatLimit
     const replaceAutomaticReduction = automatic && !!state?.pending_seats && selectedSeats > current.seatLimit
+    if (billingSeatSyncEnabled() && replaceAutomaticReduction) throw new AppError(409,"billing_scheduled_reduction_pending","Resolve the scheduled seat reduction in Plans & Billing before adding a paid seat.")
     if (state?.pending_seats && !reviseAutomaticReduction && !replaceAutomaticReduction) {
       if (state.pending_seats === selectedSeats) return getWorkspaceBilling(workspaceId)
       throw new AppError(409, "billing_change_pending", "A seat reduction is already scheduled. Wait for renewal before requesting another change.")
