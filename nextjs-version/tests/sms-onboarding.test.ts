@@ -38,6 +38,7 @@ import {
 } from "../src/lib/mca/sms/managed"
 import { twilioMessageForm } from "../src/lib/mca/sms/adapters/twilio/mapping"
 import { registrationEvents } from "../src/lib/mca/sms/registration-events"
+import { listSmsAccounts } from "../src/lib/mca/sms/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { AuthContext } from "../src/lib/mca/types"
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>,
@@ -427,7 +428,9 @@ test("managed sender readiness requires eligibility, campaign approval and send 
   const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
   assert.ok(n)
   const eligibility = process.env.MCA_SMS_ELIGIBILITY_REFERENCE
+  const cronEnabled = process.env.MCA_SMS_CRON_ENABLED
   try {
+    process.env.MCA_SMS_CRON_ENABLED = "true"
     delete process.env.MCA_SMS_ELIGIBILITY_REFERENCE
     assert.equal(await managedReady(owner.workspaceId, n.id), false)
     process.env.MCA_SMS_ELIGIBILITY_REFERENCE = eligibility
@@ -441,9 +444,33 @@ test("managed sender readiness requires eligibility, campaign approval and send 
     await saveProvider(owner.workspaceId, { ...p, apiKeySecret: undefined })
     assert.equal(await managedReady(owner.workspaceId, n.id), false)
   } finally {
+    if (cronEnabled === undefined) delete process.env.MCA_SMS_CRON_ENABLED
+    else process.env.MCA_SMS_CRON_ENABLED = cronEnabled
     process.env.MCA_SMS_ELIGIBILITY_REFERENCE = eligibility
     await saveProvider(owner.workspaceId, p)
     await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved' WHERE workspace_id=?").run(owner.workspaceId)
+  }
+})
+test("unset cron flag preserves existing approved managed sender availability", async () => {
+  const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  const cronEnabled = process.env.MCA_SMS_CRON_ENABLED
+  try {
+    delete process.env.MCA_SMS_CRON_ENABLED
+    await saveProvider(owner.workspaceId, { ...p, brandSid: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    const accounts = await listSmsAccounts(actor)
+    assert.equal(accounts.accounts.find((account) => account.id === n.id)?.providerConfigured, true)
+    await saveProvider(owner.workspaceId, { ...p, apiKeySecret: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    process.env.MCA_SMS_CRON_ENABLED = "TRUE"
+    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    process.env.MCA_SMS_CRON_ENABLED = "true"
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+  } finally {
+    if (cronEnabled === undefined) delete process.env.MCA_SMS_CRON_ENABLED
+    else process.env.MCA_SMS_CRON_ENABLED = cronEnabled
+    await saveProvider(owner.workspaceId, p)
   }
 })
 test("employee removal, zero budget and missing Advanced Opt-Out all block managed sending", async () => {
