@@ -18,6 +18,16 @@ export type MonitorConfig = {
   recipient?: string
   webhook?: string
   webhookToken?: string
+  recoveryAlerts?: boolean
+  assistantEnabled?: boolean
+  thresholds?: {
+    workerSeconds: number
+    queueSeconds: number
+    queueByKind?: Record<string, number>
+    providerFailures: number
+    billingFailures: number
+    assistantRuns: number
+  }
 }
 export async function queueMetrics(db: MonitorDb, documentRuntimeEnabled = false): Promise<Metrics> {
   const [row] = await db.query(`SELECT
@@ -41,8 +51,29 @@ export async function queueMetrics(db: MonitorDb, documentRuntimeEnabled = false
     (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors",
     (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds",
     (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','draft_extract','intake_process') AND state='failed') AS "documentFailed",
-    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable"`, [documentRuntimeEnabled])
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable",
+    COALESCE((SELECT jsonb_object_agg(kind,age) FROM (SELECT kind,COALESCE(greatest(0,extract(epoch FROM now()-min(available_at::timestamptz) FILTER (WHERE state='queued' AND available_at::timestamptz<=now())))::int,0) age FROM mca_background_jobs GROUP BY kind) q),'{}'::jsonb) AS "queueAgeByKind",
+    (SELECT count(*)::int FROM company_billing_notifications WHERE delivered_at IS NULL AND attempts>0 AND available_at::timestamptz<=now()) AS "billingMaintenanceFailures",
+    (SELECT count(*)::int FROM mca_assistant_runs WHERE created_at::timestamptz>=now()-interval '1 hour') AS "assistantRuns"`, [documentRuntimeEnabled])
   return row as Metrics
+}
+export function recoveryRules(metrics: Metrics, config: MonitorConfig): [string, boolean, number][] {
+  if (!config.recoveryAlerts) return []
+  const thresholds = config.thresholds ?? { workerSeconds: 90, queueSeconds: 600, providerFailures: 5, billingFailures: 1, assistantRuns: 100 }
+  const rules: [string, boolean, number][] = [
+    ["sender_provider_failures", metrics.recentEmailFailures >= thresholds.providerFailures || metrics.reconnect >= thresholds.providerFailures, 1],
+    ["billing_maintenance_failures", (metrics.billingMaintenanceFailures ?? 0) >= thresholds.billingFailures, 1],
+  ]
+  if (config.assistantEnabled) rules.push(["assistant_usage", (metrics.assistantRuns ?? 0) >= thresholds.assistantRuns, 1])
+  for (const [kind, age] of Object.entries(metrics.queueAgeByKind ?? {})) {
+    if (/^[a-z_]{1,50}$/.test(kind) && Number.isFinite(age))
+      rules.push([`queue_age_${kind}`, age > (thresholds.queueByKind?.[kind] ?? thresholds.queueSeconds), 3])
+  }
+  return rules
+}
+export function workerHeartbeatStale(metrics: Metrics, config: MonitorConfig): boolean {
+  if (!config.recoveryAlerts) return !documentWorkerReady(metrics)
+  return metrics.documentWorkerHeartbeatAgeSeconds === null || metrics.documentWorkerHeartbeatAgeSeconds > (config.thresholds?.workerSeconds ?? 90)
 }
 export async function runMonitor(
   db: MonitorDb,
@@ -122,17 +153,18 @@ export async function runMonitor(
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
       ["billing_reconciliation", config.billingReconciliationAlertsEnabled && metrics ? metrics.billingRetrying > 0 : null, 1],
-      ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
+      ["queue_age", metrics ? !config.recoveryAlerts && metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],
       ["email_failures", metrics ? metrics.recentEmailFailures >= 5 : null, 1],
       [
         "document_worker",
-        metrics ? !documentWorkerReady(metrics) : null,
+        metrics ? workerHeartbeatStale(metrics, config) : null,
         3,
       ],
       ["metrics_unavailable", metrics === null, 3],
     ]
+    if (metrics) rules.push(...recoveryRules(metrics, config))
     for (const [component, bad, threshold] of rules) {
       if (bad === null) continue
       const active = await db.query(

@@ -18,6 +18,9 @@ export type Metrics = {
   documentWorkerHeartbeatAgeSeconds: number | null
   documentFailed: number
   scannerUnavailable: number
+  queueAgeByKind?: Record<string, number>
+  billingMaintenanceFailures?: number
+  assistantRuns?: number
 }
 export function documentWorkerReady(metrics: {
   documentWorkerHeartbeatAgeSeconds: number | null
@@ -102,6 +105,11 @@ export function safeIdentifier(value: unknown): string | null {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(value)
     ? value
     : null
+}
+export function positiveThreshold(value: string | undefined, fallback: number): number {
+  if (!value || !/^[1-9]\d*$/.test(value)) return fallback
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed <= 86400 ? parsed : fallback
 }
 // Only fixed route families leave the request boundary. IDs and search strings never enter telemetry.
 export function safeRoute(raw: string): string {
