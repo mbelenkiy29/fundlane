@@ -58,7 +58,8 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  if (existing?.state === "sending" && (job.autoSubmitDecisionId || (job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"))) {
+  const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+  if (existing?.state === "sending" && ((job.autoSubmitDecisionId && !guardUnknownSend) || (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000))) {
     const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
     await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
     const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
@@ -80,6 +81,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
     if (isCompletedAttempt(existing.state)) await markOutboxProcessed(job.id)
     return current ?? job
   }
+  if (existing?.state === "sending" && guardUnknownSend) return await findJobById(job.workspaceId, job.id) ?? job
 
   const autoBlock = await autoDeliveryBlockReason(job)
   if (autoBlock) {
@@ -100,7 +102,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       state: "sending",
       correlationId: newId(),
     })
-    if (!reserved.created && (job.approvedPackage || isCompletedAttempt(reserved.attempt.state))) {
+    if (!reserved.created && (job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
       const current = await findJobById(job.workspaceId, job.id)
       if (isCompletedAttempt(reserved.attempt.state)) await markOutboxProcessed(job.id)
       return current ?? job

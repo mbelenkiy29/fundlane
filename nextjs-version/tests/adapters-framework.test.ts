@@ -330,6 +330,38 @@ test("readiness inventory is default-off, admin-only, scoped, and never treats c
   }
 })
 
+test("inventory pairs the active API route with its adapter and leaves the ordinary response unchanged", async () => {
+  const previous = process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+  try {
+    const funderId = (await createFunder(actor(), {
+      idempotencyKey: "inventory-multiple-routes",
+      legalName: "Multiple Route Capital LLC",
+      routes: [
+        { kind: "api", label: "Old", destination: "fixture-submit-only", documentExceptions: [], active: false },
+        { kind: "api", label: "Current", destination: "fixture-status", documentExceptions: [], active: true },
+      ],
+    })).funder.id
+    delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+    const off = await (await listGet(cookieRequest("/api/mca/adapters", "admin-session-token"))).json() as { inventory?: unknown; funders: Array<Record<string, unknown>> }
+    assert.equal(off.inventory, undefined)
+    assert.equal(Object.hasOwn(off.funders.find((item) => item.id === funderId)!, "configuredAdapterSlug"), false)
+
+    process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = "true"
+    const on = await (await listGet(cookieRequest("/api/mca/adapters", "admin-session-token"))).json() as {
+      funders: Array<Record<string, unknown>>
+      inventory: { funders: Array<{ id: string; adapterSlug?: string; routeActive: boolean }> }
+    }
+    assert.equal(Object.hasOwn(on.funders.find((item) => item.id === funderId)!, "configuredAdapterSlug"), false)
+    assert.deepEqual(
+      (({ adapterSlug, routeActive }) => ({ adapterSlug, routeActive }))(on.inventory.funders.find((item) => item.id === funderId)!),
+      { adapterSlug: "fixture-status", routeActive: true },
+    )
+  } finally {
+    if (previous === undefined) delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+    else process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = previous
+  }
+})
+
 test("controlled adapter timeout returns an unknown provider outcome without exposing credentials", async () => {
   await upsertAdapterCredential(actor(), {
     funderId: statusFunderId,

@@ -8,6 +8,8 @@ import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
+import { upsertAdapterCredential } from "../src/lib/mca/submissions/adapters/credentials"
+import { registerAdapter } from "../src/lib/mca/submissions/adapters/registry"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
@@ -236,6 +238,7 @@ test("gated API recovery leaves an interrupted send uncertain without submitting
       actor: actor(),
     })).job
     await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey, transport: "api", state: "sending", correlationId: newId() })
+    await getDatabase().prepare("UPDATE mca_submission_attempts SET created_at = ? WHERE job_id = ?").run(new Date(Date.now() - 11 * 60_000).toISOString(), job.id)
     const sending = await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
     const saved = await processJobDelivery(sending)
     assert.equal(saved.state, "failed")
@@ -246,6 +249,70 @@ test("gated API recovery leaves an interrupted send uncertain without submitting
     assert.equal(again.state, "failed")
     assert.equal(await attemptCount(job.id), 1)
   } finally {
+    if (previous === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previous
+  }
+})
+
+test("gated concurrent API requests leave a live send intact and dispatch only once", async () => {
+  const previous = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  let releaseSend!: () => void
+  let signalEntered!: () => void
+  const entered = new Promise<void>((resolve) => { signalEntered = resolve })
+  const holdSend = new Promise<void>((resolve) => { releaseSend = resolve })
+  let sends = 0
+  registerAdapter({
+    slug: "fixture-concurrent-outbox",
+    readiness: "sandbox",
+    capabilities: { submit: true, statusPoll: false, webhooks: false, offers: false },
+    validate: () => ({ ok: true }),
+    submit: async () => {
+      sends += 1
+      signalEntered()
+      await holdSend
+      return { ok: true, correlationId: "concurrent-outbox", externalRef: "controlled-receipt" }
+    },
+  })
+  try {
+    const { deal } = await seedDeal()
+    const funderId = (await createFunder(actor(), {
+      idempotencyKey: `concurrent-api-${deal.id}`,
+      legalName: "Concurrent API Capital LLC",
+      routes: [{ kind: "api", label: "Controlled", destination: "fixture-concurrent-outbox", documentExceptions: [], active: true }],
+    })).funder.id
+    await upsertAdapterCredential(actor(), { funderId, adapterSlug: "fixture-concurrent-outbox", environment: "development", secrets: { apiKey: "synthetic-only" } })
+    const job = (await persistNewDestination({
+      workspaceId: actor().workspaceId,
+      dealId: deal.id,
+      funderId,
+      displayFunderName: "Concurrent API Capital LLC",
+      routeKind: "api",
+      route: { id: "concurrent-api", kind: "api", label: "Controlled", destination: "fixture-concurrent-outbox", documentExceptions: [], active: true },
+      state: "queued",
+      confirmationKey: `concurrent-api-${deal.id}`,
+      attemptKey: `concurrent-api-${deal.id}`,
+      dealVersion: 1,
+      documentVersions: [],
+      packageDocumentIds: [],
+      preflightErrors: [],
+      merchantIdentityKey: `deal:${deal.id}`,
+      packageFingerprint: "",
+      createdByUserId: null,
+      actor: actor(),
+    })).job
+    const first = processJobDelivery(job)
+    await entered
+    const concurrent = await processJobDelivery(job)
+    assert.equal(concurrent.state, "sending")
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_attempts WHERE job_id = ?").get(job.id))?.state, "sending")
+    assert.equal(await outboxProcessedAt(job.id), null)
+    releaseSend()
+    assert.equal((await first).state, "sent")
+    assert.equal(await attemptCount(job.id), 1)
+    assert.equal(sends, 1)
+  } finally {
+    releaseSend()
     if (previous === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
     else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previous
   }
