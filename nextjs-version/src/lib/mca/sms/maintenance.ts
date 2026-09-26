@@ -15,6 +15,7 @@ import {
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { AppError } from "../errors"
 import type { AuthContext } from "../types"
+import { executionShouldStop } from "../jobs/execution"
 export async function reconcileUsage(
   workspaceId: string,
   api: TwilioApi = twilioApi
@@ -81,20 +82,33 @@ export async function reconcileUsage(
     }
   })
 }
-export async function maintenance(api: TwilioApi = twilioApi) {
+export async function maintenance(
+  api: TwilioApi = twilioApi,
+  limits: { operations?: number; companies?: number } = {}
+) {
+  const operationLimit = limits.operations ?? 10
+  const companyLimit = limits.companies ?? 100
   const ops = await getDatabase()
     .prepare<{
       id: string
-    }>("SELECT id FROM sms_operations WHERE state IN ('queued','running') ORDER BY updated_at LIMIT 10")
-    .all()
-  for (const op of ops) await runProvisioning(op.id, api)
+    }>("SELECT id FROM sms_operations WHERE state IN ('queued','running') ORDER BY updated_at LIMIT ?")
+    .all(operationLimit)
+  let operations = 0
+  for (const op of ops) {
+    if (executionShouldStop()) break
+    await runProvisioning(op.id, api)
+    operations++
+  }
   const companies = await getDatabase()
     .prepare<Company>(
-      "SELECT * FROM sms_companies WHERE provider_cipher IS NOT NULL ORDER BY updated_at LIMIT 100"
+      "SELECT * FROM sms_companies WHERE provider_cipher IS NOT NULL ORDER BY updated_at LIMIT ?"
     )
-    .all()
+    .all(companyLimit)
   const errors: string[] = []
+  let companiesProcessed = 0
   for (const c of companies) {
+    if (executionShouldStop()) break
+    companiesProcessed++
     try {
       await refreshCompany(c.workspace_id, api)
       await reconcileUsage(c.workspace_id, api)
@@ -103,8 +117,8 @@ export async function maintenance(api: TwilioApi = twilioApi) {
     }
   }
   return {
-    operations: ops.length,
-    companies: companies.length,
+    operations,
+    companies: companiesProcessed,
     failedWorkspaces: errors,
   }
 }

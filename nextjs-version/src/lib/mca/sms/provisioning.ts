@@ -10,6 +10,7 @@ import {
 } from "../db"
 import { encryptSensitive, decryptSensitive } from "../crypto"
 import { AppError } from "../errors"
+import { executionSignal } from "../jobs/execution"
 import {
   company,
   provider,
@@ -49,6 +50,7 @@ export const twilioApi: TwilioApi = async (
   const form = new URLSearchParams()
   for (const [k, v] of Object.entries(data ?? {}))
     for (const item of Array.isArray(v) ? v : [v]) form.append(k, item)
+  const deadlineSignal = executionSignal()
   const response = await fetch(`https://${host}.twilio.com${path}`, {
     method,
     headers: {
@@ -58,7 +60,9 @@ export const twilioApi: TwilioApi = async (
         : {}),
     },
     body: method === "POST" ? form : undefined,
-    signal: AbortSignal.timeout(15000),
+    signal: deadlineSignal
+      ? AbortSignal.any([deadlineSignal, AbortSignal.timeout(15000)])
+      : AbortSignal.timeout(15000),
     redirect: "error",
   })
   if (response.status === 204) return {}
