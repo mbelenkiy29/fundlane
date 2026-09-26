@@ -303,6 +303,70 @@ test("assistant cron is disabled by default and replays expired credit maintenan
     else process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = experience
   }
 })
+test("assistant cron commits credits and alerts while experience cleanup is blocked", async () => {
+  const enabled = process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED
+  const secret = process.env.CRON_SECRET
+  const experience = process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+  const emailUrl = process.env.MCA_EMAIL_WEBHOOK_URL
+  const u = await user("admin"), t = await task(u)
+  await sql("UPDATE mca_assistant_runs SET expires_at='2000-01-01' WHERE id=?", t.run.id)
+  await sql(`INSERT INTO mca_credit_balance_events
+    (account_id,month,allowance,included,purchased,threshold_mode,threshold_value,created_at)
+    SELECT a.id,m.month,10,10,0,'fixed',11,? FROM mca_credit_accounts a
+    JOIN mca_credit_months m ON m.account_id=a.id WHERE a.user_id=? AND m.month=?`, nowIso(), u.user_id, new Date().toISOString().slice(0, 7))
+  await sql("UPDATE mca_credit_accounts SET alert_dirty=1 WHERE user_id=?", u.user_id)
+  const blocker = new Client({ connectionString: fixture.databaseUrl })
+  await blocker.connect()
+  let tick: Promise<Response> | undefined
+  let tickResult: Response | undefined
+  try {
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED = "true"
+    process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = "true"
+    process.env.CRON_SECRET = "synthetic-assistant-cron-secret"
+    await blocker.query("BEGIN")
+    await blocker.query("LOCK TABLE mca_assistant_questions IN ACCESS EXCLUSIVE MODE")
+    tick = assistantCron(new Request("http://localhost/api/cron/assistant", {
+      headers: { authorization: `Bearer ${process.env.CRON_SECRET}` },
+    }))
+    let committed = false
+    for (let i = 0; i < 100; i++) {
+      const balance = await getCreditBalance(u)
+      const account = await getDatabase().prepare<{ alert_dirty: number }>(
+        "SELECT alert_dirty FROM mca_credit_accounts WHERE user_id=?"
+      ).get(u.user_id)
+      const alerts = await getDatabase().prepare<{ count: string }>(
+        "SELECT count(*) AS count FROM mca_credit_notifications WHERE recipient_user_id=?"
+      ).get(u.user_id)
+      if (balance.reserved === 0 && account?.alert_dirty === 0 && Number(alerts?.count) > 0) {
+        committed = true
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.equal(committed, true, "credit release and alerts must commit before experience cleanup")
+  } finally {
+    await blocker.query("ROLLBACK")
+    await blocker.end()
+    try {
+      if (tick) tickResult = await tick
+    } finally {
+      if (enabled === undefined) delete process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED
+      else process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED = enabled
+      if (secret === undefined) delete process.env.CRON_SECRET
+      else process.env.CRON_SECRET = secret
+      if (experience === undefined) delete process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+      else process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = experience
+      if (emailUrl === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+      else process.env.MCA_EMAIL_WEBHOOK_URL = emailUrl
+    }
+  }
+  assert.equal(tickResult?.status, 200)
+  const run = await getDatabase().prepare<{ status: string }>(
+    "SELECT status FROM mca_assistant_runs WHERE id=?"
+  ).get(t.run.id)
+  assert.equal(run?.status, "failed")
+})
 test("unverified paid billing cannot grant allowances", async () => {
   const u = await user()
   process.env.MCA_STRIPE_BILLING_ENABLED = "true"
