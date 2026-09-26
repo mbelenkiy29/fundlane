@@ -20,7 +20,28 @@ These are the current engineering catalog amounts, not an approved launch pricin
 
 When Checkout trial is fully configured, onboarding inserts `company_subscription_state` with `legacy_exempt=0` and the selected seats, then opens Checkout. When it is not, onboarding calls `initializeCompanyTrial` instead and does not open Checkout. Retrying creation reuses the workspace; Checkout retries reuse an open session when the seat selection is unchanged. A different quantity expires the open session and creates a new one. A completed session with an unresolved subscription blocks another Checkout. Subscription trial history prevents a second Stripe trial for the workspace after cancellation. `initializeCompanyTrial` is also used for historical or operator-managed local trials; database triggers protect those original trial dates. Operator extensions use a separate field.
 
-Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **0048_billing_recovery** before deploying recovery code, plus the existing runtime-security release step. Migration 0047 explicitly backfills all existing companies as `legacy_exempt=1`; it never starts a trial, creates a customer or charges them. Migration 0048 adds the durable processing-extension grant marker and backfills existing extensions. Missing state retains legacy access for older creation paths; production onboarding must initialize trials. Verified paid conversion removes exemption. Historical Clerk/Stripe rows are retained. Unknown historical Stripe prices require an explicit operator migration rather than silent contract conversion.
+Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **0048_billing_recovery** before deploying recovery code, plus the existing runtime-security release step. Migration 0047 explicitly backfills all existing companies as `legacy_exempt=1`; it never starts a trial, creates a customer or charges them. Migration 0048 adds the durable processing-extension grant marker and backfills existing extensions. Missing state retains legacy access while `MCA_BILLING_MISSING_STATE_FAIL_CLOSED` is off; production onboarding must initialize trials. Verified paid conversion removes exemption. Historical Clerk/Stripe rows are retained. Unknown historical Stripe prices require an explicit operator migration rather than silent contract conversion.
+
+## Missing billing state operator runbook (#109)
+
+Migration `drizzle/0058_billing_state_kind.sql` adds a nullable `state_kind`; it changes no rows. `MCA_BILLING_MISSING_STATE_FAIL_CLOSED=false` is the default. With the flag unset, missing rows keep legacy access and existing billing actions retain their previous behavior: checkout, reconciliation, maintenance, cancellation and Platform access edits can insert a legacy-exempt state row as they did before this change. When set to exactly `true`, a workspace without a state row gets `subscription_required`; billing and recovery remain reachable. Leave it off until Michael resolves the two known production workspaces. This release does not decide their status or alter their access. New workspaces made by `createWorkspaceWithAdmin` get an explicit exempt `internal_demo` row; regular onboarding keeps its trial flow and writes a `customer` row. The read-only Platform detection badge/list and the audited, platform-admin-only resolution action are available without the flag.
+
+1. In Platform Companies, review **Billing state exceptions**. For each missing row, inspect ownership, activity, intended use and customer communications. Record Michael's chosen resolution and reason for each workspace. Do not infer `internal_demo` from a name or seat limit.
+2. On that company's Platform detail page, use **Resolve missing billing state** with a required audit reason. `start_trial_required` writes a customer state requiring billing setup without starting a trial; `mark_internal` writes exempt `internal_demo`; `legacy_exempt` writes explicit exemption. The platform admin and MFA protected action inserts with `ON CONFLICT DO NOTHING`, audits only a successful insert and never overwrites an existing row. A classification change or deletion needs a separate reviewed procedure; this release deletes nothing.
+3. Run this read only verification through the approved production query channel after release:
+
+```sql
+SELECT w.id, w.name, w.created_at, s.state_kind, s.legacy_exempt
+FROM workspaces w LEFT JOIN company_subscription_state s ON s.workspace_id = w.id
+WHERE s.workspace_id IS NULL OR s.legacy_exempt = 1
+ORDER BY w.created_at, w.id;
+
+SELECT count(*) AS missing_state_count
+FROM workspaces w LEFT JOIN company_subscription_state s ON s.workspace_id = w.id
+WHERE s.workspace_id IS NULL;
+```
+
+4. Once the missing count is zero and Michael approves the access change, set `MCA_BILLING_MISSING_STATE_FAIL_CLOSED=true` in a reviewed release. This does not change explicit exemptions. No automatic data backfill runs at deployment.
 
 ## Provider configuration
 

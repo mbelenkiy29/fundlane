@@ -13,12 +13,12 @@ import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catal
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
-import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
+import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail, runBillingMaintenance } from "../src/lib/mca/billing-operations"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
 import type { DbExecutor } from "../src/lib/mca/db"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -26,6 +26,7 @@ before(async () => {
   Object.assign(process.env, { MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", MCA_APP_ORIGIN: "http://localhost:3000" })
   delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
   delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM
+  delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
 })
 after(async () => {
   for (const key of envKeys) { if (initialEnv[key] === undefined) delete process.env[key]; else process.env[key] = initialEnv[key] }
@@ -38,6 +39,9 @@ function subscription(customer = "cus_fixture", seats = 5, status = "active", id
 async function fixture(mapped = true) {
   const suffix = randomUUID()
   const local = await createWorkspaceWithAdmin({ workspaceName:"Billing test",adminName:"Owner",adminEmail:`${suffix}@example.test`,password:"Unused fixture password 99!",role:"admin" })
+  // These billing fixtures model either a historical explicit exemption or a missing row.
+  if (mapped) await getDatabase().prepare("UPDATE company_subscription_state SET state_kind='legacy_exempt' WHERE workspace_id=?").run(local.workspaceId)
+  else await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(local.workspaceId)
   const customerId = `cus_${suffix}`
   if (mapped) await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(local.workspaceId,customerId,nowIso())
   const sub = subscription(customerId)
@@ -56,6 +60,53 @@ async function fixture(mapped = true) {
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
 }
+async function removeBillingState(workspaceId:string) {
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(workspaceId)
+}
+async function stateFor(workspaceId:string) {
+  return getDatabase().prepare<{legacy_exempt:number;selected_seats:number;state_kind:string|null}>("SELECT legacy_exempt,selected_seats,state_kind FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+}
+test("unset missing-state flag preserves maintenance reconciliation",async()=>{
+  const f=await fixture()
+  await removeBillingState(f.workspaceId)
+  const result=await runBillingMaintenance(f.client)
+  assert.deepEqual(result.errors,[])
+  assert.equal(result.reconciled,1)
+  assert.deepEqual(await stateFor(f.workspaceId),{legacy_exempt:0,selected_seats:5,state_kind:"customer"})
+})
+test("unset missing-state flag preserves checkout and sync for workspaces without state",async()=>{
+  const unmapped=await fixture(false)
+  assert.equal((await syncWorkspaceBilling(unmapped.workspaceId,unmapped.client)).status,"legacy_exempt")
+  assert.equal(await stateFor(unmapped.workspaceId),undefined)
+
+  const checkout=await fixture(false)
+  assert.equal((await getCompanyAccess(checkout.workspaceId)).status,"legacy_exempt")
+  assert.match((await createBillingCheckout(checkout.workspaceId,5,false,checkout.client)).url,/checkout\.stripe\.com/)
+  assert.equal(checkout.state.checkouts,1)
+  assert.deepEqual(await stateFor(checkout.workspaceId),{legacy_exempt:1,selected_seats:5,state_kind:null})
+
+  const synced=await fixture()
+  await removeBillingState(synced.workspaceId)
+  synced.state.fail=true
+  await assert.rejects(syncWorkspaceBilling(synced.workspaceId,synced.client),{code:"billing_unavailable"})
+  assert.equal(await stateFor(synced.workspaceId),undefined)
+  synced.state.fail=false
+  assert.equal((await syncWorkspaceBilling(synced.workspaceId,synced.client)).status,"active")
+  assert.deepEqual(await stateFor(synced.workspaceId),{legacy_exempt:0,selected_seats:5,state_kind:"customer"})
+})
+test("unset missing-state flag preserves seat changes and cancellation",async()=>{
+  const seats=await fixture()
+  await removeBillingState(seats.workspaceId)
+  await changeBillingSeats(seats.workspaceId,8,seats.userId,seats.client)
+  assert.equal(seats.state.updates.length,1)
+  assert.equal((await stateFor(seats.workspaceId))?.state_kind,"customer")
+
+  const canceled=await fixture(),sub=canceled.state.subscriptions[0]
+  await removeBillingState(canceled.workspaceId)
+  const client={...canceled.client,subscriptions:{...canceled.client.subscriptions,update:async()=>{sub.cancel_at_period_end=true;return sub}}} as unknown as StripeBillingClient
+  assert.equal((await cancelBillingSubscription(canceled.workspaceId,canceled.userId,client)).alreadyCanceled,false)
+  assert.deepEqual(await stateFor(canceled.workspaceId),{legacy_exempt:1,selected_seats:5,state_kind:null})
+})
 
 test("trial grants limit repeat owners, keep public domains exempt, and flag fingerprint reuse without writes", async () => {
   const db = getDatabase()
@@ -257,6 +308,7 @@ test("reconciliation records a trial even when the subscription is already activ
     assert.equal((await getDatabase().prepare<{stripe_subscription_id:string}>("SELECT stripe_subscription_id FROM company_trial_grants WHERE workspace_id=?").get(f.workspaceId))?.stripe_subscription_id,f.state.subscriptions[0].id)
   } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
 })
+
 for (const entry of ["standalone", "outer_sync_failure", "outer_failure"] as const) test(`recovery verification failure survives ${entry} rollback with a single pool connection`, { timeout: 20000 }, async () => {
   const previousMax = process.env.MCA_DB_POOL_MAX
   await closeDatabaseForTests()
@@ -302,6 +354,7 @@ test("graduated pricing includes the first seat and uses marginal tiers",()=>{
 for (const scheduled of [false,true]) test(`cancellation ${scheduled ? "supersedes a seat schedule" : "updates an ordinary subscription"} while paused without forgiving debt`,async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0],end=sub.items.data[0].current_period_end!
   await syncWorkspaceBilling(f.workspaceId,f.client)
+  assert.equal((await getDatabase().prepare<{state_kind:string}>("SELECT state_kind FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.state_kind,"customer")
   await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=1,delinquent_since=?,grace_ends_at=?,collection_paused=1 WHERE workspace_id=?").run(nowIso(),nowIso(),f.workspaceId)
   await getDatabase().prepare("UPDATE company_billing_invoices SET status='open',amount_paid=0,amount_remaining=amount_due WHERE workspace_id=?").run(f.workspaceId)
   sub.pause_collection={behavior:"keep_as_draft"}
@@ -645,6 +698,7 @@ test("Stripe status access table and trial quantity use provider state",()=>{
 })
 test("trialing webhook receipts once, grants seats, and trial seat changes avoid invoices",async()=>{
   const f=await fixture()
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId)
   await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,5,?)").run(f.workspaceId,nowIso())
   const sub=f.state.subscriptions[0]
   sub.status="trialing";sub.trial_start=Math.floor(Date.now()/1000);sub.trial_end=sub.trial_start+14*86400
@@ -776,6 +830,7 @@ test("tax-enabled seat changes activate existing subscriptions and tax both sche
 })
 test("verified paid subscription replaces trial; failed proration cannot grant more seats",async()=>{
   const f=await fixture()
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId)
   await initializeCompanyTrial(f.workspaceId,5)
   await syncWorkspaceBilling(f.workspaceId,f.client)
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"active")
@@ -1491,7 +1546,7 @@ test("uncollectible missed month is not settlement even when its remaining balan
   assert.equal(f.state.updates.some(i=>i.pause_collection===""),false)
 })
 test("an active subscription without paid invoice evidence never activates a new trial company",async()=>{
-  const f=await fixture();await initializeCompanyTrial(f.workspaceId,5)
+  const f=await fixture();await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId);await initializeCompanyTrial(f.workspaceId,5)
   f.state.invoices=[]
   const current=await syncWorkspaceBilling(f.workspaceId,f.client)
   assert.equal(current.status,"incomplete")
@@ -1553,6 +1608,7 @@ test("signed duplicate and out-of-order events queue once; notification failures
 
 test("manual pause and recovery while workers are offline invalidates only old approvals",async()=>{
   const f=await fixture(false)
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,state_kind,selected_seats,updated_at) VALUES (?,1,'legacy_exempt',5,?)").run(f.workspaceId,nowIso())
   const oldApproval=new Date(Date.now()-10000).toISOString()
   await setPlatformCompanyAccess(f.workspaceId,f.userId,{manualPaused:true,reason:"Review"})
   await setPlatformCompanyAccess(f.workspaceId,f.userId,{manualPaused:false,reason:"Resolved"})
@@ -1568,6 +1624,7 @@ test("expired trial conversion records original deadline; late observation of ti
   for(const late of [true,false]) {
     const f=await fixture()
     const start=new Date(Date.now()-20*86400000).toISOString(),end=new Date(Date.now()-6*86400000).toISOString()
+    await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId)
     await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,trial_started_at,trial_ends_at,updated_at) VALUES (?,?,?,?)").run(f.workspaceId,start,end,nowIso())
     f.state.invoices[0].status_transitions.paid_at=Math.floor((late?Date.now():Date.parse(end)-86400000)/1000)
     await syncWorkspaceBilling(f.workspaceId,f.client)

@@ -8,6 +8,7 @@ export interface CompanyAccess {
   trialEndsAt: string | null; graceEndsAt: string | null; manualPaused: boolean
 }
 export interface CompanyAccessRow {
+  state_present?: number;
   legacy_exempt: number; trial_ends_at: string | null; manual_paused: number
   access_extended_until: string | null; grace_ends_at: string | null
   processing_extension_until: string | null; pending_seats: number | null
@@ -21,6 +22,7 @@ export const STRIPE_ACCESS = {
 } as const
 /** Deterministic local gate: no provider requests and no reliance on cron punctuality. */
 export function evaluateCompanyAccess(row: CompanyAccessRow, now = Date.now()): CompanyAccess {
+  if (row.state_present === 0 && process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true") return { allowed: false, status: "missing_state", reason: "subscription_required", seatLimit: row.seat_limit, trialEndsAt: null, graceEndsAt: null, manualPaused: false }
   const future = (value: string | null) => Boolean(value && Date.parse(value) > now)
   const grace = [row.grace_ends_at, row.processing_extension_until].filter((v): v is string => !!v).sort().at(-1) ?? null
   let status = "paused", reason: string | null = "subscription_required", allowed = false
@@ -44,7 +46,7 @@ export function evaluateCompanyAccess(row: CompanyAccessRow, now = Date.now()): 
   return { allowed, status, reason, seatLimit: trialCapacity ? TRIAL_SEATS : Math.min(row.seat_limit, row.pending_seats ?? row.seat_limit), trialEndsAt: row.status === "trialing" ? row.period_end : row.trial_ends_at, graceEndsAt: grace, manualPaused: !!row.manual_paused }
 }
 export async function getCompanyAccess(workspaceId: string): Promise<CompanyAccess> {
-  const row = await getDatabase().prepare<CompanyAccessRow>(`SELECT COALESCE(s.legacy_exempt,1) legacy_exempt, s.trial_ends_at,
+  const row = await getDatabase().prepare<CompanyAccessRow>(`SELECT CASE WHEN s.workspace_id IS NULL THEN 0 ELSE 1 END state_present, COALESCE(s.legacy_exempt,1) legacy_exempt, s.trial_ends_at,
     COALESCE(s.manual_paused,0) manual_paused, s.access_extended_until, s.grace_ends_at, s.processing_extension_until,
     s.pending_seats, e.status, e.period_end, w.seat_limit FROM workspaces w
     LEFT JOIN company_subscription_state s ON s.workspace_id=w.id
@@ -92,8 +94,12 @@ export async function initializeCompanyTrial(workspaceId: string, selectedSeats:
     const workspace = await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
     if (!workspace) throw new AppError(404, "workspace_not_found", "Company not found.")
     const start = nowIso(), end = new Date(Date.parse(start) + TRIAL_DAYS * 86400000).toISOString()
-    const inserted = await db.prepare(`INSERT INTO company_subscription_state (workspace_id, trial_started_at, trial_ends_at, selected_seats, updated_at)
-      VALUES (?,?,?,?,?) ON CONFLICT (workspace_id) DO NOTHING`).run(workspaceId, start, end, selectedSeats, start)
+    const inserted = await db.prepare(`INSERT INTO company_subscription_state (workspace_id, state_kind, trial_started_at, trial_ends_at, selected_seats, updated_at)
+      VALUES (?,'customer',?,?,?,?) ON CONFLICT (workspace_id) DO NOTHING`).run(workspaceId, start, end, selectedSeats, start)
+    if (!inserted.changes) {
+      const existing = await db.prepare<{state_kind:string|null}>("SELECT state_kind FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+      if (existing?.state_kind === "internal_demo" || existing?.state_kind === "synthetic") throw new AppError(409,"internal_workspace","Internal workspaces cannot start a customer trial automatically.")
+    }
     if (inserted.changes) {
       await db.prepare("UPDATE workspaces SET seat_limit=?, updated_at=? WHERE id=?").run(TRIAL_SEATS, start, workspaceId)
       await recordAuditEvent({context:{workspaceId,userId:null,source:"system"},action:"billing.trial_started",resourceType:"workspace",resourceId:workspaceId,metadata:{trialStartedAt:start,trialEndsAt:end,selectedSeats,seatLimit:TRIAL_SEATS},executor:db})

@@ -1,7 +1,7 @@
 import "server-only"
 import { getDatabase, recordAuditEvent, withImmediateTransaction, nowIso, newId } from "./db"
 import { getPlatformCompanyBillingDetail, listPlatformCompanyBilling, setPlatformCompanyAccess } from "./billing-operations"
-import { syncWorkspaceBilling } from "./billing"
+import { missingBillingStateFailsClosed, syncWorkspaceBilling } from "./billing"
 import { getCompanyAccess } from "./company-access"
 import { AppError } from "./errors"
 import { z } from "zod"
@@ -14,27 +14,48 @@ export const platformActionSchema = z.discriminatedUnion("action",[
   z.object({action:z.literal("notification_retry"),notificationId:z.string().min(1).max(300),reason:z.string().trim().min(1).max(1000)}),
   z.object({action:z.literal("notification_resend"),notificationId:z.string().min(1).max(300),reason:z.string().trim().min(1).max(1000)}),
   z.object({action:z.literal("assign_owner"),membershipId:z.string().min(1).max(200),reason:z.string().trim().min(1).max(1000)}),
+  z.object({action:z.literal("resolve_missing_state"),resolution:z.enum(["start_trial_required","mark_internal","legacy_exempt"]),reason:z.string().trim().min(1).max(1000)}),
 ])
 export type PlatformQuery = z.infer<typeof platformQuerySchema>
-type CompanyRow = {id:string;name:string;seat_limit:number;selected_seats:number|null;occupied_seats:number;subscription_status:string|null;manual_paused:number|null;trial_ends_at:string|null}
+type CompanyRow = {id:string;name:string;seat_limit:number;selected_seats:number|null;occupied_seats:number;subscription_status:string|null;manual_paused:number|null;trial_ends_at:string|null;state_kind:string|null;state_workspace_id?:string|null;workspace_id?:string|null;legacy_exempt:number|null}
+/** Read-only inventory for an operator to review before choosing a single-workspace resolution. */
+export async function listBillingStateExceptions() {
+  return getDatabase().prepare<{id:string;name:string;created_at:string;stateKind:string|null;legacyExempt:number|null}>(`SELECT w.id,w.name,w.created_at,s.state_kind "stateKind",s.legacy_exempt "legacyExempt"
+    FROM workspaces w LEFT JOIN company_subscription_state s ON s.workspace_id=w.id
+    WHERE s.workspace_id IS NULL OR s.legacy_exempt=1 ORDER BY w.created_at,w.id`).all()
+}
+export async function resolveMissingBillingState(id:string,actorUserId:string,resolution:"start_trial_required"|"mark_internal"|"legacy_exempt",reason:string) {
+  if (!reason.trim()) throw new AppError(422,"reason_required","An audit reason is required.")
+  return withImmediateTransaction(async db=>{
+    const workspace=await db.prepare<{id:string;seat_limit:number}>("SELECT id,seat_limit FROM workspaces WHERE id=? FOR UPDATE").get(id)
+    if (!workspace) throw new AppError(404,"workspace_not_found","Company not found.")
+    const kind=resolution==="mark_internal"?"internal_demo":resolution==="legacy_exempt"?"legacy_exempt":"customer"
+    const inserted=await db.prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,state_kind,selected_seats,updated_at)
+      VALUES (?,?,?,?,?) ON CONFLICT (workspace_id) DO NOTHING`).run(id,resolution==="start_trial_required"?0:1,kind,Math.max(1,workspace.seat_limit),nowIso())
+    if (inserted.changes) await recordAuditEvent({context:{workspaceId:id,userId:actorUserId},action:"billing.missing_state_resolved",resourceType:"workspace",resourceId:id,metadata:{resolution,reason},executor:db})
+    return {inserted:Boolean(inserted.changes)}
+  })
+}
 export async function platformCompanies(query:PlatformQuery) {
   // Apply search before the server-side page limit; never search only the visible page.
+  const missingStateFilter=missingBillingStateFailsClosed()?"missing_state":"legacy_exempt"
   let rows:CompanyRow[]
   if(!query.q&&!query.status) rows=await listPlatformCompanyBilling(50,query.offset) as unknown as CompanyRow[]
-  else rows=await getDatabase().prepare<CompanyRow>(`SELECT w.id,w.name,w.seat_limit,s.selected_seats,s.manual_paused,s.trial_ends_at,e.status subscription_status,
+  else rows=await getDatabase().prepare<CompanyRow>(`SELECT w.id,w.name,w.seat_limit,s.workspace_id state_workspace_id,s.state_kind,s.legacy_exempt,s.selected_seats,s.manual_paused,s.trial_ends_at,e.status subscription_status,
     (SELECT count(*)::int FROM memberships m WHERE m.workspace_id=w.id AND m.status IN ('active','pending')) occupied_seats
     FROM workspaces w LEFT JOIN company_subscription_state s ON s.workspace_id=w.id LEFT JOIN workspace_billing_entitlements e ON e.workspace_id=w.id
-    WHERE (w.name ILIKE ? OR w.id ILIKE ? OR EXISTS (SELECT 1 FROM workspace_owners o JOIN memberships om ON om.id=o.membership_id AND om.workspace_id=o.workspace_id JOIN users ou ON ou.id=om.user_id WHERE o.workspace_id=w.id AND ou.email ILIKE ?)) AND (?='' OR CASE WHEN s.manual_paused=1 THEN 'manual_paused' WHEN s.legacy_exempt=1 OR s.workspace_id IS NULL THEN 'legacy_exempt' ELSE COALESCE(e.status,'no_subscription') END=? OR
+    WHERE (w.name ILIKE ? OR w.id ILIKE ? OR EXISTS (SELECT 1 FROM workspace_owners o JOIN memberships om ON om.id=o.membership_id AND om.workspace_id=o.workspace_id JOIN users ou ON ou.id=om.user_id WHERE o.workspace_id=w.id AND ou.email ILIKE ?)) AND (?='' OR CASE WHEN s.manual_paused=1 THEN 'manual_paused' WHEN s.workspace_id IS NULL THEN ? WHEN s.legacy_exempt=1 THEN 'legacy_exempt' ELSE COALESCE(e.status,'no_subscription') END=? OR (?='missing_state' AND s.workspace_id IS NULL) OR
       'access:' || CASE WHEN s.manual_paused=1 THEN 'paused'
-      WHEN COALESCE(s.legacy_exempt,1)=1 THEN 'legacy_exempt'
+      WHEN s.workspace_id IS NULL THEN ?
+      WHEN s.legacy_exempt=1 THEN 'legacy_exempt'
       WHEN s.access_extended_until::timestamptz>now() THEN 'extended'
       WHEN e.status='trialing' AND e.period_end::timestamptz>now() THEN 'trialing'
       WHEN s.grace_ends_at IS NOT NULL THEN CASE WHEN GREATEST(s.grace_ends_at::timestamptz,s.processing_extension_until::timestamptz)>now() THEN 'grace' ELSE 'paused' END
       WHEN e.status='active' AND e.period_end::timestamptz>now() THEN 'active'
       WHEN COALESCE(e.status,'none') IN ('none','incomplete','incomplete_expired') AND s.trial_ends_at::timestamptz>now() THEN 'trial'
       ELSE 'paused' END=?)
-    ORDER BY w.created_at DESC,w.id LIMIT 50 OFFSET ?`).all(`%${query.q}%`,`%${query.q}%`,`%${query.q}%`,query.status,query.status,query.status,query.offset)
-  return Promise.all(rows.map(async row=>({id:row.id,name:row.name,purchasedSeats:row.subscription_status?row.seat_limit:0,selectedSeats:row.selected_seats??row.seat_limit,occupiedSeats:row.occupied_seats,subscriptionStatus:row.subscription_status??"none",access:await getCompanyAccess(row.id)})))
+    ORDER BY w.created_at DESC,w.id LIMIT 50 OFFSET ?`).all(`%${query.q}%`,`%${query.q}%`,`%${query.q}%`,query.status,missingStateFilter,query.status,query.status,missingStateFilter,query.status,query.offset)
+  return Promise.all(rows.map(async row=>({id:row.id,name:row.name,purchasedSeats:row.subscription_status?row.seat_limit:0,selectedSeats:row.selected_seats??row.seat_limit,occupiedSeats:row.occupied_seats,subscriptionStatus:row.subscription_status??"none",billingState:!(row.state_workspace_id??row.workspace_id)?"missing_state":row.legacy_exempt?"legacy_exempt":row.state_kind??"customer",access:await getCompanyAccess(row.id)})))
 }
 export type PlatformCompany = Awaited<ReturnType<typeof platformCompanies>>[number]
 export type Invoice = {stripe_invoice_id:string;workspace_id:string;company_name:string;status:string;currency:string;amount_due:string|number;amount_paid:string|number;amount_remaining:string|number;created_at:string;invoice_url:string|null}
@@ -72,7 +93,7 @@ export async function platformCompany(id:string) {
   const subscription=await getDatabase().prepare<{planName:string;planSlug:string;seatLimit:number;status:string}>(`SELECT plan_name "planName",plan_slug "planSlug",seat_limit "seatLimit",status FROM workspace_billing_entitlements WHERE workspace_id=?`).get(id)
   // Explicit projection avoids leaking provider payloads, notification data or transport errors.
   const state=detail.state
-  return {company,owner:owner??null,ownerCandidates,subscription:subscription??null,pricing:{version:BILLING_CATALOG.version,selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
+  return {company,owner:owner??null,ownerCandidates,subscription:subscription??null,billingState:state?{kind:String(state.state_kind??(state.legacy_exempt?"legacy_exempt":"customer")),legacyExempt:Boolean(state.legacy_exempt)}:null,pricing:{version:BILLING_CATALOG.version,selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
     adjustments:await getDatabase().prepare<Adjustment>(`SELECT a.id,a.workspace_id,w.name company_name,a.kind,a.status,a.amount,a.currency,a.reason,a.livemode,a.created_at,a.synced_at FROM company_billing_adjustments a JOIN workspaces w ON w.id=a.workspace_id WHERE a.workspace_id=? ORDER BY a.created_at DESC,a.id LIMIT 200`).all(id),
     invoices:detail.invoices.map(row=>safeInvoice({stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_due:String(row.amount_due),amount_paid:String(row.amount_paid),amount_remaining:String(row.amount_remaining),created_at:String(row.created_at),invoice_url:row.invoice_url?String(row.invoice_url):null})),
     payments:detail.payments.map(row=>({stripe_payment_id:String(row.stripe_payment_id),stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_paid:String(row.amount_paid),synced_at:String(row.synced_at)})),
@@ -85,6 +106,7 @@ export async function platformAudit(query:PlatformQuery) {
 }
 export async function platformMutation(id:string,actorUserId:string,input:z.infer<typeof platformActionSchema>) {
   input=platformActionSchema.parse(input)
+  if(input.action==="resolve_missing_state") {const result=await resolveMissingBillingState(id,actorUserId,input.resolution,input.reason);return {...await platformCompany(id),resolutionInserted:result.inserted}}
   if(input.action==="access") {await setPlatformCompanyAccess(id,actorUserId,input);return platformCompany(id)}
   if(input.action==="assign_owner"||input.action==="notification_retry"||input.action==="notification_resend") {
     await withImmediateTransaction(async db=>{
@@ -114,6 +136,7 @@ export async function platformMutation(id:string,actorUserId:string,input:z.infe
     })
     return platformCompany(id)
   }
+  if (missingBillingStateFailsClosed() && !await getDatabase().prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(id)) throw new AppError(409,"billing_state_missing","Resolve the missing billing state before reconciliation.")
   await syncWorkspaceBilling(id)
   await recordAuditEvent({context:{workspaceId:id,userId:actorUserId},action:"billing.platform_reconciled",resourceType:"workspace",resourceId:id,metadata:{reason:input.reason}})
   return platformCompany(id)

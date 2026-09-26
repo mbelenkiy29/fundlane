@@ -128,7 +128,7 @@ export async function completeCompanyOnboarding(name: string, selectedSeats = 1)
     await db.prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)`).run(membershipId,id,userId,now,now)
     await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(id,membershipId,now)
     if (cardRequiredTrial) {
-      await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,?,?)").run(id,selectedSeats,now)
+      await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,state_kind,selected_seats,updated_at) VALUES (?,0,'customer',?,?)").run(id,selectedSeats,now)
     } else {
       warnUnconfiguredStripeCheckoutTrial()
       await initializeCompanyTrial(id, selectedSeats, db)

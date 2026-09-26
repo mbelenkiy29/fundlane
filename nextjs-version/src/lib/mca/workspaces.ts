@@ -118,6 +118,7 @@ export async function updateWorkspaceSettings(
   return updated;
 }
 
+/** Internal/bootstrap fixture path. Customer sign-up uses Supabase onboarding and its trial flow. */
 export async function createWorkspaceWithAdmin(input: {
   workspaceName: string;
   adminName: string;
@@ -147,6 +148,8 @@ export async function createWorkspaceWithAdmin(input: {
         timestamp,
         timestamp,
       );
+    await database.prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,state_kind,selected_seats,updated_at)
+      VALUES (?,1,'internal_demo',?,?)`).run(workspaceId,Math.max(1,input.seatLimit ?? 5),timestamp);
     const inserted = await database.prepare<{ id: string }>(`INSERT INTO users
       (id, email, password_hash, name, phone, application_identifier, created_at, updated_at)
       VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
