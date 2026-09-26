@@ -35,7 +35,7 @@ import {
 import { attachIntakeDocument, ingestApplication, intakePayloadChecksum, scheduleAttachment } from "./service"
 import type { IntakeResult, NormalizedIntakeInput } from "./contracts"
 import { receiptEmailContent, sendUsesendEmail, usesendInboundEmail } from "./usesend"
-import { emailSenderVerified, privateEmailDeliveryEnabled, privateEmailIntakeEnabled } from "./email-readiness"
+import { emailSenderVerified, privateEmailDeliveryEnabled, privateEmailIntakeEnabled, receiptWebhookConfigured } from "./email-readiness"
 
 interface InboundAttachment {
   id?: string
@@ -375,58 +375,74 @@ async function usesendReceiptTransport(workspaceId: string, intakeId: string): P
   return undefined
 }
 
-export async function deliverPendingReceipts(options: { workspaceId?: string; fetchImpl?: typeof fetch; limit?: number } = {}): Promise<ReceiptRecord[]> {
+export async function deliverPendingReceipts(options: { workspaceId?: string; fetchImpl?: typeof fetch; limit?: number; deadline?: number } = {}): Promise<ReceiptRecord[]> {
   if (!privateEmailDeliveryEnabled()) throw new AppError(503, "receipt_delivery_disabled", "Private email receipt delivery is unavailable.")
   const endpoint = process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
   const results: ReceiptRecord[] = []
   let unconfigured = 0
-  for (const receipt of await listPendingReceipts(options.workspaceId, options.limit)) {
-    if (!(await (await import("../company-access")).getCompanyAccess(receipt.workspaceId)).allowed) {
-      await getDatabase().prepare("UPDATE intake_receipts SET state='failed',last_error='company_paused_review_required',updated_at=? WHERE workspace_id=? AND id=? AND (lease_token IS NULL OR lease_expires_at<=?)")
-        .run(nowIso(), receipt.workspaceId, receipt.id, nowIso())
-      continue
-    }
-    const usesend = await usesendReceiptTransport(receipt.workspaceId, receipt.intakeId)
-    if (!usesend && !emailSenderVerified()) { unconfigured += 1; continue }
-    if (!usesend && !endpoint) {
-      unconfigured += 1
-      continue
-    }
-    const claim = await claimReceipt(receipt.workspaceId, receipt.id)
-    if (!claim.acquired || !claim.receipt.leaseToken) continue
-    const claimed = claim.receipt
-    const leaseToken = claimed.leaseToken!
-    try {
-      await (await import("../company-access")).assertCompanyOperational(claimed.workspaceId)
-      await (await import("../outbound-approval")).assertOutboundDispatch(claimed.workspaceId, claimed.createdAt)
-      if (usesend) {
-        const content = receiptEmailContent({ dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings })
-        const sent = await sendUsesendEmail({
-          apiKey: usesend.apiKey, from: usesend.from, to: claimed.recipient, subject: content.subject, text: content.text, html: content.html,
-          idempotencyKey: `intake-receipt:${claimed.id}`, fetchImpl: options.fetchImpl,
+  const visited = new Set<string>()
+  let cursor: { updatedAt: string; id: string } | undefined
+  let exhausted = false
+  while (!exhausted && results.length < (options.limit ?? 1000000) && Date.now() < (options.deadline ?? Infinity)) {
+    const page = await listPendingReceipts(options.workspaceId, 25, cursor)
+    exhausted = page.length < 25
+    for (const receipt of page) {
+      cursor = { updatedAt: receipt.updatedAt, id: receipt.id }
+      if (results.length >= (options.limit ?? 1000000) || Date.now() >= (options.deadline ?? Infinity)) break
+      if (visited.has(receipt.id)) continue
+      visited.add(receipt.id)
+      if (!(await (await import("../company-access")).getCompanyAccess(receipt.workspaceId)).allowed) {
+        await getDatabase().prepare("UPDATE intake_receipts SET state='failed',last_error='company_paused_review_required',updated_at=? WHERE workspace_id=? AND id=? AND (lease_token IS NULL OR lease_expires_at<=?)")
+          .run(nowIso(), receipt.workspaceId, receipt.id, nowIso())
+        continue
+      }
+      let usesend: Awaited<ReturnType<typeof usesendReceiptTransport>>
+      try { usesend = await usesendReceiptTransport(receipt.workspaceId, receipt.intakeId) }
+      catch (error) {
+        if (error instanceof AppError && error.code === "usesend_receipt_unconfigured") { unconfigured += 1; continue }
+        throw error
+      }
+      if (!usesend && !emailSenderVerified()) { unconfigured += 1; continue }
+      if (!usesend && !receiptWebhookConfigured()) {
+        unconfigured += 1
+        continue
+      }
+      const claim = await claimReceipt(receipt.workspaceId, receipt.id)
+      if (!claim.acquired || !claim.receipt.leaseToken) continue
+      const claimed = claim.receipt
+      const leaseToken = claimed.leaseToken!
+      try {
+        await (await import("../company-access")).assertCompanyOperational(claimed.workspaceId)
+        await (await import("../outbound-approval")).assertOutboundDispatch(claimed.workspaceId, claimed.createdAt)
+        if (usesend) {
+          const content = receiptEmailContent({ dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings })
+          const sent = await sendUsesendEmail({
+            apiKey: usesend.apiKey, from: usesend.from, to: claimed.recipient, subject: content.subject, text: content.text, html: content.html,
+            idempotencyKey: `intake-receipt:${claimed.id}`, fetchImpl: options.fetchImpl,
+          })
+          results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "sent", providerMessageId: sent.emailId })).receipt)
+          continue
+        }
+        const response = await (options.fetchImpl ?? fetch)(endpoint!, {
+          method: "POST", headers: { "content-type": "application/json", "idempotency-key": `intake-receipt:${claimed.id}`, authorization: `Bearer ${process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN!.trim()}` },
+          body: JSON.stringify({ template: "intake_receipt", recipient: claimed.recipient, dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings }),
+          signal: AbortSignal.timeout(10_000), redirect: "error",
         })
-        results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "sent", providerMessageId: sent.emailId })).receipt)
-        continue
+        if (!response.ok) throw new Error(`Receipt provider returned HTTP ${response.status}.`)
+        const body = await response.json().catch(() => ({})) as { id?: string }
+        results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "sent", providerMessageId: body.id })).receipt)
+      } catch (error) {
+        if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
+          await getDatabase().prepare("UPDATE intake_receipts SET state='failed',attempt_count=GREATEST(0,attempt_count-1),last_error='company_paused_review_required',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE workspace_id=? AND id=? AND lease_token=?")
+            .run(nowIso(), claimed.workspaceId, claimed.id, leaseToken)
+          continue
+        }
+        if (error instanceof AppError && error.code === "receipt_delivery_unconfigured") throw error
+        if (error instanceof AppError && error.code === "usesend_receipt_unconfigured") throw error
+        results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "failed", lastError: error instanceof Error ? error.message.slice(0, 300) : "Receipt delivery failed." })).receipt)
       }
-      const response = await (options.fetchImpl ?? fetch)(endpoint!, {
-        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `intake-receipt:${claimed.id}`, ...(process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN ? { authorization: `Bearer ${process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN}` } : {}) },
-        body: JSON.stringify({ template: "intake_receipt", recipient: claimed.recipient, dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings }),
-        signal: AbortSignal.timeout(10_000), redirect: "error",
-      })
-      if (!response.ok) throw new Error(`Receipt provider returned HTTP ${response.status}.`)
-      const body = await response.json().catch(() => ({})) as { id?: string }
-      results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "sent", providerMessageId: body.id })).receipt)
-    } catch (error) {
-      if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
-        await getDatabase().prepare("UPDATE intake_receipts SET state='failed',attempt_count=GREATEST(0,attempt_count-1),last_error='company_paused_review_required',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE workspace_id=? AND id=? AND lease_token=?")
-          .run(nowIso(), claimed.workspaceId, claimed.id, leaseToken)
-        continue
-      }
-      if (error instanceof AppError && error.code === "receipt_delivery_unconfigured") throw error
-      if (error instanceof AppError && error.code === "usesend_receipt_unconfigured") throw error
-      results.push((await completeReceipt(claimed.workspaceId, claimed.id, leaseToken, { state: "failed", lastError: error instanceof Error ? error.message.slice(0, 300) : "Receipt delivery failed." })).receipt)
     }
   }
-  if (!results.length && unconfigured) throw new AppError(503, "receipt_delivery_unconfigured", "Configure useSend or MCA_INTAKE_RECEIPT_WEBHOOK_URL before sending intake receipts.")
+  if (!results.length && unconfigured) throw new AppError(503, "receipt_delivery_unconfigured", "Configure useSend or both MCA_INTAKE_RECEIPT_WEBHOOK_URL and MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN before sending intake receipts.")
   return results
 }

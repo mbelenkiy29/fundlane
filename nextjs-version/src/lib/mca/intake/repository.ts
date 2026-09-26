@@ -469,6 +469,7 @@ export async function findNativeApplyIntegration(workspaceId: string): Promise<I
 
 export interface ReceiptRecord {
   createdAt: string
+  updatedAt: string
   id: string
   workspaceId: string
   intakeId: string
@@ -488,7 +489,7 @@ function receiptFromRow(row: Row): ReceiptRecord {
   const workspaceId = String(row.workspace_id)
   return {
     id: String(row.id), workspaceId, intakeId: String(row.intake_id),
-    createdAt: String(row.created_at),
+    createdAt: String(row.created_at), updatedAt: String(row.updated_at),
     recipient: decryptSensitive(String(row.recipient_cipher), workspaceId),
     dealLink: row.deal_link_cipher ? decryptSensitive(String(row.deal_link_cipher), workspaceId) : undefined,
     addDocumentLink: row.add_document_link_cipher ? decryptSensitive(String(row.add_document_link_cipher), workspaceId) : undefined,
@@ -500,7 +501,7 @@ function receiptFromRow(row: Row): ReceiptRecord {
   }
 }
 
-export async function enqueueReceipt(input: Omit<ReceiptRecord, "id" | "state" | "attemptCount" | "createdAt">): Promise<ReceiptRecord> {
+export async function enqueueReceipt(input: Omit<ReceiptRecord, "id" | "state" | "attemptCount" | "createdAt" | "updatedAt">): Promise<ReceiptRecord> {
   return withImmediateTransaction(async (database) => {
     // AES-GCM is randomized, so event-level idempotency is enforced explicitly inside the write lock.
     await database.prepare("SELECT id FROM intake_events WHERE id = ? AND workspace_id = ? FOR UPDATE").get(input.intakeId, input.workspaceId)
@@ -522,13 +523,15 @@ export async function enqueueReceipt(input: Omit<ReceiptRecord, "id" | "state" |
   })
 }
 
-export async function listPendingReceipts(workspaceId?: string, limit?: number): Promise<ReceiptRecord[]> {
+export async function listPendingReceipts(workspaceId?: string, limit?: number, after?: { updatedAt: string; id: string }): Promise<ReceiptRecord[]> {
   const now = nowIso()
+  const cursorClause = after ? " AND (updated_at, id) > (?, ?)" : ""
+  const cursorArgs = after ? [after.updatedAt, after.id] : []
   const rows = workspaceId
     ? await intakeDatabase().prepare(`SELECT * FROM intake_receipts WHERE workspace_id=? AND state IN ('pending','failed') AND last_error IS DISTINCT FROM 'company_paused_review_required'
-        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at LIMIT ?`).all(workspaceId, now, limit ?? 1000000)
+        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)${cursorClause} ORDER BY updated_at, id LIMIT ?`).all(workspaceId, now, ...cursorArgs, limit ?? 1000000)
     : await intakeDatabase().prepare(`SELECT * FROM intake_receipts WHERE state IN ('pending','failed') AND last_error IS DISTINCT FROM 'company_paused_review_required'
-        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at LIMIT ?`).all(now, limit ?? 1000000)
+        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)${cursorClause} ORDER BY updated_at, id LIMIT ?`).all(now, ...cursorArgs, limit ?? 1000000)
   return (rows as Row[]).map(receiptFromRow)
 }
 

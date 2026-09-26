@@ -1,7 +1,7 @@
 import "server-only"
 
 import { createHash } from "node:crypto"
-import { emailIntakeReadiness } from "./email-readiness"
+import { emailIntakeReadiness, privateEmailUiEnabled } from "./email-readiness"
 import { createOpaqueToken, hashOpaqueToken } from "../crypto"
 import { getDatabase, newId, nowIso, recordAuditEvent } from "../db"
 import { AppError } from "../errors"
@@ -93,6 +93,13 @@ function assertAdmin(actor: MembershipContext): void {
 
 function status(record: IntegrationRecord): IntegrationStatus {
   const binding = record.formId ?? record.templateId ?? record.locationId ?? null
+  const showEmailReadiness = record.provider === "email" && privateEmailUiEnabled()
+  const emailReadinessIssues = showEmailReadiness ? emailIntakeReadiness({
+    enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
+    admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway,
+    providerEvidenceHash: record.providerEvidenceHash, fromAddress: record.mapping.fromAddress,
+    credentialConfigured: record.credentialConfigured,
+  }) : undefined
   return {
     id: record.id, provider: record.provider, displayName: record.displayName, binding,
     enabled: record.enabled, automaticProcessing: Boolean(record.automaticProcessing),
@@ -103,16 +110,10 @@ function status(record: IntegrationRecord): IntegrationStatus {
     inboundAddress: record.inboundAddress, updatedAt: record.updatedAt,
     contractKey: record.contractKey, attachmentMethod: record.attachmentMethod,
     emailGateway: record.emailGateway, providerServerId: record.providerServerId,
-    ...(record.provider === "email" ? { emailReadinessIssues: emailIntakeReadiness({
-      enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
-      admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway,
-      providerEvidenceHash: record.providerEvidenceHash, fromAddress: record.mapping.fromAddress,
-      credentialConfigured: record.credentialConfigured,
-    }) } : {}),
+    ...(emailReadinessIssues ? { emailReadinessIssues } : {}),
     readiness: record.provider === "email" && (record.emailGateway === "usesend" || record.emailGateway === "postmark")
-      ? emailIntakeReadiness({ enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
-        admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway, providerEvidenceHash: record.providerEvidenceHash,
-        fromAddress: record.mapping.fromAddress, credentialConfigured: record.credentialConfigured }).length === 0 ? "live_configured" : "live_unverified"
+      ? emailReadinessIssues ? emailReadinessIssues.length === 0 ? "live_configured" : "live_unverified"
+        : record.providerEvidenceHash ? "live_configured" : "live_unverified"
       : record.provider === "zoho" ? "live_unverified" : "local_tested",
   }
 }

@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         }
       }
       if (privateEmailDeliveryEnabled() && Date.now() - started < 90_000) {
-        receipts = (await deliverPendingReceipts({ limit: 3 })).length
+        receipts = (await deliverPendingReceipts({ limit: 3, deadline: started + 90_000 })).length
       }
     }, request.signal, 100_000)
     return NextResponse.json({ enabled: true, jobs, receipts, durationMs: Date.now() - started }, { headers: { "cache-control": "no-store" } })
