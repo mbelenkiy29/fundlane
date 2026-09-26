@@ -4,6 +4,8 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SidebarConfigProvider } from "@/contexts/sidebar-context";
 import { inter } from "@/lib/fonts";
+import { marketingFontClasses } from "@/lib/marketing/fonts";
+import { marketingPolishEnabled } from "@/lib/marketing/polish";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
@@ -17,13 +19,14 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "Fundlane", statusBarStyle: "default" },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const currentMarketingFonts = marketingPolishEnabled() ? "" : ` ${await marketingFontClasses(false)}`;
   return (
-    <html lang="en" className={`${inter.variable} antialiased`}>
+    <html lang="en" className={`${inter.variable}${currentMarketingFonts} antialiased`}>
       <body className={inter.className}>
           <ThemeProvider defaultTheme="system" storageKey="nextjs-ui-theme">
           <SidebarConfigProvider>
