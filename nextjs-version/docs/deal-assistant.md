@@ -17,10 +17,10 @@ Configure these variables in the app's ignored local environment or deployment s
 | `MCA_ASSISTANT_MODEL` | Explicit Responses-compatible model with function calling. No implicit model fallback. |
 | `MCA_DATA_ENCRYPTION_KEY` | Existing workspace encryption key, mandatory in production. |
 | `MCA_CLERK_BILLING_ENABLED` | Uses server-verified company plans when true. Intentionally disabled billing receives Free allowances; provider verification errors never grant paid credits. |
-| `MCA_AI_CREDIT_PURCHASES_ENABLED` | Default false. Enable first with Stripe test credentials. |
-| `STRIPE_SECRET_KEY` | Server-only Stripe key, independent of Clerk subscriptions. |
-| `STRIPE_WEBHOOK_SECRET` | Signing secret for `/api/webhooks/stripe-credits`. |
-| `MCA_APP_ORIGIN` | Canonical application origin for Checkout returns and credit-alert links. |
+| `MCA_AI_CREDIT_PURCHASES_ENABLED` | Only exactly `true` enables new credit-pack Checkout when all required settings are present. Unset, `false`, and other values default to off; balance, usage, and alerts remain available. Test with Stripe test credentials before activation. |
+| `STRIPE_SECRET_KEY` | Server-only Stripe key shared with company billing for credit Checkout and existing-purchase reconciliation. Keep configured after disabling purchases while sessions, refunds, or disputes may remain. |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret for `/api/webhooks/stripe-credits`; keep it configured when the flag is off to verify and process already-paid sessions, refunds, and disputes. |
+| `MCA_APP_ORIGIN` | Canonical application origin required for Checkout returns and credit-alert links. |
 | `MCA_EMAIL_WEBHOOK_URL` / `MCA_EMAIL_WEBHOOK_TOKEN` | Existing transactional email adapter, extended for `ai_credit_alert`. |
 
 Statement analysis separately retains `MCA_DOCUMENT_AI_PROVIDER` and `MCA_DOCUMENT_AI_MODEL`. SMS and email retain their current provider readiness, sender assignment, consent, and preflight requirements. Configuring chat alone does not enable those providers.
@@ -34,10 +34,10 @@ Before rollout, run the isolated tests below and a live synthetic deal scenario 
 - `POST /api/mca/assistant/conversations` with `{ dealId }`: opens the caller's conversation for an accessible deal; omitted or null `dealId` creates a workspace chat.
 - `GET /api/mca/assistant/credits`: own balance, recent ledger and purchase availability.
 - `GET/PATCH /api/mca/assistant/credits/admin`: admin-only team consumption, balances and alert settings. No chat content is included.
-- `POST /api/mca/assistant/credits/checkout`: admin supplies selected active recipient and request UUID. The server fixes the pack at 100 credits for $10 USD, binds company/buyer/recipient, and returns hosted Checkout.
-- `POST /api/mca/assistant/credits/reconcile`: admin-only reconciliation of a purchase in the current company. Return query parameters never grant credits by themselves.
+- `POST /api/mca/assistant/credits/checkout`: when purchases are enabled, an admin supplies selected active recipient and request UUID. The server fixes the pack at 100 credits for $10 USD, binds company/buyer/recipient, and returns hosted Checkout. With the flag off or incomplete configuration it returns 503 `purchases_disabled` before constructing a Stripe client.
+- `POST /api/mca/assistant/credits/reconcile`: admin-only reconciliation of an existing purchase in the current company, including after new purchases are disabled. Return query parameters never grant credits by themselves.
 - `GET/POST /api/mca/assistant/notifications`: current admin inbox/unread count and mark-as-read by ID. Reads and updates are scoped to the recipient and current company.
-- `POST /api/webhooks/stripe-credits`: signed Stripe events; provider state is re-read before fulfillment or reversal.
+- `POST /api/webhooks/stripe-credits`: signed Stripe events are verified and existing purchases are reconciled even when new purchases are disabled. This prevents paid sessions from being lost after a flag rollback. With missing Stripe key or signing secret, the webhook returns 503; invalid signatures return 400.
 - `GET /api/mca/assistant?conversationId=…`: returns up to 100 messages, latest run status, and its approval cards/outcomes. No serialized SDK state or tool credentials are returned.
 - `POST /api/mca/assistant` accepts strict Zod commands: `{ action: "message", conversationId, requestId, message }`, `{ action: "decision", conversationId, approvalId, approve }`, or `{ action: "cancel", conversationId }`. Message and decision responses stream newline-delimited JSON events (`delta`, `progress`, `error`, `state`). Cancel returns saved state as JSON.
 

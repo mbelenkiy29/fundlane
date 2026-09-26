@@ -54,14 +54,15 @@ export async function createCreditCheckout(
   buyerUserId: string,
   recipientUserId: string,
   requestId: string,
-  stripe = creditStripe()
+  stripe?: Stripe
 ) {
   if (!purchasesAvailable())
     throw new AppError(
       503,
-      "payments_unconfigured",
-      "Credit purchases are not configured yet."
+      "purchases_disabled",
+      "AI credit purchases are not available yet."
     )
+  stripe ??= creditStripe()
   const purchase = await withTransaction(async (db) => {
     const admin = await db
       .prepare(

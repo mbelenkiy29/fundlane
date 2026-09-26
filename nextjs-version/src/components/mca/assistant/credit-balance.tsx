@@ -74,7 +74,9 @@ export function CreditBalanceBadge() {
             ? state.purchasesAvailable
               ? "Buy a credit pack or upgrade your company plan."
               : "Upgrade your company plan."
-            : "Ask your company admin to buy more credits."}{" "}
+            : state.purchasesAvailable
+              ? "Ask your company admin to buy more credits."
+              : "Ask your company admin about your plan."}{" "}
           Included credits reset{" "}
           {new Date(state.balance.resetAt).toLocaleDateString()}.
         </p>

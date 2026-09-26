@@ -1,6 +1,7 @@
 import "./helpers/business-auth"
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
+import { createHmac } from "node:crypto"
 import type Stripe from "stripe"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import {
@@ -26,6 +27,7 @@ import {
 } from "../src/lib/mca/assistant/alerts"
 import {
   createCreditCheckout,
+  purchasesAvailable,
   reconcileCreditPurchase,
   processCreditPaymentEvent,
 } from "../src/lib/mca/assistant/purchases"
@@ -813,4 +815,81 @@ test("simplified model email schema still rejects invalid email before changing 
   )
   assert.equal(deals.total, 0)
   await cancelConversation(t.c)
+})
+
+test("credit purchases default off without hiding balances or creating Checkout", async () => {
+  const admin = await user("admin")
+  const prior = process.env.MCA_AI_CREDIT_PURCHASES_ENABLED
+  process.env.STRIPE_SECRET_KEY = "sk_test_synthetic"
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_synthetic"
+  try {
+    for (const flag of [undefined, "false", "TRUE", "garbage"]) {
+      if (flag === undefined) delete process.env.MCA_AI_CREDIT_PURCHASES_ENABLED
+      else process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = flag
+      assert.equal(purchasesAvailable(), false)
+      const response = await checkoutRoute(req(admin.user_id, {
+        recipientUserId: admin.user_id,
+        requestId: newId(),
+      }))
+      assert.equal(response.status, 503)
+      assert.equal((await response.json()).error.code, "purchases_disabled")
+      await assert.rejects(
+        createCreditCheckout(admin.workspace_id, admin.user_id, admin.user_id, newId()),
+        { code: "purchases_disabled" },
+      )
+    }
+    delete process.env.STRIPE_SECRET_KEY
+    await assert.rejects(
+      createCreditCheckout(admin.workspace_id, admin.user_id, admin.user_id, newId()),
+      { code: "purchases_disabled" },
+    )
+    process.env.STRIPE_SECRET_KEY = "sk_test_synthetic"
+    process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = "true"
+    assert.equal(purchasesAvailable(), true)
+    delete process.env.STRIPE_WEBHOOK_SECRET
+    assert.equal(purchasesAvailable(), false)
+  } finally {
+    if (prior === undefined) delete process.env.MCA_AI_CREDIT_PURCHASES_ENABLED
+    else process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = prior
+    process.env.STRIPE_SECRET_KEY = "sk_test_synthetic"
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_synthetic"
+  }
+})
+
+test("turning purchases off still reconciles a previously paid session", async () => {
+  const admin = await user("admin"), p = paymentFixture()
+  const prior = process.env.MCA_AI_CREDIT_PURCHASES_ENABLED
+  process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = "true"
+  process.env.STRIPE_SECRET_KEY = "sk_test_synthetic"
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_synthetic"
+  try {
+    const purchase = await createCreditCheckout(
+      admin.workspace_id, admin.user_id, admin.user_id, newId(), p.stripe,
+    )
+    assert.equal(p.creates(), 1)
+    process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = "false"
+    p.paid()
+    await processCreditPaymentEvent({
+      type: "checkout.session.completed",
+      data: { object: p.session() },
+    } as unknown as Stripe.Event, p.stripe)
+    assert.equal((await getCreditBalance(admin)).purchased, 100)
+    assert.equal((await reconcileCreditPurchase(purchase.purchaseId, p.stripe)).state, "paid")
+    assert.equal(p.creates(), 1)
+    assert.equal((await stripeWebhook(new Request("http://localhost/api/webhooks/stripe-credits", {
+      method: "POST", headers: { "stripe-signature": "invalid" }, body: "{}",
+    }))).status, 400)
+    const payload = JSON.stringify({ id: "evt_existing", type: "unhandled.synthetic", data: { object: {} } })
+    const timestamp = Math.floor(Date.now() / 1000)
+    const signature = createHmac("sha256", "whsec_synthetic")
+      .update(`${timestamp}.${payload}`).digest("hex")
+    assert.equal((await stripeWebhook(new Request("http://localhost/api/webhooks/stripe-credits", {
+      method: "POST",
+      headers: { "stripe-signature": `t=${timestamp},v1=${signature}` },
+      body: payload,
+    }))).status, 200)
+  } finally {
+    if (prior === undefined) delete process.env.MCA_AI_CREDIT_PURCHASES_ENABLED
+    else process.env.MCA_AI_CREDIT_PURCHASES_ENABLED = prior
+  }
 })

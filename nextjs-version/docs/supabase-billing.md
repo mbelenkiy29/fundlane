@@ -42,6 +42,8 @@ MCA_USESEND_FROM=Fundlane <billing@your-verified-domain.example>
 
 For production deliberately switch `MCA_STRIPE_MODE=live`, with matching live key, prices, portal and signing secret. Keys and all provider objects are mode-checked. Price IDs and secrets remain server-side. STARTER/TEAM variables are retired.
 
+One-time AI credit purchases have a separate `MCA_AI_CREDIT_PURCHASES_ENABLED` flag (unset/default `false`) and `STRIPE_WEBHOOK_SECRET` for `/api/webhooks/stripe-credits`. New credit Checkout also requires `STRIPE_SECRET_KEY` and `MCA_APP_ORIGIN`; the credits webhook keeps verifying and reconciling existing purchases after the flag is turned off. See [Deal assistant](deal-assistant.md).
+
 **Existing test companies require an explicit operator cutover.** 0047 adds `workspace_stripe_customers.livemode`, backfilled to 0 because the preceding implementation was test-only. A mapping in the other mode produces `billing_mode_cutover_required` before customer reuse or subscription reconciliation. It is never deleted, replaced, or silently charged. Cached legacy access is retained. `GET /api/billing` exposes `modeCutoverRequired`; platform company lists expose `stripe_livemode`. Merely changing environment keys is not a customer migration. Before activation, an operator must agree the affected companies and target mode, archive old identities/projections, and perform a reviewed mapping/entitlement migration with verified target customers and owner consent for paid conversion. There is deliberately no automatic cross-account customer migration endpoint.
 
 Create two active licensed monthly USD prices, interval_count 1, no quantity transform:
