@@ -2,6 +2,9 @@ import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
+import { readFileSync } from "node:fs"
+import { runInNewContext } from "node:vm"
+import { resolve } from "node:path"
 import type Stripe from "stripe"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { getDatabase, closeDatabaseForTests, nowIso } from "../src/lib/mca/db"
@@ -11,6 +14,48 @@ import { deliverBillingNotifications, runBillingMaintenance } from "../src/lib/m
 import { getCompanyBillingPresentation } from "../src/lib/mca/billing-presentation"
 import { claimBackgroundJob } from "../src/lib/mca/jobs/queue"
 import { queueMetrics, runMonitor } from "../src/lib/mca/operations/monitor"
+
+async function runCheckedInMonitorBundle(
+  query: (sql: string, values?: unknown[]) => Promise<Record<string, unknown>[]>,
+  fetcher: typeof fetch,
+  recoveryAlerts = false,
+  billingAlerts = false
+) {
+  const bundle = readFileSync(resolve("supabase/functions/platform-monitor/index.js"), "utf8")
+  const executable = bundle.replace(
+    /^import postgres from "npm:postgres@3\.4\.7";?$/m,
+    "const postgres = globalThis.__postgres;"
+  )
+  assert.notEqual(executable, bundle, "bundle must have the expected Edge postgres import")
+  let handler: ((request: Request) => Promise<Response>) | undefined
+  const env: Record<string, string> = {
+    MCA_MONITOR_TOKEN: "x".repeat(40),
+    MCA_MONITOR_DATABASE_URL: "postgresql://mca_app.test:unused@localhost:6543/postgres",
+    MCA_APP_ORIGIN: "https://fundlane.io",
+    MCA_OPERATIONS_ALERTS_ENABLED: "true",
+    MCA_OPERATIONS_ALERT_EMAIL: "owner@example.test",
+    MCA_EMAIL_WEBHOOK_URL: "https://mail.example.test",
+  }
+  if (recoveryAlerts) env.MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED = "true"
+  if (billingAlerts) env.MCA_BILLING_RECONCILIATION_ALERTS_ENABLED = "true"
+  runInNewContext(executable, {
+    Deno: { env: { get: (name: string) => env[name] }, serve: (fn: typeof handler) => { handler = fn } },
+    __postgres: () => ({ unsafe: query, end: async () => undefined }),
+    fetch: fetcher,
+    crypto: globalThis.crypto,
+    performance: globalThis.performance,
+    AbortSignal,
+    URL,
+    Response,
+    console,
+  })
+  assert.ok(handler)
+  const response = await handler(new Request("https://edge.example.test", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.MCA_MONITOR_TOKEN}` },
+  }))
+  assert.equal(response.status, 200)
+}
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const keys = ["DATABASE_URL","MCA_STRIPE_BILLING_ENABLED","MCA_BILLING_VERIFIED_INVOICE_NOTICES","MCA_STRIPE_MODE","STRIPE_BASE_PRICE_ID","STRIPE_ADDITIONAL_SEAT_PRICE_ID","MCA_APP_ORIGIN","MCA_EMAIL_WEBHOOK_URL"]
@@ -199,6 +244,33 @@ test("a retrying reconciliation opens a platform incident only when opted in",as
     await database.query("UPDATE mca_private.ops_control SET last_started_at=now()-interval '1 minute'")
     await runMonitor(monitorDb,{origin:"https://fundlane.io",token:"test",alerts:false,billingReconciliationAlertsEnabled:true},async()=>Response.json({databaseOk:true,databaseMs:1}))
     assert.equal((await database.query("SELECT count(*)::int n FROM mca_private.ops_incidents WHERE component='billing_reconciliation' AND opened_at IS NOT NULL")).rows[0].n,1)
+  } finally {await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete' WHERE id=?").run(row.id)}
+})
+
+test("checked-in Edge monitor keeps billing reconciliation default off and sends only after opt-in",async()=>{
+  const row=await getDatabase().prepare<{id:string}>("SELECT id FROM mca_background_jobs WHERE kind='billing_reconcile' LIMIT 1").get()
+  assert.ok(row)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',attempts=1,available_at=? WHERE id=?").run(new Date(Date.now()+60000).toISOString(),row.id)
+  const monitorDb={query:async(sql:string,values?:unknown[])=>(await database.query(sql,values)).rows as Record<string,unknown>[]}
+  try {
+    await database.query("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now(),last_started_at=now()-interval '1 minute'")
+    await database.query("TRUNCATE mca_private.ops_incidents,mca_private.ops_alert_attempts")
+    let sends=0
+    const fetcher:typeof fetch=async(url)=>{
+      if(String(url).includes('/api/internal/health'))return Response.json({databaseOk:true,databaseMs:1})
+      sends++
+      return new Response(null,{status:200})
+    }
+    await runCheckedInMonitorBundle(monitorDb.query,fetcher)
+    assert.equal(sends,0)
+    assert.equal((await database.query("SELECT count(*)::int n FROM mca_private.ops_incidents WHERE component='billing_reconciliation' AND opened_at IS NOT NULL")).rows[0].n,0)
+    await database.query("UPDATE mca_private.ops_control SET last_started_at=now()-interval '1 minute'")
+    await runCheckedInMonitorBundle(monitorDb.query,fetcher,false,true)
+    assert.equal(sends,1)
+    assert.equal((await database.query("SELECT count(*)::int n FROM mca_private.ops_alert_attempts WHERE component='billing_reconciliation' AND state='accepted'")).rows[0].n,1)
+    await database.query("UPDATE mca_private.ops_control SET last_started_at=now()-interval '1 minute'")
+    await runCheckedInMonitorBundle(monitorDb.query,fetcher,true,true)
+    assert.equal(sends,1)
   } finally {await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete' WHERE id=?").run(row.id)}
 })
 
