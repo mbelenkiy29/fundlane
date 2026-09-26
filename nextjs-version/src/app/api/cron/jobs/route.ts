@@ -1,15 +1,18 @@
 import { timingSafeEqual } from "node:crypto"
 import { NextResponse } from "next/server"
 import { apiError, AppError } from "@/lib/mca/errors"
-import { runNextBackgroundJob } from "@/lib/mca/jobs/worker"
+import { recoverSubmissionOutbox, runNextBackgroundJob } from "@/lib/mca/jobs/worker"
 import { withExecutionDeadline } from "@/lib/mca/jobs/execution"
-import type { BackgroundJobKind } from "@/lib/mca/jobs/queue"
+import { runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
+import { scheduleDueInvitationReminders } from "@/lib/mca/applications/reminders"
+import { cleanupWorkerStorage } from "@/lib/mca/jobs/cleanup"
+import { releaseExpiredReservations } from "@/lib/mca/assistant/credits"
+import { maintainAssistantExperience } from "@/lib/mca/assistant/maintenance"
+import { maintainCreditAlerts } from "@/lib/mca/assistant/alerts"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
-// Auto-submit scoring is opt-in; its submission delivery remains a separate job.
-const EXPORT_JOB_KINDS: readonly BackgroundJobKind[] = ["export_create", "export"]
 const BUDGET_MS = 240_000
 const MAX_JOBS = 3
 
@@ -22,10 +25,17 @@ export async function GET(request: Request) {
     const expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     const started = Date.now()
-    const kinds: readonly BackgroundJobKind[] = process.env.MCA_AUTO_SUBMIT_ENABLED === "true"
-      ? [...EXPORT_JOB_KINDS, "auto_submit"] : EXPORT_JOB_KINDS
+    const kinds = runtimeKinds()
     let processed = 0
     await withExecutionDeadline(async () => {
+      if (process.env.MCA_JOB_RUNTIME_MAINTENANCE === "true") {
+        await recoverSubmissionOutbox()
+        await scheduleDueInvitationReminders(process.env.MCA_APP_ORIGIN ?? "")
+        await cleanupWorkerStorage()
+        await releaseExpiredReservations()
+        await maintainAssistantExperience(3)
+        await maintainCreditAlerts()
+      }
       while (processed < MAX_JOBS && Date.now() - started < BUDGET_MS - 10_000) {
         if (!(await runNextBackgroundJob(kinds))) break
         processed++

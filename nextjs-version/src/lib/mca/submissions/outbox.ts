@@ -78,7 +78,10 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
 
   const existing = await findAttempt(job.id, job.attemptKey)
   const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
-  if (existing?.state === "sending" && ((job.autoSubmitDecisionId && !guardUnknownSend) || (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000))) {
+  if (existing?.state === "sending" && (
+    (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) ||
+    (!guardUnknownSend && (job.autoSubmitDecisionId || process.env.MCA_JOB_RUNTIME === "vercel_cron"))
+  )) {
     return settleUncertainDelivery(job)
   }
   if (existing && job.approvedPackage && existing.state === "sending" && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) {
@@ -110,7 +113,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       state: "sending",
       correlationId: newId(),
     })
-    if (!reserved.created && (job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
+    if (!reserved.created && (process.env.MCA_JOB_RUNTIME === "vercel_cron" || job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
       const current = await findJobById(job.workspaceId, job.id)
       if (isCompletedAttempt(reserved.attempt.state)) await markOutboxProcessed(job.id)
       return current ?? job

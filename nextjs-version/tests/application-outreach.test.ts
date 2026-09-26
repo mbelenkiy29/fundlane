@@ -199,6 +199,8 @@ test("email previews do not count; retry and resend delivery preserve identities
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
   const keys: string[] = [], messages: Record<string, unknown>[] = []
   let simulateFailure = true
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
   globalThis.fetch = async (_url, init) => {
     keys.push(new Headers(init?.headers).get("idempotency-key")!)
     messages.push(JSON.parse(String(init?.body)))
@@ -212,30 +214,15 @@ test("email previews do not count; retry and resend delivery preserve identities
     assert.ok(failure)
     await failBackgroundJob({ ...failedJob, attempts: 3 }, failure)
     assert.equal((await ownedInvitation(ada, invitation.id)).sent_at, null)
-    const retry = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    assert.equal(retry.jobId, queued.jobId)
+    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), { code: "delivery_uncertain" })
     simulateFailure = false
-    const retryJob = await runningJob(retry.jobId)
-    const accepted = await processInvitationEmail(ada, retryJob)
-    await completeBackgroundJob(retryJob, accepted)
-    assert.equal(accepted.delivery, "sent")
-    assert.equal(keys[0], keys[1])
-    assert.equal(messages[1].template, "application_invitation")
-    assert.equal(messages[1].actionUrl, invitation.url)
-    assert.ok((await ownedInvitation(ada, invitation.id)).sent_at)
-    await processInvitationEmail(ada, retryJob)
-    assert.equal(keys.length, 2)
-    // A crash after durable acceptance but before worker completion must not turn a sent email into a failure in the UI.
-    await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',error_code='retry_limit' WHERE id=?").run(retryJob.id)
-    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)?.deliveries[0].state, "complete")
-    const resend = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    assert.notEqual(resend.jobId, retry.jobId)
-    const resendJob = await runningJob(resend.jobId)
-    await completeBackgroundJob(resendJob, await processInvitationEmail(ada, resendJob))
-    assert.notEqual(keys[1], keys[2])
-    assert.equal(messages[2].actionUrl, invitation.url)
-    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)?.deliveries.length, 3)
-  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL }
+    const retryJob = await runningJob(queued.jobId)
+    await assert.rejects(processInvitationEmail(ada, retryJob), { code: "delivery_uncertain" })
+    assert.equal(keys.length, 1)
+    assert.equal(messages[0].template, "application_invitation")
+    assert.equal(messages[0].actionUrl, invitation.url)
+    assert.equal((await ownedInvitation(ada, invitation.id)).sent_at, null)
+  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL; if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
 })
 
 test("outreach cohort report reconciles to drilldowns and keeps funded credit with the original sender", async () => {

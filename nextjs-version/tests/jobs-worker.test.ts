@@ -9,7 +9,7 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
+import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { GET as runCron } from "../src/app/api/cron/jobs/route"
 import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
@@ -445,6 +445,44 @@ test("cron is off by default and requires the exact bearer credential when enabl
     else process.env.MCA_JOB_RUNTIME = oldRuntime
     if (oldSecret === undefined) delete process.env.CRON_SECRET
     else process.env.CRON_SECRET = oldSecret
+  }
+})
+
+test("cron rejects unregistered kinds before claiming any job", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  const oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  try {
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_KINDS = "document_scan"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 503)
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
+  }
+})
+
+test("explicit business kind fails a revoked API key and keeps job results company scoped", async () => {
+  await addWorkspace("workspace-jobs-other")
+  const revoked: DealActor = { ...actor(), workspaceId: "workspace-jobs-other", source: "api_key", apiKeyId: "revoked-key", scopes: ["intake:write"] }
+  const queued = await enqueueBackgroundJob({ actor: revoked, kind: "email_intake", resourceId: "synthetic-intake", idempotencyKey: "revoked-intake" })
+  await assert.rejects(getBackgroundJob(actor(), queued.id), { code: "job_not_found" })
+  const oldRuntime = process.env.MCA_JOB_RUNTIME, oldSecret = process.env.CRON_SECRET, oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  try {
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_KINDS = "email_intake"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 1)
+    assert.deepEqual(await getDatabase().prepare("SELECT state,error_code FROM mca_background_jobs WHERE id=?").get(queued.id), { state: "failed", error_code: "job_permission_revoked" })
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
   }
 })
 

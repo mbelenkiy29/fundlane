@@ -80,6 +80,14 @@ export async function platformStatus(window: Window): Promise<Status> {
     const calendar = process.env.MCA_CALENDAR_GOOGLE_ENABLED === "true" && process.env.MCA_CALENDAR_RUNTIME === "vercel_cron"
       ? await calendarHealth(db)
       : null
+    const jobKinds = process.env.MCA_JOB_RUNTIME_STATUS_ENABLED === "true" ? (await db.query<Status["jobKinds"][number]>(`SELECT kind,
+      count(*) FILTER (WHERE state='queued')::int queued,
+      count(*) FILTER (WHERE state='running')::int running,
+      count(*) FILTER (WHERE state='failed')::int failures,
+      min(created_at) FILTER (WHERE state='queued') AS "oldestPendingAt",
+      CASE WHEN count(*) FILTER (WHERE state='queued')>0 THEN greatest(0,extract(epoch FROM now()-min(created_at::timestamptz) FILTER (WHERE state='queued')))::int ELSE NULL END AS "oldestPendingSeconds",
+      max(updated_at) FILTER (WHERE state='complete') AS "lastSuccessAt"
+      FROM mca_background_jobs GROUP BY kind ORDER BY kind`)).rows : []
     return {
       asOf,
       startedAt: control.started_at,
@@ -102,6 +110,7 @@ export async function platformStatus(window: Window): Promise<Status> {
       incidents,
       emailRuntime,
       calendar: calendar ?? null,
+      jobKinds,
     }
   })
 }

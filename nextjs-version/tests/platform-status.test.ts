@@ -146,6 +146,7 @@ test("real aggregates distinguish no history, health, errors and current queues"
   assert.equal(empty.latest, null)
   assert.equal(empty.observedAvailability, null)
   assert.equal(empty.stale, true)
+  assert.deepEqual(empty.jobKinds, [])
   const metrics = await queueMetrics(db)
   assert.equal(metrics.queued, 0)
   assert.equal(metrics.emailUnknown, 0)
@@ -456,5 +457,30 @@ test("document failure metrics and owner alerts stay off with unset runtime flag
     await database.query("DELETE FROM workspaces WHERE id='status-fixture'")
     if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
     if (previousNative === undefined) delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR; else process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = previousNative
+  }
+})
+
+test("owner status exposes per-kind queue age, failure count and last success only when enabled", async () => {
+  const prior = process.env.MCA_JOB_RUNTIME_STATUS_ENABLED
+  const workspace = randomUUID()
+  const created = new Date(Date.now() - 120_000).toISOString()
+  try {
+    await database.query("INSERT INTO workspaces(id,name,feature_flags,page_visibility,created_at,updated_at) VALUES($1,'Status fixture','{}','{}',$2,$2)", [workspace, created])
+    for (const state of ["queued", "failed", "complete"]) {
+      await database.query(`INSERT INTO mca_background_jobs(id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
+        VALUES($1,$2,'submission_delivery',$1,$1,'{}','{}','fixture',$3,$4,$4,$4)`, [randomUUID(), workspace, state, created])
+    }
+    delete process.env.MCA_JOB_RUNTIME_STATUS_ENABLED
+    assert.deepEqual((await platformStatus("24h")).jobKinds, [])
+    process.env.MCA_JOB_RUNTIME_STATUS_ENABLED = "true"
+    const row = (await platformStatus("24h")).jobKinds.find(job => job.kind === "submission_delivery")
+    assert.equal(row?.queued, 1)
+    assert.equal(row?.failures, 1)
+    assert.ok((row?.oldestPendingSeconds ?? 0) >= 120)
+    assert.equal(row?.oldestPendingAt, created)
+    assert.equal(row?.lastSuccessAt, created)
+  } finally {
+    if (prior === undefined) delete process.env.MCA_JOB_RUNTIME_STATUS_ENABLED
+    else process.env.MCA_JOB_RUNTIME_STATUS_ENABLED = prior
   }
 })

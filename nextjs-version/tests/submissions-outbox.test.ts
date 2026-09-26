@@ -187,7 +187,7 @@ after(async () => {
   else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
 })
 
-test("processJobDelivery resumes a sending attempt, keeps one row, and marks outbox processed", async () => {
+test("processJobDelivery reconciles a sending attempt without repeating an ambiguous provider send", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-resume-sending")
   await insertAttempt({
@@ -200,17 +200,20 @@ test("processJobDelivery resumes a sending attempt, keeps one row, and marks out
   })
   const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
   deliveries = 0
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  let saved: typeof sending
+  try { saved = await processJobDelivery(sending) }
+  finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
 
-  const saved = await processJobDelivery(sending)
-
-  assert.equal(saved.state, "sent")
+  assert.equal(saved.state, "failed")
   assert.equal(await attemptCount(saved.id), 1)
   const attempt = await getDatabase().prepare<{ state: string }>(
     "SELECT state FROM mca_submission_attempts WHERE job_id = ?",
   ).get(saved.id)
-  assert.equal(attempt?.state, "sent")
+  assert.equal(attempt?.state, "failed")
   assert.ok(await outboxProcessedAt(saved.id))
-  assert.equal(deliveries, 1)
+  assert.equal(deliveries, 0)
 })
 
 test("gated API recovery leaves an interrupted send uncertain without submitting twice", async () => {

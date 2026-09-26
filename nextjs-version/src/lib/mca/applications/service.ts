@@ -166,7 +166,7 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      // Reconcile the SAME delivery id after an uncertain network result; never mint a new send.
+      if (process.env.MCA_JOB_RUNTIME === "vercel_cron") throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
       await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',attempts=0,error_code=NULL,available_at=?,updated_at=?,actor_json=? WHERE id=? AND workspace_id=? AND state='failed'")
         .run(nowIso(), nowIso(), JSON.stringify(actor), prior.job_id, actor.workspaceId)
       return { jobId: prior.job_id }
@@ -185,6 +185,7 @@ export async function processInvitationEmail(actor: DealActor, job: BackgroundJo
   const attempt = await getDatabase().prepare<{ invitation_id: string; delivery: "sent" | "preview" | null }>("SELECT invitation_id,delivery FROM mca_application_invitation_deliveries WHERE workspace_id=? AND id=? AND job_id=?").get(actor.workspaceId, job.resource_id, job.id)
   if (!attempt) throw new AppError(404, "delivery_not_found", "Invitation delivery not found.")
   if (attempt.delivery) return { delivery: attempt.delivery }
+  if (process.env.MCA_JOB_RUNTIME === "vercel_cron" && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
   const row = await ownedInvitation(actor, attempt.invitation_id)
   if (!invitationActive(row)) throw invalidLink()
   assertInvitationEmailEnabled()
