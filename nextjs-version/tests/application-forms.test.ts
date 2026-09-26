@@ -43,6 +43,8 @@ const answers = {
 }
 
 before(async () => {
+  process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
+  process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
   fixture = await createPostgresTestDatabase("forms")
   Object.assign(process.env, fixture.env())
   delete process.env.MCA_BACKGROUND_JOBS

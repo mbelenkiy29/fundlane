@@ -522,13 +522,13 @@ export async function enqueueReceipt(input: Omit<ReceiptRecord, "id" | "state" |
   })
 }
 
-export async function listPendingReceipts(workspaceId?: string): Promise<ReceiptRecord[]> {
+export async function listPendingReceipts(workspaceId?: string, limit?: number): Promise<ReceiptRecord[]> {
   const now = nowIso()
   const rows = workspaceId
     ? await intakeDatabase().prepare(`SELECT * FROM intake_receipts WHERE workspace_id=? AND state IN ('pending','failed') AND last_error IS DISTINCT FROM 'company_paused_review_required'
-        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at`).all(workspaceId, now)
+        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at LIMIT ?`).all(workspaceId, now, limit ?? 1000000)
     : await intakeDatabase().prepare(`SELECT * FROM intake_receipts WHERE state IN ('pending','failed') AND last_error IS DISTINCT FROM 'company_paused_review_required'
-        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at`).all(now)
+        AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?) ORDER BY updated_at LIMIT ?`).all(now, limit ?? 1000000)
   return (rows as Row[]).map(receiptFromRow)
 }
 

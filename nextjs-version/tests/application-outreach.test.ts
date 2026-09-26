@@ -26,6 +26,8 @@ let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>> | undefined
 let connection: Awaited<ReturnType<typeof configureIntegration>>
 let otherConnection: Awaited<ReturnType<typeof configureIntegration>>
 const originalFetch = globalThis.fetch
+process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
+process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
 const originalEmailUrl = process.env.MCA_EMAIL_WEBHOOK_URL
 const origin = "https://fundlane.example.test"
 const workspace = "outreach-workspace", otherWorkspace = "outreach-other"
@@ -298,9 +300,11 @@ test("production without invitation email enabled disables Send and tells users 
   const originalNodeEnv = env.NODE_ENV
   const originalFlag = process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
   const originalWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  const originalWebhookToken = process.env.MCA_EMAIL_WEBHOOK_TOKEN
   try {
     env.NODE_ENV = "production"
     process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+    process.env.MCA_EMAIL_WEBHOOK_TOKEN = "synthetic-receiver-secret"
     delete process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED
     assert.equal(invitationEmailEnabled(), false)
 
@@ -315,6 +319,8 @@ test("production without invitation email enabled disables Send and tells users 
     else process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = originalFlag
     if (originalWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
     else process.env.MCA_EMAIL_WEBHOOK_URL = originalWebhook
+    if (originalWebhookToken === undefined) delete process.env.MCA_EMAIL_WEBHOOK_TOKEN
+    else process.env.MCA_EMAIL_WEBHOOK_TOKEN = originalWebhookToken
   }
 
   const routeSource = readFileSync(resolve(process.cwd(), "src/app/api/mca/applications/route.ts"), "utf8")
