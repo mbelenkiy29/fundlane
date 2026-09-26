@@ -6,6 +6,14 @@ const positiveLimit = (raw: string | undefined, fallback: number | null) => raw 
 
 export const trialAbuseLimitsEnabled = () => process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED === "true"
 
+export function trialFingerprintAction(): "flag" | "off" {
+  const configured = process.env.MCA_TRIAL_FINGERPRINT_ACTION
+  if (configured === undefined || configured === "flag") return "flag"
+  if (configured === "off") return "off"
+  console.warn("Invalid MCA_TRIAL_FINGERPRINT_ACTION; falling back to flag.")
+  return "flag"
+}
+
 async function owner(workspaceId: string, db: DbExecutor) {
   const row = await db.prepare<{user_id:string;email:string}>(`SELECT m.user_id,u.email FROM workspace_owners o
     JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id
@@ -61,7 +69,14 @@ export async function releaseTrialReservation(workspaceId:string, sessionId:stri
 
 export async function recordTrialGrant(workspaceId:string, subscription:Stripe.Subscription, client:Pick<Stripe,"paymentMethods"|"setupIntents">, db:DbExecutor) {
   if (!trialAbuseLimitsEnabled() || !subscription.trial_start || !subscription.trial_end) return
-  const identity = await owner(workspaceId,db)
+  // The reservation records who claimed this Checkout trial. Ownership may
+  // transfer before Stripe makes the resulting subscription visible.
+  const reserved = await db.prepare<{owner_user_id:string;owner_email:string;email_domain:string}>(
+    "SELECT owner_user_id,owner_email,email_domain FROM company_trial_reservations WHERE workspace_id=?"
+  ).get(workspaceId)
+  const identity = reserved
+    ? {userId:reserved.owner_user_id,email:reserved.owner_email,domain:reserved.email_domain}
+    : await owner(workspaceId,db)
   if (!identity) return
   let paymentMethod = subscription.default_payment_method
   if (!paymentMethod && subscription.pending_setup_intent) {
@@ -83,7 +98,7 @@ export async function recordTrialGrant(workspaceId:string, subscription:Stripe.S
     VALUES (?,?,?,?,?,?,?,?)`).run(workspaceId,subscription.id,identity.userId,identity.email,identity.domain,fingerprint,new Date(subscription.trial_start*1000).toISOString(),nowIso())
   else if (fingerprint && !existing.card_fingerprint) await db.prepare("UPDATE company_trial_grants SET card_fingerprint=? WHERE workspace_id=?").run(fingerprint,workspaceId)
   await db.prepare("DELETE FROM company_trial_reservations WHERE workspace_id=?").run(workspaceId)
-  if (!fingerprint || existing?.fingerprint_flagged_at || process.env.MCA_TRIAL_FINGERPRINT_ACTION === "off") return
+  if (!fingerprint || existing?.fingerprint_flagged_at || trialFingerprintAction() === "off") return
   const repeat = await db.prepare<{workspace_id:string}>("SELECT workspace_id FROM company_trial_grants WHERE card_fingerprint=? AND workspace_id<>? LIMIT 1").get(fingerprint,workspaceId)
   if (repeat) {
     const flagged = await db.prepare("UPDATE company_trial_grants SET fingerprint_flagged_at=?, fingerprint_prior_workspace_id=? WHERE workspace_id=? AND fingerprint_flagged_at IS NULL").run(nowIso(),repeat.workspace_id,workspaceId)

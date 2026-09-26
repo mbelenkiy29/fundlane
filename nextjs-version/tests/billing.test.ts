@@ -14,7 +14,7 @@ import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assert
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
-import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner } from "../src/lib/mca/trial-abuse"
+import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
 import type { DbExecutor } from "../src/lib/mca/db"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -108,6 +108,58 @@ test("trial grants limit repeat owners, keep public domains exempt, and flag fin
     assert.equal((await db.prepare<{fingerprint_prior_workspace_id:string}>("SELECT fingerprint_prior_workspace_id FROM company_trial_grants WHERE workspace_id=?").get(second.workspaceId))?.fingerprint_prior_workspace_id,first.workspaceId)
   } finally {
     for (const key of ["MCA_TRIAL_ABUSE_LIMITS_ENABLED","MCA_TRIAL_LIMIT_PER_USER","MCA_TRIAL_LIMIT_PER_EMAIL","MCA_TRIAL_LIMIT_PER_DOMAIN"]) delete process.env[key]
+  }
+})
+
+test("grant reconciliation keeps the owner who reserved Checkout after ownership transfers", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const original = await db.prepare<{user_id:string;email:string}>("SELECT m.user_id,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.id=?").get(first.membershipId)
+  assert.ok(original)
+  const sameOwner = await createWorkspaceWithAdmin({workspaceName:"Original owner's other company",adminName:"Owner",adminEmail:original.email,password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(sameOwner.workspaceId,sameOwner.membershipId,nowIso())
+  const replacement = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(replacement.workspaceId,replacement.membershipId,nowIso())
+  const replacementUser = await db.prepare<{user_id:string}>("SELECT user_id FROM memberships WHERE id=?").get(replacement.membershipId)
+  assert.ok(replacementUser)
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    const reservation = await db.prepare<{owner_user_id:string;owner_email:string;email_domain:string}>("SELECT owner_user_id,owner_email,email_domain FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId)
+    assert.deepEqual(reservation,{owner_user_id:original.user_id,owner_email:original.email.toLowerCase(),email_domain:"example.test"})
+    const newMembership = randomUUID()
+    await db.prepare("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)").run(newMembership,first.workspaceId,replacementUser.user_id,nowIso(),nowIso())
+    await db.prepare("UPDATE workspace_owners SET membership_id=?,updated_at=? WHERE workspace_id=?").run(newMembership,nowIso(),first.workspaceId)
+    const trial = {...subscription(first.customerId,5,"trialing"),trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600}
+    first.state.subscriptions.push(trial)
+    await syncWorkspaceBilling(first.workspaceId,first.client)
+    const grant = await db.prepare<{owner_user_id:string;owner_email:string;email_domain:string}>("SELECT owner_user_id,owner_email,email_domain FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId)
+    assert.deepEqual(grant,reservation)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId),undefined)
+    assert.equal(await trialAllowedForOwner(sameOwner.workspaceId,db),false,"the original owner still uses their one trial")
+    assert.equal(await trialAllowedForOwner(replacement.workspaceId,db),true,"the new owner did not claim this trial")
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("invalid fingerprint action warns and explicitly falls back to flag", () => {
+  const previous = process.env.MCA_TRIAL_FINGERPRINT_ACTION
+  const warnings:string[] = []
+  const originalWarn = console.warn
+  console.warn = (message: string) => { warnings.push(message) }
+  try {
+    process.env.MCA_TRIAL_FINGERPRINT_ACTION = "ignore"
+    assert.equal(trialFingerprintAction(),"flag")
+    assert.deepEqual(warnings,["Invalid MCA_TRIAL_FINGERPRINT_ACTION; falling back to flag."])
+    process.env.MCA_TRIAL_FINGERPRINT_ACTION = "off"
+    assert.equal(trialFingerprintAction(),"off")
+    delete process.env.MCA_TRIAL_FINGERPRINT_ACTION
+    assert.equal(trialFingerprintAction(),"flag")
+    assert.equal(warnings.length,1)
+  } finally {
+    console.warn = originalWarn
+    if (previous === undefined) delete process.env.MCA_TRIAL_FINGERPRINT_ACTION
+    else process.env.MCA_TRIAL_FINGERPRINT_ACTION = previous
   }
 })
 
