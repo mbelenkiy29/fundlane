@@ -19,6 +19,8 @@
 
 The [operations recovery runbook](operations-recovery.md) covers failed-job review, safe internal replay, outbound reconciliation and worker kill drills. `MCA_JOB_RECOVERY_ENABLED=false` by default gates the platform-admin endpoint; it does not add a scheduler or external resend.
 
+If an invitation email job failed as `company_paused` with zero attempts, the provider was never called. After recovery, an authorized user can select Retry email to create a new delivery with fresh approval and correlation IDs; the paused row stays failed for audit. A paused job with any earlier attempt still requires provider receipt reconciliation before another send.
+
 This is the source inventory and selected non-Render arrangement as of 2026-09-25. **Current production status for every row below: unverified from source; needs live inventory.** The 2026-09-14 [Render audit](render-deployment.md) recorded failed worker builds, an empty queue, only Stripe Supabase functions, and the Stripe sync cron at that time. It is historical evidence, not a current live inventory. No hosted service was contacted for this change.
 
 ## Selected arrangement

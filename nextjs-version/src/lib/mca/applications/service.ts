@@ -162,14 +162,19 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
   return withTransaction(async () => {
     const row = await ownedInvitation(actor, id, true)
     if (!invitationActive(row)) throw invalidLink()
-    const prior = await getDatabase().prepare<{ id: string; job_id: string; state: string; delivery: string | null }>(`SELECT d.id,d.job_id,d.delivery,j.state FROM mca_application_invitation_deliveries d JOIN mca_background_jobs j ON j.id=d.job_id
+    const prior = await getDatabase().prepare<{ id: string; job_id: string; state: string; delivery: string | null; attempts: number; error_code: string | null }>(`SELECT d.id,d.job_id,d.delivery,j.state,j.attempts,j.error_code FROM mca_application_invitation_deliveries d JOIN mca_background_jobs j ON j.id=d.job_id
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      if (process.env.MCA_JOB_RUNTIME === "vercel_cron") throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
-      await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',attempts=0,error_code=NULL,available_at=?,updated_at=?,actor_json=? WHERE id=? AND workspace_id=? AND state='failed'")
-        .run(nowIso(), nowIso(), JSON.stringify(actor), prior.job_id, actor.workspaceId)
-      return { jobId: prior.job_id }
+      if (process.env.MCA_JOB_RUNTIME === "vercel_cron") {
+        // A pause before the first attempt cannot have reached the provider. A fresh
+        // delivery records the user's renewed approval after recovery.
+        if (prior.error_code !== "company_paused" || prior.attempts !== 0) throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
+      } else {
+        await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',attempts=0,error_code=NULL,available_at=?,updated_at=?,actor_json=? WHERE id=? AND workspace_id=? AND state='failed'")
+          .run(nowIso(), nowIso(), JSON.stringify(actor), prior.job_id, actor.workspaceId)
+        return { jobId: prior.job_id }
+      }
     }
     const same = await getDatabase().prepare<{ job_id: string }>("SELECT job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND request_key=?").get(id, requestKey)
     if (same) return { jobId: same.job_id }
