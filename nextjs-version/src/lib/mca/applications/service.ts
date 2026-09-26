@@ -2,7 +2,7 @@ import "server-only"
 
 import { requireMembershipAccess } from "../auth"
 import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken } from "../crypto"
-import { getDatabase, newId, nowIso, withTransaction } from "../db"
+import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
@@ -11,7 +11,7 @@ import { requestCorrelationId } from "../http"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
 import { effectivePageVisibility, isActionAllowed } from "../policy"
 import { getWorkspaceSettings } from "../workspaces"
-import { invitationInput, type ApplicationInvitation, type InvitationDelivery } from "./contracts"
+import { invitationInput, reconcileDeliveryInput, type ApplicationInvitation, type InvitationDelivery } from "./contracts"
 import { emailSenderVerified } from "../intake/email-readiness"
 
 export interface InvitationRecord {
@@ -71,7 +71,7 @@ export async function ownedInvitation(actor: DealActor, id: string, lock = false
 export async function listApplicationInvitations(actor: DealActor): Promise<ApplicationInvitation[]> {
   await assertApplicationAccess(actor)
   const rows = await getDatabase().prepare<InvitationRecord>(`${selection} WHERE a.workspace_id=?${admin(actor) ? "" : " AND a.membership_id=?"} ORDER BY a.created_at DESC,a.id DESC`).all(actor.workspaceId, ...(admin(actor) ? [] : [actor.membershipId]))
-  const deliveries = await getDatabase().prepare<{ invitation_id: string; id: string; created_at: string; accepted_at: string | null; delivery: InvitationDelivery["delivery"]; state: InvitationDelivery["state"]; error_code: string | null }>(`SELECT d.*, j.state, j.error_code FROM mca_application_invitation_deliveries d
+  const deliveries = await getDatabase().prepare<{ invitation_id: string; id: string; purpose: string; created_at: string; accepted_at: string | null; delivery: InvitationDelivery["delivery"]; state: InvitationDelivery["state"]; error_code: string | null; attempts: number; result_json: string | null }>(`SELECT d.*, j.state, j.error_code, j.attempts, j.result_json FROM mca_application_invitation_deliveries d
     JOIN mca_application_invitations a ON a.id=d.invitation_id AND a.workspace_id=d.workspace_id
     JOIN mca_background_jobs j ON j.id=d.job_id AND j.workspace_id=d.workspace_id
     WHERE a.workspace_id=?${admin(actor) ? "" : " AND a.membership_id=?"} ORDER BY d.created_at DESC,d.id DESC`).all(actor.workspaceId, ...(admin(actor) ? [] : [actor.membershipId]))
@@ -83,7 +83,9 @@ export async function listApplicationInvitations(actor: DealActor): Promise<Appl
     openedAt: row.opened_at, startedAt: row.started_at, submittedAt: row.submitted_at, active: invitationActive(row),
     requestedAmountCents: row.requested_amount_cents, lastStep: row.last_step, reminderCount: Number(row.reminder_count ?? 0),
     intakeId: row.intake_id, intakeError: row.intake_error, dealId: row.deal_id,
-    deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code })),
+    deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code,
+      requiresReconciliation: (process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(d.result_json)) && d.state === "failed" && !d.delivery && !(d.error_code === "company_paused" && d.attempts === 0),
+    })),
   }))
 }
 export async function createApplicationInvitation(actor: DealActor, input: unknown): Promise<{ id: string }> {
@@ -162,11 +164,11 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
   return withTransaction(async () => {
     const row = await ownedInvitation(actor, id, true)
     if (!invitationActive(row)) throw invalidLink()
-    const prior = await getDatabase().prepare<{ id: string; job_id: string; state: string; delivery: string | null; attempts: number; error_code: string | null }>(`SELECT d.id,d.job_id,d.delivery,j.state,j.attempts,j.error_code FROM mca_application_invitation_deliveries d JOIN mca_background_jobs j ON j.id=d.job_id
+    const prior = await getDatabase().prepare<{ id: string; job_id: string; state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }>(`SELECT d.id,d.job_id,d.delivery,j.state,j.attempts,j.error_code,j.result_json FROM mca_application_invitation_deliveries d JOIN mca_background_jobs j ON j.id=d.job_id
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      if (process.env.MCA_JOB_RUNTIME === "vercel_cron") {
+      if (process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(prior.result_json)) {
         // A pause before the first attempt cannot have reached the provider. A fresh
         // delivery records the user's renewed approval after recovery.
         if (prior.error_code !== "company_paused" || prior.attempts !== 0) throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
@@ -185,16 +187,60 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
     return { jobId: job.id }
   })
 }
+export function isVercelDeliveryAttempt(resultJson: string | null): boolean {
+  if (!resultJson) return false
+  try { return (JSON.parse(resultJson) as { deliveryRuntime?: string }).deliveryRuntime === "vercel_cron" } catch { return false }
+}
+export async function markVercelDeliveryAttempt(job: BackgroundJob): Promise<void> {
+  if (process.env.MCA_JOB_RUNTIME !== "vercel_cron") return
+  const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET result_json=? WHERE workspace_id=? AND id=? AND state='running' AND lease_token=?")
+    .run(JSON.stringify({ deliveryRuntime: "vercel_cron" }), job.workspace_id, job.id, job.lease_token)
+  if (!saved.changes) throw new Error("background_job_lease_lost")
+}
+export async function reconcileInvitationDelivery(actor: DealActor, invitationId: string, input: unknown): Promise<void> {
+  await assertApplicationAccess(actor, true)
+  if (!admin(actor)) throw new AppError(403, "admin_required", "An administrator must reconcile email delivery.")
+  const parsed = reconcileDeliveryInput.safeParse(input)
+  if (!parsed.success) throw new AppError(422, "invalid_reconciliation", "Choose a provider outcome and enter a receipt or lookup reference (at least 10 characters).")
+  const { deliveryId, outcome, evidence } = parsed.data
+  await withTransaction(async () => {
+    const invitation = await ownedInvitation(actor, invitationId, true)
+    const delivery = await getDatabase().prepare<{ job_id: string; purpose: string; state: string; delivery: string | null; attempts: number; error_code: string | null }>(`SELECT d.job_id,d.purpose,j.state,d.delivery,j.attempts,j.error_code FROM mca_application_invitation_deliveries d
+      JOIN mca_background_jobs j ON j.id=d.job_id AND j.workspace_id=d.workspace_id
+      WHERE d.workspace_id=? AND d.invitation_id=? AND d.id=? FOR UPDATE OF d,j`).get(actor.workspaceId, invitationId, deliveryId)
+    if (!delivery || delivery.state !== "failed" || delivery.delivery || (delivery.error_code === "company_paused" && delivery.attempts === 0)) throw new AppError(409, "reconciliation_unavailable", "This delivery is not an uncertain failed send.")
+    const latest = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_application_invitation_deliveries WHERE workspace_id=? AND invitation_id=? ORDER BY created_at DESC,id DESC LIMIT 1").get(actor.workspaceId, invitationId)
+    if (latest?.id !== deliveryId) throw new AppError(409, "reconciliation_unavailable", "Review the latest delivery before reconciling another attempt.")
+    if (outcome === "not_sent" && !invitationActive(invitation)) throw invalidLink()
+    const at = nowIso()
+    if (outcome === "accepted") {
+      await getDatabase().prepare("UPDATE mca_application_invitation_deliveries SET delivery='sent',accepted_at=? WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, deliveryId)
+      if (delivery.purpose === "invite") await getDatabase().prepare("UPDATE mca_application_invitations SET sent_at=COALESCE(sent_at,?) WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, invitationId)
+      else await getDatabase().prepare("UPDATE mca_application_invitations SET reminder_count=reminder_count+1,reminded_at=? WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, invitationId)
+      await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',result_json=?,error_code=NULL,updated_at=? WHERE workspace_id=? AND id=?")
+        .run(JSON.stringify({ delivery: "sent", reconciled: true }), at, actor.workspaceId, delivery.job_id)
+    } else {
+      // Reuse the provider correlation/idempotency key. The current admin's approval
+      // replaces the stale actor, while the delivery's original identity stays fixed.
+      await getDatabase().prepare(`UPDATE mca_background_jobs SET state='queued',attempts=0,error_code=NULL,
+        lease_token=NULL,lease_expires_at=NULL,available_at=?,created_at=?,updated_at=?,actor_json=? WHERE workspace_id=? AND id=?`)
+        .run(at, at, at, JSON.stringify(actor), actor.workspaceId, delivery.job_id)
+    }
+    await recordAuditEvent({ context: actor, action: "application_invitation_delivery_reconciled", resourceType: "application_invitation_delivery", resourceId: deliveryId,
+      metadata: { invitationId, jobId: delivery.job_id, purpose: delivery.purpose, outcome, evidence }, correlationId: actor.correlationId })
+  })
+}
 export async function processInvitationEmail(actor: DealActor, job: BackgroundJob): Promise<{ delivery: "sent" | "preview" }> {
   await assertApplicationAccess(actor, true)
   const attempt = await getDatabase().prepare<{ invitation_id: string; delivery: "sent" | "preview" | null }>("SELECT invitation_id,delivery FROM mca_application_invitation_deliveries WHERE workspace_id=? AND id=? AND job_id=?").get(actor.workspaceId, job.resource_id, job.id)
   if (!attempt) throw new AppError(404, "delivery_not_found", "Invitation delivery not found.")
   if (attempt.delivery) return { delivery: attempt.delivery }
-  if (process.env.MCA_JOB_RUNTIME === "vercel_cron" && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
+  if ((process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(job.result_json)) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
   const row = await ownedInvitation(actor, attempt.invitation_id)
   if (!invitationActive(row)) throw invalidLink()
   assertInvitationEmailEnabled()
   const { origin } = JSON.parse(job.payload_json) as { origin: string }
+  await markVercelDeliveryAttempt(job)
   const result = await deliverEmail({ recipient: decryptSensitive(row.email_cipher, row.workspace_id), template: "application_invitation",
     actionUrl: invitationUrl(row, origin), expiresAt: row.expires_at,
     data: { clientName: row.client_name, employeeName: row.employee_name, formName: row.form_name } }, { correlationId: job.resource_id, workspaceId: actor.workspaceId, approvedAt: job.created_at })

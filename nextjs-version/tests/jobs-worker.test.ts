@@ -465,6 +465,36 @@ test("cron rejects unregistered kinds before claiming any job", async () => {
   }
 })
 
+test("enabled cron runs business maintenance before its bounded queue claim", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  const oldMaintenance = process.env.MCA_JOB_RUNTIME_MAINTENANCE
+  const oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  const oldAssistant = process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+  try {
+    const past = new Date(Date.now() - 3_600_000).toISOString()
+    await getDatabase().prepare("INSERT INTO mca_assistant_conversations(id,workspace_id,user_id,deal_id,created_at) VALUES (?,?,?,?,?)")
+      .run("cron-maintenance-conversation", actor().workspaceId, "synthetic-maintenance-user", dealId, past)
+    await getDatabase().prepare("INSERT INTO mca_assistant_runs(id,conversation_id,request_id,status,created_at,expires_at) VALUES (?,?,?,'running',?,?)")
+      .run("cron-maintenance-run", "cron-maintenance-conversation", "cron-maintenance-request", past, past)
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_MAINTENANCE = "true"
+    process.env.MCA_JOB_RUNTIME_KINDS = "export"
+    process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = "true"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).enabled, true)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM mca_assistant_runs WHERE id=?").get("cron-maintenance-run"))?.status, "failed")
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldMaintenance === undefined) delete process.env.MCA_JOB_RUNTIME_MAINTENANCE; else process.env.MCA_JOB_RUNTIME_MAINTENANCE = oldMaintenance
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
+    if (oldAssistant === undefined) delete process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED; else process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = oldAssistant
+  }
+})
+
 test("explicit business kind fails a revoked API key and keeps job results company scoped", async () => {
   await addWorkspace("workspace-jobs-other")
   const revoked: DealActor = { ...actor(), workspaceId: "workspace-jobs-other", source: "api_key", apiKeyId: "revoked-key", scopes: ["intake:write"] }

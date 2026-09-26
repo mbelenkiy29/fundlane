@@ -17,5 +17,6 @@ export function runtimeKinds(env: Record<string, string | undefined> = process.e
     ? ["export_create", "export", ...(env.MCA_AUTO_SUBMIT_ENABLED === "true" ? ["auto_submit"] : [])]
     : configured.split(",").map(kind => kind.trim())
   if (requested.some(kind => !known.has(kind))) throw new AppError(503, "job_runtime_kinds_invalid", "Invalid MCA_JOB_RUNTIME_KINDS: use only registered non-native job kinds.")
+  if (requested.includes("auto_submit") && env.MCA_AUTO_SUBMIT_ENABLED !== "true") throw new AppError(503, "auto_submit_disabled", "MCA_JOB_RUNTIME_KINDS includes auto_submit, but MCA_AUTO_SUBMIT_ENABLED is not true.")
   return [...new Set(requested)].filter(kind => kind !== "auto_submit" || env.MCA_AUTO_SUBMIT_ENABLED === "true") as BackgroundJobKind[]
 }

@@ -9,7 +9,8 @@ test("unset kind override preserves the export and gated auto-submit defaults", 
 })
 
 test("explicit kinds are validated, deduplicated and auto-submit stays gated", () => {
-  assert.deepEqual(runtimeKinds({ MCA_JOB_RUNTIME_KINDS: " submission_delivery, import_commit,submission_delivery,auto_submit" }), ["submission_delivery", "import_commit"])
+  assert.throws(() => runtimeKinds({ MCA_JOB_RUNTIME_KINDS: " submission_delivery, import_commit,submission_delivery,auto_submit" }), { code: "auto_submit_disabled" })
+  assert.deepEqual(runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "submission_delivery,auto_submit,submission_delivery", MCA_AUTO_SUBMIT_ENABLED: "true" }), ["submission_delivery", "auto_submit"])
   assert.ok(RUNTIME_KINDS.includes("application_invitation_email"))
   assert.throws(() => runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "document_scan" }), { code: "job_runtime_kinds_invalid" })
   assert.throws(() => runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "export,unknown" }), { code: "job_runtime_kinds_invalid" })
