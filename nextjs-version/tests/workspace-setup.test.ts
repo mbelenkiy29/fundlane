@@ -242,12 +242,28 @@ test("readiness requires a usable approved form for configuration and document p
     VALUES (?,?,?,'setup-form-document','statement.pdf','statement.pdf','application/pdf',1,'synthetic-checksum','bank_statement',1,'setup-form-document','upload','ready',?,?)`)
     .run("document-setup-form-state", workspaceId, "deal-setup-form-state", now, now)
   items = await phases()
-  assert.equal(items.find((item) => item.id === "documents")?.phase, "tested")
+  assert.equal((await getReadinessFacts(workspaceId)).readyDocuments, 0)
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "configured")
   await db.prepare(`INSERT INTO intake_events
-    (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,deal_id,created_at,updated_at)
-    VALUES (?,?,'native',?,'checksum','synthetic','created',?,?,?)`).run("intake-setup-form-state", workspaceId, "form-state-event", "deal-setup-form-state", now, now)
+    (id,workspace_id,integration_id,provider,provider_event_id,payload_checksum,application_cipher,state,deal_id,created_at,updated_at)
+    VALUES (?,?,?,'native',?,'checksum','synthetic','created',?,?,?)`).run("intake-setup-form-state", workspaceId, "form-setup-state", "form-state-event", "deal-setup-form-state", now, now)
   items = await phases()
   assert.equal(items.find((item) => item.id === "form_intake")?.phase, "tested")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "configured")
+
+  await db.prepare(`INSERT INTO mca_background_jobs
+    (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
+    VALUES (?,?,'intake_process',?,'setup-intake-job','{}','{}','setup-hash','complete',?,?,?)`)
+    .run("job-setup-form-state", workspaceId, "intake-setup-form-state", now, now, now)
+  await db.prepare(`INSERT INTO intake_processing
+    (intake_id,workspace_id,job_id,progress_json,checked_at,updated_at) VALUES (?,?,?,?,?,?)`)
+    .run("intake-setup-form-state", workspaceId, "job-setup-form-state", JSON.stringify({ stages: { documents: { state: "blocked" } } }), now, now)
+  assert.equal((await getReadinessFacts(workspaceId)).readyDocuments, 0)
+  await db.prepare("UPDATE intake_processing SET progress_json=? WHERE intake_id=?")
+    .run(JSON.stringify({ stages: { documents: { state: "complete" } } }), "intake-setup-form-state")
+  items = await phases()
+  assert.equal((await getReadinessFacts(workspaceId)).readyDocuments, 1)
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "tested")
 
   await db.prepare("UPDATE intake_integrations SET credential_expires_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", "form-setup-state")
   items = await phases()
