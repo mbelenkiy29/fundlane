@@ -647,13 +647,22 @@ test("an invitation needing a paid seat preserves its scheduled reduction",async
     const scheduleId=sub.schedule as string
     const writesBefore=http.calls.filter(call=>call.method==="POST").length
     await assert.rejects(inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Unpaid invitee",role:"rep"},"http://localhost:3000",client),
-      {code:"billing_scheduled_reduction_pending",message:/Resolve the scheduled seat reduction/})
+      {code:"billing_scheduled_reduction_pending",message:/Cancel the scheduled seat reduction in Plans & Billing/})
     assert.equal(http.calls.filter(call=>call.method==="POST").length,writesBefore,"failed invitation makes no Stripe writes")
     assert.equal(sub.schedule,scheduleId)
     assert.equal(http.schedules.get(scheduleId).status,"active")
     assert.equal(http.schedules.get(scheduleId).phases[1].items[1].quantity,4)
     assert.equal((await getDatabase().prepare<{pending_seats:number;stripe_schedule_id:string}>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,5)
     assert.equal(await licensedSeatCount(f.workspaceId),5,"failed invitation does not reserve a seat")
+    await changeBillingSeats(f.workspaceId,5,f.userId,client)
+    assert.equal(sub.schedule,null,"manual seat action releases the reduction")
+    assert.equal(http.schedules.get(scheduleId).status,"released")
+    assert.equal((await getDatabase().prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,null)
+    let paidUpdates=0
+    const paidClient={...client,subscriptions:{list:sdk.subscriptions.list.bind(sdk.subscriptions),retrieve:sdk.subscriptions.retrieve.bind(sdk.subscriptions),update:async()=>{paidUpdates++;sub.items.data[1].quantity=5;return sub}}} as unknown as StripeBillingClient
+    await inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Paid invitee",role:"rep"},"http://localhost:3000",paidClient)
+    assert.equal(paidUpdates,1,"automatic increase resumes after manual cancellation")
+    assert.equal(await licensedSeatCount(f.workspaceId),6)
   } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES;await http.close()}
 })
 test("reconciliation repairs a released schedule whose local update rolled back",async()=>{

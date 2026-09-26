@@ -830,34 +830,46 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     }
     if (!current.subscriptionId || current.status !== "active" || current.paymentPastDue) throw new AppError(409, "billing_payment_required", "An active paid subscription is required to change purchased seats.")
     const state = await db.prepare<{ pending_seats: number | null; stripe_schedule_id: string | null }>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-    const reviseAutomaticReduction = automatic && !!state?.pending_seats && (selectedSeats !== state.pending_seats || repairReduction) && selectedSeats <= current.seatLimit
-    const replaceAutomaticReduction = automatic && !!state?.pending_seats && selectedSeats > current.seatLimit
-    if (billingSeatSyncEnabled() && replaceAutomaticReduction) throw new AppError(409,"billing_scheduled_reduction_pending","Resolve the scheduled seat reduction in Plans & Billing before adding a paid seat.")
-    if (state?.pending_seats && !reviseAutomaticReduction && !replaceAutomaticReduction) {
+    const reviseReduction = !!state?.pending_seats && (automatic || billingSeatSyncEnabled()) && (selectedSeats !== state.pending_seats || repairReduction) && (automatic ? selectedSeats <= current.seatLimit : selectedSeats < current.seatLimit)
+    const cancelReduction = !!state?.pending_seats && !automatic && billingSeatSyncEnabled() && selectedSeats >= current.seatLimit
+    if (automatic && state?.pending_seats && selectedSeats > current.seatLimit) throw new AppError(409,"billing_scheduled_reduction_pending","Cancel the scheduled seat reduction in Plans & Billing before adding a paid seat.")
+    if (state?.pending_seats && !reviseReduction && !cancelReduction) {
       if (state.pending_seats === selectedSeats) return getWorkspaceBilling(workspaceId)
       throw new AppError(409, "billing_change_pending", "A seat reduction is already scheduled. Wait for renewal before requesting another change.")
     }
     const sub = await client.subscriptions.retrieve(current.subscriptionId)
     if (sub.pending_update || sub.cancel_at_period_end || sub.cancel_at) throw new AppError(409, "billing_change_pending", "Resolve the pending subscription change before changing seats.")
-    if (selectedSeats === current.seatLimit && !reviseAutomaticReduction) return getWorkspaceBilling(workspaceId)
+    if (selectedSeats === current.seatLimit && !cancelReduction && !reviseReduction) return getWorkspaceBilling(workspaceId)
     const additional = sub.items.data.find(i => i.price.id === ids.seats)
-    if (selectedSeats > current.seatLimit) {
+    if (cancelReduction) {
       if (sub.schedule) {
         const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id
-        if (!replaceAutomaticReduction || state?.stripe_schedule_id !== scheduleId) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
+        if (state?.stripe_schedule_id !== scheduleId) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before changing seats.")
         const schedule = await client.subscriptionSchedules.retrieve(scheduleId)
         const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
         if (resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.status!=="active" || schedule.end_behavior==="cancel" ||
-          schedule.metadata?.workspace_id!==workspaceId || scheduledRenewalSeats(schedule)===null)
-          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before increasing seats.")
+          schedule.metadata?.workspace_id!==workspaceId || schedule.metadata?.selected_seats!==String(state.pending_seats) || scheduledRenewalSeats(schedule)!==state.pending_seats)
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
         await client.subscriptionSchedules.release(scheduleId,{preserve_cancel_date:true},{idempotencyKey:`fundlane-release-reduction-${scheduleId}-${selectedSeats}`})
         releasedSchedule = true
-        await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
       } else if (state?.pending_seats) {
         // A previous attempt may have released Stripe's schedule before its DB transaction rolled back.
-        if (!replaceAutomaticReduction || !state.stripe_schedule_id) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before increasing seats.")
-        await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
+        if (!state.stripe_schedule_id) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
+        const schedule = await client.subscriptionSchedules.retrieve(state.stripe_schedule_id)
+        const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
+        if (schedule.status!=="released" || resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.metadata?.workspace_id!==workspaceId || schedule.metadata?.selected_seats!==String(state.pending_seats))
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
       }
+      const confirmed = await client.subscriptions.retrieve(sub.id)
+      if (confirmed.schedule) throw new AppError(503,"billing_schedule_unverified","The scheduled reduction could not yet be canceled. Refresh billing and retry.")
+      await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
+      if (selectedSeats === current.seatLimit) {
+        await recordAuditEvent({context:{workspaceId,userId:actorUserId},action:"billing.seat_reduction_canceled",resourceType:"workspace",resourceId:workspaceId,metadata:{seats:current.seatLimit},executor:db})
+        return getWorkspaceBilling(workspaceId)
+      }
+    }
+    if (selectedSeats > current.seatLimit) {
+      if (sub.schedule && !cancelReduction) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
       // Stripe pending updates do not accept automatic_tax. Enable it separately
       // before invoicing the proration when the feature is activated on an older subscription.
       if (stripeTaxEnabled() && !sub.automatic_tax?.enabled) await client.subscriptions.update(sub.id,
@@ -886,9 +898,9 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       } else schedule = await creation()
       const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
       if (resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.status!=="active" || schedule.end_behavior==="cancel" ||
-        (schedule.metadata?.workspace_id && schedule.metadata.workspace_id!==workspaceId) || (!reviseAutomaticReduction && schedule.metadata?.selected_seats && schedule.metadata.selected_seats!==String(selectedSeats))) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
+        (schedule.metadata?.workspace_id && schedule.metadata.workspace_id!==workspaceId) || (!reviseReduction && schedule.metadata?.selected_seats && schedule.metadata.selected_seats!==String(selectedSeats))) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
       const phase = schedule.phases[0]
-      const generation = reviseAutomaticReduction ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed'").get(workspaceId))?.count ?? 0 : null
+      const generation = reviseReduction ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed'").get(workspaceId))?.count ?? 0 : null
       await client.subscriptionSchedules.update(schedule.id, { metadata: { workspace_id: workspaceId, selected_seats: String(selectedSeats) }, end_behavior: "release", proration_behavior: "none", phases: [
         { start_date: phase.start_date, end_date: phase.end_date, items: sub.items.data.map(i => ({ price: i.price.id, quantity: i.quantity ?? 1 })), proration_behavior: "none", ...automaticTaxWhenEnabled() },
         { start_date: phase.end_date, items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])], proration_behavior: "none", duration: { interval: "month", interval_count: 1 }, ...automaticTaxWhenEnabled() },

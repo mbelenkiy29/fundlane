@@ -39,9 +39,9 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
   const minimumSeats=state?.seatSyncEnabled&&!state.seatsCountPendingInvites?Math.max(1,state.activeSeats):Math.max(1,state?.occupiedSeats??0)
   const load=useCallback(async()=>{ const result=await requestJson<BillingResponse>("/api/billing");setState(result);setPreview(null);setSeats(result.state?.selected_seats??result.billing?.seatLimit??1) },[])
   useEffect(()=>{void load().catch(e=>setError(e instanceof Error?e.message:"Billing could not be loaded."))},[load])
-  const action=useCallback(async(kind:"checkout"|"portal"|"seats"|"sync"|"cancel")=>{
+  const action=useCallback(async(kind:"checkout"|"portal"|"seats"|"sync"|"cancel", selectedSeats = seats)=>{
     setBusy(true);setError("");setNotice("")
-    try {const result=await requestJson<{url?:string;cancelAt?:string|null;alreadyCanceled?:boolean}>(`/api/billing/${kind}`,{method:"POST",body:JSON.stringify(kind==="checkout"?{selectedSeats:seats,onboarding}:kind==="seats"?{selectedSeats:seats}:kind==="portal"?{onboarding}:{})});if(result.url){window.location.assign(result.url);return}await load();setNotice(kind==="cancel"?(result.alreadyCanceled?"Subscription is already canceled. Outstanding invoices remain due.":`Cancellation confirmed for ${result.cancelAt?date(result.cancelAt):"the current period end"}. Outstanding invoices remain due.`):kind==="seats"?"Seat change submitted. Increases activate after payment; reductions take effect at renewal.":"Billing refreshed.")}
+    try {const result=await requestJson<{url?:string;cancelAt?:string|null;alreadyCanceled?:boolean}>(`/api/billing/${kind}`,{method:"POST",body:JSON.stringify(kind==="checkout"?{selectedSeats,onboarding}:kind==="seats"?{selectedSeats}:kind==="portal"?{onboarding}:{})});if(result.url){window.location.assign(result.url);return}await load();setNotice(kind==="cancel"?(result.alreadyCanceled?"Subscription is already canceled. Outstanding invoices remain due.":`Cancellation confirmed for ${result.cancelAt?date(result.cancelAt):"the current period end"}. Outstanding invoices remain due.`):kind==="seats"?"Seat change submitted. Increases activate after payment; reductions take effect at renewal.":"Billing refreshed.")}
     catch(e){setError(e instanceof Error?e.message:"Billing action failed.")}finally{setBusy(false)}
   },[load,onboarding,seats])
   const previewIncrease=useCallback(async()=>{
@@ -64,6 +64,7 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
         <p>Selected paid seats: {state.state?.selected_seats??1} · Purchased seats: {state.billing?.subscriptionId?state.billing.seatLimit:0}</p>
         {state.billing?.subscriptionId&&<p>Current monthly price: {formatBillingMoney(monthlyPriceCents(state.billing.seatLimit))} USD · Subscription: {state.billing.status}</p>}
         {state.state?.pending_seats&&<p>Scheduled seats: {state.state.pending_seats} ({formatBillingMoney(monthlyPriceCents(state.state.pending_seats))}/month), effective {state.state.pending_seats_at?date(state.state.pending_seats_at):"at renewal"}. {state.seatSyncEnabled&&!state.seatsCountPendingInvites?"Pending invitations use a licensed seat when accepted.":"This lower limit applies to new invitations now."}</p>}
+        {state.seatSyncEnabled&&state.state?.pending_seats&&state.billing?.status==="active"&&<Button variant="outline" disabled={busy||!state.enabled} onClick={()=>void action("seats",state.billing!.seatLimit)}>Cancel scheduled seat reduction</Button>}
         {state.billing?.periodEnd&&<p>Current period ends {date(state.billing.periodEnd)}.</p>}
       </CardContent></Card>
       <BillingRecoveryDetails recovery={state.recovery}/>
