@@ -12,6 +12,7 @@ import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { GET as runCron } from "../src/app/api/cron/jobs/route"
+import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
@@ -25,6 +26,7 @@ delete process.env.MCA_EMAIL_WEBHOOK_URL
 const previousJobs = process.env.MCA_BACKGROUND_JOBS
 const previousVercel = process.env.VERCEL
 const previousPoolMax = process.env.MCA_DB_POOL_MAX
+const previousNativeExecutor = process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
 const actor = (): DealActor => ({
@@ -66,6 +68,7 @@ function countingScanner() {
 let dealId = ""
 before(async () => {
   process.env.MCA_BACKGROUND_JOBS = "enabled"
+  process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = "true"
   delete process.env.VERCEL
   testDatabase = await createPostgresTestDatabase("jobs_worker")
   process.env.DATABASE_URL = testDatabase.databaseUrl
@@ -83,6 +86,8 @@ after(async () => {
   else process.env.VERCEL = previousVercel
   if (previousPoolMax === undefined) delete process.env.MCA_DB_POOL_MAX
   else process.env.MCA_DB_POOL_MAX = previousPoolMax
+  if (previousNativeExecutor === undefined) delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+  else process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = previousNativeExecutor
 })
 
 test("Vercel/jobs-enabled deal uploads enqueue document_scan and do not promote until the worker runs", async () => {
@@ -234,6 +239,23 @@ test("heartbeat is written even when the queue is empty", async () => {
   assert.ok(heartbeat?.document_worker_heartbeat_at)
 })
 
+test("legacy scan completion stays unchanged when both new runtime flags are unset", async () => {
+  const native = process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+  const cron = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  try {
+    delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+    delete process.env.MCA_DOCUMENT_JOB_RUNTIME
+    setDocumentScannerForTests(undefined)
+    const stored = await storeDocument(actor(), { dealId, idempotencyKey: "legacy-unavailable-scan", filename: "legacy.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    assert.equal(await runNextBackgroundJob(["document_scan"]), true)
+    assert.equal((await getDocument(actor(), stored.id)).processingState, "pending_scan")
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(stored.id))?.state, "complete")
+  } finally {
+    if (native === undefined) delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR; else process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = native
+    if (cron === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = cron
+  }
+})
+
 test("unconfigured scan completion requeues on retry so a later worker actually scans", async () => {
   setDocumentScannerForTests(undefined)
   const stored = await storeDocument(actor(), {
@@ -248,10 +270,11 @@ test("unconfigured scan completion requeues on retry so a later worker actually 
   assert.equal(stored.processingState, "pending_scan")
   assert.equal(await runNextBackgroundJob(), true)
   assert.equal((await getDocument(actor(), stored.id)).processingState, "pending_scan")
-  const completed = await getDatabase().prepare<{ state: string }>(
-    "SELECT state FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
+  const completed = await getDatabase().prepare<{ state: string; error_code: string; id: string }>(
+    "SELECT id, state, error_code FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
   ).get(actor().workspaceId, stored.id)
-  assert.equal(completed?.state, "complete")
+  assert.equal(completed?.state, "queued")
+  assert.equal(completed?.error_code, "scanner_unavailable")
 
   const scanner = countingScanner()
   const retried = await retryDocumentScan(actor(), stored.id)
@@ -261,6 +284,7 @@ test("unconfigured scan completion requeues on retry so a later worker actually 
     "SELECT state FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan' AND state IN ('queued','running')",
   ).get(actor().workspaceId, stored.id)
   assert.equal(requeued?.state, "queued")
+  await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", completed!.id)
   assert.equal(await runNextBackgroundJob(), true)
   assert.equal(scanner.count(), 1)
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
@@ -289,8 +313,8 @@ test("document_scan enqueue uses a durable system actor so expired user sessions
     source: "test",
   })
   assert.equal(stored.processingState, "pending_scan")
-  const enqueued = await getDatabase().prepare<{ state: string; actor_json: string }>(
-    "SELECT state, actor_json FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
+  const enqueued = await getDatabase().prepare<{ id: string; state: string; actor_json: string }>(
+    "SELECT id, state, actor_json FROM mca_background_jobs WHERE workspace_id = ? AND resource_id = ? AND kind = 'document_scan'",
   ).get(actor().workspaceId, stored.id)
   const storedActor = JSON.parse(enqueued?.actor_json ?? "{}") as DealActor
   assert.equal(enqueued?.state, "queued")
@@ -309,6 +333,7 @@ test("document_scan enqueue uses a durable system actor so expired user sessions
   ).get(actor().workspaceId, stored.id)
   assert.equal(requeued?.state, "queued")
   assert.equal(JSON.parse(requeued?.actor_json ?? "{}").source, "system")
+  await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", enqueued!.id)
   assert.equal(await runNextBackgroundJob(), true)
   assert.equal(scanner.count(), 1)
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
@@ -496,5 +521,98 @@ test("maximum-size synthetic private document retries after a killed claim", asy
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
   const final = await getDatabase().prepare<{ id: string; attempts: number; state: string }>("SELECT id,attempts,state FROM mca_background_jobs WHERE id=?").get(first!.id)
   assert.deepEqual(final, { id: first!.id, attempts: 2, state: "complete" })
+  assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM mca_documents WHERE workspace_id=? AND idempotency_key='max-private-retry'").get(actor().workspaceId))?.count, 1)
   t.diagnostic(JSON.stringify({ bytes: bytes.byteLength, durationMs: Math.round(performance.now() - started), firstJobId: first!.id, retryJobId: final.id, privateStorage: true, externalSends: 0 }))
+})
+
+test("document cron defaults off and rejects missing or incorrect bearer without claiming", async () => {
+  const previous = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const secret = process.env.CRON_SECRET
+  try {
+    delete process.env.MCA_DOCUMENT_JOB_RUNTIME
+    assert.deepEqual(await (await runDocumentsCron(new Request("https://fundlane.test/api/cron/documents"))).json(), { enabled: false })
+    process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+    delete process.env.CRON_SECRET
+    assert.equal((await runDocumentsCron(new Request("https://fundlane.test/api/cron/documents"))).status, 503)
+    process.env.CRON_SECRET = "synthetic-document-cron-secret"
+    assert.equal((await runDocumentsCron(new Request("https://fundlane.test/api/cron/documents", { headers: { authorization: "Bearer wrong" } }))).status, 401)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previous
+    if (secret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = secret
+  }
+})
+
+test("document cron leaves native scanner jobs for the external executor", async () => {
+  const previousRuntime = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const previousScanner = process.env.MCA_DOCUMENT_SCANNER
+  const previousSecret = process.env.CRON_SECRET
+  try {
+    process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+    process.env.MCA_DOCUMENT_SCANNER = "clamscan"
+    process.env.CRON_SECRET = "synthetic-document-cron-secret"
+    const scanner = countingScanner()
+    const document = await storeDocument(actor(), { dealId, idempotencyKey: "native-only-cron", filename: "native.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    const response = await runDocumentsCron(new Request("https://fundlane.test/api/cron/documents", { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 0)
+    assert.equal(scanner.count(), 0)
+    assert.equal((await getDocument(actor(), document.id)).processingState, "pending_scan")
+    assert.equal(await runNextBackgroundJob(["document_scan"]), true)
+    assert.equal((await getDocument(actor(), document.id)).processingState, "clean")
+  } finally {
+    setDocumentScannerForTests()
+    if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
+    if (previousScanner === undefined) delete process.env.MCA_DOCUMENT_SCANNER; else process.env.MCA_DOCUMENT_SCANNER = previousScanner
+    if (previousSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousSecret
+  }
+})
+
+test("document cron retries scanner outage and refuses infected file without promotion", async () => {
+  const previousRuntime = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const previousScanner = process.env.MCA_DOCUMENT_SCANNER
+  const previousSecret = process.env.CRON_SECRET
+  process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+  process.env.MCA_DOCUMENT_SCANNER = "cloudmersive"
+  process.env.CRON_SECRET = "synthetic-document-cron-secret"
+  const tick = () => runDocumentsCron(new Request("https://fundlane.test/api/cron/documents", { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } }))
+  try {
+    setDocumentScannerForTests({ name: "outage", async scan() { return { status: "unavailable", provider: "outage", evidence: {} } } })
+    const document = await storeDocument(actor(), { dealId, idempotencyKey: "cron-outage", filename: "outage.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    assert.equal(document.processingState, "pending_scan")
+    const response = await tick()
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 1)
+    const first = await getDatabase().prepare<{ id: string; state: string; attempts: number; error_code: string }>("SELECT id,state,attempts,error_code FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(document.id)
+    assert.equal(first?.state, "queued")
+    assert.equal(first?.error_code, "scanner_unavailable")
+    await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", first!.id)
+    setDocumentScannerForTests({ name: "infected-fixture", async scan() { return { status: "infected", provider: "infected-fixture", evidence: { engineVerified: true } } } })
+    assert.equal((await tick()).status, 200)
+    assert.equal((await getDocument(actor(), document.id)).processingState, "quarantined")
+    const final = await getDatabase().prepare<{ id: string; state: string; attempts: number }>("SELECT id,state,attempts FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(document.id)
+    assert.deepEqual(final, { id: first!.id, state: "complete", attempts: 2 })
+  } finally {
+    setDocumentScannerForTests()
+    if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
+    if (previousScanner === undefined) delete process.env.MCA_DOCUMENT_SCANNER; else process.env.MCA_DOCUMENT_SCANNER = previousScanner
+    if (previousSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousSecret
+  }
+})
+
+test("document worker refuses a cross-workspace scan claim", async () => {
+  await addWorkspace("workspace-jobs-other")
+  const scanner = countingScanner()
+  const document = await storeDocument(actor(), { dealId, idempotencyKey: "cross-workspace-scan", filename: "scoped.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+  const original = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(document.id)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',error_code='test_deferred' WHERE id=?").run(original!.id)
+  const other = { ...actor(), workspaceId: "workspace-jobs-other" }
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_background_jobs
+    (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,attempts,available_at,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,'synthetic','queued',0,?,?,?)`).run("cross-workspace-scan-job", other.workspaceId, "document_scan", document.id, "cross-workspace-scan", JSON.stringify(other), "{}", now, now, now)
+  assert.equal(await runNextBackgroundJob(["document_scan"]), true)
+  const result = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM mca_background_jobs WHERE id='cross-workspace-scan-job'").get()
+  assert.deepEqual(result, { state: "failed", error_code: "document_not_found" })
+  assert.equal(scanner.count(), 0)
+  assert.equal((await getDocument(actor(), document.id)).processingState, "pending_scan")
 })

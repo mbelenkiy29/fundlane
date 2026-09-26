@@ -379,7 +379,7 @@ test("document worker ready vs lag surfaces metrics, health workerReady, inciden
   )
   assert.match(
     dashboard,
-    /Document worker has not claimed work recently\./
+    /Document worker heartbeat is stale\./
   )
   assert.match(dashboard, /documentWorkerReady/)
 })

@@ -80,7 +80,8 @@ export async function createApplicationDraft(actor: DealActor, input: { idempote
   const replay = await findApplicationDraftByKey(actor.workspaceId, input.idempotencyKey)
   if (replay) {
     if (replay.checksum !== checksum) throw new AppError(409, "idempotency_conflict", "That idempotency key was used for another application file.")
-    return view(replay)
+    const retryInWorker = (process.env.MCA_DOCUMENT_JOB_RUNTIME === "vercel_cron" || process.env.MCA_NATIVE_DOCUMENT_EXECUTOR === "true") && ["pending_scan", "scan_failed"].includes(replay.processingState)
+    return retryInWorker ? view(await scanDraft(actor, replay, await documentStorage().get(replay.storageKey))) : view(replay)
   }
   const id = newId(), now = nowIso(), storageKey = `${actor.workspaceId}/application-drafts/${id}`
   await documentStorage().putImmutable(storageKey, input.bytes)

@@ -27,6 +27,10 @@ import { assertOutboundFresh } from "../outbound-freshness"
 import { withOutboundApproval } from "../outbound-approval"
 import { executionSignal, outsideExecutionScope, withExecutionDeadline } from "./execution"
 
+function documentRuntimeEnabled(): boolean {
+  return process.env.MCA_DOCUMENT_JOB_RUNTIME === "vercel_cron" || process.env.MCA_NATIVE_DOCUMENT_EXECUTOR === "true"
+}
+
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
   if (["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
@@ -35,7 +39,9 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
   if (job.kind === "document_scan") {
     const record = await findDocumentById(job.workspace_id, job.resource_id)
     if (!record) throw new AppError(404, "document_not_found", "The requested document was not found.")
-    return retryDocumentScan(documentScanActor(record), job.resource_id)
+    const result = await retryDocumentScan(documentScanActor(record), job.resource_id)
+    if (documentRuntimeEnabled() && (result.processingState === "pending_scan" || result.processingState === "scan_failed")) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this document. Retry after restoring the scanner.")
+    return result
   }
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
@@ -54,11 +60,21 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
       const { data, error } = await storageClient().storage.from(quarantineBucket()).download(validateStorageKey(job.resource_id))
       if (error || !data) throw new AppError(503, "scanner_unavailable", "The staged file could not be read.")
       if (data.size > 25 * 1024 * 1024) throw new AppError(413, "file_limit", "The staged file exceeds the size limit.")
-      return documentScanner().scan(new Uint8Array(await data.arrayBuffer()), payload.filename)
+      const result = await documentScanner().scan(new Uint8Array(await data.arrayBuffer()), payload.filename)
+      if (documentRuntimeEnabled() && (result.status === "unavailable" || result.status === "error")) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this file. Retry after restoring the scanner.")
+      return result
     }
     case "multipart_task": return processMultipartTask(actor, payload)
-    case "document_upload": return processDirectUpload(job.workspace_id, job.resource_id)
-    case "draft_scan": return retryApplicationDraftScan(actor, job.resource_id)
+    case "document_upload": {
+      const result = await processDirectUpload(job.workspace_id, job.resource_id)
+      if (documentRuntimeEnabled() && result && typeof result === "object" && "processingState" in result && ["pending_scan", "scan_failed"].includes(String(result.processingState))) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this upload. Retry after restoring the scanner.")
+      return result
+    }
+    case "draft_scan": {
+      const result = await retryApplicationDraftScan(actor, job.resource_id)
+      if (documentRuntimeEnabled() && ["pending_scan", "scan_failed"].includes(result.processingState)) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this draft. Retry after restoring the scanner.")
+      return result
+    }
     case "draft_extract": return extractApplicationDraft(actor, job.resource_id, payload.approvedFields)
     case "export_create": return createExportJob(actor, payload as CreateExportInput)
     case "export": return { job: await processExportJob(actor, job.resource_id) }
@@ -110,7 +126,10 @@ export async function touchDocumentWorkerHeartbeat(): Promise<void> {
 export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<boolean> {
   const job = await claimBackgroundJob(kinds)
   if (!job) return false
-  const heartbeat = setInterval(() => { void heartbeatBackgroundJob(job).catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
+  const heartbeat = setInterval(() => { void (async () => {
+    await heartbeatBackgroundJob(job)
+    if (["document_upload", "document_scan", "draft_scan", "draft_extract", "assistant_scan", "intake_process"].includes(job.kind)) await touchDocumentWorkerHeartbeat()
+  })().catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     const result = await runAsBackgroundWorker(() => outbound ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job))
