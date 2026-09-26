@@ -1,6 +1,6 @@
 import "server-only"
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
-import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripePausedTrialEligible, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, reconcileLicensedSeats, type BillingSubscription, type StripeBillingClient } from "./billing"
+import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripePausedTrialEligible, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, reconcileLicensedSeats, trialInvoicePreview, type BillingSubscription, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
@@ -52,21 +52,7 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
         await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
         continue
       }
-      let payload:BillingEmailMessage
-      if (row.delivery_payload) payload=JSON.parse(row.delivery_payload)
-      else {
-        const owner = await getDatabase().prepare<{ email: string }>(`SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=? AND m.status='active'`).get(row.workspace_id)
-        if (!owner) throw new Error("Company owner must be assigned before billing notifications can be delivered")
-        const origin = process.env.MCA_APP_ORIGIN
-        if (!origin) throw new Error("MCA_APP_ORIGIN is required")
-        if (!process.env.MCA_EMAIL_WEBHOOK_URL && !(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())) throw new Error("Configure the billing email webhook or UseSend API key and From address")
-        const data = JSON.parse(row.data)
-        const portal = row.kind === "payment_failed" || row.kind === "trial_paused" || (row.kind === "trial_ending" && data.stripeTrial === true)
-        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${portal?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...data,kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
-        payload.content=renderBillingEmailContent(payload)
-        const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
-        if (!frozen.changes) continue
-      }
+      let preview: { amount: number; currency: string; quantity: number } | null = null
       if (stripeTrialNotice) {
         const mapping = await getDatabase().prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(row.workspace_id)
         const subscription = mapping && notice?.subscriptionId &&
@@ -78,6 +64,27 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
           await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
           continue
         }
+        if (row.kind === "trial_ending" && !row.delivery_payload) {
+          try {
+            const invoice = await (client ?? getStripeClient()).invoices.createPreview({customer:mapping.stripe_customer_id,subscription:subscription.id})
+            preview = trialInvoicePreview(invoice,subscription,mapping.stripe_customer_id)
+          } catch { /* A preview outage must not suppress the trial reminder. */ }
+        }
+      }
+      let payload:BillingEmailMessage
+      if (row.delivery_payload) payload=JSON.parse(row.delivery_payload)
+      else {
+        const owner = await getDatabase().prepare<{ email: string }>(`SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=? AND m.status='active'`).get(row.workspace_id)
+        if (!owner) throw new Error("Company owner must be assigned before billing notifications can be delivered")
+        const origin = process.env.MCA_APP_ORIGIN
+        if (!origin) throw new Error("MCA_APP_ORIGIN is required")
+        if (!process.env.MCA_EMAIL_WEBHOOK_URL && !(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())) throw new Error("Configure the billing email webhook or UseSend API key and From address")
+        const data = JSON.parse(row.data)
+        const portal = row.kind === "payment_failed" || row.kind === "trial_paused" || (row.kind === "trial_ending" && data.stripeTrial === true)
+        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${portal?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...data,...preview,kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
+        payload.content=renderBillingEmailContent(payload)
+        const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
+        if (!frozen.changes) continue
       }
       if (stripeTrialNotice && !stripeTrialLifecycleEnabled()) {
         await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)

@@ -173,7 +173,7 @@ async function resumePausedTrial(subscription: BillingSubscription, customerId: 
   return resumed
 }
 
-function trialInvoicePreview(invoice: Stripe.Invoice, subscription: BillingSubscription, customerId: string) {
+export function trialInvoicePreview(invoice: Stripe.Invoice, subscription: BillingSubscription, customerId: string) {
   if (invoice.livemode !== stripeLiveMode() || (typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id) !== customerId ||
     !Number.isSafeInteger(invoice.total) || invoice.total < 0 || invoice.currency !== "usd" || invoice.lines.has_more !== false) return null
   const expected = subscription.items.data
@@ -557,18 +557,10 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     } else if (object.id && event.type === "invoice.payment_failed") {
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id,receivedAt:nowIso()})
     }
-    if (stripeTrialLifecycleEnabled() && object.id && ["customer.subscription.trial_will_end","customer.subscription.paused"].includes(event.type)) {
-      const candidate = await (providedClient ?? getStripeClient()).subscriptions.retrieve(object.id) as BillingSubscription
-      const owned = candidate.id === object.id && fundlaneSubscriptions([candidate],customerId).length === 1
-      if (owned && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000 && stripeTrialReminderEligible(candidate,customerId,new Date(object.trial_end*1000).toISOString())) {
-        let preview: { amount: number; currency: string; quantity: number } | null = null
-        try {
-          const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
-          preview = trialInvoicePreview(invoice,candidate,customerId)
-        } catch { /* A preview outage must not suppress the trial reminder. */ }
-        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString(),...preview})
-      }
-      if (owned && event.type === "customer.subscription.paused" && stripePausedTrialEligible(candidate,customerId))
+    if (stripeTrialLifecycleEnabled() && object.id) {
+      if (event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000)
+        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString()})
+      if (event.type === "customer.subscription.paused")
         await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-paused:${object.id}`,"trial_paused",{subscriptionId:object.id})
     }
     const jobId = newId()
