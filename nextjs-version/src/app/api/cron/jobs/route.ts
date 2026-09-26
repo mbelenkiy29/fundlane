@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         if (!(await runNextBackgroundJob(VERCEL_JOB_KINDS))) break
         processed++
       }
-    }, request.signal, BUDGET_MS)
+    }, request.signal, BUDGET_MS - 10_000)
     return NextResponse.json({ enabled: true, processed, durationMs: Date.now() - started }, { headers: { "cache-control": "no-store" } })
   } catch (error) { return apiError(error) }
 }

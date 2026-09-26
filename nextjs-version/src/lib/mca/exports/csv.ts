@@ -15,9 +15,14 @@ export function csvEscape(value: string | number | null | undefined, options: { 
 export function serializeCsv(
   fields: readonly ExportField[],
   rows: ReadonlyArray<Readonly<Record<string, string | number | null>>>,
+  checkpoint?: () => void,
 ): string {
   const header = fields.map((field) => csvEscape(field.header)).join(",")
-  const body = rows.map((row) => fields.map((field) => csvEscape(row[field.key], { identifier: field.identifier })).join(","))
+  const body = rows.map((row) => {
+    checkpoint?.()
+    return fields.map((field) => csvEscape(row[field.key], { identifier: field.identifier })).join(",")
+  })
+  checkpoint?.()
   return [header, ...body].join("\r\n")
 }
 

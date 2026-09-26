@@ -1,5 +1,6 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
+import { Client } from "pg"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
@@ -11,6 +12,7 @@ import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { GET as runCron } from "../src/app/api/cron/jobs/route"
+import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { persistNewDestination } from "../src/lib/mca/submissions/repository"
@@ -356,6 +358,31 @@ test("enabled cron completes only its eligible private export", async () => {
     if (oldSecret === undefined) delete process.env.CRON_SECRET
     else process.env.CRON_SECRET = oldSecret
   }
+})
+
+test("a claimed export blocked in PostgreSQL stops at the request deadline and retries", async () => {
+  const exported = await createExportJob(actor(), { kind: "deals", correlationId: "cron-expired-export", async: true })
+  const queued = await enqueueBackgroundJob({ actor: actor(), kind: "export", resourceId: exported.job.id, idempotencyKey: "cron-expired-export" })
+  const blocker = new Client({ connectionString: testDatabase.databaseUrl })
+  await blocker.connect()
+  try {
+    await blocker.query("BEGIN")
+    await blocker.query("SELECT id FROM mca_export_jobs WHERE id=$1 FOR UPDATE", [exported.job.id])
+    const started = performance.now()
+    await assert.rejects(
+      withExecutionDeadline(() => runNextBackgroundJob(["export"]), undefined, 2_000),
+      /expired/,
+    )
+    assert.ok(performance.now() - started < 5_000, "the blocked export must return before the platform limit")
+  } finally {
+    await blocker.query("ROLLBACK")
+    await blocker.end()
+  }
+  const job = await getDatabase().prepare<{ state: string; error_code: string; attempts: number }>("SELECT state,error_code,attempts FROM mca_background_jobs WHERE id=?").get(queued.id)
+  assert.equal(job?.state, "queued")
+  assert.equal(job?.error_code, "execution_expired")
+  assert.equal(job?.attempts, 1)
+  assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_export_jobs WHERE id=?").get(exported.job.id))?.state, "queued")
 })
 
 test("expired claim retains identity, fences stale completion, and retries with backoff", async () => {

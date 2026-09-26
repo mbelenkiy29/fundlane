@@ -26,6 +26,7 @@ import {
 import { csvChecksum, serializeCsv } from "./csv"
 import { manifestFor } from "./manifests"
 import { captureExportSnapshot } from "./query"
+import { assertExecutionActive } from "../jobs/execution"
 
 type JobRow = {
   id: string
@@ -132,7 +133,7 @@ async function loadJob(actor: DealActor, jobId: string): Promise<JobRow> {
 
 function csvFor(row: JobRow): string {
   const kind = row.kind as ExportKind
-  return serializeCsv(manifestFor(kind).fields, snapshotOf(row).rows)
+  return serializeCsv(manifestFor(kind).fields, snapshotOf(row).rows, assertExecutionActive)
 }
 
 function lockKey(actor: DealActor, kind: ExportKind, correlationId: string): string {
@@ -174,6 +175,7 @@ export async function getExportJob(actor: DealActor, jobId: string): Promise<Exp
 }
 
 export async function createExportJob(actor: DealActor, input: CreateExportInput): Promise<{ job: ExportJobView; download: ExportDownload | null }> {
+  assertExecutionActive()
   if (!isExportKind(input.kind)) throw new AppError(422, "validation_failed", "Choose a supported export kind.", { kind: ["Choose deals, offers, all deals and owners, or funded deals."] })
   const correlationId = input.correlationId?.trim() ?? ""
   if (!correlationId || correlationId.length > EXPORT_CORRELATION_MAX) {
@@ -200,6 +202,7 @@ export async function createExportJob(actor: DealActor, input: CreateExportInput
   }
 
   const snapshot = await captureExportSnapshot(actor, input.kind, filters, capturedAt)
+  assertExecutionActive()
   const asyncJob = Boolean(input.async) || snapshot.rows.length >= EXPORT_ASYNC_ROW_THRESHOLD
   const id = newId()
   const manifest = manifestFor(input.kind)
@@ -219,6 +222,7 @@ export async function createExportJob(actor: DealActor, input: CreateExportInput
   }
 
   await withImmediateTransaction(async (database) => {
+    assertExecutionActive()
     await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(lockKey(actor, input.kind, correlationId))
     const replay = await findByCorrelation(actor, input.kind, correlationId)
     if (replay) {
@@ -246,6 +250,7 @@ export async function createExportJob(actor: DealActor, input: CreateExportInput
 }
 
 export async function processExportJob(actor: DealActor, jobId: string, options: { nowIso?: string } = {}): Promise<ExportJobView> {
+  assertExecutionActive()
   const actions = (await getWorkspaceSettings(actor.workspaceId)).actionVisibility
   if (!exportEnabled(actor, actions)) throw new AppError(403, "action_disabled", "Deal exports are disabled for this workspace.")
   const current = await loadJob(actor, jobId)
@@ -255,6 +260,7 @@ export async function processExportJob(actor: DealActor, jobId: string, options:
   const now = options.nowIso ?? nowIso()
   try {
     const csv = csvFor(current)
+    assertExecutionActive()
     const checksum = csvChecksum(csv)
     const snapshot = snapshotOf(current)
     if (snapshot.rows.length !== (current.row_count ?? snapshot.rows.length)) {
@@ -269,6 +275,7 @@ export async function processExportJob(actor: DealActor, jobId: string, options:
       correlationId: current.correlation_id,
     })
   } catch (error) {
+    assertExecutionActive()
     const message = error instanceof Error ? error.message : "Export failed."
     const snapshot = { ...snapshotOf(current), error: { code: "export_failed", message } }
     await getDatabase().prepare(
@@ -333,5 +340,4 @@ export async function redeemExportDownload(actor: DealActor, token: string, opti
   })
   return { csv, filename: exportFilename(job.kind as ExportKind, snapshotOf(job).capturedAt), checksum, job: toView(job) }
 }
-
 
