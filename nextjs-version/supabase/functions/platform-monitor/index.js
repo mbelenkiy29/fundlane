@@ -24,6 +24,11 @@ function documentWorkerReady(metrics) {
 function safeIdentifier(value) {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(value) ? value : null;
 }
+function positiveThreshold(value, fallback) {
+  if (!value || !/^[1-9]\d*$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= 86400 ? parsed : fallback;
+}
 function incidentTransition(previous, bad, threshold, now) {
   const badChecks = bad ? previous.bad_checks + 1 : 0;
   const goodChecks = bad ? 0 : previous.good_checks + 1;
@@ -65,8 +70,29 @@ async function queueMetrics(db, documentRuntimeEnabled = false) {
     (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors",
     (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds",
     (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','draft_extract','intake_process') AND state='failed') AS "documentFailed",
-    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable"`, [documentRuntimeEnabled]);
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable",
+    COALESCE((SELECT jsonb_object_agg(kind,age) FROM (SELECT kind,COALESCE(greatest(0,extract(epoch FROM now()-min(available_at::timestamptz) FILTER (WHERE state='queued' AND available_at::timestamptz<=now())))::int,0) age FROM mca_background_jobs GROUP BY kind) q),'{}'::jsonb) AS "queueAgeByKind",
+    (SELECT count(*)::int FROM company_billing_notifications WHERE delivered_at IS NULL AND attempts>0 AND available_at::timestamptz<=now()) AS "billingMaintenanceFailures",
+    (SELECT count(*)::int FROM mca_assistant_runs WHERE created_at::timestamptz>=now()-interval '1 hour') AS "assistantRuns"`, [documentRuntimeEnabled]);
   return row;
+}
+function recoveryRules(metrics, config) {
+  if (!config.recoveryAlerts) return [];
+  const thresholds = config.thresholds ?? { workerSeconds: 90, queueSeconds: 600, providerFailures: 5, billingFailures: 1, assistantRuns: 100 };
+  const rules = [
+    ["sender_provider_failures", metrics.recentEmailFailures >= thresholds.providerFailures || metrics.reconnect >= thresholds.providerFailures, 1],
+    ["billing_maintenance_failures", (metrics.billingMaintenanceFailures ?? 0) >= thresholds.billingFailures, 1]
+  ];
+  if (config.assistantEnabled) rules.push(["assistant_usage", (metrics.assistantRuns ?? 0) >= thresholds.assistantRuns, 1]);
+  for (const [kind, age] of Object.entries(metrics.queueAgeByKind ?? {})) {
+    if (/^[a-z_]{1,50}$/.test(kind) && Number.isFinite(age))
+      rules.push([`queue_age_${kind}`, age > (thresholds.queueByKind?.[kind] ?? thresholds.queueSeconds), 3]);
+  }
+  return rules;
+}
+function workerHeartbeatStale(metrics, config) {
+  if (!config.recoveryAlerts) return !documentWorkerReady(metrics);
+  return metrics.documentWorkerHeartbeatAgeSeconds === null || metrics.documentWorkerHeartbeatAgeSeconds > (config.thresholds?.workerSeconds ?? 90);
 }
 async function runMonitor(db, config, fetcher = fetch) {
   if (new URL(config.origin).protocol !== "https:")
@@ -128,17 +154,18 @@ async function runMonitor(db, config, fetcher = fetch) {
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
       ["billing_reconciliation", config.billingReconciliationAlertsEnabled && metrics ? metrics.billingRetrying > 0 : null, 1],
-      ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
+      ["queue_age", metrics ? !config.recoveryAlerts && metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],
       ["email_failures", metrics ? metrics.recentEmailFailures >= 5 : null, 1],
       [
         "document_worker",
-        metrics ? !documentWorkerReady(metrics) : null,
+        metrics ? workerHeartbeatStale(metrics, config) : null,
         3
       ],
       ["metrics_unavailable", metrics === null, 3]
     ];
+    if (metrics) rules.push(...recoveryRules(metrics, config));
     for (const [component, bad, threshold] of rules) {
       if (bad === null) continue;
       const active = await db.query(
@@ -254,6 +281,15 @@ var SUPABASE_DATABASE_CA = "-----BEGIN CERTIFICATE-----\nMIIDxDCCAqygAwIBAgIUbLx
 
 // scripts/operations/edge-entry.ts
 var env = (name) => Deno.env.get(name);
+function queueThresholds() {
+  try {
+    const raw = JSON.parse(env("MCA_OPERATIONS_QUEUE_AGE_BY_KIND_SECONDS") ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter(([kind, value]) => /^[a-z_]{1,50}$/.test(kind) && Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 86400));
+  } catch {
+    return {};
+  }
+}
 Deno.serve(async (request) => {
   const secret = env("MCA_MONITOR_TOKEN");
   if (request.method !== "POST" || !secret || secret.length < 32 || request.headers.get("authorization") !== `Bearer ${secret}`)
@@ -288,6 +324,16 @@ Deno.serve(async (request) => {
         alerts: env("MCA_OPERATIONS_ALERTS_ENABLED") === "true",
         documentRuntimeEnabled: env("MCA_DOCUMENT_JOB_RUNTIME") === "vercel_cron" || env("MCA_NATIVE_DOCUMENT_EXECUTOR") === "true",
         billingReconciliationAlertsEnabled: env("MCA_BILLING_RECONCILIATION_ALERTS_ENABLED") === "true",
+        recoveryAlerts: env("MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED") === "true",
+        assistantEnabled: env("MCA_ASSISTANT_ENABLED") === "true",
+        thresholds: {
+          workerSeconds: positiveThreshold(env("MCA_OPERATIONS_WORKER_STALE_SECONDS"), 90),
+          queueSeconds: positiveThreshold(env("MCA_OPERATIONS_QUEUE_AGE_SECONDS"), 600),
+          queueByKind: queueThresholds(),
+          providerFailures: positiveThreshold(env("MCA_OPERATIONS_PROVIDER_FAILURES"), 5),
+          billingFailures: positiveThreshold(env("MCA_OPERATIONS_BILLING_FAILURES"), 1),
+          assistantRuns: positiveThreshold(env("MCA_OPERATIONS_ASSISTANT_RUNS_PER_HOUR"), 100)
+        },
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN")
