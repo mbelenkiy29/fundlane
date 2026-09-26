@@ -57,6 +57,27 @@ export function encryptSensitive(value: string, workspaceId: string): string {
   return ["v1", nonce.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
 }
 
+/** True when TOTP secrets can be encrypted with the existing data key (or the local fallback). */
+export function totpEncryptionAvailable(): boolean {
+  const configured = process.env.MCA_DATA_ENCRYPTION_KEY;
+  if (configured) {
+    try {
+      return Buffer.from(configured, "base64url").length === 32;
+    } catch {
+      return false;
+    }
+  }
+  return process.env.NODE_ENV !== "production";
+}
+
+export function encryptUserSecret(value: string, userId: string): string {
+  return encryptSensitive(value, `totp:${userId}`);
+}
+
+export function decryptUserSecret(value: string, userId: string): string {
+  return decryptSensitive(value, `totp:${userId}`);
+}
+
 export function decryptSensitive(value: string, workspaceId: string): string {
   const [version, nonceValue, tagValue, ciphertextValue] = value.split(".");
   if (version !== "v1" || !nonceValue || !tagValue || !ciphertextValue) throw new Error("Invalid encrypted value.");

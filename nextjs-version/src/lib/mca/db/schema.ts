@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigint, bigserial, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigint, bigserial, boolean, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -43,6 +43,7 @@ export const workspaces = pgTable("workspaces", {
 	feature_flags: text().notNull(),
 	page_visibility: text().notNull(),
 	action_visibility: text().default('{"createDeal":true,"exportDeals":true,"inviteUsers":true,"manageApiKeys":true,"viewPaymentTable":true,"viewCompanyFinancials":true}').notNull(),
+	require_2fa: boolean(),
 	created_at: text().notNull(),
 	updated_at: text().notNull(),
 	setup_checklist_dismissed_at: text(),
@@ -1869,6 +1870,40 @@ export const intake_notifications = pgTable("intake_notifications", {
   created_at: text().notNull(),
   read_at: text(),
 }, table => [unique("intake_notifications_workspace_id_intake_id_user_id_key").on(table.workspace_id, table.intake_id, table.user_id), index("intake_notifications_recipient_idx").on(table.workspace_id, table.user_id, table.created_at)]);
+
+export const user_totp_factors = pgTable("user_totp_factors", {
+	user_id: text().primaryKey().notNull().references(() => users.id, { onDelete: "cascade" }),
+	status: text().notNull(),
+	secret_cipher: text().notNull(),
+	last_used_counter: bigint({ mode: "bigint" }),
+	confirmed_at: text(),
+	created_at: text().notNull(),
+	updated_at: text().notNull(),
+}, (table) => [
+	check("user_totp_factors_status_check", sql`${table.status} = ANY (ARRAY['pending'::text, 'enabled'::text])`),
+]);
+
+export const user_totp_recovery_codes = pgTable("user_totp_recovery_codes", {
+	id: text().primaryKey().notNull(),
+	user_id: text().notNull().references(() => users.id, { onDelete: "cascade" }),
+	code_hash: text().notNull(),
+	used_at: text(),
+	created_at: text().notNull(),
+}, (table) => [
+	unique("user_totp_recovery_codes_user_hash_key").on(table.user_id, table.code_hash),
+	index("user_totp_recovery_codes_user_idx").on(table.user_id, table.used_at),
+]);
+
+export const auth_session_totp = pgTable("auth_session_totp", {
+	session_id: text().primaryKey().notNull(),
+	user_id: text().notNull().references(() => users.id, { onDelete: "cascade" }),
+	method: text().notNull(),
+	verified_at: text(),
+	created_at: text().notNull(),
+}, (table) => [
+	index("auth_session_totp_user_idx").on(table.user_id),
+	check("auth_session_totp_method_check", sql`${table.method} = ANY (ARRAY['pending'::text, 'totp'::text, 'recovery'::text, 'google'::text, 'not_required'::text])`),
+]);
 
 export const intake_submission_previews = pgTable("intake_submission_previews", {
   id: text().primaryKey().notNull(),

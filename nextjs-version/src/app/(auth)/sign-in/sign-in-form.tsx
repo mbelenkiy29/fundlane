@@ -29,7 +29,8 @@ export function SignInForm() {
   async function submitCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setGoogleError("")
-    await flow.verify(code)
+    if (flow.mfaRequired) await flow.verifyTotp(code)
+    else await flow.verify(code)
   }
 
   async function continueWithGoogle() {
@@ -45,6 +46,43 @@ export function SignInForm() {
       setGoogleError(authErrorMessage(caught))
       setGoogleBusy(false)
     }
+  }
+
+  if (flow.mfaRequired) {
+    return (
+      <>
+        <h2 id="sign-in-title">Two-factor authentication</h2>
+        <p>Enter an authenticator or single-use recovery code to finish signing in.</p>
+        <form className="fl-form" onSubmit={submitCode} aria-busy={loading}>
+          {error && (
+            <p className="fl-form-notice fl-form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div>
+            <label htmlFor="sign-in-totp">Authenticator or recovery code</label>
+            <input
+              id="sign-in-totp"
+              name="code"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              required
+              autoFocus
+              disabled={loading}
+            />
+          </div>
+          <button className="fl-button" type="submit" disabled={loading}>
+            {loading ? "Verifying…" : "Verify and continue"}
+            {loading ? (
+              <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <ArrowUpRight size={16} aria-hidden="true" />
+            )}
+          </button>
+        </form>
+      </>
+    )
   }
 
   if (flow.codeSent) {

@@ -3,6 +3,7 @@ import { supabaseIdentity } from "./supabase-auth"
 import { createSupabaseServerClient } from "../supabase/server"
 import { getDatabase } from "./db"
 import { AppError } from "./errors"
+import { sessionHasAppTotp } from "./totp-service"
 
 /** Platform authority is never inferred from company roles or editable metadata. */
 export async function requirePlatformAdmin() {
@@ -13,7 +14,8 @@ export async function requirePlatformAdmin() {
   if (!grant) throw new AppError(403, "platform_admin_required", "Platform administrator access is required.")
   const client = await createSupabaseServerClient()
   const { data, error } = await client.auth.getClaims()
-  if (error || data?.claims.sub !== identity.user.id || data.claims.session_id !== identity.sessionId || data.claims.aal !== "aal2") {
+  const appVerified = await sessionHasAppTotp(identity.sessionId, grant.user_id)
+  if (error || data?.claims.sub !== identity.user.id || data.claims.session_id !== identity.sessionId || (data.claims.aal !== "aal2" && !appVerified)) {
     throw new AppError(403, "mfa_required", "Complete multi-factor authentication to access platform administration.")
   }
   return { userId: grant.user_id, supabaseUserId: identity.user.id, sessionId: identity.sessionId }
