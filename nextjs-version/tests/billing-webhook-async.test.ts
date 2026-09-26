@@ -187,7 +187,7 @@ test("replayed refund receipts avoid another charge lookup",async()=>{
   assert.equal(lookups,1)
 })
 
-test("a retrying reconciliation opens a dedicated platform incident",async()=>{
+test("a retrying reconciliation opens a platform incident only when opted in",async()=>{
   const row=await getDatabase().prepare<{id:string}>("SELECT id FROM mca_background_jobs WHERE kind='billing_reconcile' LIMIT 1").get()
   assert.ok(row)
   await getDatabase().prepare("UPDATE mca_background_jobs SET state='queued',attempts=1,available_at=? WHERE id=?").run(new Date(Date.now()+60000).toISOString(),row.id)
@@ -195,6 +195,9 @@ test("a retrying reconciliation opens a dedicated platform incident",async()=>{
   try {
     assert.ok((await queueMetrics(monitorDb)).billingRetrying>0)
     await runMonitor(monitorDb,{origin:"https://fundlane.io",token:"test",alerts:false},async()=>Response.json({databaseOk:true,databaseMs:1}))
+    assert.equal((await database.query("SELECT count(*)::int n FROM mca_private.ops_incidents WHERE component='billing_reconciliation' AND opened_at IS NOT NULL")).rows[0].n,0)
+    await database.query("UPDATE mca_private.ops_control SET last_started_at=now()-interval '1 minute'")
+    await runMonitor(monitorDb,{origin:"https://fundlane.io",token:"test",alerts:false,billingReconciliationAlertsEnabled:true},async()=>Response.json({databaseOk:true,databaseMs:1}))
     assert.equal((await database.query("SELECT count(*)::int n FROM mca_private.ops_incidents WHERE component='billing_reconciliation' AND opened_at IS NOT NULL")).rows[0].n,1)
   } finally {await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete' WHERE id=?").run(row.id)}
 })

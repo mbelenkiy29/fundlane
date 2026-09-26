@@ -127,7 +127,7 @@ async function runMonitor(db, config, fetcher = fetch) {
       ["website", !websiteOk, 3],
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
-      ["billing_reconciliation", metrics ? metrics.billingRetrying > 0 : null, 1],
+      ["billing_reconciliation", config.billingReconciliationAlertsEnabled && metrics ? metrics.billingRetrying > 0 : null, 1],
       ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],
@@ -287,6 +287,7 @@ Deno.serve(async (request) => {
         token: secret,
         alerts: env("MCA_OPERATIONS_ALERTS_ENABLED") === "true",
         documentRuntimeEnabled: env("MCA_DOCUMENT_JOB_RUNTIME") === "vercel_cron" || env("MCA_NATIVE_DOCUMENT_EXECUTOR") === "true",
+        billingReconciliationAlertsEnabled: env("MCA_BILLING_RECONCILIATION_ALERTS_ENABLED") === "true",
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN")
