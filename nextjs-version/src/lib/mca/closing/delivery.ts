@@ -2,6 +2,7 @@ import "server-only"
 
 import { createHash } from "node:crypto"
 import { newId } from "../db"
+import { verifiedClosingFlowEnabled } from "./verified-flow"
 
 export interface ClosingTransportRequest {
   workspaceId?: string
@@ -188,12 +189,17 @@ const liveTransport: ClosingTransport = {
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       })
-      if (!response.ok) return { state: "failed", correlationId: request.correlationId, errorCode: "provider_rejected", errorMessage: `Provider rejected the request with HTTP ${response.status}.` }
+      if (!response.ok) return response.status >= 500 && verifiedClosingFlowEnabled()
+        ? { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown", errorMessage: "The provider may have accepted the request. Check provider activity before retrying." }
+        : { state: "failed", correlationId: request.correlationId, errorCode: "provider_rejected", errorMessage: `Provider rejected the request with HTTP ${response.status}.` }
       const responseBody = await response.json().catch(() => ({})) as { id?: unknown; externalId?: unknown }
       const externalId = String(responseBody.externalId ?? responseBody.id ?? response.headers.get("x-request-id") ?? "").slice(0, 300) || undefined
+      if (verifiedClosingFlowEnabled() && !externalId) return { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown", errorMessage: "The provider did not return a durable delivery identity. Check provider activity before retrying." }
       return { state: "sent", correlationId: request.correlationId, externalId }
     } catch {
-      return { state: "failed", correlationId: request.correlationId, errorCode: "provider_unavailable", errorMessage: "The delivery provider could not be reached." }
+      return verifiedClosingFlowEnabled()
+        ? { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown", errorMessage: "The provider outcome is unknown. Check provider activity before retrying." }
+        : { state: "failed", correlationId: request.correlationId, errorCode: "provider_unavailable", errorMessage: "The delivery provider could not be reached." }
     }
   },
   async reconcile(request) {

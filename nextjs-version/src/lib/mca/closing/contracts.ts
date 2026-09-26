@@ -60,8 +60,9 @@ export interface ClosingSnapshot {
   deliveries: ClosingDelivery[]; pitchedRevisionIds: string[]
   capabilities: { psfVisible: boolean; psfAdmin: boolean }
   psfDeliveryReady: boolean
+  verifiedFlowEnabled: boolean
   merchantContact: { email?: string; phone?: string }
   assignableOwners: Array<{ id: string; name: string }>
   merchantSmsAccounts: Array<{ id: string; label: string; senderMasked: string; providerConfigured: boolean; isDefault: boolean }>
-  productionGates: { merchantEmail: string; merchantSms: string; contractDelivery: string; psfDelivery: string }
+  productionGates: { merchantEmail: string; merchantSms: string; contractDelivery: string; contractSignature: string; psfDelivery: string }
 }

@@ -25,6 +25,8 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 import { GET as snapshotGet } from "../src/app/api/mca/closing/[dealId]/route"
 import { POST as stipulationPost } from "../src/app/api/mca/closing/stipulations/route"
+import { confirmOfferFunding } from "../src/lib/mca/funding/service"
+import { runRenewalEligibility, saveRenewalPolicy } from "../src/lib/mca/renewals/service"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const ids = { workspace: "closing-workspace", otherWorkspace: "closing-other", user: "closing-user", member: "closing-member", otherUser: "closing-other-user", otherMember: "closing-other-member" }
@@ -70,7 +72,7 @@ async function seed() {
 
 before(async () => { fixture = await createPostgresTestDatabase("milestone05_closing"); Object.assign(process.env, fixture.env()); delete process.env.MCA_BACKGROUND_JOBS; delete process.env.VERCEL; setDocumentStorageForTests(storage); setDocumentScannerForTests({ name: "clean-fixture", async scan() { return { status: "clean", provider: "clean-fixture", evidence: { engineVerified: true } } } }); await seed() })
 beforeEach(async () => { setClosingTransportForTests(); await getDatabase().execute("DELETE FROM mca_pitch_events"); await getDatabase().execute("DELETE FROM mca_closing_deliveries"); await getDatabase().execute("DELETE FROM mca_offer_message_previews"); await getDatabase().execute("DELETE FROM mca_closing_previews"); await getDatabase().execute("DELETE FROM mca_psf_requests"); await getDatabase().execute("DELETE FROM mca_psf_config"); await getDatabase().execute("DELETE FROM mca_contract_workflows"); await getDatabase().execute("DELETE FROM mca_merchant_upload_links"); await getDatabase().execute("DELETE FROM mca_closing_stipulations"); await getDatabase().execute("DELETE FROM mca_sms_status_events"); await getDatabase().execute("DELETE FROM mca_sms_messages"); await getDatabase().execute("DELETE FROM mca_sms_consent_events"); await getDatabase().execute("DELETE FROM mca_sms_account_members"); await getDatabase().execute("DELETE FROM mca_sms_accounts") })
-after(async () => { setClosingTransportForTests(); setDocumentScannerForTests(); setDocumentStorageForTests(); await closeDatabaseForTests(); await fixture.close() })
+after(async () => { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED; setClosingTransportForTests(); setDocumentScannerForTests(); setDocumentStorageForTests(); await closeDatabaseForTests(); await fixture.close() })
 
 test("MIC-106 opaque merchant upload is deal scoped, validates content, resolves once, and replays after response loss", async () => {
   const stip = await createStipulation(actor(), { dealId, documentCategory: "driver_license", label: "Owner driver license", idempotencyKey: "stip-dl" })
@@ -130,6 +132,88 @@ test("MIC-157 encrypts PSF details, failed transport stays failed, one provider 
   const apiActor: DealActor = { ...actor(), source: "api_key", userId: null, membershipId: null, role: null }
   const apiSnapshot = await getClosingSnapshot(apiActor, dealId); assert.equal(apiSnapshot.capabilities.psfVisible, false); assert.deepEqual(apiSnapshot.psfRequests, [])
   await assert.rejects(() => confirmPsfRequest(apiActor, { ...input, idempotencyKey: "psf-api", attemptKey: "psf-api-attempt" }), (error: { code?: string }) => error.code === "psf_permission_denied")
+})
+
+test("verified closing flow keeps unsigned callbacks unavailable and reconciles offer through renewal once", async () => {
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  try {
+    const db = getDatabase()
+    const pilot = (await createDeal(actor(), { idempotencyKey: "verified-pilot-deal", legalName: "Synthetic Pilot Bakery", contactName: "Mira", contactEmail: "mira@example.test" })).deal
+    const funder = (await createFunder(actor(), { idempotencyKey: "verified-pilot-funder", legalName: "Pilot Funder", routes: [{ kind: "email", label: "Contracts", destination: "contracts@pilot.example", active: true }] })).funder
+    const offer = await createOffer(actor(), { dealId: pilot.id, funderId: funder.id, funderName: "Pilot Funder", terms: { amountCents: 1_000_000, factorRate: 1.2, paymentAmountCents: 60_000, paymentFrequency: "weekly", commissionCents: 80_000 } })
+    await selectOfferRevision(actor(), { dealId: pilot.id, offerId: offer.id, revisionId: offer.currentRevisionId, selected: true })
+    await recordPhonePitch(actor(), { dealId: pilot.id, revisionId: offer.currentRevisionId, notes: "Approved synthetic pitch", idempotencyKey: "pilot-pitch" })
+    const task = await createStipulation(actor(), { dealId: pilot.id, revisionId: offer.currentRevisionId, documentCategory: "closing_document", label: "Signed agreement", idempotencyKey: "pilot-stip" })
+    const link = await createMerchantUploadLink(actor(), { stipulationId: task.id, idempotencyKey: "pilot-upload-link", origin: "https://app.example.test" })
+    const uploaded = await uploadMerchantDocument(link.url!.split("/").pop()!, { idempotencyKey: "pilot-upload", filename: "agreement.pdf", mimeType: "application/pdf", bytes: pdf })
+    await updateStipulation(actor(), task.id, { status: "verified" })
+    const workflow = await acceptOfferForClosing(actor(), { dealId: pilot.id, revisionId: offer.currentRevisionId, idempotencyKey: "pilot-accept" })
+    await assert.rejects(() => recordContractSignature(actor(), { workflowId: workflow.id, source: "manual", manualReason: "Signed offline", evidenceDocumentId: uploaded.documentId }), (error: { code?: string }) => error.code === "contract_not_sent")
+    await assert.rejects(() => confirmOfferFunding(actor(), { dealId: pilot.id, offerId: offer.id, offerRevisionId: offer.currentRevisionId, idempotencyKey: "pilot-fund-early", fundedAt: "2026-09-26" }), (error: { code?: string }) => error.code === "closing_final_review_required")
+    const prepared = await previewContractAction(actor(), { workflowId: workflow.id, action: "request_contract", senderId: "submission-sender", recipient: "contracts@pilot.example", exceptions: { driver_license: "Funder approved", voided_check: "Funder approved" }, idempotencyKey: "pilot-contract-preview" })
+    let sends = 0
+    setClosingTransportForTests({ async deliver(request) { sends++; return { state: "sent", correlationId: request.correlationId, externalId: "mock-mail-1" } }, async reconcile(request) { return { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown" } } })
+    await sendRequestPreview(actor(), prepared.preview.id, "pilot-contract-send")
+    await sendRequestPreview(actor(), prepared.preview.id, "pilot-contract-send-retry")
+    assert.equal(sends, 1)
+    await assert.rejects(() => recordContractSignature(actor(), { workflowId: workflow.id, source: "external", externalId: "mock-signed", evidenceDocumentId: uploaded.documentId }), (error: { code?: string }) => error.code === "contract_signature_provider_unavailable")
+    const signed = await recordContractSignature(actor(), { workflowId: workflow.id, source: "manual", manualReason: "Signed paper agreement reviewed", evidenceDocumentId: uploaded.documentId })
+    assert.equal(signed.state, "signed")
+    assert.equal((await recordContractSignature(actor(), { workflowId: workflow.id, source: "manual", manualReason: "Signed paper agreement reviewed", evidenceDocumentId: uploaded.documentId })).signedAt, signed.signedAt)
+    await assert.rejects(() => recordContractSignature(actor(), { workflowId: workflow.id, source: "manual", manualReason: "Different decision", evidenceDocumentId: uploaded.documentId }), (error: { code?: string }) => error.code === "signature_conflict")
+    await assert.rejects(() => previewContractAction(actor(), { workflowId: workflow.id, action: "request_contract", senderId: "submission-sender", idempotencyKey: "pilot-late-contract" }), (error: { code?: string }) => error.code === "contract_already_signed")
+    await db.prepare("UPDATE mca_documents SET processing_state='ready' WHERE id=?").run(uploaded.documentId)
+    await assert.rejects(() => markContractFinalReview(actor(), workflow.id), (error: { code?: string }) => error.code === "signature_evidence_required")
+    await db.prepare("UPDATE mca_documents SET processing_state='clean' WHERE id=?").run(uploaded.documentId)
+    const reviewed = await markContractFinalReview(actor(), workflow.id)
+    assert.equal((await markContractFinalReview(actor(), workflow.id)).finalReviewAt, reviewed.finalReviewAt)
+    const fundingInput = { dealId: pilot.id, offerId: offer.id, offerRevisionId: offer.currentRevisionId, idempotencyKey: "pilot-fund", fundedAt: "2026-09-26", paymentCount: 20, paymentFrequency: "weekly" as const, calendarConvention: "calendar_days" as const }
+    const funded = await confirmOfferFunding(actor(), fundingInput)
+    assert.equal((await confirmOfferFunding(actor(), fundingInput)).advanceId, funded.advanceId)
+    assert.equal(Number((await db.prepare<{ count: number }>("SELECT count(*)::int count FROM mca_advances WHERE funding_event_id=?").get(funded.fundingEventId))?.count), 1)
+    assert.equal(Number((await db.prepare<{ count: number }>("SELECT count(*)::int count FROM mca_accounting_payments WHERE funding_event_id=?").get(funded.fundingEventId))?.count), 1)
+    const audit = await db.prepare<{ action: string }>("SELECT action FROM audit_events WHERE workspace_id=? AND resource_id IN (?,?) AND action IN ('closing.contract_signature_recorded','closing.contract_final_review','offer.funded')").all(ids.workspace, workflow.id, funded.fundingEventId)
+    assert.deepEqual(new Set(audit.map((item) => item.action)), new Set(["closing.contract_signature_recorded", "closing.contract_final_review", "offer.funded"]))
+    await saveRenewalPolicy(actor(), { paidInThresholdBasisPoints: 0, minimumDaysSinceFunding: 0 })
+    const renewal = await runRenewalEligibility(actor(), "2026-09-27T00:00:00.000Z")
+    assert.ok(renewal.eligible.some((item) => item.sourceAdvanceId === funded.advanceId))
+    assert.equal((await runRenewalEligibility(actor(), "2026-09-27T00:00:00.000Z")).created, 0)
+  } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED; setClosingTransportForTests() }
+})
+
+test("verified closing flow rejects a generic signed PSF callback before state changes", async () => {
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  try {
+    await assert.rejects(() => recordPsfWebhook(ids.workspace, JSON.stringify({ status: "signed", externalRequestId: "mock" }), "mock"), (error: { code?: string }) => error.code === "psf_signature_provider_unavailable")
+    assert.equal((await getClosingSnapshot(actor(), dealId)).productionGates.psfDelivery.includes("unavailable"), true)
+  } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED }
+})
+
+test("verified closing flow fences an interrupted webhook send for operator reconciliation", async () => {
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  process.env.MCA_MERCHANT_EMAIL_WEBHOOK_URL = "https://mail.example.test/offer"
+  const originalFetch = globalThis.fetch
+  let calls = 0
+  try {
+    const preview = await previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", idempotencyKey: "interrupted-offer-preview" })
+    globalThis.fetch = async () => { calls++; throw new Error("Connection ended after provider acceptance") }
+    const first = await sendMerchantOfferPreview(actor(), preview.id, "interrupted-attempt-1")
+    const retry = await sendMerchantOfferPreview(actor(), preview.id, "interrupted-attempt-2")
+    assert.equal(first.delivery.state, "blocked")
+    assert.equal(first.delivery.errorCode, "provider_outcome_unknown")
+    assert.equal(retry.delivery.id, first.delivery.id)
+    assert.equal(calls, 1)
+    assert.equal(retry.pitched, false)
+    const noIdentity = await previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", idempotencyKey: "ack-without-identity-preview" })
+    globalThis.fetch = async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    const unverified = await sendMerchantOfferPreview(actor(), noIdentity.id, "ack-without-identity-send")
+    assert.equal(unverified.delivery.state, "blocked")
+    assert.equal(unverified.pitched, false)
+  } finally {
+    globalThis.fetch = originalFetch
+    delete process.env.MCA_MERCHANT_EMAIL_WEBHOOK_URL
+    delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED
+  }
 })
 
 test("MIC-168 pins preview revisions, excludes commissions, never pitches failed sends, and logs every successful or phone revision separately", async () => {
