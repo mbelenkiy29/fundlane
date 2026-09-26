@@ -80,6 +80,42 @@ test("marketing polish and legal name have safe empty defaults", () => {
   }
 })
 
+test("marketing font preloads preserve the default and turn off only with polish enabled", () => {
+  const script = `
+    const { mock } = require("node:test");
+    const calls = [];
+    mock.module("next/font/local", { exports: { default: options => {
+      calls.push(options);
+      return { variable: options.variable };
+    } } });
+    const { marketingFontClasses } = require("./src/lib/marketing/fonts.ts");
+    (async () => {
+      const currentClasses = await marketingFontClasses(false);
+      const current = calls.splice(0);
+      const polishedClasses = await marketingFontClasses(true);
+      console.log(JSON.stringify({ currentClasses, current, polishedClasses, polished: calls }));
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `
+  const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], {
+    encoding: "utf8",
+    cwd: resolve(import.meta.dirname, ".."),
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const { currentClasses, current, polishedClasses, polished } = JSON.parse(result.stdout) as {
+    currentClasses: string
+    current: { src: string; preload: boolean; variable: string }[]
+    polishedClasses: string
+    polished: { src: string; preload: boolean; variable: string }[]
+  }
+  assert.equal(current.length, 3)
+  assert.deepEqual(current.map(font => font.preload), [true, true, true])
+  assert.equal(polished.length, 1)
+  assert.equal(polished[0].preload, false)
+  assert.match(polished[0].src, /GeistMono-Regular\.woff2$/)
+  for (const font of current) assert.ok(currentClasses.includes(font.variable))
+  assert.equal(polishedClasses, polished[0].variable)
+})
+
 test("internal demo link in mobile navigation has no external arrow when polished", () => {
   const script = `
     const React = require("react");

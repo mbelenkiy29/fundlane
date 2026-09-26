@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { ArrowUpRight } from "lucide-react"
 import { Logo } from "@/components/logo"
-import { marketingHeading, marketingMetric, marketingMono } from "@/lib/marketing/fonts"
+import { marketingFontClasses } from "@/lib/marketing/fonts"
 import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
@@ -46,7 +46,7 @@ export function MarketingJsonLd({ title, path, description, faq }: { title: stri
   )
 }
 
-export function MarketingShell({
+export async function MarketingShell({
   children,
   immersive = false,
   jsonLd,
@@ -56,11 +56,12 @@ export function MarketingShell({
   jsonLd?: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }
 }) {
   const polished = marketingPolishEnabled()
+  const fontClasses = await marketingFontClasses(polished)
   const { privacyUrl } = getDemoConfiguration()
   const { statusUrl, roadmapUrl, supportEmail } = getSupportConfig()
   const legalName = polished ? companyLegalName() : null
   return (
-    <div className={`fundlane ${marketingMono.variable}${polished ? " fl-polished" : ` ${marketingHeading.variable} ${marketingMetric.variable}`}${immersive ? " fl-immersive" : ""}`}>
+    <div className={`fundlane ${fontClasses}${polished ? " fl-polished" : ""}${immersive ? " fl-immersive" : ""}`}>
       {jsonLd && <MarketingJsonLd {...jsonLd} />}
       <a className="fl-skip" href="#main">
         Skip to content
