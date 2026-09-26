@@ -44,7 +44,7 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
       const stripeTrialNotice = row.kind === "trial_paused" || notice?.stripeTrial === true
       const localTrialNotice = (row.kind === "trial_ending" && !stripeTrialNotice) || row.kind === "trial_ended"
       const localTrialEnd = localTrialNotice ? (notice ?? JSON.parse(row.data) as { trialEndsAt?: string }).trialEndsAt : undefined
-      if (localTrialNotice && !await localTrialNoticeStillEligible(row.workspace_id,row.kind,localTrialEnd)) {
+      if (stripeTrialLifecycleEnabled() && localTrialNotice && !await localTrialNoticeStillEligible(row.workspace_id,row.kind,localTrialEnd)) {
         await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
         continue
       }
@@ -83,7 +83,7 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
         await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
         continue
       }
-      if (localTrialNotice && !await localTrialNoticeStillEligible(row.workspace_id,row.kind,localTrialEnd)) {
+      if (stripeTrialLifecycleEnabled() && localTrialNotice && !await localTrialNoticeStillEligible(row.workspace_id,row.kind,localTrialEnd)) {
         await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
         continue
       }

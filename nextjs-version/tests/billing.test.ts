@@ -1788,16 +1788,44 @@ test("queued Stripe trial notices are suppressed when disabled or no longer acti
 })
 
 test("queued local trial notices are suppressed after access recovers",async()=>{
-  for(const kind of ["trial_ending","trial_ended"] as const){
-    const f=await fixture(false)
-    const end=new Date(Date.now()+(kind==="trial_ending"?86400000:-86400000)).toISOString()
-    await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,trial_ends_at,updated_at) VALUES (?,0,?,?)").run(f.workspaceId,end,nowIso())
-    const id=`billing:${f.workspaceId}:${kind}`
-    await getDatabase().prepare("INSERT INTO company_billing_notifications (id,workspace_id,kind,data,available_at,created_at) VALUES (?,?,?,?,?,?)").run(id,f.workspaceId,kind,JSON.stringify({trialEndsAt:end}),"1700-01-01",nowIso())
-    await getDatabase().prepare("UPDATE company_subscription_state SET legacy_exempt=1 WHERE workspace_id=?").run(f.workspaceId)
-    assert.deepEqual(await deliverBillingNotifications(1),{claimed:1,delivered:0})
-    assert.ok((await getDatabase().prepare<{delivered_at:string|null}>("SELECT delivered_at FROM company_billing_notifications WHERE id=?").get(id))?.delivered_at)
-  }
+  process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+  try {
+    for(const kind of ["trial_ending","trial_ended"] as const){
+      const f=await fixture(false)
+      const end=new Date(Date.now()+(kind==="trial_ending"?86400000:-86400000)).toISOString()
+      await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,trial_ends_at,updated_at) VALUES (?,0,?,?)").run(f.workspaceId,end,nowIso())
+      const id=`billing:${f.workspaceId}:${kind}`
+      await getDatabase().prepare("INSERT INTO company_billing_notifications (id,workspace_id,kind,data,available_at,created_at) VALUES (?,?,?,?,?,?)").run(id,f.workspaceId,kind,JSON.stringify({trialEndsAt:end}),"1700-01-01",nowIso())
+      await getDatabase().prepare("UPDATE company_subscription_state SET legacy_exempt=1 WHERE workspace_id=?").run(f.workspaceId)
+      assert.deepEqual(await deliverBillingNotifications(1),{claimed:1,delivered:0})
+      assert.ok((await getDatabase().prepare<{delivered_at:string|null}>("SELECT delivered_at FROM company_billing_notifications WHERE id=?").get(id))?.delivered_at)
+    }
+  } finally {delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED}
+})
+
+test("queued local trial notices still deliver with the lifecycle flag unset",async()=>{
+  const sent:Array<{data:{kind:string};actionUrl:string}>=[]
+  const server=createServer((request,response)=>{let body="";request.on("data",chunk=>body+=chunk);request.on("end",()=>{sent.push(JSON.parse(body));response.writeHead(200);response.end()})})
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+  const address=server.address();assert.ok(address&&typeof address!=="string")
+  process.env.MCA_EMAIL_WEBHOOK_URL=`http://127.0.0.1:${address.port}`
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  try {
+    for(const kind of ["trial_ending","trial_ended"] as const){
+      const f=await fixture(false)
+      const end=new Date(Date.now()-86400000).toISOString()
+      await getDatabase().prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(f.workspaceId,f.membershipId,nowIso())
+      await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,trial_ends_at,updated_at) VALUES (?,0,?,?)").run(f.workspaceId,end,nowIso())
+      const id=`billing:${f.workspaceId}:${kind}`
+      await getDatabase().prepare("INSERT INTO company_billing_notifications (id,workspace_id,kind,data,available_at,created_at) VALUES (?,?,?,?,?,?)").run(id,f.workspaceId,kind,JSON.stringify({trialEndsAt:end}),"1700-01-01",nowIso())
+      if(kind==="trial_ended") await getDatabase().prepare("UPDATE company_subscription_state SET legacy_exempt=1 WHERE workspace_id=?").run(f.workspaceId)
+      assert.deepEqual(await deliverBillingNotifications(1),{claimed:1,delivered:1})
+      assert.ok((await getDatabase().prepare<{delivered_at:string|null}>("SELECT delivered_at FROM company_billing_notifications WHERE id=?").get(id))?.delivered_at)
+      assert.equal(sent.at(-1)?.data.kind,kind)
+      assert.equal(sent.at(-1)?.actionUrl,"http://localhost:3000/settings/billing")
+    }
+    assert.equal(sent.length,2)
+  } finally {delete process.env.MCA_EMAIL_WEBHOOK_URL;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
 })
 
 test("trial resume is reconciled after an enclosing database rollback",async()=>{
