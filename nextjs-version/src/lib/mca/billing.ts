@@ -199,7 +199,11 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
         else if (session.status === "complete" && session.subscription) {
           const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription.id
           const completed = live.find(s => s.id === subscriptionId) ?? await client.subscriptions.retrieve(subscriptionId)
-          if (completed && !completed.trial_start && !completed.trial_end) await releaseTrialReservation(workspaceId,session.id,db)
+          if (completed) {
+            const [managed] = fundlaneSubscriptions([completed], mapping.stripe_customer_id)
+            if (managed?.trial_start && managed.trial_end) await recordTrialGrant(workspaceId,managed as Stripe.Subscription,client,db)
+            else if (managed) await releaseTrialReservation(workspaceId,session.id,db)
+          }
         }
       }
     }

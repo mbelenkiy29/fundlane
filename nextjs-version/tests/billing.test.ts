@@ -131,6 +131,34 @@ test("expired trial Checkout releases its reservation for another workspace", as
   } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
 })
 
+test("completed trial Checkout stays counted past reservation expiry until a lagging subscription is granted", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const owner = await db.prepare<{email:string}>("SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").get(first.workspaceId)
+  assert.ok(owner)
+  const second = await createWorkspaceWithAdmin({workspaceName:"Same owner",adminName:"Owner",adminEmail:owner.email,password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    await db.prepare("UPDATE company_trial_reservations SET expires_at=? WHERE workspace_id=?").run(new Date(Date.now()-1000).toISOString(),first.workspaceId)
+    first.state.checkoutStatus = "complete"
+    const trial = {...subscription(first.customerId,5,"trialing"),trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600}
+    first.state.checkoutSubscription = trial.id
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"expired timestamp cannot free a completed Checkout")
+    const secondClient = await fixture(false)
+    await createBillingCheckout(second.workspaceId,1,false,secondClient.client)
+    assert.equal((secondClient.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined)
+    const laggingClient = {...first.client,subscriptions:{...first.client.subscriptions,retrieve:async()=>trial}} as unknown as StripeBillingClient
+    await syncWorkspaceBilling(first.workspaceId,laggingClient)
+    assert.equal(first.state.subscriptions.length,0,"subscription list still lags")
+    assert.equal((await db.prepare<{stripe_subscription_id:string}>("SELECT stripe_subscription_id FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId))?.stripe_subscription_id,trial.id)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId),undefined)
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"durable grant continues to count")
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
 test("completed Checkout without a trial releases its reservation", async () => {
   const db = getDatabase()
   const f = await fixture(false)

@@ -27,12 +27,14 @@ export async function trialAllowedForOwner(workspaceId: string, db: DbExecutor) 
   const keys = [`user:${identity.userId}`,`email:${identity.email}`]
   if (perDomain && identity.domain && !freeMailDomains.has(identity.domain)) keys.push(`domain:${identity.domain}`)
   for (const key of keys.sort()) await db.prepare("SELECT pg_advisory_xact_lock(105, hashtext(?))").get(key)
+  // Expiry is not proof that Checkout expired: a completed session may be
+  // awaiting subscription propagation. Reconciliation removes verified claims.
   const count = async (column:"owner_user_id"|"owner_email"|"email_domain", value:string) =>
     (await db.prepare<{count:number}>(`SELECT count(*)::int count FROM (
       SELECT workspace_id FROM company_trial_grants WHERE ${column}=? AND workspace_id<>?
       UNION
-      SELECT workspace_id FROM company_trial_reservations WHERE ${column}=? AND workspace_id<>? AND expires_at>?
-    ) used`).get(value,workspaceId,value,workspaceId,nowIso()))?.count ?? 0
+      SELECT workspace_id FROM company_trial_reservations WHERE ${column}=? AND workspace_id<>?
+    ) used`).get(value,workspaceId,value,workspaceId))?.count ?? 0
   if (await count("owner_user_id",identity.userId) >= perUser || await count("owner_email",identity.email) >= perEmail) return false
   if (perDomain && identity.domain && !freeMailDomains.has(identity.domain) && await count("email_domain",identity.domain) >= perDomain) return false
   return true
