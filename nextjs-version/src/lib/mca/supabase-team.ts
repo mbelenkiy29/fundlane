@@ -9,7 +9,7 @@ import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites
 
 export async function deliverSupabaseInvitation(context: MembershipContext, invitationId: string, appOrigin: string, token: string) {
   const row=await getDatabase().prepare<{ email:string; expires_at:string }>(`SELECT i.email,i.expires_at FROM invitations i JOIN memberships m ON m.id=i.membership_id
-    WHERE i.id=? AND i.workspace_id=? AND i.token_hash=? AND i.status='pending' AND m.status='pending'`).get(invitationId,context.workspaceId,hashSupabaseInvitationToken(token))
+    WHERE i.id=? AND i.workspace_id=? AND i.token_hash=? AND i.status='pending' AND i.expires_at>? AND m.status='pending'`).get(invitationId,context.workspaceId,hashSupabaseInvitationToken(token),nowIso())
   if (!row) throw new AppError(409,"invitation_not_pending","This invitation is no longer pending.")
   return deliverEmail({ recipient:row.email,template:"workspace_invitation",actionUrl:`${appOrigin}/accept-invite?token=${encodeURIComponent(token)}`,expiresAt:row.expires_at })
 }
