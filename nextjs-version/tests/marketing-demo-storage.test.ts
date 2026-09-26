@@ -1,9 +1,11 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes, randomUUID } from "node:crypto"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { decryptSensitive } from "../src/lib/mca/crypto"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
-import { isDemoStorageAvailable, notifyDemoSubmission, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
+import { deliverStoredDemoSubmission, hasUnnotifiedDemoSubmissions, isDemoStorageAvailable, listDemoSubmissions, notifyDemoSubmission, retryUnsentDemoSubmissions, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 test("demo submissions persist once and reject conflicting request IDs", async () => {
@@ -22,7 +24,7 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     const rows = await db.query("SELECT * FROM marketing_demo_submissions")
     assert.equal(rows.rows.length, 1)
     const row = rows.rows[0] as { request_id: string; payload_cipher: string; payload_digest: string; created_at: Date }
-    assert.deepEqual(Object.keys(row).sort(), ["created_at", "payload_cipher", "payload_digest", "request_id"])
+    assert.deepEqual(Object.keys(row).sort(), ["created_at", "notification_attempts", "notification_error", "notification_lease_until", "notified_at", "payload_cipher", "payload_digest", "request_id"])
     assert.equal(row.request_id, id)
     assert.ok(row.payload_cipher.startsWith("v1."))
     assert.deepEqual(JSON.parse(decryptSensitive(row.payload_cipher, `marketing-demo-submission:${id}`)), contact)
@@ -42,6 +44,56 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     else process.env.DATABASE_URL = previous
     if (previousKey === undefined) delete process.env.MCA_DATA_ENCRYPTION_KEY
     else process.env.MCA_DATA_ENCRYPTION_KEY = previousKey
+    await db.close()
+  }
+})
+
+test("stored requests expose failed and unconfigured notifications; bounded retry sends once", async () => {
+  const db = await createPostgresTestDatabase("demo_visibility")
+  const keys = ["DATABASE_URL", "MCA_DATA_ENCRYPTION_KEY", "MCA_DEMO_NOTIFY_EMAIL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_DEMO_VISIBILITY_ENABLED"] as const
+  const previous = keys.map(key => process.env[key])
+  const originalFetch = globalThis.fetch
+  const originalWarn = console.warn
+  const warnings: string[] = []
+  let sends = 0
+  process.env.DATABASE_URL = db.databaseUrl
+  process.env.MCA_DATA_ENCRYPTION_KEY = randomBytes(32).toString("base64url")
+  process.env.MCA_DEMO_VISIBILITY_ENABLED = "true"
+  delete process.env.MCA_DEMO_NOTIFY_EMAIL
+  console.warn = (message) => { warnings.push(String(message)) }
+  try {
+    const id = randomUUID()
+    const contact = { name: "Alex", email: "alex@example.test", brokerage: "Synthetic", teamSize: "1" as const, message: "Call" }
+    await storeDemoSubmission(id, contact)
+    const inbox = await promisify(execFile)(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/marketing/inbox.ts", "list"], { env: process.env })
+    assert.equal(JSON.parse(inbox.stdout).find((row: { request_id: string }) => row.request_id === id).notification_status, "pending")
+    const shown = await promisify(execFile)(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/marketing/inbox.ts", "show", id], { env: process.env })
+    assert.deepEqual(JSON.parse(shown.stdout), contact)
+    assert.equal(await deliverStoredDemoSubmission(id), false)
+    assert.equal((await listDemoSubmissions())[0].notification_status, "not configured")
+    assert.equal(await hasUnnotifiedDemoSubmissions(), true)
+    assert.equal(JSON.parse(warnings[0]).reason, "not_configured")
+    process.env.MCA_DEMO_NOTIFY_EMAIL = "sales@example.test"
+    process.env.MCA_USESEND_API_KEY = "test-key"
+    process.env.MCA_USESEND_FROM = "sender@example.test"
+    globalThis.fetch = async () => { sends++; return Response.json({ error: "synthetic failure" }, { status: 503 }) }
+    assert.equal(await retryUnsentDemoSubmissions(), 0)
+    assert.equal((await listDemoSubmissions())[0].notification_status, "failed")
+    assert.equal(JSON.parse(warnings[1]).reason, "delivery_failed")
+    globalThis.fetch = async () => { sends++; return Response.json({ emailId: "synthetic" }) }
+    assert.equal(await retryUnsentDemoSubmissions(), 1)
+    assert.equal(await retryUnsentDemoSubmissions(), 0)
+    assert.equal(sends, 2)
+    const listed = (await listDemoSubmissions())[0]
+    assert.deepEqual(listed.contact, contact)
+    assert.equal(listed.notification_status, "sent")
+    assert.equal(listed.notification_attempts, 3)
+    assert.equal(await hasUnnotifiedDemoSubmissions(), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    console.warn = originalWarn
+    await closeDatabaseForTests()
+    keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index] })
     await db.close()
   }
 })

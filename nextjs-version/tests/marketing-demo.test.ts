@@ -218,6 +218,28 @@ test("database mode stores normalized requests and attempts notification", async
   assert.equal(f.sent.length, 0)
 })
 
+test("duplicate request retries an unsent notification only when visibility is enabled", async () => {
+  const old = process.env.MCA_DEMO_VISIBILITY_ENABLED
+  try {
+    let attempts = 0
+    const f = fixture({
+      configuration: () => ({ ...configuration(), databaseEnabled: true }),
+      store: async () => false,
+      notify: async () => { attempts++; return true },
+    })
+    delete process.env.MCA_DEMO_VISIBILITY_ENABLED
+    assert.equal((await f.handler(request())).status, 202)
+    assert.equal(attempts, 0)
+    process.env.MCA_DEMO_VISIBILITY_ENABLED = "true"
+    assert.equal((await f.handler(request())).status, 202)
+    assert.equal(attempts, 1)
+    assert.deepEqual(f.metrics, ["accepted", "accepted"])
+  } finally {
+    if (old === undefined) delete process.env.MCA_DEMO_VISIBILITY_ENABLED
+    else process.env.MCA_DEMO_VISIBILITY_ENABLED = old
+  }
+})
+
 test("notification failures and missing delivery configuration do not lose a stored request", async () => {
   for (const notify of [async () => { throw new Error("provider secret") }, async () => false]) {
     let stored = 0

@@ -12,8 +12,9 @@ retaining the existing webhook route until the migration is released. The privac
 URL remains a publication gate in both delivery modes. When enabled, the page
 checks database availability before enabling the form. A successful API response
 means the row was stored; email notification is best effort. Repeated request IDs
-with identical normalized fields are accepted without creating another row or
-resending email. Contact details, including team size and message, are encrypted
+with identical normalized fields are accepted without creating another row. With
+`MCA_DEMO_VISIBILITY_ENABLED=true`, unsent notifications may be retried using
+the same provider idempotency key. Contact details, including team size and message, are encrypted
 as one payload with the existing `MCA_DATA_ENCRYPTION_KEY` and bound to the opaque
 request ID. Plaintext columns contain only that ID, a keyed retry digest, and
 creation time; no raw IP address is stored. Preserve the encryption key when
@@ -24,8 +25,33 @@ the existing `MCA_USESEND_API_KEY` and `MCA_USESEND_FROM` settings. Missing
 configuration or provider failure emits a `marketing_demo_notification_skipped`
 or `marketing_demo_notification_failed` metric and does not reject a stored lead.
 Monitor notification delivery and verify it with a synthetic submission before
-relying on the inbox. The private table holds encrypted contact details and has
-no admin list view; database access alone shows only ciphertext and metadata.
+relying on the inbox. The private table holds encrypted contact details;
+database access alone shows only ciphertext and metadata.
+After migration `0060_demo_notification_status.sql`, set
+`MCA_DEMO_VISIBILITY_ENABLED=true` to enable the platform-admin-only
+`/platform/demo-requests` list and retry behavior for duplicate submissions.
+The flag defaults to `false`. The list decrypts contact details only on the
+server for authenticated platform admins with MFA and shows notification state,
+attempt count, and a warning if any stored request remains unnotified. The
+private `scripts/marketing/inbox.ts list` command combines legacy and new
+requests; `show <request-id>` decrypts either source. Run
+`MCA_DEMO_VISIBILITY_ENABLED=true pnpm tsx scripts/marketing/inbox.ts retry`
+from a private deployment shell to retry up to ten unsent requests per run.
+The database lease and stable provider idempotency key prevent concurrent retry
+sends. Retry is manual; no hosted cron schedule is required. Review the warning
+and run the command whenever notification configuration or delivery recovers.
+The status column stores only `not_configured` or `delivery_failed`, never a
+provider error or contact details. A structured warning records each unsent
+attempt without personal data. The existing notification email, useSend key,
+sender address, and encryption key must be configured in the intended host;
+verify with a synthetic request and a platform-admin login before activation.
+In the useSend console, verify the sending domain for `MCA_USESEND_FROM` and
+create a send-capable API key for `MCA_USESEND_API_KEY`. Set
+`MCA_DEMO_NOTIFY_EMAIL` to a monitored mailbox. Keep
+`MCA_DATA_ENCRYPTION_KEY` identical to the key used to encrypt existing demo
+rows. Apply migration 0060 before enabling the visibility flag. This workflow
+has no provider callback URL and no cron schedule; the private retry command
+is run by an operator after reviewing the warning.
 `MCA_SUPPORT_EMAIL`, already used by the help center,
 provides the `/demo` mailto fallback when storage is unavailable. If it is
 unset, the page shows a neutral unavailable message without an invented address.

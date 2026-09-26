@@ -7,8 +7,8 @@ import {
 } from "../mca/auth"
 import { AppError } from "../mca/errors"
 import { getDemoConfiguration } from "./config"
-import { demoSchema } from "./demo-schema"
-import { notifyDemoSubmission, storeDemoSubmission } from "./demo-storage"
+import { demoSchema, type DemoRequest } from "./demo-schema"
+import { deliverStoredDemoSubmission, demoVisibilityEnabled, storeDemoSubmission } from "./demo-storage"
 
 const MAX_BODY_BYTES = 12_000
 const RETRY_SECONDS = 60
@@ -19,7 +19,7 @@ type Dependencies = {
   fetch: typeof fetch
   timeout: () => AbortSignal
   store: typeof storeDemoSubmission
-  notify: typeof notifyDemoSubmission
+  notify: (requestId: string, contact: Pick<DemoRequest, "name" | "email" | "brokerage" | "teamSize" | "message">) => Promise<boolean>
   metric: (event: "accepted" | "delivery_failed" | "notification_failed" | "notification_skipped", requestId: string) => void
 }
 
@@ -29,9 +29,9 @@ const defaults: Dependencies = {
   fetch: (...args) => fetch(...args),
   timeout: () => AbortSignal.timeout(10_000),
   store: storeDemoSubmission,
-  notify: notifyDemoSubmission,
+  notify: deliverStoredDemoSubmission,
   metric: (event, requestId) =>
-    console.info(
+    (event === "notification_failed" || event === "notification_skipped" ? console.warn : console.info)(
       JSON.stringify({ event: `marketing_demo_${event}`, requestId })
     ),
 }
@@ -131,9 +131,9 @@ export function createDemoHandler(overrides: Partial<Dependencies> = {}) {
       if (config.databaseEnabled) {
         try {
           const inserted = await deps.store(clientId, contact)
-          if (inserted) {
+          if (inserted || demoVisibilityEnabled()) {
             try {
-              if (!await deps.notify(clientId, contact)) deps.metric("notification_skipped", clientId)
+              if (!await deps.notify(clientId, contact) && inserted) deps.metric("notification_skipped", clientId)
             } catch {
               deps.metric("notification_failed", clientId)
             }
