@@ -56,7 +56,7 @@ export function isGoogleOauthCallback(input: {
   next?: string | null;
 }): boolean {
   if (!input.hasCode || input.hasTokenHash || input.provider !== "google") return false;
-  if (input.type === "email" || input.type === "signup" || input.type === "recovery") return false;
+  if (input.type === "email" || input.type === "signup" || input.type === "recovery" || input.type === "magiclink") return false;
   return !input.next?.startsWith("/reset-password");
 }
 

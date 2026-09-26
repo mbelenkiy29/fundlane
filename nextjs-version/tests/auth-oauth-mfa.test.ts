@@ -23,7 +23,7 @@ const totpSessionCalls: string[] = []
 mock.module(new URL("../src/lib/mca/totp-service.ts", import.meta.url).href, { namedExports: {
   isGoogleOauthCallback: (input: { hasCode: boolean; hasTokenHash: boolean; type: string | null; provider?: string | null; next?: string | null }) => {
     if (!input.hasCode || input.hasTokenHash || input.provider !== "google") return false
-    if (input.type === "email" || input.type === "signup" || input.type === "recovery") return false
+    if (input.type === "email" || input.type === "signup" || input.type === "recovery" || input.type === "magiclink") return false
     return !input.next?.startsWith("/reset-password")
   },
   markGoogleTotpSession: async () => { totpSessionCalls.push("google") },
@@ -128,11 +128,28 @@ test("email and recovery callbacks do not mark a Google TOTP skip", async () => 
   identity = { user: { id: "verified" }, sessionId: "live" }
 })
 
+test("magic-link callback starts the password-style 2FA challenge even for a Google-linked account", async () => {
+  process.env.MCA_MAGIC_LINK_ENABLED = "true"
+  totpSessionCalls.length = 0
+  identity = { user: { id: "verified", app_metadata: { provider: "google" } }, sessionId: "live" }
+  const response = await callback(new Request("https://app.example.test/auth/callback?code=pkce&flow=magic-link&next=%2Fonboarding"))
+  assert.equal(new URL(response.headers.get("location")!).pathname, "/onboarding")
+  assert.deepEqual(totpSessionCalls, ["password"])
+  totpSessionCalls.length = 0
+  const token = await callback(new Request("https://app.example.test/auth/callback?token_hash=hash&type=magiclink&next=%2Fonboarding"))
+  assert.equal(new URL(token.headers.get("location")!).pathname, "/onboarding")
+  assert.deepEqual(totpSessionCalls, ["password"])
+  identity = { user: { id: "verified" }, sessionId: "live" }
+  delete process.env.MCA_MAGIC_LINK_ENABLED
+  const disabled = await callback(new Request("https://app.example.test/auth/callback?code=pkce&flow=magic-link"))
+  assert.equal(new URL(disabled.headers.get("location")!).pathname, "/sign-in")
+})
+
 test("documented token-hash email templates preserve signup and recovery query context without PKCE", async () => {
   const doc = readFileSync(new URL("../docs/supabase-auth.md", import.meta.url), "utf8")
   const templates = [...doc.matchAll(/```html\n([^]*?)\n```/g)].map(match => match[1])
-  assert.equal(templates.length, 2)
-  for (const [index, template] of templates.entries()) {
+  assert.equal(templates.length, 3)
+  for (const [index, template] of templates.slice(0, 2).entries()) {
     const type = index === 0 ? "signup" : "recovery"
     const next = type === "recovery" ? recoveryDestination(invitation) : invitation
     const redirectTo = `https://app.example.test/auth/callback?next=${encodeURIComponent(next)}`

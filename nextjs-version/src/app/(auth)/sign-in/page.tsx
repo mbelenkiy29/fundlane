@@ -15,7 +15,7 @@ export default function SignInPage() {
           <p>Sign in to continue to your brokerage workspace.</p>
         </div>
         <section className="fl-demo-card" aria-labelledby="sign-in-title">
-          <SignInForm />
+          <SignInForm magicLinkEnabled={process.env.MCA_MAGIC_LINK_ENABLED === "true"} />
         </section>
       </main>
     </MarketingShell>

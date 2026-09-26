@@ -14,14 +14,14 @@ export async function GET(request: Request) {
   try {
     const client=await createSupabaseServerClient()
     if (url.searchParams.has("error")) success=false
-    else if (tokenHash && !code && (type === "email" || type === "signup" || type === "recovery")) success=!(await client.auth.verifyOtp({ token_hash:tokenHash,type })).error
-    else if (code && !tokenHash) success=!(await client.auth.exchangeCodeForSession(code)).error
+    else if (tokenHash && !code && (type === "email" || type === "signup" || type === "recovery" || (type === "magiclink" && process.env.MCA_MAGIC_LINK_ENABLED === "true"))) success=!(await client.auth.verifyOtp({ token_hash:tokenHash,type })).error
+    else if (code && !tokenHash && (url.searchParams.get("flow") !== "magic-link" || process.env.MCA_MAGIC_LINK_ENABLED === "true")) success=!(await client.auth.exchangeCodeForSession(code)).error
     if (success) {
       const identity=await supabaseIdentity({ allowPasswordSetup:true })
       success=Boolean(identity)
       if (identity) {
         try {
-          if (isGoogleOauthCallback({
+          if (url.searchParams.get("flow") !== "magic-link" && isGoogleOauthCallback({
             hasCode: Boolean(code && !tokenHash),
             hasTokenHash: Boolean(tokenHash),
             type,

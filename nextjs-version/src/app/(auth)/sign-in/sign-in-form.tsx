@@ -10,15 +10,35 @@ import {
   currentAuthContinuation,
 } from "@/lib/mca/auth-navigation"
 
-export function SignInForm() {
+export function SignInForm({ magicLinkEnabled = false }: { magicLinkEnabled?: boolean }) {
   const flow = useSignInFlow()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [code, setCode] = useState("")
   const [googleBusy, setGoogleBusy] = useState(false)
   const [googleError, setGoogleError] = useState("")
+  const [magicBusy, setMagicBusy] = useState(false)
+  const [magicError, setMagicError] = useState("")
+  const [magicSent, setMagicSent] = useState(false)
   const loading = flow.busy
-  const error = flow.error || googleError
+  const error = flow.error || googleError || magicError
+
+  async function sendMagicLink() {
+    setMagicBusy(true)
+    setMagicError("")
+    setMagicSent(false)
+    try {
+      await requestJson("/api/auth/magic-link", {
+        method: "POST",
+        body: JSON.stringify({ email, next: currentAuthContinuation() }),
+      })
+      setMagicSent(true)
+    } catch (caught) {
+      setMagicError(authErrorMessage(caught))
+    } finally {
+      setMagicBusy(false)
+    }
+  }
 
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -127,11 +147,11 @@ export function SignInForm() {
     <>
       <h2 id="sign-in-title">Sign in</h2>
       <p>Use your work email or continue with Google.</p>
-      <form className="fl-form" onSubmit={submitPassword} aria-busy={loading}>
+      <form className="fl-form" onSubmit={submitPassword} aria-busy={loading || magicBusy}>
         <button
           className="fl-button fl-button-secondary"
           type="button"
-          disabled={loading || googleBusy}
+          disabled={loading || googleBusy || magicBusy}
           onClick={continueWithGoogle}
         >
           {googleBusy ? "Connecting to Google…" : "Continue with Google"}
@@ -152,10 +172,10 @@ export function SignInForm() {
             type="email"
             autoComplete="email"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => { setEmail(event.target.value); setMagicSent(false) }}
             required
             autoFocus
-            disabled={loading || googleBusy}
+            disabled={loading || googleBusy || magicBusy}
           />
         </div>
         <div>
@@ -173,10 +193,10 @@ export function SignInForm() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             required
-            disabled={loading || googleBusy}
+            disabled={loading || googleBusy || magicBusy}
           />
         </div>
-        <button className="fl-button" type="submit" disabled={loading || googleBusy}>
+        <button className="fl-button" type="submit" disabled={loading || googleBusy || magicBusy}>
           {loading ? "Signing in" : "Sign in"}
           {loading ? (
             <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
@@ -184,10 +204,18 @@ export function SignInForm() {
             <ArrowUpRight size={16} aria-hidden="true" />
           )}
         </button>
+        {magicLinkEnabled && (
+          <>
+            <button className="fl-button fl-button-secondary" type="button" disabled={loading || googleBusy || magicBusy || !email} onClick={sendMagicLink}>
+              {magicBusy ? "Sending link…" : "Email me a sign-in link"}
+            </button>
+            {magicSent && <p className="fl-form-notice" role="status">If an account exists, we&apos;ve sent a link.</p>}
+          </>
+        )}
         <button
           className="fl-button fl-button-secondary"
           type="button"
-          disabled={loading || googleBusy || !email}
+          disabled={loading || googleBusy || magicBusy || !email}
           onClick={() => {
             setGoogleError("")
             void flow.sendCode(email)
