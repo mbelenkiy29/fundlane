@@ -940,13 +940,31 @@ export async function previewBillingSeatIncrease(workspaceId:string, selectedSea
   const current=subscriptionEntitlement(sub)
   if (selectedSeats<=current.seatLimit || sub.pending_update || sub.schedule || sub.cancel_at || sub.cancel_at_period_end) throw new AppError(409,"billing_change_pending","Choose an increase on an unchanged subscription.")
   const ids=priceIds(),additional=sub.items.data.find(i=>i.price.id===ids.seats)
-  const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
+  const prorationDate=Math.floor(Date.now()/1000)
+  const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",proration_date:prorationDate,items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
   if (preview.livemode!==stripeLiveMode() || preview.currency!==BILLING_CATALOG.currency) throw new AppError(503,"billing_preview_unavailable","Seat price preview is unavailable. Retry before confirming.")
   if (preview.lines.has_more) throw new AppError(503,"billing_preview_unavailable","Seat price preview is incomplete. Retry before confirming.")
-  // The preview invoice can also contain renewal charges and pending invoice items.
-  // Stripe marks the lines created by this subscription change as prorations.
-  const prorationAmount=preview.lines.data
-    .filter(line=>line.parent?.subscription_item_details?.proration===true)
-    .reduce((total,line)=>total+line.amount,0)
+  // A preview can include older prorations and changes to other subscription items.
+  // An unidentified proration at this timestamp could be part of this seat change.
+  const prorations=preview.lines.data.filter(line=>line.parent?.subscription_item_details?.proration===true)
+  const seatLines=prorations.filter(line=>{
+    const details=line.parent?.subscription_item_details
+    const price=line.pricing?.price_details?.price
+    return line.period?.start===prorationDate && details?.subscription===sub.id &&
+      (additional?.id ? details.subscription_item===additional.id : (typeof price==="string" ? price : price?.id)===ids.seats) &&
+      (!price || (typeof price==="string" ? price : price.id)===ids.seats)
+  })
+  const ambiguous=prorations.some(line=>{
+    if (seatLines.includes(line)) return false
+    if (line.period && line.period.start!==prorationDate) return false
+    const details=line.parent?.subscription_item_details
+    const price=line.pricing?.price_details?.price
+    const priceId=typeof price==="string" ? price : price?.id
+    if (details?.subscription===sub.id && additional?.id && details.subscription_item===additional.id && priceId && priceId!==ids.seats) return true
+    return !(details?.subscription && details.subscription!==sub.id) &&
+      !(additional?.id && details?.subscription_item && details.subscription_item!==additional.id) &&
+      !(priceId && priceId!==ids.seats)
+  })
+  const prorationAmount=ambiguous || seatLines.length===0 ? null : seatLines.reduce((total,line)=>total+line.amount,0)
   return {prorationAmount,currency:preview.currency,selectedSeats}
 }

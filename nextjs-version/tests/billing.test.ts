@@ -384,15 +384,25 @@ test("licensed count includes pending invitations only when explicitly configure
 test("paid seat preview excludes renewal charges and pending invoice items",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   let calls=0
-  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:unknown)=>{calls++;assert.deepEqual(params,{customer:f.customerId,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",items:[{id:"si_seats",quantity:5}]}});return{livemode:false,currency:"usd",amount_due:9999,lines:{has_more:false,data:[
-    {amount:8000,parent:{subscription_item_details:{proration:false}}},
-    {amount:1234,parent:{subscription_item_details:{proration:true}}},
-    {amount:-200,parent:{subscription_item_details:{proration:true}}},
+  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:{subscription_details:{proration_date:number}})=>{calls++;const at=params.subscription_details.proration_date;assert.ok(Number.isSafeInteger(at));assert.deepEqual(params,{customer:f.customerId,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",proration_date:at,items:[{id:"si_seats",quantity:5}]}});return{livemode:false,currency:"usd",amount_due:9999,lines:{has_more:false,data:[
+    {amount:8000,period:{start:at},parent:{subscription_item_details:{proration:false,subscription:sub.id,subscription_item:"si_seats"}}},
+    {amount:1234,period:{start:at},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}},
+    {amount:-200,period:{start:at},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}},
+    {amount:900,period:{start:at},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_base"}}},
+    {amount:500,period:{start:at-300},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}},
     {amount:965,parent:{invoice_item_details:{invoice_item:"ii_unrelated"}}},
   ]}}}}} as unknown as StripeBillingClient
   assert.deepEqual(await previewBillingSeatIncrease(f.workspaceId,6,client),{prorationAmount:1034,currency:"usd",selectedSeats:6})
   assert.equal(calls,1)
   assert.equal(f.state.updates.length,0)
+})
+test("paid seat preview omits an amount when a proration cannot be attributed",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:{subscription_details:{proration_date:number}})=>({livemode:false,currency:"usd",lines:{has_more:false,data:[
+    {amount:1234,period:{start:params.subscription_details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}},
+    {amount:200,period:{start:params.subscription_details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id}}},
+  ]}})}} as unknown as StripeBillingClient
+  assert.deepEqual(await previewBillingSeatIncrease(f.workspaceId,6,client),{prorationAmount:null,currency:"usd",selectedSeats:6})
 })
 test("incomplete Stripe preview lines fail closed",async()=>{
   const f=await fixture()
