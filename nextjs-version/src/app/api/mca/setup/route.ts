@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   const correlationId = requestCorrelationId(request)
   try {
     const context = await requireSetupReader(request)
-    return NextResponse.json(await getWorkspaceSetup(context.workspaceId), { headers: { "cache-control": "no-store" } })
+    return NextResponse.json(await getWorkspaceSetup(context.workspaceId, context.role), { headers: { "cache-control": "no-store" } })
   } catch (error) {
     return apiError(error, correlationId)
   }

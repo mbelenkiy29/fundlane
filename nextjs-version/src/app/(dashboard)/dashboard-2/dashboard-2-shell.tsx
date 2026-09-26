@@ -8,6 +8,7 @@ import { formatDashboardTimestamp, mapDashboard2, periodForDateRange, type Dashb
 import { HomeEmptyState } from "@/components/mca/home/home-empty-state"
 import { NeedsAction } from "@/components/mca/home/needs-action"
 import { SetupChecklist } from "@/components/mca/setup/setup-checklist"
+import { Button } from "@/components/ui/button"
 import type { WorkspaceSetup } from "@/lib/mca/setup/contracts"
 import { CustomerInsights } from "./components/customer-insights"
 import { DashboardHeader } from "./components/dashboard-header"
@@ -23,11 +24,13 @@ export function Dashboard2Shell({
   initialSetup = null,
   firstName,
   canCreateDeal = true,
+  readinessEnabled = false,
 }: {
   initialKpis: HomeKpis | null
   initialSetup?: WorkspaceSetup | null
   firstName?: string
   canCreateDeal?: boolean
+  readinessEnabled?: boolean
 }) {
   const newDeal = useNewDeal()
   const [dateRange, setDateRange] = React.useState<Dashboard2DateRange>("30d")
@@ -36,9 +39,23 @@ export function Dashboard2Shell({
   const [dismissing, setDismissing] = React.useState(false)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState<string>()
+  const [setupLoading, setSetupLoading] = React.useState(readinessEnabled && !initialSetup)
+  const [setupError, setSetupError] = React.useState(false)
   const period = periodForDateRange(dateRange)
   const view = mapDashboard2(kpis, { dateRange })
   const lastUpdated = kpis?.asOf ? formatDashboardTimestamp(kpis.asOf, kpis.timezone) : "—"
+
+  const loadSetup = React.useCallback(async () => {
+    setSetupLoading(true)
+    setSetupError(false)
+    try {
+      setSetup(await requestJson<WorkspaceSetup>("/api/mca/setup"))
+    } catch {
+      setSetupError(true)
+    } finally {
+      setSetupLoading(false)
+    }
+  }, [])
 
   const refresh = React.useCallback(async () => {
     setRefreshing(true)
@@ -46,16 +63,21 @@ export function Dashboard2Shell({
     try {
       const [nextKpis, nextSetup] = await Promise.all([
         requestJson<HomeKpis>(`/api/mca/home/kpis?period=${period}`),
-        requestJson<WorkspaceSetup>("/api/mca/setup").catch(() => null),
+        requestJson<WorkspaceSetup>("/api/mca/setup").catch(() => {
+          if (readinessEnabled) setSetupError(true)
+          return null
+        }),
       ])
       setKpis(nextKpis)
-      if (nextSetup) setSetup(nextSetup)
+      if (nextSetup) { setSetup(nextSetup); setSetupError(false) }
     } catch (caught) {
       setError(caught instanceof RequestError ? caught.message : "Could not load dashboard metrics.")
     } finally {
       setRefreshing(false)
     }
-  }, [period])
+  }, [period, readinessEnabled])
+
+  React.useEffect(() => { if (readinessEnabled && !initialSetup) void loadSetup() }, [readinessEnabled, initialSetup, loadSetup])
 
   React.useEffect(() => {
     if (kpis?.period === period) return
@@ -103,12 +125,17 @@ export function Dashboard2Shell({
               }}
             />
           ) : null}
+          {readinessEnabled && !setup && setupLoading ? <p className="text-sm text-muted-foreground" role="status">Loading workspace setup…</p> : null}
+          {readinessEnabled && setupError ? <div className="flex flex-wrap items-center gap-3 text-sm" role="alert">
+            <span>Could not load workspace setup.</span>
+            <Button type="button" variant="outline" size="sm" disabled={setupLoading} onClick={() => void loadSetup()}>Retry</Button>
+          </div> : null}
 
           {kpis?.empty ? (
             <HomeEmptyState
               canCreateDeal={canCreateDeal}
               onCreate={() => newDeal.open()}
-              nextStep={setup?.dismissed ? null : setup?.nextStep}
+              nextStep={setup?.dismissed || setup?.readiness ? null : setup?.nextStep}
             />
           ) : (
             <NeedsAction />

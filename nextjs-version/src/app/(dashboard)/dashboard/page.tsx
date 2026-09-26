@@ -6,7 +6,7 @@ import { authenticateSupabaseSession } from "@/lib/mca/supabase-auth"
 import { getSessionResponse } from "@/lib/mca/sessions"
 import { HomeWorkspace } from "@/components/mca/home/home-workspace"
 import type { WorkspaceSetup } from "@/lib/mca/setup/contracts"
-import { getWorkspaceSetup } from "@/lib/mca/setup/service"
+import { getWorkspaceSetup, setupReadinessEnabled } from "@/lib/mca/setup/service"
 
 export default async function DashboardPage() {
   const context = await authenticateSupabaseSession()
@@ -21,7 +21,7 @@ export default async function DashboardPage() {
       initialKpis = null
     }
     try {
-      initialSetup = await getWorkspaceSetup(context.workspaceId)
+      initialSetup = await getWorkspaceSetup(context.workspaceId, context.role)
     } catch {
       initialSetup = null
     }
@@ -32,6 +32,7 @@ export default async function DashboardPage() {
       canCreateDeal={Boolean(session?.permissions?.actions.createDeal)}
       initialKpis={initialKpis}
       initialSetup={initialSetup}
+      readinessEnabled={setupReadinessEnabled()}
     />
   )
 }
