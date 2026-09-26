@@ -84,7 +84,7 @@ export async function listApplicationInvitations(actor: DealActor): Promise<Appl
     requestedAmountCents: row.requested_amount_cents, lastStep: row.last_step, reminderCount: Number(row.reminder_count ?? 0),
     intakeId: row.intake_id, intakeError: row.intake_error, dealId: row.deal_id,
     deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code,
-      requiresReconciliation: (process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(d.result_json)) && d.state === "failed" && !d.delivery && !(d.error_code === "company_paused" && d.attempts === 0),
+      requiresReconciliation: process.env.MCA_JOB_RUNTIME === "vercel_cron" && isVercelDeliveryAttempt(d.result_json) && d.state === "failed" && !d.delivery && d.attempts > 0,
     })),
   }))
 }
@@ -198,6 +198,7 @@ export async function markVercelDeliveryAttempt(job: BackgroundJob): Promise<voi
   if (!saved.changes) throw new Error("background_job_lease_lost")
 }
 export async function reconcileInvitationDelivery(actor: DealActor, invitationId: string, input: unknown): Promise<void> {
+  if (process.env.MCA_JOB_RUNTIME !== "vercel_cron") throw new AppError(404, "reconciliation_unavailable", "Invitation delivery reconciliation is unavailable.")
   await assertApplicationAccess(actor, true)
   if (!admin(actor)) throw new AppError(403, "admin_required", "An administrator must reconcile email delivery.")
   const parsed = reconcileDeliveryInput.safeParse(input)
@@ -205,10 +206,10 @@ export async function reconcileInvitationDelivery(actor: DealActor, invitationId
   const { deliveryId, outcome, evidence } = parsed.data
   await withTransaction(async () => {
     const invitation = await ownedInvitation(actor, invitationId, true)
-    const delivery = await getDatabase().prepare<{ job_id: string; purpose: string; state: string; delivery: string | null; attempts: number; error_code: string | null }>(`SELECT d.job_id,d.purpose,j.state,d.delivery,j.attempts,j.error_code FROM mca_application_invitation_deliveries d
+    const delivery = await getDatabase().prepare<{ job_id: string; purpose: string; state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }>(`SELECT d.job_id,d.purpose,j.state,d.delivery,j.attempts,j.error_code,j.result_json FROM mca_application_invitation_deliveries d
       JOIN mca_background_jobs j ON j.id=d.job_id AND j.workspace_id=d.workspace_id
       WHERE d.workspace_id=? AND d.invitation_id=? AND d.id=? FOR UPDATE OF d,j`).get(actor.workspaceId, invitationId, deliveryId)
-    if (!delivery || delivery.state !== "failed" || delivery.delivery || (delivery.error_code === "company_paused" && delivery.attempts === 0)) throw new AppError(409, "reconciliation_unavailable", "This delivery is not an uncertain failed send.")
+    if (!delivery || delivery.state !== "failed" || delivery.delivery || !isVercelDeliveryAttempt(delivery.result_json) || delivery.attempts === 0) throw new AppError(409, "reconciliation_unavailable", "This delivery is not an uncertain failed send.")
     const latest = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_application_invitation_deliveries WHERE workspace_id=? AND invitation_id=? ORDER BY created_at DESC,id DESC LIMIT 1").get(actor.workspaceId, invitationId)
     if (latest?.id !== deliveryId) throw new AppError(409, "reconciliation_unavailable", "Review the latest delivery before reconciling another attempt.")
     if (outcome === "not_sent" && !invitationActive(invitation)) throw invalidLink()

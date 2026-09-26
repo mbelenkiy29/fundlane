@@ -263,10 +263,11 @@ test("provider-confirmed absence requeues the same invitation identity once", as
     await assert.rejects(processInvitationEmail(ada, first))
     await failBackgroundJob({ ...first, attempts: 3 }, new Error("provider unavailable"))
     delete process.env.MCA_JOB_RUNTIME
-    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, true)
+    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
     await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
     process.env.MCA_JOB_RUNTIME = "vercel_cron"
     const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
+    assert.equal(delivery.requiresReconciliation, true)
     const path = `/api/mca/applications/${invitation.id}/reconcile`
     const input = { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-456" }
     assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 200)
@@ -285,6 +286,9 @@ test("provider-confirmed absence requeues the same invitation identity once", as
 })
 
 test("accepted reminder reconciliation records the reminder event once", async () => {
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  try {
   const invitation = await invite()
   const past = new Date(Date.now() - 3 * 3600_000).toISOString()
   await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, invitation.id)
@@ -293,7 +297,7 @@ test("accepted reminder reconciliation records the reminder event once", async (
     "SELECT id,job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND purpose='reminder'",
   ).get(invitation.id)
   assert.ok(delivery)
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain' WHERE id=?").run(delivery.job_id)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain',result_json=? WHERE id=?").run(JSON.stringify({ deliveryRuntime: "vercel_cron" }), delivery.job_id)
   const input = { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-reminder-receipt-123" }
 
   await reconcileInvitationDelivery(admin, invitation.id, input)
@@ -306,6 +310,30 @@ test("accepted reminder reconciliation records the reminder event once", async (
   ).get(invitation.id)
   assert.equal(events?.count, 1)
   await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, input), code("reconciliation_unavailable"))
+  } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
+})
+
+test("reconciliation rejects an unset runtime and a legacy failed delivery without changing either job", async () => {
+  const invitation = await invite()
+  const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+  const delivery = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_application_invitation_deliveries WHERE job_id=?").get(queued.jobId)
+  assert.ok(delivery)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain' WHERE id=?").run(queued.jobId)
+  const path = `/api/mca/applications/${invitation.id}/reconcile`
+  const input = { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-receipt-legacy-123" }
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  try {
+    delete process.env.MCA_JOB_RUNTIME
+    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 404)
+    await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, input), code("reconciliation_unavailable"))
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 409)
+    assert.equal((await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
+    const job = await getDatabase().prepare<{ state: string; result_json: string | null }>("SELECT state,result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId)
+    assert.equal(job?.state, "failed")
+    assert.equal(job?.result_json, null)
+    assert.equal((await getDatabase().prepare<{ delivery: string | null }>("SELECT delivery FROM mca_application_invitation_deliveries WHERE id=?").get(delivery.id))?.delivery, null)
+  } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
 })
 
 test("a paused invitation with no send attempt can be approved again after recovery", async () => {
