@@ -6,7 +6,9 @@ import { pipelineHasFilters } from "../src/lib/mca/deals/pipeline"
 import { closeDatabaseForTests, getDatabase, nowIso } from "../src/lib/mca/db"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { buildWorkspaceSetup } from "../src/lib/mca/setup/contracts"
-import { dismissWorkspaceSetup, getWorkspaceSetup } from "../src/lib/mca/setup/service"
+import { dismissWorkspaceSetup, getReadinessFacts, getWorkspaceSetup } from "../src/lib/mca/setup/service"
+import { deriveReadiness } from "../src/lib/mca/setup/readiness"
+import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../src/lib/mca/sandbox/labels"
 import { GET, POST } from "../src/app/api/mca/setup/route"
 import { GET as GET_DIAGNOSTICS } from "../src/app/api/mca/setup/diagnostics/route"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -206,6 +208,57 @@ test("flagged readiness reads scoped rows and diagnostics require an admin sessi
     if (previous === undefined) delete process.env.MCA_SETUP_READINESS_ENABLED
     else process.env.MCA_SETUP_READINESS_ENABLED = previous
   }
+})
+
+test("readiness requires a usable approved form for configuration and document processing", async () => {
+  const workspaceId = "ws-setup-form-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Form State Brokerage")
+  await db.prepare(`INSERT INTO intake_integrations
+    (id,workspace_id,provider,display_name,enabled,approval_state,automatic_processing,credential_expires_at,created_at,updated_at)
+    VALUES (?,?,'native','Test form',1,'pending_customer_contract',1,NULL,?,?)`).run("form-setup-state", workspaceId, now, now)
+
+  const phases = async () => deriveReadiness(await getReadinessFacts(workspaceId), "admin")
+  let items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+  assert.match(items.find((item) => item.id === "form_intake")?.detail ?? "", /reapproval/)
+
+  await db.prepare("UPDATE intake_integrations SET approval_state='approved', credential_expires_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", "form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=NULL WHERE id=?").run("form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "configured")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "configured")
+})
+
+test("a sandbox send counts as a synthetic test only for a synthetic deal in the same workspace", async () => {
+  const workspaceId = "ws-setup-sandbox-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Sandbox State Brokerage")
+  await db.prepare(`INSERT INTO mca_funders (id,workspace_id,idempotency_key,legal_name,active,created_at,updated_at)
+    VALUES (?,?,?,?,1,?,?)`).run("funder-setup-sandbox", workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY, "Sandbox", now, now)
+  await db.prepare(`INSERT INTO deals
+    (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
+    VALUES (?,?,?,?,'lead',1,'partial','[]','{}',1,?,?)`).run("deal-setup-sandbox", workspaceId, "MCA-SANDBOX-STATE", "Real Merchant LLC", now, now)
+  await db.prepare(`INSERT INTO mca_submission_jobs
+    (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_at,updated_at)
+    VALUES (?,?,?,?,'Sandbox','api','{}','sent','setup-sandbox-confirm','setup-sandbox-attempt',1,'{}','{}','[]',?,?)`).run(
+    "job-setup-sandbox", workspaceId, "deal-setup-sandbox", "funder-setup-sandbox", now, now,
+  )
+
+  let facts = await getReadinessFacts(workspaceId)
+  assert.equal(facts.sandboxSentJobs, 0)
+  assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE deals SET legal_name='[SYNTHETIC] Test Merchant' WHERE id=?").run("deal-setup-sandbox")
+  facts = await getReadinessFacts(workspaceId)
+  assert.equal(facts.sandboxSentJobs, 1)
+  assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "tested")
+  assert.equal((await getReadinessFacts(ids.empty)).sandboxSentJobs, 0)
 })
 
 test("dismissWorkspaceSetup is idempotent and hides later reads", async () => {

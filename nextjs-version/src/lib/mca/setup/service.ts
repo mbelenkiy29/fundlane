@@ -56,6 +56,7 @@ export async function getWorkspaceSetup(workspaceId: string, role: Role | null =
 }
 
 export async function getReadinessFacts(workspaceId: string): Promise<ReadinessFacts> {
+  const now = nowIso()
   const row = await getDatabase().prepare<{
     company_named: boolean; team_members: number; pending_invitations: number; enabled_forms: number; broken_forms: number; created_intakes: number;
     failed_intakes: number; ready_documents: number; failed_documents: number; verified_senders: number; broken_senders: number;
@@ -66,9 +67,10 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
       length(trim(w.name)) >= 2 company_named,
       (SELECT count(*)::int FROM memberships m WHERE m.workspace_id=w.id AND m.status='active') team_members,
       (SELECT count(*)::int FROM invitations i WHERE i.workspace_id=w.id AND i.status='pending') pending_invitations,
-      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND i.enabled=1) enabled_forms,
-      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND (i.approval_state <> 'approved' OR (i.credential_expires_at IS NOT NULL AND i.credential_expires_at < ?))) broken_forms,
-      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND i.enabled=1 AND i.automatic_processing=1) automatic_processing_forms,
+      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND i.enabled=1 AND i.approval_state='approved' AND (i.credential_expires_at IS NULL OR i.credential_expires_at > ?)) enabled_forms,
+      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND i.enabled=1 AND (i.approval_state <> 'approved' OR (i.credential_expires_at IS NOT NULL AND i.credential_expires_at <= ?))) broken_forms,
+      (SELECT count(*)::int FROM intake_integrations i WHERE i.workspace_id=w.id AND i.enabled=1 AND i.approval_state='approved' AND (i.credential_expires_at IS NULL OR i.credential_expires_at > ?) AND i.automatic_processing=1
+        AND i.provider IN ('jotform','highlevel','zoho','custom','fundlane','native','fillout','docuseal')) automatic_processing_forms,
       (SELECT count(*)::int FROM intake_events e JOIN deals d ON d.id=e.deal_id AND d.workspace_id=e.workspace_id WHERE e.workspace_id=w.id AND e.state IN ('created','file_pending') AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) created_intakes,
       (SELECT count(*)::int FROM intake_events e WHERE e.workspace_id=w.id AND e.state='error') failed_intakes,
       (SELECT count(*)::int FROM mca_documents d JOIN deals deal ON deal.id=d.deal_id AND deal.workspace_id=d.workspace_id WHERE d.workspace_id=w.id AND d.processing_state IN ('ready','clean') AND (deal.legal_name ILIKE '[SANDBOX]%' OR deal.legal_name ILIKE '[SYNTHETIC]%')) ready_documents,
@@ -80,10 +82,12 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
       (SELECT status FROM workspace_billing_entitlements b WHERE b.workspace_id=w.id) billing_status,
       COALESCE((SELECT legacy_exempt=1 FROM company_subscription_state c WHERE c.workspace_id=w.id), false) billing_exempt,
       (SELECT count(*)::int FROM deals d WHERE d.workspace_id=w.id AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) synthetic_deals,
-      (SELECT count(*)::int FROM mca_submission_jobs j JOIN mca_funders f ON f.id=j.funder_id AND f.workspace_id=j.workspace_id WHERE j.workspace_id=w.id AND f.idempotency_key=? AND j.state='sent') sandbox_sent_jobs,
-      (SELECT count(*)::int FROM mca_submission_jobs j JOIN mca_funders f ON f.id=j.funder_id AND f.workspace_id=j.workspace_id WHERE j.workspace_id=w.id AND f.idempotency_key=? AND j.state IN ('failed','preflight_failed')) sandbox_failed_jobs
+      (SELECT count(*)::int FROM mca_submission_jobs j JOIN mca_funders f ON f.id=j.funder_id AND f.workspace_id=j.workspace_id JOIN deals d ON d.id=j.deal_id AND d.workspace_id=j.workspace_id
+        WHERE j.workspace_id=w.id AND f.idempotency_key=? AND j.state='sent' AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) sandbox_sent_jobs,
+      (SELECT count(*)::int FROM mca_submission_jobs j JOIN mca_funders f ON f.id=j.funder_id AND f.workspace_id=j.workspace_id JOIN deals d ON d.id=j.deal_id AND d.workspace_id=j.workspace_id
+        WHERE j.workspace_id=w.id AND f.idempotency_key=? AND j.state IN ('failed','preflight_failed') AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) sandbox_failed_jobs
     FROM workspaces w WHERE w.id=?
-  `).get(nowIso(), SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, workspaceId)
+  `).get(now, now, now, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, workspaceId)
   if (!row) throw new Error("Workspace not found.")
   return {
     companyNamed: row.company_named, teamMembers: row.team_members, pendingInvitations: row.pending_invitations,
