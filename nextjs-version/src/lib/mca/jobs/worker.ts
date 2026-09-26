@@ -15,7 +15,7 @@ import { processJobDelivery } from "../submissions/outbox"
 import { createExportJob, processExportJob } from "../exports/service"
 import type { CreateExportInput } from "../exports/contracts"
 import { commitCsvUpdate, commitSpreadsheetImport } from "../imports/service"
-import { claimBackgroundJob, completeBackgroundJob, currentJobActor, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob, type BackgroundJobKind } from "./queue"
+import { claimBackgroundJob, completeBackgroundJob, currentJobActor, deferBackgroundJob, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob, type BackgroundJobKind } from "./queue"
 import { processMultipartTask } from "./multipart"
 import { quarantineBucket, storageClient, validateStorageKey } from "../documents/storage"
 import { documentScanner } from "../documents/scanner"
@@ -130,6 +130,18 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
   try {
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     const result = await runAsBackgroundWorker(() => outbound ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job))
+    if (job.kind === "submission_delivery" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
+      const pending = await getDatabase().prepare<{ created_at: string }>(`SELECT a.created_at FROM mca_submission_jobs s
+        JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
+        JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
+        WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`)
+        .get(job.resource_id, job.workspace_id)
+      if (pending) {
+        const dueAt = new Date(Math.max(Date.now() + 1_000, Date.parse(pending.created_at) + 10 * 60_000)).toISOString()
+        await deferBackgroundJob(job, dueAt)
+        return true
+      }
+    }
     await completeBackgroundJob(job, result)
     console.info(JSON.stringify({ event: "worker_job_completed", jobId: job.id, kind: job.kind }))
   } catch (error) {
