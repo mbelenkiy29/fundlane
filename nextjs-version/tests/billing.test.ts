@@ -515,6 +515,58 @@ test("adding a member immediately revises a scheduled reduction to the current p
     assert.equal(revisions[1].body.get("phases[1][items][1][quantity]"),"4")
   } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
 })
+test("licensed count above paid seats releases a verified reduction before a paid increase",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],http=await createStripeHttpFixture(),url=new URL(http.origin)
+  const sdk=new Stripe("rk_test_fixture",{apiVersion:"2026-08-26.dahlia",host:url.hostname,port:Number(url.port),protocol:"http",maxNetworkRetries:0})
+  const client={...f.client,subscriptions:sdk.subscriptions,subscriptionSchedules:sdk.subscriptionSchedules} as StripeBillingClient
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  http.subscriptions.set(f.customerId,[sub]);http.invoices.set(f.customerId,f.state.invoices)
+  try {
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await changeBillingSeats(f.workspaceId,2,f.userId,client,true)
+    assert.equal((await getDatabase().prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,2)
+    await assert.rejects(ensureSyncedSeatCapacity(f.workspaceId,f.userId,5,client),{code:"billing_seat_payment_required"})
+    assert.equal(sub.schedule,null)
+    assert.equal((await getDatabase().prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,null)
+    const release=http.calls.find(call=>call.method==="POST"&&call.path.endsWith("/release"))
+    const increase=http.calls.find(call=>call.method==="POST"&&call.path===`/v1/subscriptions/${sub.id}`)
+    assert.ok(release?.idempotencyKey)
+    assert.ok(increase?.idempotencyKey)
+    assert.ok(http.calls.indexOf(release)<http.calls.indexOf(increase))
+    assert.equal(increase.body.get("payment_behavior"),"pending_if_incomplete")
+    assert.equal(increase.body.get("items[0][quantity]"),"5")
+    assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,5,"unpaid update does not grant the seat")
+    sub.items.data[1].quantity=5
+    const at=nowIso()
+    for(let i=0;i<5;i++) {
+      const id=randomUUID()
+      await getDatabase().prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(id,`${id}@example.test`,"Member",`MCA-${id.slice(0,8)}`,at,at)
+      await getDatabase().prepare("INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'rep','active',?,?)").run(randomUUID(),f.workspaceId,id,at,at)
+    }
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await reconcileLicensedSeats(f.workspaceId,client)
+    assert.equal(await licensedSeatCount(f.workspaceId),6)
+    assert.equal((await getCompanyAccess(f.workspaceId)).seatLimit,6)
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
+})
+test("reconciliation repairs a released schedule whose local update rolled back",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],http=await createStripeHttpFixture(),url=new URL(http.origin)
+  const sdk=new Stripe("rk_test_fixture",{apiVersion:"2026-08-26.dahlia",host:url.hostname,port:Number(url.port),protocol:"http",maxNetworkRetries:0})
+  const client={...f.client,subscriptions:sdk.subscriptions,subscriptionSchedules:sdk.subscriptionSchedules} as StripeBillingClient
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  http.subscriptions.set(f.customerId,[sub]);http.invoices.set(f.customerId,f.state.invoices)
+  try {
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await changeBillingSeats(f.workspaceId,2,f.userId,client,true)
+    const oldSchedule=sub.schedule as string
+    await sdk.subscriptionSchedules.release(oldSchedule,{preserve_cancel_date:true})
+    await reconcileLicensedSeats(f.workspaceId,client)
+    const state=await getDatabase().prepare<{pending_seats:number;stripe_schedule_id:string}>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId)
+    assert.equal(state?.pending_seats,1)
+    assert.notEqual(state?.stripe_schedule_id,oldSchedule)
+    assert.equal(sub.schedule,state?.stripe_schedule_id)
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
+})
 test("manual reduction in active-only mode ignores pending invitations while flag-off keeps the old minimum",async()=>{
   const f=await fixture(),at=nowIso()
   for(let i=0;i<2;i++) {
