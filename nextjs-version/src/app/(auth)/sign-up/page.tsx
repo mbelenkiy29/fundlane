@@ -1,6 +1,7 @@
 import { SignupForm1 } from "./components/signup-form-1"
 import { Logo } from "@/components/logo"
 import Link from "next/link"
+import { signupMode } from "@/lib/mca/signup-mode"
 
 export default function SignUpPage() {
   return (
@@ -12,7 +13,11 @@ export default function SignUpPage() {
           </div>
           Fundlane
         </Link>
-        <SignupForm1 />
+        {signupMode() === "invite_only" ? <div className="rounded-lg border bg-card p-6 text-center">
+          <h1 className="text-xl font-semibold">Fundlane is invite-only</h1>
+          <p className="mt-2 text-muted-foreground">Book a demo to get started, or use your invitation link to join your team.</p>
+          <Link href="/demo" className="mt-4 inline-block underline">Book a demo</Link>
+        </div> : <SignupForm1 />}
       </div>
     </div>
   )

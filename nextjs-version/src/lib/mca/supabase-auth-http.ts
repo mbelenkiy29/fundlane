@@ -10,6 +10,7 @@ import { getDatabase, nowIso } from "./db"
 import { supabaseIdentity, WORKSPACE_COOKIE } from "./supabase-auth"
 import { authContinuation, recoveryDestination } from "./auth-navigation"
 import { startPasswordTotpChallenge } from "./totp-service"
+import { assertAccountSignupAllowed } from "./signup-guard"
 
 const emailInput = z.object({ email: z.email().max(320), next: z.string().max(2048).optional() })
 const credentials = emailInput.extend({ password: z.string().min(1).max(256) })
@@ -55,6 +56,7 @@ export async function handleSupabaseAuth(request: Request, action: "sign-in" | "
       return NextResponse.json({ success: true, mfaRequired: challenge.mfaRequired }, { headers: { "Cache-Control": "no-store" } })
     } else if (action === "company-signup") {
       const input = credentials.extend({ password:newPassword, name:z.string().trim().min(2).max(200), companyName:z.string().trim().max(200).optional() }).parse(body)
+      await assertAccountSignupAllowed(input.email, input.next)
       const { data,error } = await client.auth.signUp({ email:input.email, password:input.password, options: { data:{ name:input.name,companyName:input.companyName }, emailRedirectTo:`${authOrigin(request)}/auth/callback?next=${encodeURIComponent(authContinuation(input.next ?? null))}` } })
       authError(error)
       return NextResponse.json({ success:true, verificationRequired:!data.session })

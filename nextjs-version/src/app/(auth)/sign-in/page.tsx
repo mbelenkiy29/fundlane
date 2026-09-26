@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { MarketingShell } from "@/components/marketing/shell"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 import { SignInForm } from "./sign-in-form"
+import { migratedAccountNoticeEnabled, signupMode } from "@/lib/mca/signup-mode"
 
 export const metadata: Metadata = marketingMetadata("Sign in", "/sign-in")
 
@@ -15,7 +16,11 @@ export default function SignInPage() {
           <p>Sign in to continue to your brokerage workspace.</p>
         </div>
         <section className="fl-demo-card" aria-labelledby="sign-in-title">
-          <SignInForm magicLinkEnabled={process.env.MCA_MAGIC_LINK_ENABLED === "true"} />
+          <SignInForm
+            magicLinkEnabled={process.env.MCA_MAGIC_LINK_ENABLED === "true"}
+            inviteOnly={signupMode() === "invite_only"}
+            showMigratedAccountNotice={migratedAccountNoticeEnabled()}
+          />
         </section>
       </main>
     </MarketingShell>
