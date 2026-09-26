@@ -1,5 +1,6 @@
 import faqs from "@/app/(dashboard)/pricing/data/faqs.json"
 import { stripeTrialLifecycleEnabled } from "./billing-flags"
+import { trialRequiresCard } from "./stripe-checkout-trial"
 
 export type PricingFaq = {
   id: number
@@ -7,8 +8,9 @@ export type PricingFaq = {
   answer: string
 }
 
-/** Static FAQ JSON is the no-card wording. Overlay trial and cancellation when Stripe Checkout is fully configured. */
+/** Static FAQ JSON is the legacy wording. Overlay the card disclosure when the gate requires it. */
 export function pricingFaqCopy(cardRequiredTrial: boolean, trialDays: number): PricingFaq[] {
+  cardRequiredTrial ||= trialRequiresCard()
   return (faqs as PricingFaq[]).map(item => {
     if (item.question === "Is there a free trial available?") {
       return {

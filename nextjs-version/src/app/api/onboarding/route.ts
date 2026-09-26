@@ -8,12 +8,14 @@ import { requireOpenSignup } from "@/lib/mca/signup-guard"
 import { readJson } from "@/lib/mca/http"
 import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured, stripeTrialLifecycleEnabled } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
+import { cardRequiredTrial, trialRequiresCard } from "@/lib/mca/stripe-checkout-trial"
+import { getCompanyAccess } from "@/lib/mca/company-access"
 export async function GET() {
   try {
     const identity=await supabaseIdentity({ allowPasswordSetup:true })
     if (!identity) return NextResponse.json({ authenticated:false,workspaces:[] },{ headers:{ "Cache-Control":"no-store" } })
-    const cardRequiredTrial=isStripeCheckoutTrialConfigured()
-    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial,trialLifecycleEnabled:stripeTrialLifecycleEnabled(),...(cardRequiredTrial?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
+    const requiresCard=cardRequiredTrial()
+    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial:requiresCard,checkoutUnavailable:trialRequiresCard()&&!isStripeCheckoutTrialConfigured(),trialLifecycleEnabled:stripeTrialLifecycleEnabled(),...(requiresCard?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
   } catch(error) { return apiError(error) }
 }
 export async function POST(request: Request) {
@@ -28,7 +30,8 @@ export async function POST(request: Request) {
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")
     const context="workspaceId" in input ? await setActiveWorkspace(identity,input.workspaceId) : await completeCompanyOnboarding(input.name,input.selectedSeats)
     const checkoutUrl = await createOnboardingCheckoutUrl(context.workspaceId,context.role,"name" in input?input.selectedSeats:1)
+    const checkoutUnavailable=trialRequiresCard()&&!isStripeCheckoutTrialConfigured()&&(await getCompanyAccess(context.workspaceId)).reason==="finish_setup"
     const totp=context.userId ? await getTotpAccessState({ userId:context.userId, sessionId:identity.sessionId, workspaceId:context.workspaceId }) : null
-    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl,totpEnrollmentRequired:totp?.enrollmentRequired===true,totpChallengeRequired:totp?.challengeRequired===true })
+    return NextResponse.json({ workspaceId:context.workspaceId,role:context.role,billingEnabled:billingEnabled(),checkoutUrl,checkoutUnavailable,totpEnrollmentRequired:totp?.enrollmentRequired===true,totpChallengeRequired:totp?.challengeRequired===true })
   } catch(error) { return apiError(error) }
 }

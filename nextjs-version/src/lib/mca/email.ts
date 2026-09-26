@@ -4,6 +4,7 @@ import "server-only";
 import { AppError } from "./errors";
 import { newId } from "./db";
 import { sendUsesendEmail } from "./intake/usesend";
+import { trialRequiresCard } from "./stripe-checkout-trial";
 
 interface EmailMessage {
   recipient: string;
@@ -76,7 +77,7 @@ export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"dat
     renewal_payment_failed:"Your company renewal payment has not completed. Update your payment method and pay all outstanding invoices before your grace period ends to keep company access. Monthly fees continue during suspension until the subscription’s effective cancellation date. Open Plans & Billing to review outstanding invoices, pay or cancel. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation.",
     billing_paused:"Company operations are paused because a renewal remains unpaid. Monthly fees continue during suspension until the subscription’s effective cancellation date. Outstanding invoices, including missed months, remain due even after cancellation. Plans & Billing remains available to review outstanding invoices, pay or cancel. All applicable overdue invoices must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation. Separate administrative suspensions remain in effect.",
     billing_recovered:"All applicable overdue invoices have been verified paid. Billing suspension has been cleared. Any separate administrative suspension remains in effect. Payment does not restart a canceled subscription.",
-    trial_ending:stripeTrial ? "Your Stripe trial ends soon. Your selected plan will be billed after the trial unless you cancel before it ends. Open the Stripe billing portal to update your card or cancel." : "Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
+    trial_ending:stripeTrial ? "Your Stripe trial ends soon. Your selected plan will be billed after the trial unless you cancel before it ends. Open the Stripe billing portal to update your card or cancel." : trialRequiresCard() ? "Your existing trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately." : "Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
     trial_ended:"Your trial has ended and company operations are paused. Your data remains available for recovery. Choose your paid subscription in Plans & Billing.",
     trial_paused:"Your subscription is paused because there was no usable payment method at trial end. Add a payment method in the Stripe billing portal to resume your subscription and company access. You can also cancel there.",
     payment_action_required:"Your invoice needs payment authentication. Complete the payment on Stripe's hosted invoice page. Seats and access update after Stripe confirms payment.",
