@@ -6,6 +6,7 @@ import type { Role } from "../types"
 import { buildWorkspaceSetup, type WorkspaceSetup } from "./contracts"
 import { deriveReadiness, type ReadinessFacts } from "./readiness"
 import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../sandbox/labels"
+import { getCompanyAccess } from "../company-access"
 
 interface SetupRow {
   name: string
@@ -89,12 +90,13 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
     FROM workspaces w WHERE w.id=?
   `).get(now, now, now, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, workspaceId)
   if (!row) throw new Error("Workspace not found.")
+  const billingAccessAllowed = (await getCompanyAccess(workspaceId)).allowed
   return {
     companyNamed: row.company_named, teamMembers: row.team_members, pendingInvitations: row.pending_invitations,
     enabledForms: row.enabled_forms, brokenForms: row.broken_forms, createdIntakes: row.created_intakes, failedIntakes: row.failed_intakes,
     readyDocuments: row.ready_documents, failedDocuments: row.failed_documents, verifiedSenders: row.verified_senders,
     brokenSenders: row.broken_senders, activeFunders: row.active_funders, sandboxFunders: row.sandbox_funders,
-    billingStatus: row.billing_status, billingExempt: row.billing_exempt, syntheticDeals: row.synthetic_deals, sandboxSentJobs: row.sandbox_sent_jobs,
+    billingStatus: row.billing_status, billingExempt: row.billing_exempt, billingAccessAllowed, syntheticDeals: row.synthetic_deals, sandboxSentJobs: row.sandbox_sent_jobs,
     sandboxFailedJobs: row.sandbox_failed_jobs,
     processingAvailable: row.automatic_processing_forms > 0,
   }

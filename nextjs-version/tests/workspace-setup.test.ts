@@ -233,6 +233,39 @@ test("readiness requires a usable approved form for configuration and document p
   items = await phases()
   assert.equal(items.find((item) => item.id === "form_intake")?.phase, "configured")
   assert.equal(items.find((item) => item.id === "documents")?.phase, "configured")
+
+  await db.prepare(`INSERT INTO deals
+    (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
+    VALUES (?,?,?,?,'lead',1,'partial','[]','{}',1,?,?)`).run("deal-setup-form-state", workspaceId, "MCA-FORM-STATE", "[SYNTHETIC] Test Merchant", now, now)
+  await db.prepare(`INSERT INTO intake_events
+    (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,deal_id,created_at,updated_at)
+    VALUES (?,?,'native',?,'checksum','synthetic','created',?,?,?)`).run("intake-setup-form-state", workspaceId, "form-state-event", "deal-setup-form-state", now, now)
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "tested")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", "form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "form_intake")?.href, "/settings/connections")
+})
+
+test("billing readiness follows entitlement expiry and manual suspension", async () => {
+  const workspaceId = "ws-setup-billing-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Billing State Brokerage")
+  await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(workspaceId, now)
+  await db.prepare(`INSERT INTO workspace_billing_entitlements
+    (workspace_id,plan_slug,plan_name,status,period_start,period_end,seat_limit,source,synced_at)
+    VALUES (?,'test','Test','active',?, ?,8,'free',?)`).run(workspaceId, now, "2099-01-01T00:00:00.000Z", now)
+  const billing = async () => deriveReadiness(await getReadinessFacts(workspaceId), "admin").find((item) => item.id === "billing")
+  assert.equal((await billing())?.phase, "live_ready")
+
+  await db.prepare("UPDATE workspace_billing_entitlements SET period_end=? WHERE workspace_id=?").run("2020-01-01T00:00:00.000Z", workspaceId)
+  assert.equal((await billing())?.phase, "needs_setup")
+
+  await db.prepare("UPDATE workspace_billing_entitlements SET period_end=? WHERE workspace_id=?").run("2099-01-01T00:00:00.000Z", workspaceId)
+  await db.prepare("UPDATE company_subscription_state SET manual_paused=1 WHERE workspace_id=?").run(workspaceId)
+  assert.equal((await billing())?.phase, "needs_setup")
 })
 
 test("a sandbox send counts as a synthetic test only for a synthetic deal in the same workspace", async () => {

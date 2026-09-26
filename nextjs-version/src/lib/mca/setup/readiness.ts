@@ -29,6 +29,7 @@ export interface ReadinessFacts {
   sandboxFunders: number
   billingStatus: string | null
   billingExempt: boolean
+  billingAccessAllowed: boolean
   syntheticDeals: number
   sandboxSentJobs: number
   sandboxFailedJobs: number
@@ -44,9 +45,9 @@ export function deriveReadiness(f: ReadinessFacts, role: Role | null): Readiness
     { id: "company_team", title: "Company and team", phase: f.companyNamed && f.teamMembers > 1 ? "live_ready" : "needs_setup",
       detail: f.pendingInvitations && f.teamMembers < 2 ? "An invitation is pending acceptance." : "Name the company and invite a teammate.",
       action: "Manage team", href: "/settings/team", helpHref: help("set-up-your-company") },
-    { id: "form_intake", title: "Form and intake", phase: f.createdIntakes ? "tested" : f.enabledForms ? "configured" : "needs_setup",
+    { id: "form_intake", title: "Form and intake", phase: !f.enabledForms ? "needs_setup" : f.brokenForms ? "configured" : f.createdIntakes ? "tested" : "configured",
       detail: f.brokenForms ? "A form connection needs reapproval or its credential expired. Reconnect it in Connections, then retry intake." : f.failedIntakes ? "An intake failed. Open Application Intake to inspect and retry it." : f.enabledForms ? "Submit a synthetic application through the enabled form." : "Enable a form in Connections.",
-      action: f.enabledForms ? "Open Application Intake" : "Configure form", href: f.enabledForms ? "/intake" : "/settings/connections", helpHref: help("invite-a-client-to-apply") },
+      action: f.brokenForms ? "Reconnect form" : f.enabledForms ? "Open Application Intake" : "Configure form", href: f.brokenForms || !f.enabledForms ? "/settings/connections" : "/intake", helpHref: help("invite-a-client-to-apply") },
     { id: "documents", title: "Document processing", phase: f.readyDocuments ? "tested" : f.processingAvailable ? "configured" : "needs_setup",
       detail: f.failedDocuments ? "A document failed processing. Review its state and retry from the application." : f.processingAvailable ? "Automatic processing is enabled for a form. Verify the worker with a synthetic statement and confirm it reaches ready." : "Enable automatic processing on an intake form, then verify the worker with a synthetic statement.",
       action: "Review documents", href: "/intake", helpHref: help("review-applications-and-documents") },
@@ -56,8 +57,8 @@ export function deriveReadiness(f: ReadinessFacts, role: Role | null): Readiness
     { id: "pilot_funder", title: "Pilot funder", phase: f.activeFunders ? "configured" : "needs_setup",
       detail: f.activeFunders ? "An active real funder is saved. Verify its route before live submission." : "Add an active pilot funder and verify its route.",
       action: "Manage funders", href: "/funders", helpHref: help("track-submissions-and-offers") },
-    { id: "billing", title: "Billing", phase: f.billingExempt || f.billingStatus === "active" ? "live_ready" : f.billingStatus === "trialing" ? "configured" : "needs_setup",
-      detail: f.billingExempt ? "This workspace has an existing billing exemption." : f.billingStatus === "past_due" ? "Payment is past due. Open billing to update the payment method." : f.billingStatus ? "Review the current plan and payment state." : "Complete billing setup.",
+    { id: "billing", title: "Billing", phase: f.billingAccessAllowed && (f.billingExempt || f.billingStatus === "active") ? "live_ready" : f.billingAccessAllowed && f.billingStatus === "trialing" ? "configured" : "needs_setup",
+      detail: !f.billingAccessAllowed && (f.billingExempt || f.billingStatus === "active" || f.billingStatus === "trialing") ? "Billing access is paused or expired. Open billing to review the account." : f.billingExempt ? "This workspace has an existing billing exemption." : f.billingStatus === "past_due" ? "Payment is past due. Open billing to update the payment method." : f.billingStatus ? "Review the current plan and payment state." : "Complete billing setup.",
       action: "Open billing", href: "/settings/billing", helpHref: help("set-up-your-company") },
     { id: "synthetic_deal", title: "Synthetic test deal", phase: f.sandboxSentJobs ? "tested" : f.syntheticDeals && f.sandboxFunders ? "configured" : "needs_setup",
       detail: f.sandboxFailedJobs ? "The sandbox submission failed. Open Submissions to inspect its state and retry." : f.sandboxSentJobs ? "A sandbox submission completed. This does not prove live lender delivery." : "Create a synthetic deal, enable the sandbox funder, then submit to it without contacting a real lender.",
