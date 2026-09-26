@@ -25,6 +25,7 @@ type JobRow = {
   confirmation_key: string
   attempt_key: string
   analysis_run_id: string | null
+  auto_submit_decision_id: string | null
   deal_version: number
   document_versions_json: string
   package_json: string
@@ -75,6 +76,7 @@ export interface JobInsert {
   confirmationKey: string
   attemptKey: string
   analysisRunId?: string
+  autoSubmitDecisionId?: string
   dealVersion: number
   expectedDealVersion?: number
   expectedAutoApiRoute?: FunderRoute
@@ -121,6 +123,7 @@ function fromJobRow(row: JobRow): SubmissionJob {
     confirmationKey: row.confirmation_key,
     attemptKey: row.attempt_key,
     analysisRunId: row.analysis_run_id ?? undefined,
+    autoSubmitDecisionId: row.auto_submit_decision_id ?? undefined,
     dealVersion: Number(row.deal_version),
     documentVersions: parseJson(row.document_versions_json, []),
     packageDocumentIds: parseJson<{ documentIds?: string[] }>(row.package_json, {}).documentIds ?? parseJson<string[]>(row.package_json, []),
@@ -192,9 +195,9 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
   const id = newId()
   const row = await executor.prepare<{ id: string }>(`INSERT INTO mca_submission_jobs
     (id, workspace_id, deal_id, funder_id, display_funder_name, route_kind, route_json, state, confirmation_key, attempt_key,
-     analysis_run_id, deal_version, document_versions_json, package_json, preflight_errors_json, merchant_identity_key, package_fingerprint,
+     analysis_run_id, auto_submit_decision_id, deal_version, document_versions_json, package_json, preflight_errors_json, merchant_identity_key, package_fingerprint,
      reason, created_by_user_id, created_at, updated_at, approved_package_cipher)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (workspace_id, confirmation_key, funder_id) DO NOTHING
     RETURNING id`).get(
     id,
@@ -208,6 +211,7 @@ export async function insertJob(input: JobInsert, executor: DbExecutor = db()): 
     input.confirmationKey,
     input.attemptKey,
     input.analysisRunId ?? null,
+    input.autoSubmitDecisionId ?? null,
     input.dealVersion,
     JSON.stringify(input.documentVersions),
     JSON.stringify({ documentIds: input.packageDocumentIds }),
@@ -404,6 +408,25 @@ export async function insertDealSubmissionCache(input: {
 
 export async function persistNewDestination(input: JobInsert): Promise<{ job: SubmissionJob; created: boolean }> {
   return withImmediateTransaction(async (executor) => {
+    if (input.autoSubmitDecisionId) {
+      if (process.env.MCA_AUTO_SUBMIT_ENABLED !== "true") throw new AppError(409, "auto_submit_disabled", "Auto-submit was disabled before the submission was queued.")
+      const settings = await executor.prepare<{ mode: string; eligible_funder_ids: string; min_match_score: number; max_funders_per_deal: number }>(
+        "SELECT mode,eligible_funder_ids,min_match_score,max_funders_per_deal FROM mca_auto_submit_settings WHERE workspace_id=? FOR UPDATE",
+      ).get(input.workspaceId)
+      if (settings?.mode !== "auto_submit" || !parseJson<string[]>(settings.eligible_funder_ids, []).includes(input.funderId)) {
+        throw new AppError(409, "auto_submit_disabled", "This workspace no longer allows automatic submissions to the funder.")
+      }
+      const decision = await executor.prepare<{ id: string; score: number }>(
+        "SELECT id,score FROM mca_auto_submit_decisions WHERE workspace_id=? AND id=? AND deal_id=? AND funder_id=? AND outcome='pending'",
+      ).get(input.workspaceId, input.autoSubmitDecisionId, input.dealId, input.funderId)
+      if (!decision) throw new AppError(409, "auto_submit_decision_changed", "The automatic submission decision changed before queueing.")
+      const reserved = await executor.prepare<{ n: number }>(
+        "SELECT count(*)::integer AS n FROM mca_auto_submit_decisions WHERE workspace_id=? AND deal_id=? AND outcome IN ('pending','submit')",
+      ).get(input.workspaceId, input.dealId)
+      if (decision.score < settings.min_match_score || (reserved?.n ?? 0) > settings.max_funders_per_deal) {
+        throw new AppError(409, "auto_submit_settings_changed", "The automatic match threshold or funder limit changed before queueing.")
+      }
+    }
     if (input.expectedDealVersion !== undefined) {
       const current = await executor.prepare<{ version: number }>(
         "SELECT version FROM deals WHERE workspace_id=? AND id=? FOR UPDATE",

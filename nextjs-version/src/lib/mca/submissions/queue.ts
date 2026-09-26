@@ -171,6 +171,7 @@ async function queueDestination(input: {
   funderId: string
   confirmationKey: string
   analysisRunId?: string
+  autoSubmitDecisionId?: string
   privilegedRetry?: boolean
   privilegedReason?: string
   approvedPackage?: SubmissionJob["approvedPackage"]
@@ -244,6 +245,7 @@ async function queueDestination(input: {
     confirmationKey: input.confirmationKey,
     attemptKey: input.confirmationKey,
     analysisRunId: input.analysisRunId,
+    autoSubmitDecisionId: input.autoSubmitDecisionId,
     dealVersion: input.dealVersion,
     expectedDealVersion: input.expectedDealVersion,
     expectedAutoApiRoute: input.expectedAutoApiRoute,
@@ -298,6 +300,7 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
         deferDelivery: input.deferDelivery,
         confirmationKey: input.confirmationKey,
         analysisRunId: input.analysisRunId,
+        autoSubmitDecisionId: input.autoSubmitDecisionId,
         privilegedRetry: input.privilegedRetry,
         privilegedReason: input.privilegedReason,
         dealVersion: deal.version,

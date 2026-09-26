@@ -144,7 +144,7 @@ export async function processAutoSubmit(actor: DealActor, dealId: string, expect
         const prior = await findJobByConfirmation(actor.workspaceId, confirmationKey, score.funderId)
         const job = prior
           ? { jobId: prior.id, state: prior.state, reason: prior.reason }
-          : (await queueSubmissions({ actor, dealId: deal.id, funderIds: [score.funderId], confirmationKey, expectedDealVersion, expectedAutoApiRoute: route })).jobs[0]
+          : (await queueSubmissions({ actor, dealId: deal.id, funderIds: [score.funderId], confirmationKey, autoSubmitDecisionId: id, expectedDealVersion, expectedAutoApiRoute: route })).jobs[0]
         const submitted = Boolean(job && ["queued", "sending", "sent", "pending_portal", "declined", "funded"].includes(job.state))
         const persisted = submitted ? undefined : await findJobByConfirmation(actor.workspaceId, confirmationKey, score.funderId)
         submissionJobId = submitted ? job?.jobId ?? null : persisted?.id ?? null
@@ -155,6 +155,9 @@ export async function processAutoSubmit(actor: DealActor, dealId: string, expect
         if (job?.state === "failed" && persisted) {
           outcome = "skipped"
           reason = "manual_retry_required"
+        } else if (job?.state === "skipped" && persisted) {
+          outcome = "skipped"
+          reason = job.reason ?? "automatic_delivery_cancelled"
         }
       } catch (error) {
         outcome = "failed"
@@ -164,6 +167,7 @@ export async function processAutoSubmit(actor: DealActor, dealId: string, expect
           submissionJobId = job.id
           if (["queued", "sending", "sent", "pending_portal", "declined", "funded"].includes(job.state)) outcome = "submit"
           else if (job.state === "failed") { outcome = "skipped"; reason = "manual_retry_required" }
+          else if (job.state === "skipped") { outcome = "skipped"; reason = job.reason ?? "automatic_delivery_cancelled" }
         }
       }
       await getDatabase().prepare("UPDATE mca_auto_submit_decisions SET outcome=?,reason=?,submission_job_id=?,retry_count=retry_count+? WHERE workspace_id=? AND id=?")

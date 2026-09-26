@@ -9,6 +9,7 @@ import type { AttemptState, DeliverResult, JobState, SubmissionJob } from "./con
 import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
+import { autoDeliveryBlockReason, recordAutoDeliveryCancellation } from "./auto-delivery-gate"
 import {
   displayCacheStatus,
   findAttempt,
@@ -57,6 +58,15 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
+  if (existing?.state === "sending" && job.autoSubmitDecisionId) {
+    const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
+    await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
+    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
+    await recordAutoDeliveryCancellation(job, "manual_retry_required")
+    await refreshCache(saved)
+    await markOutboxProcessed(job.id, reason)
+    return saved
+  }
   if (existing && job.approvedPackage && existing.state === "sending" && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) {
     const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
     await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
@@ -69,6 +79,16 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
     const current = await findJobById(job.workspaceId, job.id)
     if (isCompletedAttempt(existing.state)) await markOutboxProcessed(job.id)
     return current ?? job
+  }
+
+  const autoBlock = await autoDeliveryBlockReason(job)
+  if (autoBlock) {
+    if (existing) await updateAttempt(job.id, job.attemptKey, { state: "skipped", errorCode: "auto_submit_cancelled", errorMessage: autoBlock })
+    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "skipped", reason: autoBlock })
+    await recordAutoDeliveryCancellation(job, autoBlock)
+    await refreshCache(saved)
+    await markOutboxProcessed(job.id, autoBlock)
+    return saved
   }
 
   if (!existing) {
@@ -130,6 +150,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
       reason: reason ?? null,
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     })
+    if (nextState === "skipped" && delivered.errorCode === "auto_submit_cancelled") await recordAutoDeliveryCancellation(job, reason ?? "Automatic delivery was cancelled.")
     await refreshCache(saved)
     await markOutboxProcessed(job.id)
     return saved

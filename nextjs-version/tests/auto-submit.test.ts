@@ -7,7 +7,9 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
-import { persistNewDestination } from "../src/lib/mca/submissions/repository"
+import { findJobById, insertAttempt, insertJob, persistNewDestination, updateJobRecord, type JobInsert } from "../src/lib/mca/submissions/repository"
+import { processJobDelivery } from "../src/lib/mca/submissions/outbox"
+import { deliverSubmission } from "../src/lib/mca/submissions/deliver"
 import { upsertAdapterCredential } from "../src/lib/mca/submissions/adapters/credentials"
 import { setSandboxFunderEnabled } from "../src/lib/mca/sandbox/service"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -190,6 +192,104 @@ test("sandbox auto-submit retries a failed preflight, then never sends the deal 
     await processAutoSubmit(actor, deal.id, 1, "auto_submit", manualEdit.version)
     assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_jobs WHERE deal_id=? AND funder_id=?").get(deal.id, funderId))?.n, 2)
     assert.deepEqual(await getDatabase().prepare<{ outcome: string; reason: string }>("SELECT outcome,reason FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(deal.id, funderId), { outcome: "skipped", reason: "previous_submission" })
+
+    // Queue a real automatic submission, then revoke consent before the separate
+    // delivery worker runs. No attempt or provider receipt may be created.
+    const queuedDeal = (await createDeal(actor, { idempotencyKey: "auto-revoked-deal", legalName: "Revoked Merchant LLC", entityType: "llc", address: { line1: "3 Main St", city: "New York", state: "NY", postalCode: "10001" }, startDate: "2020-01-01", industry: "restaurants", naicsCode: "722511", monthlyRevenue: 20_000, ficoScore: 680, requestedAmount: 50_000, requestedTermMonths: 12, fundingPurpose: "working capital", contactPhone: "2125550100", owners: [{ firstName: "Ada", lastName: "Cole", ownershipPercent: 100, isPrimary: true }] })).deal
+    await getDatabase().prepare(`INSERT INTO mca_completeness_results
+      (id,workspace_id,deal_id,ready,version,rule_snapshot,findings_json,findings_fingerprint,checked_at)
+      VALUES (?,?,?,1,1,'{}','[]','ready',?)`).run("auto-revoked-complete", actor.workspaceId, queuedDeal.id, now)
+    await storeDocument(actor, { dealId: queuedDeal.id, idempotencyKey: "auto-revoked-doc", filename: "statement.pdf", mimeType: "application/pdf", bytes, category: "statement", source: "test" })
+    process.env.MCA_BACKGROUND_JOBS = "enabled"
+    await processAutoSubmit(actor, queuedDeal.id, 1, "auto_submit", queuedDeal.version)
+    const queuedDecision = await getDatabase().prepare<{ submission_job_id: string }>("SELECT submission_job_id FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(queuedDeal.id, funderId)
+    assert.ok(queuedDecision?.submission_job_id)
+    const queuedJob = await findJobById(actor.workspaceId, queuedDecision.submission_job_id)
+    assert.equal(queuedJob?.state, "queued")
+    assert.ok(queuedJob?.autoSubmitDecisionId)
+    delete process.env.MCA_AUTO_SUBMIT_ENABLED
+    assert.equal((await deliverSubmission(queuedJob!)).state, "skipped")
+    const skipped = await processJobDelivery(queuedJob!)
+    assert.equal(skipped.state, "skipped")
+    assert.match(skipped.reason ?? "", /disabled/)
+    assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_attempts WHERE job_id=?").get(skipped.id))?.n, 0)
+    assert.equal((await getDatabase().prepare<{ outcome: string }>("SELECT outcome FROM mca_auto_submit_decisions WHERE id=?").get(queuedJob!.autoSubmitDecisionId))?.outcome, "skipped")
+    process.env.MCA_AUTO_SUBMIT_ENABLED = "true"
+
+    const modes = ["off", "score_only"] as const
+    for (const mode of modes) {
+      await getDatabase().prepare("UPDATE mca_auto_submit_decisions SET outcome='pending' WHERE id=?").run(queuedJob!.autoSubmitDecisionId)
+      await setAutoSubmitSettings(actor, { mode, minMatchScore: 0, maxFundersPerDeal: 1, eligibleFunderIds: [funderId] })
+      // Reuse the queued job's durable automatic marker with a fresh job ID.
+      const replayInput = { workspaceId: actor.workspaceId, dealId: queuedDeal.id, funderId,
+        displayFunderName: "Sandbox", routeKind: "api", route: approvedRoute, state: "queued",
+        confirmationKey: `auto-revoked-${mode}`, attemptKey: `auto-revoked-${mode}`, dealVersion: queuedDeal.version,
+        autoSubmitDecisionId: queuedJob!.autoSubmitDecisionId, documentVersions: queuedJob!.documentVersions,
+        packageDocumentIds: queuedJob!.packageDocumentIds, preflightErrors: [], merchantIdentityKey: `deal:${queuedDeal.id}`,
+        packageFingerprint: `auto-revoked-${mode}`, createdByUserId: null,
+      } satisfies JobInsert
+      await assert.rejects(persistNewDestination(replayInput), { code: "auto_submit_disabled" })
+      const replay = await insertJob(replayInput)
+      assert.equal((await processJobDelivery(replay.job)).state, "skipped")
+      assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_attempts WHERE job_id=?").get(replay.job.id))?.n, 0)
+      assert.equal((await getDatabase().prepare<{ outcome: string }>("SELECT outcome FROM mca_auto_submit_decisions WHERE id=?").get(queuedJob!.autoSubmitDecisionId))?.outcome, "skipped")
+    }
+    await setAutoSubmitSettings(actor, { mode: "auto_submit", minMatchScore: 0, maxFundersPerDeal: 1, eligibleFunderIds: [funderId] })
+    for (const change of ["route", "funder_selection", "completeness", "threshold", "limit"] as const) {
+      await getDatabase().prepare("UPDATE mca_auto_submit_decisions SET outcome='pending',score=90 WHERE id=?").run(queuedJob!.autoSubmitDecisionId)
+      const replay = await insertJob({ workspaceId: actor.workspaceId, dealId: queuedDeal.id, funderId,
+        displayFunderName: "Sandbox", routeKind: "api", route: approvedRoute, state: "queued",
+        confirmationKey: `auto-revoked-${change}`, attemptKey: `auto-revoked-${change}`, dealVersion: queuedDeal.version,
+        autoSubmitDecisionId: queuedJob!.autoSubmitDecisionId, documentVersions: queuedJob!.documentVersions,
+        packageDocumentIds: queuedJob!.packageDocumentIds, preflightErrors: [], merchantIdentityKey: `deal:${queuedDeal.id}`,
+        packageFingerprint: `auto-revoked-${change}`, createdByUserId: null,
+      })
+      if (change === "route") {
+        await getDatabase().prepare("UPDATE mca_funders SET routes=? WHERE workspace_id=? AND id=?")
+          .run(JSON.stringify([{ ...approvedRoute, destination: "unavailable" }]), actor.workspaceId, funderId)
+      } else if (change === "funder_selection") {
+        await setAutoSubmitSettings(actor, { mode: "auto_submit", minMatchScore: 0, maxFundersPerDeal: 1, eligibleFunderIds: [] })
+      } else if (change === "completeness") {
+        await getDatabase().prepare("UPDATE mca_completeness_results SET ready=0 WHERE workspace_id=? AND deal_id=?").run(actor.workspaceId, queuedDeal.id)
+      } else if (change === "threshold") {
+        await setAutoSubmitSettings(actor, { mode: "auto_submit", minMatchScore: 95, maxFundersPerDeal: 1, eligibleFunderIds: [funderId] })
+        await assert.rejects(persistNewDestination({ workspaceId: actor.workspaceId, dealId: queuedDeal.id, funderId,
+          displayFunderName: "Sandbox", routeKind: "api", route: approvedRoute, state: "queued",
+          confirmationKey: "auto-threshold-commit", attemptKey: "auto-threshold-commit", dealVersion: queuedDeal.version,
+          autoSubmitDecisionId: queuedJob!.autoSubmitDecisionId, documentVersions: queuedJob!.documentVersions,
+          packageDocumentIds: queuedJob!.packageDocumentIds, preflightErrors: [], merchantIdentityKey: `deal:${queuedDeal.id}`,
+          packageFingerprint: "auto-threshold-commit", createdByUserId: null,
+        }), { code: "auto_submit_settings_changed" })
+      } else {
+        await getDatabase().prepare(`INSERT INTO mca_auto_submit_decisions
+          (id,workspace_id,deal_id,deal_version,completeness_version,funder_id,score,outcome,reason,created_at)
+          VALUES (?,?,?,?,?,?,90,'submit','fixture',?)`).run("auto-limit-other", actor.workspaceId, queuedDeal.id, queuedDeal.version, 1, "other-funder", now)
+      }
+      assert.equal((await processJobDelivery(replay.job)).state, "skipped")
+      assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_attempts WHERE job_id=?").get(replay.job.id))?.n, 0)
+      if (change === "route") await getDatabase().prepare("UPDATE mca_funders SET routes=? WHERE workspace_id=? AND id=?").run(JSON.stringify([approvedRoute]), actor.workspaceId, funderId)
+      else if (change === "funder_selection") await setAutoSubmitSettings(actor, { mode: "auto_submit", minMatchScore: 0, maxFundersPerDeal: 1, eligibleFunderIds: [funderId] })
+      else if (change === "completeness") await getDatabase().prepare("UPDATE mca_completeness_results SET ready=1 WHERE workspace_id=? AND deal_id=?").run(actor.workspaceId, queuedDeal.id)
+      else if (change === "threshold") await setAutoSubmitSettings(actor, { mode: "auto_submit", minMatchScore: 0, maxFundersPerDeal: 1, eligibleFunderIds: [funderId] })
+      else await getDatabase().prepare("DELETE FROM mca_auto_submit_decisions WHERE id=?").run("auto-limit-other")
+    }
+    await getDatabase().prepare("UPDATE mca_auto_submit_decisions SET outcome='pending' WHERE id=?").run(queuedJob!.autoSubmitDecisionId)
+    const uncertain = (await insertJob({ workspaceId: actor.workspaceId, dealId: queuedDeal.id, funderId,
+      displayFunderName: "Sandbox", routeKind: "api", route: approvedRoute, state: "queued",
+      confirmationKey: "auto-revoked-uncertain", attemptKey: "auto-revoked-uncertain", dealVersion: queuedDeal.version,
+      autoSubmitDecisionId: queuedJob!.autoSubmitDecisionId, documentVersions: queuedJob!.documentVersions,
+      packageDocumentIds: queuedJob!.packageDocumentIds, preflightErrors: [], merchantIdentityKey: `deal:${queuedDeal.id}`,
+      packageFingerprint: "auto-revoked-uncertain", createdByUserId: null,
+    })).job
+    await insertAttempt({ workspaceId: actor.workspaceId, jobId: uncertain.id, attemptKey: uncertain.attemptKey,
+      transport: "api", state: "sending", correlationId: "uncertain-attempt" })
+    await updateJobRecord(actor.workspaceId, uncertain.id, { state: "sending" })
+    const failed = await processJobDelivery({ ...uncertain, state: "sending" })
+    assert.equal(failed.state, "failed")
+    assert.match(failed.reason ?? "", /uncertain/)
+    assert.equal((await getDatabase().prepare<{ error_code: string }>("SELECT error_code FROM mca_submission_attempts WHERE job_id=?").get(failed.id))?.error_code, "delivery_uncertain")
+    assert.equal((await getDatabase().prepare<{ reason: string }>("SELECT reason FROM mca_auto_submit_decisions WHERE id=?").get(queuedJob!.autoSubmitDecisionId))?.reason, "manual_retry_required")
+    delete process.env.MCA_BACKGROUND_JOBS
 
     const capped = (await createDeal(actor, { idempotencyKey: "auto-capped-deal", legalName: "Capped Merchant LLC", entityType: "llc", address: { line1: "2 Main St", city: "New York", state: "NY", postalCode: "10001" }, startDate: "2020-01-01", industry: "restaurants", naicsCode: "722511", monthlyRevenue: 20_000, ficoScore: 680, requestedAmount: 50_000, requestedTermMonths: 12, fundingPurpose: "working capital", contactPhone: "2125550100", owners: [{ firstName: "Ada", lastName: "Cole", ownershipPercent: 100, isPrimary: true }] })).deal
     await getDatabase().prepare(`INSERT INTO mca_completeness_results

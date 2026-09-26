@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS mca_auto_submit_settings (
   CONSTRAINT mca_auto_submit_max_check CHECK (max_funders_per_deal BETWEEN 1 AND 25)
 );
 --> statement-breakpoint
+ALTER TABLE mca_submission_jobs ADD COLUMN auto_submit_decision_id text;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS mca_auto_submit_decisions (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

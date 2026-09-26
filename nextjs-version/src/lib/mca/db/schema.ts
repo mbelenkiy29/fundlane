@@ -1567,6 +1567,7 @@ export const mca_submission_jobs = pgTable("mca_submission_jobs", {
 	confirmation_key: text().notNull(),
 	attempt_key: text().notNull(),
 	analysis_run_id: text(),
+	auto_submit_decision_id: text(),
 	deal_version: integer().notNull(),
 	document_versions_json: text().notNull(),
 	package_json: text().notNull(),

@@ -19,6 +19,7 @@ const billingRecoveryTimestamp = 1790035200002;
 async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS marketing_demo_submissions");
   await fixture.query("DROP TABLE IF EXISTS mca_auto_submit_decisions, mca_auto_submit_settings");
+  await fixture.query("ALTER TABLE mca_submission_jobs DROP COLUMN IF EXISTS auto_submit_decision_id");
   await fixture.query("ALTER TABLE company_subscription_state DROP COLUMN IF EXISTS state_kind");
   await fixture.query("DROP TABLE IF EXISTS company_trial_grants");
   await fixture.query("DROP TABLE IF EXISTS company_trial_reservations");
