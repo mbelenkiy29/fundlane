@@ -20,9 +20,9 @@ The public homepage is `/`; `/landing` permanently redirects to it. `/demo` host
 
 ## Draft legal pages
 
-`/terms` and `/privacy` are public and linked from the marketing footer and sign-up form. Their copy is maintained in `src/lib/marketing/legal-drafts.ts`; the banner and last-updated line are rendered by `src/components/marketing/legal-draft.tsx`. Both pages are deliberately labeled **DRAFT — pending legal review. Not yet in effect.** Michael and counsel must approve the copy, fill `[Company legal name]`, `[Company mailing address]`, `[contact email]`, and `[date pending legal review]`, and decide when it takes effect. The pages do not add a new environment variable or migration. Public availability is required by issue #52 even while content remains draft.
+`MCA_LEGAL_DRAFT_PAGES_ENABLED=true` is a server-only, strict opt-in for the draft `/terms` and `/privacy` pages, footer and sign-up links, and robots/sitemap entries. Unset or any other value keeps the original behavior: `/terms` redirects to sign-in, `/privacy` serves the existing gated website/demo notice only when `MCA_MARKETING_PRIVACY_URL=https://fundlane.io/privacy`, and no draft links or index entries appear. The draft copy is maintained in `src/lib/marketing/legal-drafts.ts`; the banner and last-updated line are rendered by `src/components/marketing/legal-draft.tsx`. Both pages are deliberately labeled **DRAFT — pending legal review. Not yet in effect.** The sign-up links also say “(draft)”. Michael and counsel must approve final copy, fill `[Company legal name]`, `[Company mailing address]`, `[contact email]`, and `[date pending legal review]`, and decide when it takes effect before the flag is turned on in production. No migration is needed.
 
-The demo form still requires `MCA_MARKETING_PRIVACY_URL` as its separate approval gate. A public draft page alone does not approve demo collection. Do not use this draft as the approved notice for demo activation, OAuth consent, or SMS registration until reviewed.
+The demo form still requires `MCA_MARKETING_PRIVACY_URL` as its separate approval gate. When the draft flag is on, the demo gate rejects any configured URL whose path is `/privacy` (on any host, including preview domains), so it cannot treat this app's draft route as the approved notice. A separately approved notice at another path may still be configured. Do not use draft content for demo activation, OAuth consent, or SMS registration until reviewed.
 
 ## Enable demo requests
 
@@ -170,7 +170,7 @@ node marketing-inbox.cjs delete <opaque-request-id>
 
 `list` displays only IDs and timestamps. `show` decrypts contact data: use it only in the private shell and do not copy its output to shared logs or tickets. `delete` removes the encrypted contact payload and preserves the retry tombstone. Operators should review new inquiries and delete contact details when no longer needed. Outbound contact requires a separate operator decision; intake itself sends nothing.
 
-The demo receiver uses `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. `/privacy` is public regardless of the demo configuration; the demo form remains disabled until all three values are configured.
+The demo receiver uses `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. `/privacy` serves the draft only with the draft flag; otherwise the existing approved-notice publication gate applies. The demo form remains disabled until all three values are configured and the configured notice is eligible.
 
 
 ## Luro design adaptation (September 13, 2026)
