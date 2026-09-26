@@ -61,7 +61,7 @@ const stages = [
     alt: "Fundlane renewal workspace with synthetic funding history",
   },
 ]
-const faqs = [
+const faqs: readonly (readonly [string, string])[] = [
   ["What can the AI assistant help with?", "Ask questions about accessible deals, draft communications, research public sources, and work with supported files. Approval-required messages and submissions stay under your control. Tools depend on enabled capabilities and available credits."],
   [
     "Who is Fundlane for?",
@@ -93,7 +93,7 @@ export function MarketingHome() {
   return (
     <MarketingShell
       immersive
-      jsonLd={{ title: "MCA brokerage software, from application to renewal", path: "/" }}
+      jsonLd={{ title: "MCA brokerage software, from application to renewal", path: "/", faq: faqs }}
     >
       <main id="main">
         <section className="fl-hero">

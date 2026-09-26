@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { resolve } from "node:path"
 import robots from "../src/app/robots"
 import sitemap from "../src/app/sitemap"
@@ -13,6 +13,7 @@ import {
   marketingMetadata,
 } from "../src/lib/marketing/metadata"
 import { helpArticles } from "../src/lib/marketing/help"
+import { companyLegalName, marketingPolishEnabled } from "../src/lib/marketing/polish"
 
 test("marketing metadata uses Fundlane chrome and page-specific demo copy", () => {
   const home = marketingMetadata("MCA brokerage software, from application to renewal", "/")
@@ -48,9 +49,50 @@ test("JSON-LD describes Fundlane without pricing or legal-entity claims", () => 
   assert.doesNotMatch(encoded, /Sentinel Tech Solutions/)
 })
 
-test("mobile nav demo arrow stays visible below 760px", () => {
-  const css = readFileSync(resolve(import.meta.dirname, "../src/components/marketing/marketing.css"), "utf8")
-  assert.doesNotMatch(css, /\.fl-nav-actions \.fl-button svg\s*\{\s*display:\s*none/)
+test("FAQ JSON-LD is valid and uses the page's own visible answers", () => {
+  const faq = [["What can I review?", "Applications and submissions."], ["Can we import deals?", "Use spreadsheet imports."]] as const
+  const parsed = JSON.parse(JSON.stringify(marketingJsonLd({ title: "Home", path: "/", faq })))
+  const faqPage = parsed["@graph"].find((node: { "@type": string }) => node["@type"] === "FAQPage")
+  assert.equal(faqPage.mainEntity.length, faq.length)
+  assert.deepEqual(faqPage.mainEntity.map((item: { name: string; acceptedAnswer: { text: string } }) => [item.name, item.acceptedAnswer.text]), faq)
+  assert.doesNotMatch(JSON.stringify(parsed), /"offers"|"price"/i)
+})
+
+test("marketing polish and legal name have safe empty defaults", () => {
+  const flag = process.env.MCA_MARKETING_POLISH_ENABLED
+  const name = process.env.NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME
+  try {
+    delete process.env.MCA_MARKETING_POLISH_ENABLED
+    delete process.env.NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME
+    assert.equal(marketingPolishEnabled(), false)
+    assert.equal(companyLegalName(), null)
+    process.env.MCA_MARKETING_POLISH_ENABLED = "TRUE"
+    assert.equal(marketingPolishEnabled(), false)
+    process.env.MCA_MARKETING_POLISH_ENABLED = "true"
+    process.env.NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME = "  Example Legal LLC  "
+    assert.equal(marketingPolishEnabled(), true)
+    assert.equal(companyLegalName(), "Example Legal LLC")
+  } finally {
+    if (flag === undefined) delete process.env.MCA_MARKETING_POLISH_ENABLED
+    else process.env.MCA_MARKETING_POLISH_ENABLED = flag
+    if (name === undefined) delete process.env.NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME
+    else process.env.NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME = name
+  }
+})
+
+test("internal demo link in mobile navigation has no external arrow when polished", () => {
+  const script = `
+    const React = require("react");
+    const { renderToStaticMarkup } = require("react-dom/server");
+    const { MobileNav } = require("./src/components/marketing/mobile-nav.tsx");
+    console.log(JSON.stringify([false, true].map(polished => renderToStaticMarkup(React.createElement(MobileNav, { polished })))))
+  `
+  const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", cwd: resolve(import.meta.dirname, "..") })
+  assert.equal(result.status, 0, result.stderr)
+  const [current, polished] = JSON.parse(result.stdout) as string[]
+  assert.match(current, /Book a demo <span aria-hidden="true">↗<\/span>/)
+  assert.match(polished, /Book a demo/)
+  assert.doesNotMatch(polished, /↗/)
 })
 
 test("sitemap includes lastmod for each public marketing URL", () => {

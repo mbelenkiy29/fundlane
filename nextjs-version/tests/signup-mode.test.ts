@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import test from "node:test"
 import { migratedAccountNoticeEnabled, signupMode } from "../src/lib/mca/signup-mode"
 
-function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false) {
+function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false, polish = false) {
   const script = `
     const React = require("react");
     const { renderToStaticMarkup } = require("react-dom/server");
@@ -17,6 +17,7 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
   if (showNotice === undefined) delete env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE
   else env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE = showNotice
   env.MCA_MAGIC_LINK_ENABLED = String(magicLink)
+  env.MCA_MARKETING_POLISH_ENABLED = String(polish)
   const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", env })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout) as { signup: string; signin: string }
@@ -58,4 +59,14 @@ test("invite-only sign-in can show magic link while hiding the migrated-account 
   assert.match(markup, /Email me a sign-in link/)
   assert.match(markup, /New team members join through an invitation/)
   assert.doesNotMatch(markup, /Create a company workspace|migrated account/)
+})
+
+test("polished sign-up renders one visible h1 in either signup mode", () => {
+  const open = renderAuth("open", undefined, false, true).signup
+  const inviteOnly = renderAuth("invite_only", undefined, false, true).signup
+  assert.match(open, /<h1 class="leading-none font-semibold">Create your company workspace<\/h1>/)
+  assert.equal((open.match(/<h1\b/g) ?? []).length, 1)
+  assert.match(inviteOnly, /<h1 class="text-xl font-semibold">Fundlane is invite-only<\/h1>/)
+  assert.equal((inviteOnly.match(/<h1\b/g) ?? []).length, 1)
+  assert.doesNotMatch(renderAuth("open", undefined).signup, /<h1\b/)
 })

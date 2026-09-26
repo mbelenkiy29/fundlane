@@ -55,9 +55,10 @@ export type MarketingJsonLdNode = {
   publisher?: { "@id": string }
   isPartOf?: { "@id": string }
   about?: { "@id": string }
+  mainEntity?: { "@type": "Question"; name: string; acceptedAnswer: { "@type": "Answer"; text: string } }[]
 }
 
-export function marketingJsonLd(input: { title: string; path: string; description?: string }): {
+export function marketingJsonLd(input: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }): {
   "@context": "https://schema.org"
   "@graph": MarketingJsonLdNode[]
 } {
@@ -99,6 +100,15 @@ export function marketingJsonLd(input: { title: string; path: string; descriptio
         isPartOf: { "@id": `${MARKETING_ORIGIN}/#website` },
         about: { "@id": `${MARKETING_ORIGIN}/#software` },
       },
+      ...(input.faq?.length ? [{
+        "@type": "FAQPage",
+        "@id": `${pageUrl}#faq`,
+        mainEntity: input.faq.map(([question, answer]) => ({
+          "@type": "Question" as const,
+          name: question,
+          acceptedAnswer: { "@type": "Answer" as const, text: answer },
+        })),
+      }] : []),
     ],
   }
 }
