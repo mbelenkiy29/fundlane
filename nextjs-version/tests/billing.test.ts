@@ -51,7 +51,7 @@ async function fixture(mapped = true) {
   const client = {
     customers:{ create:async()=>{state.createdCustomers++;return{id:customerId,livemode:false}},retrieve:async()=>({id:customerId,livemode:false,metadata:{workspace_id:local.workspaceId},invoice_settings:{default_payment_method:state.defaultPaymentMethod}}) },
     paymentMethods:{retrieve:async(id:string)=>({id,customer:customerId,livemode:false,type:"card",card:{exp_year:new Date().getUTCFullYear()+1,exp_month:12}})},
-    subscriptions:{ list:async()=>{if(state.fail)throw new Error("outage");return{data:state.subscriptions,has_more:false}},retrieve:async(id:string)=>state.subscriptions.find(s=>s.id===id),resume:async(id:string,_params:unknown,options?:{idempotencyKey?:string})=>{state.resumeCalls.push({id,key:options?.idempotencyKey});const target=state.subscriptions.find(s=>s.id===id)!;target.status="active";return target},update:async(_id:string,params:Record<string,unknown>)=>{state.updates.push(params);if("pause_collection" in params)sub.pause_collection=params.pause_collection ? {behavior:"keep_as_draft"} : null;return sub} },
+    subscriptions:{ list:async()=>{if(state.fail)throw new Error("outage");return{data:state.subscriptions,has_more:false}},retrieve:async(id:string)=>state.subscriptions.find(s=>s.id===id),resume:async(id:string,_params:unknown,options?:{idempotencyKey?:string})=>{state.resumeCalls.push({id,key:options?.idempotencyKey});const target=state.subscriptions.find(s=>s.id===id)!;target.status="active";return target},update:async(_id:string,params:Record<string,unknown>)=>{state.updates.push(params);if("pause_collection" in params)sub.pause_collection=params.pause_collection ? {behavior:"keep_as_draft"} : null;if("default_payment_method" in params)sub.default_payment_method=params.default_payment_method as string;return sub} },
     charges:{list:async()=>({data:[],has_more:false})},
     prices:{ retrieve:async(id:string)=>({id,active:true,livemode:false,currency:"usd",unit_amount:id==="price_base"?state.priceAmount:null,billing_scheme:id==="price_base"?"per_unit":"tiered",tiers_mode:"graduated",tiers:BILLING_CATALOG.additionalSeats.tiers.map(tier=>({up_to:tier.upTo,unit_amount:tier.unitAmountCents})),recurring:{interval:"month",interval_count:1,usage_type:"licensed"}}) },
     invoices:{list:async()=>{state.invoiceReads++;return{data:structuredClone(state.invoices),has_more:false}},finalizeInvoice:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.finalizations.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params,{status:"open",hosted_invoice_url:`https://invoice.stripe.com/i/${id}`,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:null}});return structuredClone(target)},update:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.invoiceUpdates.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params);return structuredClone(target)}},
@@ -1722,12 +1722,15 @@ test("Stripe trial webhooks dedupe owner reminders, pause access, and recover af
     process.env.MCA_EMAIL_WEBHOOK_URL=`http://127.0.0.1:${address.port}`
     try {
       await getDatabase().prepare("UPDATE company_billing_notifications SET available_at='1900-01-01' WHERE id=?").run(rows[0].id)
+      delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
       await deliverBillingNotifications(1)
       assert.equal(sent.length,1)
       assert.equal(sent[0].body.recipient,(await getDatabase().prepare<{email:string}>("SELECT email FROM users WHERE id=?").get(f.userId))?.email)
       assert.match(String(sent[0].body.actionUrl),/\/settings\/billing\?billingAction=portal$/)
       assert.match(String((sent[0].body.content as {text:string}).text),/Upcoming invoice total: \$715\.00\. Selected seats: 5/)
+      assert.doesNotMatch(String((sent[0].body.content as {text:string}).text),/Checkout starts your paid subscription immediately/)
       assert.match(String((sent[0].body.content as {text:string}).text),new RegExp(new Date(trialEnd*1000).toISOString()))
+      process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
       sub.status="paused"
       sub.trial_end=Math.floor(Date.now()/1000)-1
       await processStripeBillingEvent(event("customer.subscription.paused"),client)
@@ -1738,10 +1741,12 @@ test("Stripe trial webhooks dedupe owner reminders, pause access, and recover af
       const paused=await getDatabase().prepare<{id:string}>("SELECT id FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_paused'").all(f.workspaceId)
       assert.equal(paused.length,1)
       await getDatabase().prepare("UPDATE company_billing_notifications SET available_at='1901-01-01' WHERE id=?").run(paused[0].id)
+      delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
       await deliverBillingNotifications(1)
       assert.equal(sent.length,2)
       assert.match(String((sent[1].body.content as {text:string}).text),/Add a payment method/)
       assert.match(String(sent[1].body.actionUrl),/billingAction=portal$/)
+      process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
       f.state.defaultPaymentMethod="pm_saved"
       const customerResult=await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"customer.updated",livemode:false,data:{object:{id:f.customerId}}} as Stripe.Event,client)
       assert.ok("queued" in customerResult && customerResult.queued)
@@ -1845,7 +1850,18 @@ test("paused trial uses a valid customer default when the subscription default i
     sub.default_payment_method="pm_old"
     f.state.defaultPaymentMethod="pm_new"
     const checked:string[]=[]
-    const client={...f.client,paymentMethods:{retrieve:async(id:string)=>{
+    const writes:Array<{method:string;key:string|undefined}>=[]
+    const client={...f.client,subscriptions:{...f.client.subscriptions,
+      update:async(id:string,params:{default_payment_method:string},options?:{idempotencyKey:string})=>{
+        assert.equal(id,sub.id)
+        writes.push({method:params.default_payment_method,key:options?.idempotencyKey})
+        sub.default_payment_method=params.default_payment_method
+        return sub
+      },
+      resume:async(id:string,params:unknown,options?:{idempotencyKey:string})=>{
+        assert.equal(sub.default_payment_method,"pm_new","Stripe charges the subscription default before the customer default")
+        return f.client.subscriptions.resume(id,params as Stripe.SubscriptionResumeParams,options)
+      }},paymentMethods:{retrieve:async(id:string)=>{
       checked.push(id)
       if (id==="pm_old" && stale==="missing") throw Object.assign(new Error("No such payment method"),{code:"resource_missing"})
       return {id,customer:id==="pm_old" && stale==="detached"?"cus_other":f.customerId,livemode:false,type:"card",card:{exp_year:id==="pm_old"?2000:new Date().getUTCFullYear()+1,exp_month:12}}
@@ -1854,10 +1870,28 @@ test("paused trial uses a valid customer default when the subscription default i
     try {
       await syncWorkspaceBilling(f.workspaceId,client)
       assert.deepEqual(checked,["pm_old","pm_new"])
+      assert.deepEqual(writes,[{method:"pm_new",key:`fundlane:trial-resume-method:${sub.id}:${sub.trial_end}:pm_new`}])
       assert.deepEqual(f.state.resumeCalls,[{id:sub.id,key:`fundlane:trial-resume:${sub.id}:${sub.trial_end}:pm_new`}])
       assert.equal(sub.status,"active")
     } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
   }
+})
+
+test("paused trial does not resume when replacing the stale subscription card fails",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  sub.status="paused";sub.trial_end=Math.floor(Date.now()/1000)-10
+  sub.trial_settings={end_behavior:{missing_payment_method:"pause"}}
+  sub.collection_method="charge_automatically"
+  sub.default_payment_method="pm_old"
+  f.state.defaultPaymentMethod="pm_new"
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async()=>{throw new Error("Stripe update failed")}},paymentMethods:{retrieve:async(id:string)=>({id,customer:f.customerId,livemode:false,type:"card",card:{exp_year:id==="pm_old"?2000:new Date().getUTCFullYear()+1,exp_month:12}})}} as unknown as StripeBillingClient
+  process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+  try {
+    await assert.rejects(syncWorkspaceBilling(f.workspaceId,client),/Stripe update failed/)
+    assert.equal(sub.status,"paused")
+    assert.equal(sub.default_payment_method,"pm_old")
+    assert.equal(f.state.resumeCalls.length,0)
+  } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
 })
 
 test("unset lifecycle flag keeps local notices for mixed legacy trial records",()=>{

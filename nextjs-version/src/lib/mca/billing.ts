@@ -146,6 +146,14 @@ async function resumePausedTrial(subscription: BillingSubscription, customerId: 
     break
   }
   if (!methodId) return subscription
+  const subscriptionMethodId = typeof subscription.default_payment_method === "string" ? subscription.default_payment_method : subscription.default_payment_method?.id
+  if (subscriptionMethodId !== methodId) {
+    const updated = await client.subscriptions.update(subscription.id, { default_payment_method: methodId },
+      { idempotencyKey: `fundlane:trial-resume-method:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
+    const updatedMethodId = typeof updated.default_payment_method === "string" ? updated.default_payment_method : updated.default_payment_method?.id
+    if (updated.id !== subscription.id || fundlaneSubscriptions([updated],customerId).length !== 1 || updatedMethodId !== methodId)
+      throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+  }
   const resumed = await client.subscriptions.resume(subscription.id, { billing_cycle_anchor: "now" }, { idempotencyKey: `fundlane:trial-resume:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
   if (resumed.id !== subscription.id || fundlaneSubscriptions([resumed],customerId).length !== 1) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
   return resumed

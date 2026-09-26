@@ -106,7 +106,10 @@ test("unset lifecycle flag preserves the original local trial email body", () =>
     const description="Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately."
     assert.deepEqual(result,{subject:"Your Fundlane trial ends soon",text:`${description}\n\nDeadline: 2030-01-01T00:00:00Z\n\nPlans & Billing: ${url}`,html:`<p>${description.replace("Plans & Billing","Plans &amp; Billing")}</p><p>Deadline: 2030-01-01T00:00:00Z</p><p><a href="${url}">Open Plans &amp; Billing</a></p>`})
     const queuedStripePayload=renderBillingEmailContent({data:{kind:"trial_ending",stripeTrial:true,trialEndsAt:"2030-01-01T00:00:00Z",amount:1000,quantity:1,currency:"usd"},actionUrl:url})
-    assert.deepEqual(queuedStripePayload,result)
+    assert.match(queuedStripePayload.text,/Your Stripe trial ends soon/)
+    assert.match(queuedStripePayload.text,/Upcoming invoice total: \$10\.00\. Selected seats: 1/)
+    assert.match(queuedStripePayload.text,/Stripe billing portal/)
+    assert.doesNotMatch(queuedStripePayload.text,/Checkout starts your paid subscription immediately/)
   } finally { if(previous===undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED;else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED=previous }
 })
 

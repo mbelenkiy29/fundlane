@@ -40,7 +40,9 @@ export async function deliverBillingNotifications(limit = 50) {
         const origin = process.env.MCA_APP_ORIGIN
         if (!origin) throw new Error("MCA_APP_ORIGIN is required")
         if (!process.env.MCA_EMAIL_WEBHOOK_URL && !(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())) throw new Error("Configure the billing email webhook or UseSend API key and From address")
-        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${row.kind==="payment_failed"||(stripeTrialLifecycleEnabled()&&(row.kind==="trial_paused"||(row.kind==="trial_ending"&&JSON.parse(row.data).stripeTrial)))?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...JSON.parse(row.data),kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
+        const data = JSON.parse(row.data)
+        const portal = row.kind === "payment_failed" || row.kind === "trial_paused" || (row.kind === "trial_ending" && data.stripeTrial === true)
+        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${portal?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...data,kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
         payload.content=renderBillingEmailContent(payload)
         const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
         if (!frozen.changes) continue

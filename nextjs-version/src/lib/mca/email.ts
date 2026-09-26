@@ -4,7 +4,6 @@ import "server-only";
 import { AppError } from "./errors";
 import { newId } from "./db";
 import { sendUsesendEmail } from "./intake/usesend";
-import { stripeTrialLifecycleEnabled } from "./billing-flags";
 
 interface EmailMessage {
   recipient: string;
@@ -70,7 +69,7 @@ export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"dat
     payment_action_required:"Action needed: authenticate your Fundlane payment", payment_failed:"Action needed: update your Fundlane payment method",
   }
   const kind = String(message.data.kind)
-  const stripeTrial = stripeTrialLifecycleEnabled() && message.data.stripeTrial === true
+  const stripeTrial = message.data.stripeTrial === true
   const subject = subjects[kind]
   if (!subject) throw new AppError(422,"billing_notification_unknown","Unknown billing notification kind.")
   const descriptions: Record<string,string> = {
