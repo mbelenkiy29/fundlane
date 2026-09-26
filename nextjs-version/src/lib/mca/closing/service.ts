@@ -13,7 +13,8 @@ import { getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { permittedAssignmentIds } from "../deals/access-policy"
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from "../documents/contracts"
-import { getDocument, getDocumentContent, listSubmissionDocuments, storeDocument } from "../documents/service"
+import { getDocument, getDocumentContent, listSubmissionDocuments, retryDocumentScan, storeDocument } from "../documents/service"
+import { documentRuntimeEnabled } from "../jobs/document-runtime"
 import { assertSenderUsable } from "../senders/service"
 import { getSmsConsent, listSmsAccounts, normalizeSmsRecipient, resolveSmsRoute } from "../sms/service"
 import type { TwilioSmsTransport } from "../sms/twilio"
@@ -301,7 +302,11 @@ export async function uploadMerchantDocument(token: string, input: { idempotency
     const prior = await database.prepare<Row>("SELECT id,deal_id,category,processing_state FROM mca_documents WHERE workspace_id=? AND idempotency_key=?").get(row.workspace_id, storageKey)
     if (prior) {
       if (prior.deal_id !== row.deal_id || prior.category !== row.destination_category) throw new AppError(409, "idempotency_conflict", "That retry key already identifies another document.")
-      return { documentId: String(prior.id), processingState: String(prior.processing_state), stipulationStatus: String(row.stipulation_status ?? "open") as StipulationState }
+      const actor: DealActor = { workspaceId: String(row.workspace_id), userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId: newId() }
+      const state = documentRuntimeEnabled() && ["pending_scan", "scan_failed"].includes(String(prior.processing_state))
+        ? (await retryDocumentScan(actor, String(prior.id))).processingState
+        : String(prior.processing_state)
+      return { documentId: String(prior.id), processingState: state, stipulationStatus: String(row.stipulation_status ?? "open") as StipulationState }
     }
     if (Number(row.used_count) >= Number(row.max_uploads)) throw new AppError(404, "upload_link_invalid", "This upload link is invalid or expired.")
     const now = nowIso()

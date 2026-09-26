@@ -26,10 +26,7 @@ import { assertCompanyOperational, getCompanyAccess } from "../company-access"
 import { assertOutboundFresh } from "../outbound-freshness"
 import { withOutboundApproval } from "../outbound-approval"
 import { executionSignal, outsideExecutionScope, withExecutionDeadline } from "./execution"
-
-function documentRuntimeEnabled(): boolean {
-  return process.env.MCA_DOCUMENT_JOB_RUNTIME === "vercel_cron" || process.env.MCA_NATIVE_DOCUMENT_EXECUTOR === "true"
-}
+import { documentRuntimeEnabled } from "./document-runtime"
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)

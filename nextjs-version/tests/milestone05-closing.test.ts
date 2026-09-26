@@ -22,6 +22,7 @@ import {
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { storeDocument } from "../src/lib/mca/documents/service"
+import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 import { GET as snapshotGet } from "../src/app/api/mca/closing/[dealId]/route"
 import { POST as stipulationPost } from "../src/app/api/mca/closing/stipulations/route"
@@ -89,6 +90,51 @@ test("MIC-106 opaque merchant upload is deal scoped, validates content, resolves
   await assert.rejects(() => inspectMerchantUpload(token), (error: { code?: string }) => error.code === "upload_link_invalid")
   const verified = await updateStipulation(actor(), stip.id, { status: "verified" }); assert.equal(verified.status, "verified")
   await assert.rejects(() => updateStipulation(actor(ids.otherWorkspace), stip.id, { status: "waived", exceptionReason: "wrong workspace" }), (error: { code?: string }) => error.code === "stipulation_not_found")
+})
+
+test("merchant upload replay rescans after a scanner outage only with the document runtime enabled", async () => {
+  const previousRuntime = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const previousNative = process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+  const previousJobs = process.env.MCA_BACKGROUND_JOBS
+  const stip = await createStipulation(actor(), { dealId, documentCategory: "driver_license", label: "Replay scan", idempotencyKey: "stip-replay-scan" })
+  const link = await createMerchantUploadLink(actor(), { stipulationId: stip.id, idempotencyKey: "link-replay-scan", origin: "https://app.example.test" })
+  const token = link.url!.split("/").pop()!
+  const input = { idempotencyKey: "merchant-replay-scan", filename: "license.pdf", mimeType: "application/pdf", bytes: pdf }
+  let scans = 0
+  try {
+    delete process.env.MCA_DOCUMENT_JOB_RUNTIME
+    delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+    process.env.MCA_BACKGROUND_JOBS = "enabled"
+    setDocumentScannerForTests({ name: "outage", async scan() { scans++; return { status: "unavailable", provider: "outage", evidence: {} } } })
+    const upload = () => runAsBackgroundWorker(() => uploadMerchantDocument(token, input))
+    const first = await upload()
+    assert.equal(first.processingState, "pending_scan")
+    assert.equal((await upload()).processingState, "pending_scan")
+    assert.equal(scans, 1, "unset flags preserve the existing replay behavior")
+
+    process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+    assert.equal((await upload()).processingState, "pending_scan")
+    assert.equal(scans, 2)
+    setDocumentScannerForTests({ name: "error", async scan() { scans++; return { status: "error", provider: "error", evidence: {} } } })
+    assert.equal((await upload()).processingState, "scan_failed")
+    assert.equal(scans, 3)
+    setDocumentScannerForTests({ name: "recovered", async scan() { scans++; return { status: "clean", provider: "recovered", evidence: { engineVerified: true } } } })
+    const recovered = await upload()
+    assert.equal(recovered.documentId, first.documentId)
+    assert.equal(recovered.processingState, "clean")
+    assert.equal(scans, 4)
+    assert.deepEqual(await upload(), recovered)
+    assert.equal(scans, 4, "clean replay does not rescan")
+    const count = await getDatabase().prepare<{ documents: number; used: number }>(`SELECT
+      (SELECT count(*)::int FROM mca_documents WHERE workspace_id=? AND idempotency_key LIKE 'merchant:%:merchant-replay-scan') documents,
+      (SELECT used_count FROM mca_merchant_upload_links WHERE id=?) used`).get(ids.workspace, link.id)
+    assert.deepEqual(count, { documents: 1, used: 1 })
+  } finally {
+    if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
+    if (previousNative === undefined) delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR; else process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = previousNative
+    if (previousJobs === undefined) delete process.env.MCA_BACKGROUND_JOBS; else process.env.MCA_BACKGROUND_JOBS = previousJobs
+    setDocumentScannerForTests({ name: "clean-fixture", async scan() { return { status: "clean", provider: "clean-fixture", evidence: { engineVerified: true } } } })
+  }
 })
 
 test("MIC-108 requests preserve blockers, attach pinned clean documents, never imply signature, and require evidence", async () => {
