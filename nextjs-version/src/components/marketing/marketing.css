@@ -20,6 +20,7 @@
 }
 .fundlane * { box-sizing: border-box; }
 .fundlane h1, .fundlane h2, .fundlane h3, .fl-brand { font-family: var(--font-marketing-heading), sans-serif; }
+.fundlane.fl-polished h1, .fundlane.fl-polished h2, .fundlane.fl-polished h3, .fundlane.fl-polished .fl-brand, .fundlane.fl-polished .fl-demo-aside p, .fundlane.fl-polished .fl-mobile-nav nav a, .fundlane.fl-polished .fl-metrics p > span { font-family: var(--font-inter), sans-serif; }
 .fundlane h1, .fundlane h2, .fundlane h3 { font-weight: 500; line-height: 1.17; letter-spacing: -.045em; text-wrap: balance; }
 .fundlane h2 { font-size: clamp(32px, 3.5vw, 46px); }
 .fundlane p { color: var(--fl-muted); }
@@ -158,6 +159,7 @@
 .fl-footer-top p { font-size: 13px; margin-top: 18px; }
 .fl-footer nav { display: flex; gap: 26px; flex-wrap: wrap; font-size: 13px; align-items: flex-start; }
 .fl-footer-bottom { border-top: 1px solid var(--fl-line); display: flex; justify-content: space-between; margin-top: 40px; padding-top: 22px; font-size: 11px; color: var(--fl-muted); }
+.fl-footer-contact { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 28px; font-size: 13px; font-style: normal; }
 .fl-features-intro { text-align: center; padding-block: 85px 55px; }
 .fl-help { padding-block: 72px 100px; }
 .fl-help h1 { font-size: clamp(40px, 5vw, 64px); margin: 12px 0 18px; }

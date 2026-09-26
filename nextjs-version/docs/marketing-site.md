@@ -1,5 +1,13 @@
 # Fundlane marketing site
 
+## Marketing polish rollout
+
+Set `MCA_MARKETING_POLISH_ENABLED=true` in the Vercel environment and redeploy to enable the footer contact block, FAQ structured data, reduced marketing fonts, internal demo links without external-link arrows, and the visible sign-up heading. Unset or any other value preserves the current presentation. The root layout retains Inter for application and authentication screens. Marketing font preloads are scoped away from the root layout in both modes, so sign-in and sign-up do not preload unused display and metric fonts. With polish enabled, marketing uses Inter plus Geist Mono; the display and metric font files are not requested. Redeploy after changing the flag so static pages use the selected presentation.
+
+Set `NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME` to the verified legal entity name to show it in the marketing footer. It is blank by default; no company name is inferred from the brand or privacy notice. The existing server-only `MCA_SUPPORT_EMAIL` supplies the contact email in that block and elsewhere on the site. Invalid or unset email and blank legal name are omitted. Confirm the legal name and monitored support address with the owner before configuring them. No phone number, postal address, prices, customer claims, or new sales provider is implied. The demo request integration and publication gate remain as described below.
+
+Organization, WebSite, SoftwareApplication and WebPage structured data, the distinct demo meta description, and the dated sitemap entries are already present. The opt-in FAQPage node uses the same seven question and answer strings shown on the homepage. Update the sitemap content date only when published marketing content changes; do not use the build time as `lastmod`.
+
 The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice.
 
 ## Enable demo requests

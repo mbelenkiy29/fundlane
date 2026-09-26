@@ -1,8 +1,9 @@
 import Link from "next/link"
 import { ArrowUpRight } from "lucide-react"
 import { Logo } from "@/components/logo"
-import { marketingHeading, marketingMetric, marketingMono } from "@/lib/fonts"
+import { marketingHeading, marketingMetric, marketingMono } from "@/lib/marketing/fonts"
 import { marketingJsonLd } from "@/lib/marketing/metadata"
+import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
 import "./marketing.css"
@@ -31,16 +32,16 @@ export function DemoLink({
       href="/demo"
     >
       {children}
-      <ArrowUpRight size={16} aria-hidden="true" />
+      {!marketingPolishEnabled() && <ArrowUpRight size={16} aria-hidden="true" />}
     </Link>
   )
 }
 
-export function MarketingJsonLd({ title, path, description }: { title: string; path: string; description?: string }) {
+export function MarketingJsonLd({ title, path, description, faq }: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }) {
   return (
     <script
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(marketingJsonLd({ title, path, description })) }}
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(marketingJsonLd({ title, path, description, faq: marketingPolishEnabled() ? faq : undefined })).replace(/</g, "\\u003c") }}
     />
   )
 }
@@ -52,12 +53,14 @@ export function MarketingShell({
 }: {
   children: React.ReactNode
   immersive?: boolean
-  jsonLd?: { title: string; path: string; description?: string }
+  jsonLd?: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }
 }) {
+  const polished = marketingPolishEnabled()
   const { privacyUrl } = getDemoConfiguration()
   const { statusUrl, roadmapUrl, supportEmail } = getSupportConfig()
+  const legalName = polished ? companyLegalName() : null
   return (
-    <div className={`fundlane ${marketingHeading.variable} ${marketingMono.variable} ${marketingMetric.variable}${immersive ? " fl-immersive" : ""}`}>
+    <div className={`fundlane ${marketingMono.variable}${polished ? " fl-polished" : ` ${marketingHeading.variable} ${marketingMetric.variable}`}${immersive ? " fl-immersive" : ""}`}>
       {jsonLd && <MarketingJsonLd {...jsonLd} />}
       <a className="fl-skip" href="#main">
         Skip to content
@@ -78,7 +81,7 @@ export function MarketingShell({
             </Link>
             <DemoLink />
           </div>
-          <MobileNav />
+          <MobileNav polished={polished} />
         </div>
       </header>
       {children}
@@ -102,6 +105,10 @@ export function MarketingShell({
               {privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>
           </div>
+          {polished && (legalName || supportEmail) && <address className="fl-footer-contact">
+            {legalName && <span>{legalName}</span>}
+            {supportEmail && <a href={`mailto:${supportEmail}`}>{supportEmail}</a>}
+          </address>}
           <div className="fl-footer-bottom">
             <span>© {new Date().getFullYear()} Fundlane</span>
             <span>Built for MCA brokerages.</span>
