@@ -381,12 +381,23 @@ export function verifyStripeBillingEvent(body: string, signature: string | null,
   catch { throw new AppError(400, "billing_webhook_signature_invalid", "Invalid webhook signature.") }
 }
 
+export const BILLING_WEBHOOK_EVENTS = new Set([
+  "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed", "checkout.session.expired",
+  "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed", "customer.subscription.trial_will_end",
+  "invoice.paid", "invoice.payment_failed", "invoice.payment_action_required", "invoice.finalized", "invoice.upcoming",
+  "charge.refunded", "charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed", "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated",
+  "refund.created", "refund.updated", "refund.failed",
+])
+
 export async function processStripeBillingEvent(event: Stripe.Event, providedClient?: StripeBillingClient) {
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
-  if (!/^(customer\.subscription\.|invoice\.|charge\.(refunded|dispute\.)|refund\.|checkout\.session\.(completed|async_payment_succeeded|async_payment_failed|expired)$)/.test(event.type)) return { ignored: true }
+  if (!BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
   const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
   if (!customerId && object.charge) {
+    // Refund/dispute events may need a provider lookup; skip it for a known receipt.
+    const existing = await getDatabase().prepare("SELECT event_id FROM stripe_billing_events WHERE event_id=?").get(event.id)
+    if (existing) return { duplicate: true }
     const charge = await (providedClient??getStripeClient()).charges.retrieve(typeof object.charge==="string"?object.charge:object.charge.id)
     if (charge.livemode !== stripeLiveMode()) throw new AppError(400,"billing_mode_mismatch","Charge mode mismatch.")
     customerId = typeof charge.customer==="string"?charge.customer:charge.customer?.id
@@ -399,9 +410,9 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     const receipt = await db.prepare("INSERT INTO stripe_billing_events (event_id, event_type, stripe_customer_id, workspace_id, received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (event_id) DO NOTHING").run(event.id, event.type, customerId, mapping.workspace_id, nowIso())
     if (!receipt.changes) return { duplicate: true }
     if (object.id && event.type === "invoice.payment_action_required") {
-      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:action-required:${object.id}`,"payment_action_required",{invoiceId:object.id,invoiceUrl:object.hosted_invoice_url??null})
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:action-required:${object.id}`,"payment_action_required",{invoiceId:object.id,invoiceUrl:object.hosted_invoice_url??null,receivedAt:nowIso()})
     } else if (object.id && event.type === "invoice.payment_failed") {
-      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id})
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id,receivedAt:nowIso()})
     }
     const jobId = newId()
     await db.prepare(`INSERT INTO mca_background_jobs

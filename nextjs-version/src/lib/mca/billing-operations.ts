@@ -20,6 +20,18 @@ export async function deliverBillingNotifications(limit = 50) {
   let delivered = 0
   for (const row of claimed) {
     try {
+      if (process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES === "true" && (row.kind === "payment_action_required" || row.kind === "payment_failed")) {
+        const data = JSON.parse(row.data) as { invoiceId?: string; receivedAt?: string }
+        const invoice = await getDatabase().prepare<{ status: string; amount_remaining: number; synced_at: string }>("SELECT status,amount_remaining,synced_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_invoice_id=?").get(row.workspace_id,data.invoiceId)
+        if (!invoice || Date.parse(invoice.synced_at) < Date.parse(data.receivedAt ?? row.created_at)) {
+          await getDatabase().prepare("UPDATE company_billing_notifications SET lease_until=NULL,available_at=? WHERE id=? AND lease_until=?").run(new Date(Date.now()+60000).toISOString(),row.id,row.lease)
+          continue
+        }
+        if (invoice.status !== "open" || Number(invoice.amount_remaining) <= 0) {
+          await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
+          continue
+        }
+      }
       let payload:BillingEmailMessage
       if (row.delivery_payload) payload=JSON.parse(row.delivery_payload)
       else {

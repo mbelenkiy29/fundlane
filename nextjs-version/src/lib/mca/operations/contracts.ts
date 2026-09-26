@@ -4,6 +4,7 @@ export type Metrics = {
   running: number
   failed: number
   retrying: number
+  billingRetrying: number
   expired: number
   oldestSeconds: number
   emailQueued: number
