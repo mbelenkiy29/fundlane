@@ -8,7 +8,7 @@ Owner: Michael Belenkiy. Execute hosted drills only in an approved nonproduction
 
 The document host is the only worker with a dedicated heartbeat in this monitor. Generic job owners are observed through due queue age and expired leases; messaging and other schedulers need separate hosted owner and heartbeat acceptance before claiming full worker coverage. The recovery endpoint limits an authenticated administrator to 60 inventory reads and 10 decisions per minute through the existing request-rate table.
 
-The existing monitor rules remain: three bad checks for website/database/queue age/expired leases/document heartbeat, immediate billing reconciliation retries, ambiguous email, five recent email failures or five errors. The additional rules below are controlled by `MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED=true` and require the existing `MCA_OPERATIONS_ALERTS_ENABLED=true` for delivery. An unset flag preserves current delivery. Configure these as **Supabase platform-monitor secrets**, not browser settings:
+The existing deployed monitor rules remain: three bad checks for website/database/queue age/expired leases/document heartbeat, immediate ambiguous email, five recent email failures or five errors. Billing reconciliation retries and the additional rules below are controlled by `MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED=true` and require the existing `MCA_OPERATIONS_ALERTS_ENABLED=true` for delivery. An unset flag preserves current delivery. Configure these as **Supabase platform-monitor secrets**, not browser settings:
 
 | Variable | Default | Action |
 | --- | ---: | --- |
@@ -17,7 +17,7 @@ The existing monitor rules remain: three bad checks for website/database/queue a
 | `MCA_OPERATIONS_QUEUE_AGE_SECONDS` | `600` | Oldest due queued job age per kind, three checks. |
 | `MCA_OPERATIONS_QUEUE_AGE_BY_KIND_SECONDS` | `{}` | JSON object of kind-to-seconds overrides, e.g. `{"document_scan":300}`. Invalid entries are ignored. |
 | `MCA_OPERATIONS_PROVIDER_FAILURES` | `5` | Recent email failures or senders requiring reconnect, one check. |
-| `MCA_OPERATIONS_BILLING_FAILURES` | `1` | Due, retried billing notification, one check. Existing billing reconciliation alert remains separate. |
+| `MCA_OPERATIONS_BILLING_FAILURES` | `1` | Due, retried billing notification, one check. Billing reconciliation retry is a separate rule under the same recovery flag. |
 | `MCA_OPERATIONS_ASSISTANT_RUNS_PER_HOUR` | `100` | Assistant runs in the preceding hour, one check, only when `MCA_ASSISTANT_ENABLED=true` in the monitor. |
 
 Positive integer thresholds up to 86,400 are accepted. Review counts and expected traffic in synthetic staging, configure the approved operator recipient (`MCA_OPERATIONS_ALERT_EMAIL`) and transactional receiver, invoke `platform-monitor` with its dedicated `MCA_MONITOR_TOKEN`, then verify one opening and one recovery notification. Check `ops_alert_attempts` and the approved mailbox. A receiver timeout is an unknown outcome; inspect provider receipts before reconciling. Install or verify the existing monitor schedule only after acceptance; no new cron schedule is declared in this repository.
