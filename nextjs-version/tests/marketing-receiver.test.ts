@@ -39,7 +39,7 @@ test("demo to receiver commits one encrypted record across concurrent and ambigu
     const receiver = createDemoReceiver()
     let loseResponse = true
     const handler = createDemoHandler({
-      configuration: () => ({ enabled: true, token, privacyUrl: "https://fundlane.io/privacy", webhookUrl: "https://fundlane.io/api/marketing/receiver" }),
+      configuration: () => ({ enabled: true, databaseEnabled: false, token, privacyUrl: "https://fundlane.io/privacy", webhookUrl: "https://fundlane.io/api/marketing/receiver" }),
       rateLimit: async () => undefined,
       metric: () => undefined,
       fetch: async (url, init) => {
