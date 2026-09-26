@@ -714,9 +714,9 @@ export async function reconcileLicensedSeats(workspaceId:string, client?:StripeB
         await stripe.subscriptionSchedules.release(attached,{preserve_cancel_date:true},{idempotencyKey:`fundlane-release-orphan-reduction-${attached}`})
       }
     }
-    if (pending?.pending_seats===count && !repairReduction) return
-    if (count===current.seatLimit && !pending?.pending_seats) return
     if (count>current.seatLimit) await ensureSyncedSeatCapacity(workspaceId,actorUserId,0,client)
+    else if (pending?.pending_seats===count && !repairReduction) return
+    else if (count===current.seatLimit && !pending?.pending_seats) return
     else await changeBillingSeats(workspaceId,count,actorUserId,client,true,repairReduction)
   })
 }

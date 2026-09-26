@@ -490,12 +490,17 @@ test("active-only mode buys on acceptance and keeps an unpaid invitation pending
   assert.equal(await licensedSeatCount(f.workspaceId),5)
   delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
 })
-test("invitation delivery rechecks expiry after the invitation was created",async()=>{
+test("invitation delivery preserves flag-off behavior and rechecks expiry with seat sync enabled",async()=>{
   const f=await fixture(false),context={workspaceId:f.workspaceId,userId:f.userId,membershipId:f.membershipId,role:"admin" as const,authType:"session" as const,scopes:[],sessionId:null}
   const invitation=await inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Invitee",role:"rep"},"http://localhost:3000")
   const token=new URL(invitation.previewUrl!).searchParams.get("token")!
   await getDatabase().prepare("UPDATE invitations SET expires_at=? WHERE id=?").run(new Date(Date.now()-1000).toISOString(),invitation.id)
-  await assert.rejects(deliverSupabaseInvitation(context,invitation.id,"http://localhost:3000",token),{code:"invitation_not_pending"})
+  delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
+  assert.equal((await deliverSupabaseInvitation(context,invitation.id,"http://localhost:3000",token)).delivery,"preview")
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  try {
+    await assert.rejects(deliverSupabaseInvitation(context,invitation.id,"http://localhost:3000",token),{code:"invitation_not_pending"})
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED}
 })
 test("reconciliation schedules the licensed count at renewal without a credit",async()=>{
   const f=await fixture()
@@ -507,6 +512,26 @@ test("reconciliation schedules the licensed count at renewal without a credit",a
   await ensureSyncedSeatCapacity(f.workspaceId,f.userId,1,f.client)
   assert.equal((await getDatabase().prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,2)
   delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
+})
+test("reconciliation detects paid capacity drift below licensed members with a matching renewal reduction",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],http=await createStripeHttpFixture(),url=new URL(http.origin)
+  const sdk=new Stripe("rk_test_fixture",{apiVersion:"2026-08-26.dahlia",host:url.hostname,port:Number(url.port),protocol:"http",maxNetworkRetries:0})
+  const client={...f.client,subscriptions:sdk.subscriptions,subscriptionSchedules:sdk.subscriptionSchedules} as StripeBillingClient
+  const id=randomUUID(),at=nowIso()
+  await getDatabase().prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(id,`${id}@example.test`,"Member",`MCA-${id.slice(0,8)}`,at,at)
+  await getDatabase().prepare("INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'rep','active',?,?)").run(randomUUID(),f.workspaceId,id,at,at)
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  http.subscriptions.set(f.customerId,[sub]);http.invoices.set(f.customerId,f.state.invoices)
+  try {
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await changeBillingSeats(f.workspaceId,2,f.userId,client,true)
+    assert.equal((await getDatabase().prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,2)
+    sub.items.data=[sub.items.data[0]]
+    const writesBefore=http.calls.filter(call=>call.method==="POST").length
+    await assert.rejects(reconcileLicensedSeats(f.workspaceId,client),{code:"billing_scheduled_reduction_pending"})
+    assert.equal(http.calls.filter(call=>call.method==="POST").length,writesBefore,"drift cannot silently pass or cancel the reduction")
+    assert.equal(await licensedSeatCount(f.workspaceId),2)
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
 })
 test("adding a member immediately revises a scheduled reduction to the current paid limit",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0],http=await createStripeHttpFixture(),url=new URL(http.origin)
