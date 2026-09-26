@@ -1,11 +1,14 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
 import { Client } from "pg"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { GET } from "../src/app/api/cron/sms/route"
 import { POST as runLegacySmsJobs } from "../src/app/api/mca/sms/jobs/route"
 import { runScheduledSmsJobs } from "../src/lib/mca/sms/scheduler"
+import { encryptSensitive } from "../src/lib/mca/crypto"
+import type { TwilioApi } from "../src/lib/mca/sms/provisioning"
 
 const previous = { ...process.env }
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -86,4 +89,30 @@ test("one database-backed cron consumer runs and reports operation states", asyn
   assert.equal(body.operations, 0)
   assert.equal(body.companies, 0)
   assert.equal(typeof body.durationMs, "number")
+})
+
+test("bounded cron refresh rotates past companies without campaign or service SIDs", async () => {
+  process.env.MCA_DATA_ENCRYPTION_KEY = randomBytes(32).toString("base64url")
+  const refreshed: string[] = []
+  for (const [index, id] of ["sms-cron-first", "sms-cron-second", "sms-cron-third"].entries()) {
+    const sid = `AC${String(index + 1).repeat(32)}`
+    await getDatabase().prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .run(`${id}-owner`, `${id}@example.test`, "SMS cron owner", id, "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z")
+    await getDatabase().prepare("INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) VALUES (?,?,'America/New_York',5,'{}','{}','{}',?,?)")
+      .run(id, id, "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z")
+    const config = { accountSid: sid, authToken: "synthetic", ...(index === 2 ? { serviceSid: `MG${"3".repeat(32)}`, campaignSid: `QE${"3".repeat(32)}` } : {}) }
+    await getDatabase().prepare("INSERT INTO sms_companies (workspace_id,owner_user_id,provider_cipher,created_at,updated_at) VALUES (?,?,?,?,?)")
+      .run(id, `${id}-owner`, encryptSensitive(JSON.stringify(config), id), "2020-01-01T00:00:00.000Z", `2020-01-0${index + 1}T00:00:00.000Z`)
+  }
+  const api: TwilioApi = async (config, _host, path) => {
+    if (path.includes("/Compliance/Usa2p/")) refreshed.push(config!.accountSid)
+    return path.includes("/Compliance/Usa2p/") ? { campaign_status: "VERIFIED" } : { usage_records: [] }
+  }
+  const first = await runScheduledSmsJobs(api)
+  assert.equal(first.companies, 2)
+  assert.deepEqual(refreshed, [])
+  const second = await runScheduledSmsJobs(api)
+  assert.equal(second.companies, 2)
+  assert.deepEqual(refreshed, [`AC${"3".repeat(32)}`])
+  assert.deepEqual(second.failedWorkspaces, [])
 })

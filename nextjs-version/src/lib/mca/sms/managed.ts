@@ -48,13 +48,14 @@ export async function managedReady(
     c.suspended ||
     !c.opt_out_ready ||
     !platformReady() ||
-    !p?.accountSid ||
-    !p.authToken ||
-    !p.apiKeySid ||
-    !p.apiKeySecret ||
-    !p.serviceSid ||
-    !p.brandSid ||
-    !p.campaignSid
+    (process.env.MCA_SMS_CRON_ENABLED === "true" &&
+      (!p?.accountSid ||
+        !p.authToken ||
+        !p.apiKeySid ||
+        !p.apiKeySecret ||
+        !p.serviceSid ||
+        !p.brandSid ||
+        !p.campaignSid))
   )
     return false
   return !!(await getDatabase()

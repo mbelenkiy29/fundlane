@@ -101,7 +101,7 @@ export async function maintenance(
   }
   const companies = await getDatabase()
     .prepare<Company>(
-      "SELECT * FROM sms_companies WHERE provider_cipher IS NOT NULL ORDER BY updated_at LIMIT ?"
+      "SELECT * FROM sms_companies WHERE provider_cipher IS NOT NULL ORDER BY updated_at,workspace_id LIMIT ?"
     )
     .all(companyLimit)
   const errors: string[] = []
@@ -110,6 +110,11 @@ export async function maintenance(
     if (executionShouldStop()) break
     companiesProcessed++
     try {
+      // Record the attempt before provider work so missing registration SIDs,
+      // failures, and interrupted calls cannot monopolize later ticks.
+      await getDatabase()
+        .prepare("UPDATE sms_companies SET updated_at=GREATEST(updated_at,?) WHERE workspace_id=?")
+        .run(nowIso(), c.workspace_id)
       await refreshCompany(c.workspace_id, api)
       await reconcileUsage(c.workspace_id, api)
     } catch {
