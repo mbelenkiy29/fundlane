@@ -1,6 +1,6 @@
 import "server-only";
 import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
-import { assertBillingCapacity } from "./billing";
+import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, syncSeatsAfterRemoval, type StripeBillingClient } from "./billing";
 
 import { createOpaqueToken, hashOpaqueToken, hashPassword } from "./crypto";
 import { hashSupabaseInvitationToken } from "./invitation-token";
@@ -120,6 +120,7 @@ export async function inviteMember(
     senderAssociation?: string | null;
   },
   appOrigin: string,
+  billingClient?: StripeBillingClient,
 ): Promise<InvitationResult> {
 
   if (!isActionAllowed(context.role, "inviteUsers", (await getWorkspaceSettings(context.workspaceId)).actionVisibility)) {
@@ -129,8 +130,10 @@ export async function inviteMember(
   const token = createOpaqueToken();
   const created = await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
-    await assertBillingCapacity(context.workspaceId);
-    await assertSeatAvailable(database, context.workspaceId);
+    if (!billingSeatSyncEnabled()) {
+      await assertBillingCapacity(context.workspaceId);
+      await assertSeatAvailable(database, context.workspaceId);
+    }
     await validateManager(database, context.workspaceId, input.managerMembershipId);
     const timestamp = nowIso();
     const email = input.email.trim().toLowerCase();
@@ -159,6 +162,7 @@ export async function inviteMember(
     if (prior?.status === "active" || prior?.status === "pending") {
       throw new AppError(409, "membership_exists", "This person already has a reserved seat in the workspace.");
     }
+    if (billingSeatSyncEnabled()) await ensureSyncedSeatCapacity(context.workspaceId,context.userId,seatsCountPendingInvites()?1:0,billingClient);
     const membershipId = prior?.id ?? newId();
     if (prior) {
       await database.prepare(`UPDATE memberships SET role = ?, manager_membership_id = ?, status = 'pending',
@@ -310,7 +314,7 @@ export async function updateMembership(
   return getMembership(context.workspaceId, membershipId);
 }
 
-export async function deactivateMembership(context: MembershipContext, membershipId: string): Promise<void> {
+export async function deactivateMembership(context: MembershipContext, membershipId: string, billingClient?: StripeBillingClient): Promise<void> {
   if (membershipId === context.membershipId) throw new AppError(409, "cannot_deactivate_self", "Ask another administrator to deactivate your account.");
   await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
@@ -332,6 +336,7 @@ export async function deactivateMembership(context: MembershipContext, membershi
     await database.prepare("DELETE FROM sessions WHERE membership_id = ?").run(membershipId);
     await database.prepare("UPDATE invitations SET status = 'superseded', updated_at = ? WHERE membership_id = ? AND status = 'pending'")
       .run(timestamp, membershipId);
+    if (member && billingSeatSyncEnabled()) await syncSeatsAfterRemoval(context.workspaceId,context.userId,billingClient);
   });
   await syncSupabaseMember(context.workspaceId, membershipId);
   await recordAuditEvent({ context, action: "membership.deactivated", resourceType: "membership", resourceId: membershipId });

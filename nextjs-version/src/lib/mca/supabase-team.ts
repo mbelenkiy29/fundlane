@@ -5,7 +5,7 @@ import { deliverEmail } from "./email"
 import { AppError } from "./errors"
 import { linkSupabaseUser, type SupabaseIdentity } from "./supabase-auth"
 import type { MembershipContext } from "./types"
-import { assertBillingCapacity } from "./billing"
+import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, type StripeBillingClient } from "./billing"
 
 export async function deliverSupabaseInvitation(context: MembershipContext, invitationId: string, appOrigin: string, token: string) {
   const row=await getDatabase().prepare<{ email:string; expires_at:string }>(`SELECT i.email,i.expires_at FROM invitations i JOIN memberships m ON m.id=i.membership_id
@@ -21,7 +21,7 @@ export async function inspectSupabaseInvitation(token: string) {
   return row
 }
 
-export async function acceptSupabaseInvitation(identity: SupabaseIdentity, token: string) {
+export async function acceptSupabaseInvitation(identity: SupabaseIdentity, token: string, billingClient?: StripeBillingClient) {
   return withImmediateTransaction(async db=>{
     // Lock workspace first, matching invite/resend/deactivation order.
     const candidate=await db.prepare<{ workspace_id:string }>("SELECT workspace_id FROM invitations WHERE token_hash=?").get(hashSupabaseInvitationToken(token))
@@ -31,7 +31,8 @@ export async function acceptSupabaseInvitation(identity: SupabaseIdentity, token
       WHERE i.token_hash=? AND i.status='pending' AND i.expires_at>? AND m.status='pending' FOR UPDATE OF i,m`).get(hashSupabaseInvitationToken(token),nowIso())
     if (!row) throw new AppError(400,"invitation_invalid","This invitation is invalid or expired.")
     if (row.email.toLowerCase() !== identity.email) throw new AppError(403,"invitation_account_mismatch","Sign in using the email address invited to this company.")
-    await assertBillingCapacity(row.workspace_id,0)
+    if (billingSeatSyncEnabled()) await ensureSyncedSeatCapacity(row.workspace_id,row.user_id,seatsCountPendingInvites()?0:1,billingClient)
+    else await assertBillingCapacity(row.workspace_id,0)
     await linkSupabaseUser(identity,row.user_id)
     await db.prepare("UPDATE memberships SET status='active',updated_at=? WHERE id=?").run(nowIso(),row.membership_id)
     await db.prepare("UPDATE invitations SET status='accepted',updated_at=? WHERE id=?").run(nowIso(),row.id)

@@ -118,6 +118,12 @@ Refund/dispute projections additionally require **charges, refunds and disputes 
 
 Optional Supabase Stripe Sync Engine tables are read-only and only used as a matching snapshot. They cannot independently grant seats. Application projections do not require Sync Engine installation.
 
+## Automatic seat synchronization decision (#110)
+
+`MCA_BILLING_SEAT_SYNC_ENABLED=false` by default preserves the manual buy-seats-first model, including the existing `active + pending > seatLimit` invitation rejection. When set to the exact string `true` along with billing enabled, pending invitations count toward licensed users only if `MCA_BILLING_SEATS_COUNT_PENDING_INVITES=true` (default `false`). The pending-invite setting has no effect while sync is off. Licensed users are active memberships plus pending memberships only when that setting is true; the base plan includes the first licensed user and Stripe's additional-seat item quantity is licensed users minus one. Prices, price IDs, and catalog amounts are unchanged.
+
+With sync enabled, an invitation reserves a paid seat before delivery when pending invitations count. Otherwise acceptance buys the seat before activation. Paid increases use `always_invoice` and `pending_if_incomplete`, with access granted only after verified payment; payment authentication or failure leaves the membership unchanged. Deactivating a licensed member schedules a no-credit decrease for renewal. Trial subscription changes use `proration_behavior:none` and are free. The workspace row lock serializes membership changes and the existing Stripe idempotency keys protect retries. Automatic changes use the same verified subscription and schedule paths as manual seat changes. Billing maintenance compares Stripe capacity to the licensed count and repairs differences through that path. Plans & Billing shows the proration policy and, with sync enabled, a read-only `invoices.createPreview` estimate before an administrator confirms a manual increase. Hosted Stripe test-clock, payment authentication, decline, and renewal acceptance remain release checks; local tests use mocked providers only.
+
 ## HTTP and service interfaces
 
 Company billing routes use existing session membership authorization and trusted-mutation protection. Keep billing recovery routes reachable during operational suspension.
