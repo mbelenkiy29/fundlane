@@ -643,29 +643,26 @@ export async function ensureSyncedSeatCapacity(workspaceId:string, actorUserId:s
   if (target>refreshed.seatLimit) throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry.")
 }
 
-/** Called after a deactivation, while the workspace row lock is held. */
+/** Called after a deactivation commits; reconciliation takes the workspace lock. */
 export async function syncSeatsAfterRemoval(workspaceId:string, actorUserId:string, client?:StripeBillingClient) {
-  if (!billingSeatSyncEnabled()) return
-  const count=await licensedSeatCount(workspaceId)
-  const mapping=await getDatabase().prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
-  if (!mapping) return
-  const current=await syncWorkspaceBilling(workspaceId,client)
-  if (current.subscriptionId && count<current.seatLimit) await changeBillingSeats(workspaceId,count,actorUserId,client,true)
+  await reconcileLicensedSeats(workspaceId,client,actorUserId)
 }
 
 /** Repair provider quantity drift during periodic billing maintenance. */
-export async function reconcileLicensedSeats(workspaceId:string, client?:StripeBillingClient) {
+export async function reconcileLicensedSeats(workspaceId:string, client?:StripeBillingClient, actorUserId:string|null=null) {
   if (!billingSeatSyncEnabled()) return
   await withImmediateTransaction(async db=>{
     await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
+    const mapping=await db.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
+    if (!mapping) return
     const count=await licensedSeatCount(workspaceId,db)
     const current=await syncWorkspaceBilling(workspaceId,client)
     if (!current.subscriptionId || !["active","trialing"].includes(current.status)) return
     const pending=await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     if (pending?.pending_seats===count) return
     if (count===current.seatLimit && !pending?.pending_seats) return
-    if (count>current.seatLimit) await ensureSyncedSeatCapacity(workspaceId,null,0,client)
-    else await changeBillingSeats(workspaceId,count,null,client,true)
+    if (count>current.seatLimit) await ensureSyncedSeatCapacity(workspaceId,actorUserId,0,client)
+    else await changeBillingSeats(workspaceId,count,actorUserId,client,true)
   })
 }
 

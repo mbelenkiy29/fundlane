@@ -18,6 +18,7 @@ import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompa
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
 import type { DbExecutor } from "../src/lib/mca/db"
 import { inviteMember, deactivateMembership } from "../src/lib/mca/memberships"
+import { createSession } from "../src/lib/mca/sessions"
 import { acceptSupabaseInvitation } from "../src/lib/mca/supabase-team"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -508,6 +509,26 @@ test("deactivating a licensed member schedules a renewal decrease",async()=>{
   assert.equal((await getDatabase().prepare<{status:string}>("SELECT status FROM memberships WHERE id=?").get(membershipId))?.status,"deactivated")
   assert.equal((await getDatabase().prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,1)
   delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
+})
+test("provider outage cannot roll back deactivation or session revocation; maintenance retries the reduction",async()=>{
+  const f=await fixture(),userId=randomUUID(),membershipId=randomUUID(),at=nowIso()
+  const db=getDatabase()
+  await db.prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(userId,`${userId}@example.test`,"Member",`MCA-${userId.slice(0,8)}`,at,at)
+  await db.prepare("INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'rep','active',?,?)").run(membershipId,f.workspaceId,userId,at,at)
+  await createSession(userId,membershipId)
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  try {
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    const outage={...f.client,subscriptions:{...f.client.subscriptions,list:async()=>{throw new Error("provider outage")}}} as unknown as StripeBillingClient
+    await deactivateMembership({workspaceId:f.workspaceId,userId:f.userId,membershipId:f.membershipId,role:"admin",authType:"session",scopes:[],sessionId:null},membershipId,outage)
+    assert.equal((await db.prepare<{status:string}>("SELECT status FROM memberships WHERE id=?").get(membershipId))?.status,"deactivated")
+    assert.equal((await db.prepare<{count:number}>("SELECT count(*)::int count FROM sessions WHERE membership_id=?").get(membershipId))?.count,0)
+    assert.equal((await db.prepare<{state:string}>("SELECT state FROM mca_background_jobs WHERE workspace_id=? AND kind='billing_reconcile' AND resource_id=?").get(f.workspaceId,membershipId))?.state,"queued")
+    assert.equal((await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,null)
+    await runBillingMaintenance(f.client)
+    assert.equal((await db.prepare<{state:string}>("SELECT state FROM mca_background_jobs WHERE workspace_id=? AND kind='billing_reconcile' AND resource_id=?").get(f.workspaceId,membershipId))?.state,"complete")
+    assert.equal((await db.prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,1)
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED}
 })
 for (const scheduled of [false,true]) test(`cancellation ${scheduled ? "supersedes a seat schedule" : "updates an ordinary subscription"} while paused without forgiving debt`,async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0],end=sub.items.data[0].current_period_end!

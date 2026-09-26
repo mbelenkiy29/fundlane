@@ -316,12 +316,12 @@ export async function updateMembership(
 
 export async function deactivateMembership(context: MembershipContext, membershipId: string, billingClient?: StripeBillingClient): Promise<void> {
   if (membershipId === context.membershipId) throw new AppError(409, "cannot_deactivate_self", "Ask another administrator to deactivate your account.");
-  await withImmediateTransaction(async (database) => {
+  const billingJobId = await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
     if (await database.prepare("SELECT workspace_id FROM workspace_owners WHERE workspace_id=? AND membership_id=?").get(context.workspaceId, membershipId)) {
       throw new AppError(409, "owner_protected", "Transfer company ownership before deactivating the owner.");
     }
-    const member = await database.prepare<{ user_id: string; role: Role }>("SELECT user_id, role FROM memberships WHERE id = ? AND workspace_id = ? FOR UPDATE").get(membershipId, context.workspaceId);
+    const member = await database.prepare<{ user_id: string; role: Role; status: string }>("SELECT user_id, role, status FROM memberships WHERE id = ? AND workspace_id = ? FOR UPDATE").get(membershipId, context.workspaceId);
     if (!member) throw new AppError(404, "membership_not_found", "Team member not found.");
     if (member.role === "super_admin") {
       if (context.role !== "super_admin") throw new AppError(403, "permission_denied", "Only a super administrator can manage that member.");
@@ -336,10 +336,26 @@ export async function deactivateMembership(context: MembershipContext, membershi
     await database.prepare("DELETE FROM sessions WHERE membership_id = ?").run(membershipId);
     await database.prepare("UPDATE invitations SET status = 'superseded', updated_at = ? WHERE membership_id = ? AND status = 'pending'")
       .run(timestamp, membershipId);
-    if (member && billingSeatSyncEnabled()) await syncSeatsAfterRemoval(context.workspaceId,context.userId,billingClient);
+    // Commit revocation and a durable retry together. Provider availability must not
+    // determine whether this member keeps access.
+    if (member.status === "deactivated" || !billingSeatSyncEnabled()) return null;
+    const jobId = newId();
+    await database.prepare(`INSERT INTO mca_background_jobs
+      (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
+      VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`)
+      .run(jobId,context.workspaceId,membershipId,jobId,timestamp,timestamp,timestamp);
+    return jobId;
   });
   await syncSupabaseMember(context.workspaceId, membershipId);
   await recordAuditEvent({ context, action: "membership.deactivated", resourceType: "membership", resourceId: membershipId });
+  if (billingJobId) {
+    try {
+      await syncSeatsAfterRemoval(context.workspaceId,context.userId,billingClient);
+      await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',updated_at=? WHERE id=? AND state='queued'").run(nowIso(),billingJobId);
+    } catch {
+      // Billing maintenance retries the committed job; access is already revoked.
+    }
+  }
 }
 
 export async function requestPasswordRecovery(email: string, appOrigin: string): Promise<{ previewUrl?: string }> {

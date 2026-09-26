@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
-import { assertTrustedMutation, requireMembershipAccess } from "@/lib/mca/auth"
+import { assertTrustedMutation, consumeRequestRateLimit, requireMembershipAccess } from "@/lib/mca/auth"
 import { billingSeatSyncEnabled, previewBillingSeatIncrease } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
 
@@ -10,6 +10,7 @@ export async function POST(request:Request) {
     assertTrustedMutation(request)
     if (!billingSeatSyncEnabled()) throw new AppError(404,"billing_preview_disabled","Seat price previews are unavailable.")
     const context=await requireMembershipAccess(request,["admin","super_admin"])
+    await consumeRequestRateLimit(`billing-seat-preview:${context.workspaceId}:${context.membershipId}`, 30)
     const payload=input.parse(await request.json())
     return NextResponse.json(await previewBillingSeatIncrease(context.workspaceId,payload.selectedSeats),{headers:{"Cache-Control":"no-store"}})
   } catch(error) { return apiError(error) }
