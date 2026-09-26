@@ -10,12 +10,14 @@ import { webhookVerificationTime } from "./maintenance/replay-clock"
 import { recordOperationalError } from "./operations/telemetry"
 import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern } from "./stripe-checkout-trial"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
+import { stripeTrialLifecycleEnabled } from "./billing-flags"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
+export { stripeTrialLifecycleEnabled } from "./billing-flags"
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -78,6 +80,8 @@ export interface BillingSubscription {
   trial_end?: number | null
   default_payment_method?: string | Stripe.PaymentMethod | null
   pending_setup_intent?: string | Stripe.SetupIntent | null
+  trial_settings?: { end_behavior?: { missing_payment_method?: string } } | null
+  collection_method?: string
   items: { data: Array<{ id?: string; quantity?: number | null; current_period_start?: number; current_period_end?: number; price: { id: string } }> }
 }
 export interface BillingEntitlement {
@@ -113,6 +117,68 @@ function fundlaneSubscriptions(subscriptions: BillingSubscription[], customerId:
     fundlaneSubscriptionItems(subscription)
     return true
   })
+}
+
+async function resumePausedTrial(subscription: BillingSubscription, customerId: string, client: StripeBillingClient, beforeProviderWrite: () => void) {
+  if (!stripeTrialLifecycleEnabled() || subscription.status !== "paused" || subscription.trial_settings?.end_behavior?.missing_payment_method !== "pause" ||
+    !subscription.trial_end || subscription.trial_end * 1000 > Date.now() || subscription.collection_method !== "charge_automatically" || subscription.pause_collection) return subscription
+  const customer = await client.customers.retrieve(customerId)
+  if (customer.deleted || customer.livemode !== stripeLiveMode()) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+  const now = new Date()
+  const defaults = [subscription.default_payment_method, customer.invoice_settings?.default_payment_method]
+  let methodId: string | null = null
+  const checked = new Set<string>()
+  for (const method of defaults) {
+    if (!method) continue
+    const candidateId = typeof method === "string" ? method : method.id
+    if (!candidateId || checked.has(candidateId)) continue
+    checked.add(candidateId)
+    let paymentMethod: Awaited<ReturnType<StripeBillingClient["paymentMethods"]["retrieve"]>>
+    try { paymentMethod = await client.paymentMethods.retrieve(candidateId) }
+    catch (error) {
+      if ((error as { code?: string })?.code === "resource_missing") continue
+      throw error
+    }
+    if ((typeof paymentMethod.customer === "string" ? paymentMethod.customer : paymentMethod.customer?.id) !== customerId || paymentMethod.livemode !== stripeLiveMode() ||
+      paymentMethod.type !== "card" || !paymentMethod.card || paymentMethod.card.exp_year < now.getUTCFullYear() ||
+      (paymentMethod.card.exp_year === now.getUTCFullYear() && paymentMethod.card.exp_month < now.getUTCMonth() + 1)) continue
+    methodId = candidateId
+    break
+  }
+  if (!methodId) return subscription
+  if (!stripeTrialLifecycleEnabled()) return subscription
+  const subscriptionMethodId = typeof subscription.default_payment_method === "string" ? subscription.default_payment_method : subscription.default_payment_method?.id
+  let currentSubscription = subscription
+  if (subscriptionMethodId !== methodId) {
+    beforeProviderWrite()
+    const updated = await client.subscriptions.update(subscription.id, { default_payment_method: methodId },
+      { idempotencyKey: `fundlane:trial-resume-method:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
+    const updatedMethodId = typeof updated.default_payment_method === "string" ? updated.default_payment_method : updated.default_payment_method?.id
+    if (updated.id !== subscription.id || fundlaneSubscriptions([updated],customerId).length !== 1 || updatedMethodId !== methodId)
+      throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+    currentSubscription = updated
+  }
+  if (!stripeTrialLifecycleEnabled()) return currentSubscription
+  beforeProviderWrite()
+  const resumed = await client.subscriptions.resume(subscription.id, { billing_cycle_anchor: "now" }, { idempotencyKey: `fundlane:trial-resume:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
+  if (resumed.id !== subscription.id || fundlaneSubscriptions([resumed],customerId).length !== 1) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+  return resumed
+}
+
+function trialInvoicePreview(invoice: Stripe.Invoice, subscription: BillingSubscription, customerId: string) {
+  if (invoice.livemode !== stripeLiveMode() || (typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id) !== customerId ||
+    !Number.isSafeInteger(invoice.total) || invoice.total < 0 || invoice.currency !== "usd" || invoice.lines.has_more !== false) return null
+  const expected = subscription.items.data
+  const lines = invoice.lines.data.filter(line => line.parent?.type === "subscription_item_details" &&
+    line.parent.subscription_item_details?.subscription === subscription.id && !line.parent.subscription_item_details.proration)
+  if (lines.length !== expected.length || expected.some(item => {
+    if (!item.id || !Number.isSafeInteger(item.quantity) || (item.quantity ?? 0) < 1) return true
+    const matches = lines.filter(line => line.parent?.subscription_item_details?.subscription_item === item.id &&
+      (typeof line.pricing?.price_details?.price === "string" ? line.pricing.price_details.price : line.pricing?.price_details?.price?.id) === item.price.id)
+    return matches.length !== 1 || matches[0].quantity !== item.quantity
+  })) return null
+  const quantity = expected.reduce((sum, item) => sum + (item.quantity ?? 0), 0)
+  return Number.isSafeInteger(quantity) && quantity > 0 ? { amount: invoice.total, currency: invoice.currency, quantity } : null
 }
 
 export function subscriptionEntitlement(subscription: BillingSubscription): BillingEntitlement {
@@ -168,8 +234,9 @@ async function persistEntitlement(workspaceId: string, current: BillingEntitleme
   return { ...current, source, syncedAt }
 }
 
-export async function syncWorkspaceBilling(workspaceId: string, providedClient?: StripeBillingClient) {
+export async function syncWorkspaceBilling(workspaceId: string, providedClient?: StripeBillingClient, allowTrialResume = true) {
   if (!billingEnabled()) throw new AppError(503, "billing_disabled", "Company billing is not enabled in this environment.")
+  let providerWriteAttempted = false
   return withImmediateTransaction(async db => {
     const workspace = await db.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(workspaceId)
     if (!workspace) throw new AppError(404, "workspace_not_found", "Company not found.")
@@ -210,6 +277,11 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
       }
     }
     let current = currentEntitlement(live, mapping.stripe_customer_id)
+    const currentIndex = live.findIndex(subscription => subscription.id === current.subscriptionId)
+    if (currentIndex >= 0 && allowTrialResume && stripeTrialLifecycleEnabled() && live[currentIndex].status === "paused") {
+      live[currentIndex] = await resumePausedTrial(live[currentIndex], mapping.stripe_customer_id, client, () => { providerWriteAttempted = true })
+      current = currentEntitlement(live, mapping.stripe_customer_id)
+    }
     if (!missingBillingStateFailsClosed()) await ensureBillingState(workspaceId,db)
     const accessHistory = await db.prepare<{legacy_exempt:number;access_extended_until:string|null}>("SELECT legacy_exempt,access_extended_until FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     const successor = live.find(s=>s.id===current.subscriptionId)
@@ -262,7 +334,23 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
   }, { onRollback: async () => {
     // The outermost caller may fail after this reconciliation succeeds. Record
     // incomplete verification only after that transaction releases its locks/client.
-    await recordAuditEvent({ context: { workspaceId, userId: null, source: "system" }, action: "billing.recovery_verification_failed", resourceType: "workspace", resourceId: workspaceId, metadata: {} })
+    try {
+      await recordAuditEvent({ context: { workspaceId, userId: null, source: "system" }, action: "billing.recovery_verification_failed", resourceType: "workspace", resourceId: workspaceId, metadata: {} })
+    } finally {
+      // A provider mutation cannot roll back with Postgres. Read Stripe again after
+      // the transaction releases its lock, including when the provider response was lost.
+      if (providerWriteAttempted) {
+        try { await syncWorkspaceBilling(workspaceId, providedClient, false) }
+        catch {
+          const jobId = newId(), availableAt = nowIso()
+          await getDatabase().prepare(`INSERT INTO mca_background_jobs
+            (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
+            VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`)
+            .run(jobId, workspaceId, jobId, jobId, availableAt, availableAt, availableAt)
+          await recordOperationalError("billing", "trial_resume_rollback_reconciliation_deferred")
+        }
+      }
+    }
   } })
 }
 
@@ -412,6 +500,20 @@ export function verifyStripeBillingEvent(body: string, signature: string | null,
   catch { throw new AppError(400, "billing_webhook_signature_invalid", "Invalid webhook signature.") }
 }
 
+export function stripeTrialReminderEligible(subscription: BillingSubscription, customerId: string, trialEndsAt: string) {
+  return fundlaneSubscriptions([subscription],customerId).length === 1 &&
+    subscription.status === "trialing" && !subscription.cancel_at_period_end && !subscription.cancel_at &&
+    iso(subscription.trial_end) === trialEndsAt
+}
+
+export function stripePausedTrialEligible(subscription: BillingSubscription, customerId: string) {
+  return fundlaneSubscriptions([subscription],customerId).length === 1 && subscription.status === "paused" &&
+    !subscription.cancel_at_period_end && !subscription.cancel_at &&
+    subscription.trial_settings?.end_behavior?.missing_payment_method === "pause" &&
+    Boolean(subscription.trial_end && subscription.trial_end * 1000 <= Date.now()) &&
+    subscription.collection_method === "charge_automatically" && !subscription.pause_collection
+}
+
 export const BILLING_WEBHOOK_EVENTS = new Set([
   "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed", "checkout.session.expired",
   "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed", "customer.subscription.trial_will_end",
@@ -422,9 +524,11 @@ export const BILLING_WEBHOOK_EVENTS = new Set([
 
 export async function processStripeBillingEvent(event: Stripe.Event, providedClient?: StripeBillingClient) {
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
-  if (!BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
-  const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null }
+  if (event.type === "customer.updated" && !stripeTrialLifecycleEnabled()) return { ignored: true }
+  if (event.type !== "customer.updated" && !BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
+  const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null; trial_end?:number|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
+  if (event.type === "customer.updated") customerId = object.id
   if (!customerId && object.charge) {
     // Refund/dispute events may need a provider lookup; skip it for a known receipt.
     const existing = await getDatabase().prepare("SELECT event_id FROM stripe_billing_events WHERE event_id=?").get(event.id)
@@ -444,6 +548,20 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:action-required:${object.id}`,"payment_action_required",{invoiceId:object.id,invoiceUrl:object.hosted_invoice_url??null,receivedAt:nowIso()})
     } else if (object.id && event.type === "invoice.payment_failed") {
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id,receivedAt:nowIso()})
+    }
+    if (stripeTrialLifecycleEnabled() && object.id && ["customer.subscription.trial_will_end","customer.subscription.paused"].includes(event.type)) {
+      const candidate = await (providedClient ?? getStripeClient()).subscriptions.retrieve(object.id) as BillingSubscription
+      const owned = candidate.id === object.id && fundlaneSubscriptions([candidate],customerId).length === 1
+      if (owned && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000 && stripeTrialReminderEligible(candidate,customerId,new Date(object.trial_end*1000).toISOString())) {
+        let preview: { amount: number; currency: string; quantity: number } | null = null
+        try {
+          const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
+          preview = trialInvoicePreview(invoice,candidate,customerId)
+        } catch { /* A preview outage must not suppress the trial reminder. */ }
+        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString(),...preview})
+      }
+      if (owned && event.type === "customer.subscription.paused" && stripePausedTrialEligible(candidate,customerId))
+        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-paused:${object.id}`,"trial_paused",{subscriptionId:object.id})
     }
     const jobId = newId()
     await db.prepare(`INSERT INTO mca_background_jobs

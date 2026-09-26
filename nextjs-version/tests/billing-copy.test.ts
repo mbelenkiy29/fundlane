@@ -80,7 +80,7 @@ test("customer billing copy does not claim PayPal or bank transfer support", () 
   }
 })
 
-test("trial-ending and trial-ended emails keep the no-card wording in both modes", () => {
+test("local trial emails keep their no-card wording in both checkout modes", () => {
   for (const configured of [false, true]) {
     withStripeMode(configured, () => {
       assert.equal(isStripeCheckoutTrialConfigured(), configured)
@@ -95,6 +95,22 @@ test("trial-ending and trial-ended emails keep the no-card wording in both modes
       }
     })
   }
+})
+
+test("unset lifecycle flag preserves the original local trial email body", () => {
+  const previous=process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  try {
+    const url="https://app.example.test/settings/billing"
+    const result=renderBillingEmailContent({data:{kind:"trial_ending",trialEndsAt:"2030-01-01T00:00:00Z"},actionUrl:url})
+    const description="Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately."
+    assert.deepEqual(result,{subject:"Your Fundlane trial ends soon",text:`${description}\n\nDeadline: 2030-01-01T00:00:00Z\n\nPlans & Billing: ${url}`,html:`<p>${description.replace("Plans & Billing","Plans &amp; Billing")}</p><p>Deadline: 2030-01-01T00:00:00Z</p><p><a href="${url}">Open Plans &amp; Billing</a></p>`})
+    const queuedStripePayload=renderBillingEmailContent({data:{kind:"trial_ending",stripeTrial:true,trialEndsAt:"2030-01-01T00:00:00Z",amount:1000,quantity:1,currency:"usd"},actionUrl:url})
+    assert.match(queuedStripePayload.text,/Your Stripe trial ends soon/)
+    assert.match(queuedStripePayload.text,/Upcoming invoice total: \$10\.00\. Selected seats: 1/)
+    assert.match(queuedStripePayload.text,/Stripe billing portal/)
+    assert.doesNotMatch(queuedStripePayload.text,/Checkout starts your paid subscription immediately/)
+  } finally { if(previous===undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED;else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED=previous }
 })
 
 test("unconfigured Stripe keeps the no-card trial wording", () => {
@@ -113,6 +129,9 @@ test("unconfigured Stripe keeps the no-card trial wording", () => {
 test("configured Stripe Checkout discloses the card-required trial on onboarding and FAQ", () => {
   withStripeMode(true, () => {
     assert.equal(isStripeCheckoutTrialConfigured(), true)
+    const previous = process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+    process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED = "true"
+    try {
     const faqs = pricingFaqCopy(true, 21)
     const trialFaq = faqs.find(item => item.question === "Is there a free trial available?")?.answer ?? ""
     const cancelFaq = faqs.find(item => item.question === "Can I cancel my subscription anytime?")?.answer ?? ""
@@ -130,11 +149,26 @@ test("configured Stripe Checkout discloses the card-required trial on onboarding
     assert.match(onboarding, /Enter a card at Stripe Checkout to start a \$\{account\.trialDays\}-day trial/)
     assert.match(onboarding, /automatically charges/)
     assert.match(onboarding, /licensed seats/)
-    assert.match(onboarding, /cancel before then/)
+    assert.match(onboarding, /account\.trialLifecycleEnabled\?/)
+    assert.match(onboarding, /post-trial price shown at Checkout/)
+    assert.match(onboarding, /Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then/)
     const panel = readFileSync(join(sourceRoot, "components/mca/billing-panel.tsx"), "utf8")
     assert.ok(panel.includes(configuredCheckout))
     assert.doesNotMatch(panel, /14-day trial/)
+    } finally { if (previous === undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED; else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED = previous }
   })
+})
+
+test("unset lifecycle flag preserves origin/main FAQ and onboarding trial disclosure", () => {
+  const previous = process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  try {
+    assert.equal(pricingFaqCopy(true, 21).find(item => item.question === "Is there a free trial available?")?.answer,
+      "Yes. Enter a card at Stripe Checkout to start a 21-day trial. Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.")
+    const onboarding = readFileSync(join(sourceRoot, "app/(auth)/onboarding/page.tsx"), "utf8")
+    assert.match(onboarding, /Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal\./)
+    assert.match(onboarding, /account\.trialLifecycleEnabled\?/)
+  } finally { if (previous === undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED; else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED = previous }
 })
 
 test("billing panel trial line follows access status", () => {

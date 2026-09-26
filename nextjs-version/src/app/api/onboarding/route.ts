@@ -6,14 +6,14 @@ import { assertTrustedMutation, clientRateKey, consumeRequestRateLimit } from "@
 import { signupMode } from "@/lib/mca/signup-mode"
 import { requireOpenSignup } from "@/lib/mca/signup-guard"
 import { readJson } from "@/lib/mca/http"
-import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured } from "@/lib/mca/billing"
+import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured, stripeTrialLifecycleEnabled } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
 export async function GET() {
   try {
     const identity=await supabaseIdentity({ allowPasswordSetup:true })
     if (!identity) return NextResponse.json({ authenticated:false,workspaces:[] },{ headers:{ "Cache-Control":"no-store" } })
     const cardRequiredTrial=isStripeCheckoutTrialConfigured()
-    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial,...(cardRequiredTrial?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
+    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial,trialLifecycleEnabled:stripeTrialLifecycleEnabled(),...(cardRequiredTrial?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
   } catch(error) { return apiError(error) }
 }
 export async function POST(request: Request) {
