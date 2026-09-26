@@ -12,6 +12,7 @@ export const PUBLIC_PAGE_PREFIXES = [
   "/help",
   "/demo",
   "/privacy",
+  "/terms",
   "/landing",
   "/sign-in",
   "/sign-up",

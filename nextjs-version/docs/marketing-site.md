@@ -16,7 +16,13 @@ Set `NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME` to the verified legal entity name to sh
 
 Organization, WebSite, SoftwareApplication and WebPage structured data, the distinct demo meta description, and the dated sitemap entries are already present. The opt-in FAQPage node uses the same seven question and answer strings shown on the homepage. Update the sitemap content date only when published marketing content changes; do not use the build time as `lastmod`.
 
-The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice.
+The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice and draft legal pages when enabled.
+
+## Draft legal pages
+
+`/terms` and `/privacy` are public and linked from the marketing footer and sign-up form. Their copy is maintained in `src/lib/marketing/legal-drafts.ts`; the banner and last-updated line are rendered by `src/components/marketing/legal-draft.tsx`. Both pages are deliberately labeled **DRAFT — pending legal review. Not yet in effect.** Michael and counsel must approve the copy, fill `[Company legal name]`, `[Company mailing address]`, `[contact email]`, and `[date pending legal review]`, and decide when it takes effect. The pages do not add a new environment variable or migration. Public availability is required by issue #52 even while content remains draft.
+
+The demo form still requires `MCA_MARKETING_PRIVACY_URL` as its separate approval gate. A public draft page alone does not approve demo collection. Do not use this draft as the approved notice for demo activation, OAuth consent, or SMS registration until reviewed.
 
 ## Enable demo requests
 
@@ -123,7 +129,7 @@ The server has a 10-second delivery deadline and the client waits 15 seconds. Fa
 
 Structured logs contain only `marketing_demo_accepted` or `marketing_demo_delivery_failed` and the opaque request ID. Count unique accepted IDs for conversions; retries can repeat an accepted log. Alert on sustained delivery failures and verify a controlled synthetic request reaches the sales destination before launch. Do not log bodies, contact fields, or tokens. No third-party tracking/cookies were added. Compare conversion only after establishing a real traffic baseline.
 
-The approved website/demo privacy notice is published at `/privacy` for Sentinel Tech Solutions LLC, with privacy contact `ben@sentineltechsolutions.io`. The operator approved the notice on September 11, 2026. The dedicated production receiver is `/api/marketing/receiver`. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
+The old website-only privacy notice has been replaced by the draft workspace-wide privacy policy described above. The dedicated production receiver is `/api/marketing/receiver`. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
 
 ## Product images
 
@@ -164,7 +170,7 @@ node marketing-inbox.cjs delete <opaque-request-id>
 
 `list` displays only IDs and timestamps. `show` decrypts contact data: use it only in the private shell and do not copy its output to shared logs or tickets. `delete` removes the encrypted contact payload and preserves the retry tombstone. Operators should review new inquiries and delete contact details when no longer needed. Outbound contact requires a separate operator decision; intake itself sends nothing.
 
-Render stores `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. The Docker build explicitly accepts the non-secret privacy URL so the static homepage footer includes it; tokens are runtime-only. `/privacy` remains unpublished unless the configured privacy URL points to it.
+The demo receiver uses `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. `/privacy` is public regardless of the demo configuration; the demo form remains disabled until all three values are configured.
 
 
 ## Luro design adaptation (September 13, 2026)

@@ -10,6 +10,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...(publicPricingEnabled() ? [{ url: `${MARKETING_ORIGIN}/pricing`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly" as const, priority: 0.9 }] : []),
     { url: `${MARKETING_ORIGIN}/changelog`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.8 },
     { url: `${MARKETING_ORIGIN}/demo`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.8 },
+    { url: `${MARKETING_ORIGIN}/terms`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.5 },
+    { url: `${MARKETING_ORIGIN}/privacy`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.5 },
     { url: `${MARKETING_ORIGIN}/help`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.7 },
     ...helpArticles.map(({ slug }) => ({ url: `${MARKETING_ORIGIN}/help/${slug}`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly" as const, priority: 0.6 })),
   ]

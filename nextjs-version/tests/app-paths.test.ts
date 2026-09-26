@@ -26,6 +26,7 @@ test("public marketing and auth pages stay public while logged out", () => {
     "/features/pipeline",
     "/demo",
     "/privacy",
+    "/terms",
     "/landing",
     "/sign-in",
     "/sign-in?returnTo=%2Fdashboard",
@@ -111,6 +112,8 @@ test("anonymous gate returns sign-in status and destination only for real app ro
     location: "/sign-in?returnTo=%2Fdashboard",
   })
   assert.deepEqual(unauthenticatedPageGate("/features"), { action: "allow", status: 200 })
+  assert.deepEqual(unauthenticatedPageGate("/terms"), { action: "allow", status: 200 })
+  assert.deepEqual(unauthenticatedPageGate("/privacy"), { action: "allow", status: 200 })
   assert.deepEqual(unauthenticatedPageGate("/api/mca/deals"), { action: "allow", status: 200 })
   assert.deepEqual(unauthenticatedPageGate("/not-a-real-page", "/not-a-real-page"), { action: "not-found", status: 404 })
 })

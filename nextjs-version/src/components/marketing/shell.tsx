@@ -109,7 +109,8 @@ export async function MarketingShell({
               {statusUrl && <a href={statusUrl}>System status</a>}
               {roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
-              {privacyUrl && <a href={privacyUrl}>Privacy</a>}
+              <Link href="/terms">Terms of Service</Link>
+              <Link href="/privacy">Privacy Policy</Link>
             </nav>
           </div>
           {(legalName || supportEmail) && <address className="fl-footer-contact">
