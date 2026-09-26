@@ -47,6 +47,27 @@ type ListPayload = {
   funders: Array<{ id: string; name: string; adapterSlug?: string; hasApiRoute: boolean }>
   environments: AdapterEnvironment[]
   canManage: boolean
+  inventory?: {
+    funders: Array<{
+      id: string
+      name: string
+      adapterSlug?: string
+      routeActive: boolean
+      credentials: Array<{ adapterSlug: string; environment: AdapterEnvironment; present: boolean; active: boolean }>
+      apiContract: string
+      callback: string
+      commercialAccess: string
+      readiness: "sandbox verified" | "untested"
+    }>
+    unassignedAdapters: Array<{
+      slug: string
+      credentialsPresent: false
+      apiContract: string
+      callback: string
+      commercialAccess: string
+      readiness: "sandbox verified" | "untested"
+    }>
+  }
 }
 
 type ActionResult = {
@@ -234,6 +255,24 @@ export function AdapterCredentialsPanel() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {payload?.inventory && <section aria-label="Funder provider readiness" className="space-y-3 rounded-lg border p-4 text-sm">
+          <h3 className="font-medium">Funder provider readiness</h3>
+          <p className="text-muted-foreground">Credentials and routes show configuration only. Provider access and live delivery require separate verification.</p>
+          {payload.inventory.funders.length === 0 && <p>No funders configured in this workspace.</p>}
+          {payload.inventory.funders.map((funder) => <div key={funder.id} className="space-y-1 border-t pt-3">
+            <p className="font-medium">{funder.name} <Badge variant="outline">{funder.readiness}</Badge></p>
+            <p>Adapter: {funder.adapterSlug ?? "none"} · API route: {funder.routeActive ? "active" : "unavailable"}</p>
+            <p>Credentials: {funder.credentials.length ? funder.credentials.map((credential) => `${credential.adapterSlug} ${credential.environment} ${credential.present ? "present" : "missing"}${credential.active ? "" : " (inactive)"}`).join(", ") : "none"}</p>
+            <p>API contract: {funder.apiContract}</p>
+            <p>Callback: {funder.callback}</p>
+            <p>Commercial access: {funder.commercialAccess}</p>
+          </div>)}
+          <div className="border-t pt-3"><p className="font-medium">Other registered adapters</p>
+            {payload.inventory.unassignedAdapters.length ? payload.inventory.unassignedAdapters.map((adapter) => <p key={adapter.slug} className="mt-2 text-muted-foreground">
+              {adapter.slug} · {adapter.readiness} · credentials: none · API contract: {adapter.apiContract} · callback: {adapter.callback} · commercial access: {adapter.commercialAccess}
+            </p>) : <p>None</p>}
+          </div>
+        </section>}
         {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading adapter credentials…</p>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {message && <p role="status" className="text-sm text-emerald-700">{message}</p>}
@@ -266,7 +305,7 @@ export function AdapterCredentialsPanel() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={credential.readiness === "live" ? "default" : "outline"}>{credential.readiness}</Badge>
-                  <Badge variant={credential.environment === "production" ? "default" : "secondary"}>{environmentLabel(credential.environment)}</Badge>
+                  <Badge variant="secondary">{environmentLabel(credential.environment)} environment</Badge>
                   <Badge variant={credential.hasCredential ? "default" : "outline"}>{credential.hasCredential ? "Credential saved" : "No credential"}</Badge>
                   {!credential.active && <Badge variant="destructive">Inactive</Badge>}
                   {statusAllowed ? <Badge variant="outline">Status poll</Badge> : <Badge variant="outline">Submit only</Badge>}

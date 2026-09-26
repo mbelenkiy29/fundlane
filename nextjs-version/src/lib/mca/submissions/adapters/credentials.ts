@@ -19,6 +19,7 @@ import {
   type AdapterCredentialPublic,
   type AdapterEncryptedPayload,
   type AdapterFunderOption,
+  type AdapterInventory,
   type AdapterLastAction,
   type AdapterResolvedSecrets,
   type AdapterRuntime,
@@ -420,10 +421,52 @@ async function funderNameMap(actor: DealActor): Promise<Map<string, AdapterFunde
       id: funder.id,
       name: funder.nickname?.trim() || funder.legalName,
       adapterSlug: apiRoute?.destination,
+      configuredAdapterSlug: funder.routes.find((route) => route.kind === "api")?.destination,
       hasApiRoute: Boolean(apiRoute),
     })
   }
   return map
+}
+
+function buildInventory(funders: Map<string, AdapterFunderOption>, records: StoredAdapterCredential[]): AdapterInventory {
+  const assigned = new Set<string>()
+  const rows = [...funders.values()].map((funder) => {
+    const scoped = records.filter((record) => record.funderId === funder.id)
+    const slug = funder.configuredAdapterSlug ?? scoped[0]?.adapterSlug
+    if (slug) assigned.add(slug)
+    for (const record of scoped) assigned.add(record.adapterSlug)
+    const adapter = slug ? getAdapter(slug) : undefined
+    return {
+      id: funder.id,
+      name: funder.name,
+      adapterSlug: slug,
+      routeActive: funder.hasApiRoute,
+      credentials: scoped.map((record) => ({
+        adapterSlug: record.adapterSlug,
+        environment: record.environment,
+        present: Boolean(record.credentialCipher && (() => {
+          const payload = decryptAdapterCredential(record.workspaceId, record.credentialCipher)
+          return payload?.environment === record.environment && (record.adapterSlug === "sandbox" || hasAnySecret(payload.secrets))
+        })()),
+        active: record.active,
+      })),
+      apiContract: slug === "sandbox" ? "Local deterministic fixture" : "No verified provider API contract in repo",
+      callback: adapter?.capabilities.webhooks && adapter.parseWebhook ? "Handler in code; provider delivery unverified" : "No provider callback verified",
+      commercialAccess: slug === "sandbox" ? "Local test only" : "Provider authorization not evidenced",
+      readiness: slug === "sandbox" ? "sandbox verified" as const : "untested" as const,
+    }
+  })
+  return {
+    funders: rows,
+    unassignedAdapters: listAdapters().filter((adapter) => !assigned.has(adapter.slug)).map((adapter) => ({
+      slug: adapter.slug,
+      credentialsPresent: false as const,
+      apiContract: adapter.slug === "sandbox" ? "Local deterministic fixture" : "No verified provider API contract in repo",
+      callback: adapter.capabilities.webhooks && adapter.parseWebhook ? "Handler in code; provider delivery unverified" : "No provider callback verified",
+      commercialAccess: adapter.slug === "sandbox" ? "Local test only" : "Provider authorization not evidenced",
+      readiness: adapter.slug === "sandbox" ? "sandbox verified" as const : "untested" as const,
+    })),
+  }
 }
 
 export async function listAdapterConnections(actor: DealActor): Promise<AdapterConnectionList> {
@@ -444,6 +487,9 @@ export async function listAdapterConnections(actor: DealActor): Promise<AdapterC
     funders: visibleFunders,
     environments: ADAPTER_ENVIRONMENTS,
     canManage: isAdmin(actor),
+    ...(isAdmin(actor) && process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED === "true"
+      ? { inventory: buildInventory(funders, records) }
+      : {}),
   }
 }
 

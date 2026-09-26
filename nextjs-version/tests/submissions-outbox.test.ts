@@ -211,6 +211,46 @@ test("processJobDelivery resumes a sending attempt, keeps one row, and marks out
   assert.equal(deliveries, 1)
 })
 
+test("gated API recovery leaves an interrupted send uncertain without submitting twice", async () => {
+  const previous = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  try {
+    const { deal } = await seedDeal()
+    const job = (await persistNewDestination({
+      workspaceId: actor().workspaceId,
+      dealId: deal.id,
+      funderId: emailFunderId,
+      displayFunderName: "Controlled API fixture",
+      routeKind: "api",
+      route: { id: "controlled-api", kind: "api", label: "API", destination: "sandbox", documentExceptions: [], active: true },
+      state: "queued",
+      confirmationKey: "unknown-api-outcome",
+      attemptKey: "unknown-api-outcome",
+      dealVersion: 1,
+      documentVersions: [],
+      packageDocumentIds: [],
+      preflightErrors: [],
+      merchantIdentityKey: `deal:${deal.id}`,
+      packageFingerprint: "",
+      createdByUserId: null,
+      actor: actor(),
+    })).job
+    await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey, transport: "api", state: "sending", correlationId: newId() })
+    const sending = await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
+    const saved = await processJobDelivery(sending)
+    assert.equal(saved.state, "failed")
+    assert.match(saved.reason ?? "", /uncertain/)
+    assert.equal(await attemptCount(job.id), 1)
+    assert.ok(await outboxProcessedAt(job.id))
+    const again = await processJobDelivery(saved)
+    assert.equal(again.state, "failed")
+    assert.equal(await attemptCount(job.id), 1)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previous
+  }
+})
+
 test("processJobDelivery marks sent, failed, or skipped attempts processed without a second row", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-sent")

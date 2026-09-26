@@ -74,6 +74,7 @@ export interface AdapterFunderOption {
   id: string
   name: string
   adapterSlug?: string
+  configuredAdapterSlug?: string
   hasApiRoute: boolean
 }
 
@@ -89,6 +90,29 @@ export interface AdapterConnectionList {
   funders: AdapterFunderOption[]
   environments: readonly AdapterEnvironment[]
   canManage: boolean
+  inventory?: AdapterInventory
+}
+
+export interface AdapterInventory {
+  funders: Array<{
+    id: string
+    name: string
+    adapterSlug?: string
+    routeActive: boolean
+    credentials: Array<{ adapterSlug: string; environment: AdapterEnvironment; present: boolean; active: boolean }>
+    apiContract: string
+    callback: string
+    commercialAccess: string
+    readiness: "sandbox verified" | "untested"
+  }>
+  unassignedAdapters: Array<{
+    slug: string
+    credentialsPresent: false
+    apiContract: string
+    callback: string
+    commercialAccess: string
+    readiness: "sandbox verified" | "untested"
+  }>
 }
 
 export interface AdapterResolvedSecrets {

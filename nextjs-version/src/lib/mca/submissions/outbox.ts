@@ -58,7 +58,7 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  if (existing?.state === "sending" && job.autoSubmitDecisionId) {
+  if (existing?.state === "sending" && (job.autoSubmitDecisionId || (job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"))) {
     const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
     await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
     const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
