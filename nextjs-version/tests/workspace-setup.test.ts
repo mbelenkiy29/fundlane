@@ -237,6 +237,12 @@ test("readiness requires a usable approved form for configuration and document p
   await db.prepare(`INSERT INTO deals
     (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
     VALUES (?,?,?,?,'lead',1,'partial','[]','{}',1,?,?)`).run("deal-setup-form-state", workspaceId, "MCA-FORM-STATE", "[SYNTHETIC] Test Merchant", now, now)
+  await db.prepare(`INSERT INTO mca_documents
+    (id,workspace_id,deal_id,idempotency_key,original_filename,display_filename,mime_type,byte_length,checksum,category,version,storage_key,source,processing_state,created_at,updated_at)
+    VALUES (?,?,?,'setup-form-document','statement.pdf','statement.pdf','application/pdf',1,'synthetic-checksum','bank_statement',1,'setup-form-document','upload','ready',?,?)`)
+    .run("document-setup-form-state", workspaceId, "deal-setup-form-state", now, now)
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "tested")
   await db.prepare(`INSERT INTO intake_events
     (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,deal_id,created_at,updated_at)
     VALUES (?,?,'native',?,'checksum','synthetic','created',?,?,?)`).run("intake-setup-form-state", workspaceId, "form-state-event", "deal-setup-form-state", now, now)
@@ -247,6 +253,12 @@ test("readiness requires a usable approved form for configuration and document p
   items = await phases()
   assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
   assert.equal(items.find((item) => item.id === "form_intake")?.href, "/settings/connections")
+  assert.equal((await getReadinessFacts(workspaceId)).readyDocuments, 1)
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=NULL, automatic_processing=0 WHERE id=?").run("form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
 })
 
 test("billing readiness follows entitlement expiry and manual suspension", async () => {

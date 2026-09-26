@@ -48,8 +48,8 @@ export function deriveReadiness(f: ReadinessFacts, role: Role | null): Readiness
     { id: "form_intake", title: "Form and intake", phase: !f.enabledForms ? "needs_setup" : f.brokenForms ? "configured" : f.createdIntakes ? "tested" : "configured",
       detail: f.brokenForms ? "A form connection needs reapproval or its credential expired. Reconnect it in Connections, then retry intake." : f.failedIntakes ? "An intake failed. Open Application Intake to inspect and retry it." : f.enabledForms ? "Submit a synthetic application through the enabled form." : "Enable a form in Connections.",
       action: f.brokenForms ? "Reconnect form" : f.enabledForms ? "Open Application Intake" : "Configure form", href: f.brokenForms || !f.enabledForms ? "/settings/connections" : "/intake", helpHref: help("invite-a-client-to-apply") },
-    { id: "documents", title: "Document processing", phase: f.readyDocuments ? "tested" : f.processingAvailable ? "configured" : "needs_setup",
-      detail: f.failedDocuments ? "A document failed processing. Review its state and retry from the application." : f.processingAvailable ? "Automatic processing is enabled for a form. Verify the worker with a synthetic statement and confirm it reaches ready." : "Enable automatic processing on an intake form, then verify the worker with a synthetic statement.",
+    { id: "documents", title: "Document processing", phase: !f.processingAvailable ? "needs_setup" : f.readyDocuments ? "tested" : "configured",
+      detail: !f.processingAvailable ? "Enable automatic processing on an intake form, then verify the worker with a synthetic statement." : f.failedDocuments ? "A document failed processing. Review its state and retry from the application." : "Automatic processing is enabled for a form. Verify the worker with a synthetic statement and confirm it reaches ready.",
       action: "Review documents", href: "/intake", helpHref: help("review-applications-and-documents") },
     { id: "sender", title: "Email sender", phase: f.verifiedSenders ? "configured" : "needs_setup",
       detail: f.brokenSenders ? "A sender connection expired or was revoked. Reconnect it in Connections." : f.verifiedSenders ? "Verified sender saved. Confirm delivery with a synthetic recipient before live use." : "Connect and verify a sender in Connections.",
@@ -76,7 +76,7 @@ export interface DiagnosticBundle {
 
 const safeId = (value: string) => /^[a-zA-Z0-9_-]{1,80}$/.test(value) ? value : "redacted"
 const intakeStates = new Set(["received", "validated", "created", "file_pending", "error"])
-const submissionStates = new Set(["preflight_failed", "queued", "sending", "sent", "failed", "skipped", "pending_portal", "blocked_duplicate"])
+const submissionStates = new Set(["preflight_failed", "queued", "sending", "sent", "failed", "skipped", "pending_portal", "blocked_duplicate", "declined", "funded"])
 
 /** Explicit allowlist: no provider payloads, error text, credentials, names, bank fields or document contents. */
 export function makeDiagnosticBundle(input: {
