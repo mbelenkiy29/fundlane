@@ -117,18 +117,25 @@ test("configured onboarding stores selected seats without a local trial",async()
   } finally {clearStripeEnv()}
 })
 test("GET /api/onboarding exposes cardRequiredTrial from the shared helper",async()=>{
+  const previousLifecycleFlag=process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
   clearStripeEnv()
   const off=await json(await GET())
   assert.equal(off.status,200)
   assert.equal(off.body.cardRequiredTrial,false)
   assert.equal(off.body.trialDays,undefined)
+  assert.equal(off.body.trialLifecycleEnabled,false)
   setStripeEnv()
   try {
     const on=await json(await GET())
     assert.equal(on.status,200)
     assert.equal(on.body.cardRequiredTrial,true)
     assert.equal(on.body.trialDays,14)
-  } finally {clearStripeEnv()}
+    assert.equal(on.body.trialLifecycleEnabled,false)
+    process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+    assert.equal((await json(await GET())).body.trialLifecycleEnabled,true)
+    delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  } finally {clearStripeEnv();if(previousLifecycleFlag===undefined)delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED;else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED=previousLifecycleFlag}
 })
 test("unconfigured POST onboarding starts a local trial and never constructs Stripe",async()=>{
   clearStripeEnv()

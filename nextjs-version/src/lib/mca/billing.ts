@@ -10,13 +10,14 @@ import { webhookVerificationTime } from "./maintenance/replay-clock"
 import { recordOperationalError } from "./operations/telemetry"
 import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern } from "./stripe-checkout-trial"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
+import { stripeTrialLifecycleEnabled } from "./billing-flags"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
-export const stripeTrialLifecycleEnabled = () => process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED === "true"
+export { stripeTrialLifecycleEnabled } from "./billing-flags"
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -123,14 +124,28 @@ async function resumePausedTrial(subscription: BillingSubscription, customerId: 
     !subscription.trial_end || subscription.trial_end * 1000 > Date.now() || subscription.collection_method !== "charge_automatically" || subscription.pause_collection) return subscription
   const customer = await client.customers.retrieve(customerId)
   if (customer.deleted || customer.livemode !== stripeLiveMode()) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
-  const method = subscription.default_payment_method ?? customer.invoice_settings?.default_payment_method
-  if (!method) return subscription
-  const methodId = typeof method === "string" ? method : method.id
-  const paymentMethod = await client.paymentMethods.retrieve(methodId)
-  if ((typeof paymentMethod.customer === "string" ? paymentMethod.customer : paymentMethod.customer?.id) !== customerId || paymentMethod.livemode !== stripeLiveMode()) return subscription
   const now = new Date()
-  if (paymentMethod.type !== "card" || !paymentMethod.card || paymentMethod.card.exp_year < now.getUTCFullYear() ||
-    (paymentMethod.card.exp_year === now.getUTCFullYear() && paymentMethod.card.exp_month < now.getUTCMonth() + 1)) return subscription
+  const defaults = [subscription.default_payment_method, customer.invoice_settings?.default_payment_method]
+  let methodId: string | null = null
+  const checked = new Set<string>()
+  for (const method of defaults) {
+    if (!method) continue
+    const candidateId = typeof method === "string" ? method : method.id
+    if (!candidateId || checked.has(candidateId)) continue
+    checked.add(candidateId)
+    let paymentMethod: Awaited<ReturnType<StripeBillingClient["paymentMethods"]["retrieve"]>>
+    try { paymentMethod = await client.paymentMethods.retrieve(candidateId) }
+    catch (error) {
+      if ((error as { code?: string })?.code === "resource_missing") continue
+      throw error
+    }
+    if ((typeof paymentMethod.customer === "string" ? paymentMethod.customer : paymentMethod.customer?.id) !== customerId || paymentMethod.livemode !== stripeLiveMode() ||
+      paymentMethod.type !== "card" || !paymentMethod.card || paymentMethod.card.exp_year < now.getUTCFullYear() ||
+      (paymentMethod.card.exp_year === now.getUTCFullYear() && paymentMethod.card.exp_month < now.getUTCMonth() + 1)) continue
+    methodId = candidateId
+    break
+  }
+  if (!methodId) return subscription
   const resumed = await client.subscriptions.resume(subscription.id, { billing_cycle_anchor: "now" }, { idempotencyKey: `fundlane:trial-resume:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
   if (resumed.id !== subscription.id || fundlaneSubscriptions([resumed],customerId).length !== 1) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
   return resumed

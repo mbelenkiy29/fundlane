@@ -13,7 +13,7 @@ import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catal
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, runImmediateBillingReconcile, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
-import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail, runBillingMaintenance } from "../src/lib/mca/billing-operations"
+import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail, runBillingMaintenance, localTrialNoticeEligible } from "../src/lib/mca/billing-operations"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
 import type { DbExecutor } from "../src/lib/mca/db"
 
@@ -1833,6 +1833,41 @@ test("paused trial resumes only with lifecycle enabled and a default method",asy
     await syncWorkspaceBilling(f.workspaceId,f.client)
     await syncWorkspaceBilling(f.workspaceId,f.client)
     assert.deepEqual(f.state.resumeCalls,[{id:sub.id,key:`fundlane:trial-resume:${sub.id}:${sub.trial_end}:pm_saved`}])
+  } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
+})
+
+test("paused trial uses a valid customer default when the subscription default is stale",async()=>{
+  for (const stale of ["expired", "detached", "missing"] as const) {
+    const f=await fixture(),sub=f.state.subscriptions[0]
+    sub.status="paused";sub.trial_end=Math.floor(Date.now()/1000)-10
+    sub.trial_settings={end_behavior:{missing_payment_method:"pause"}}
+    sub.collection_method="charge_automatically"
+    sub.default_payment_method="pm_old"
+    f.state.defaultPaymentMethod="pm_new"
+    const checked:string[]=[]
+    const client={...f.client,paymentMethods:{retrieve:async(id:string)=>{
+      checked.push(id)
+      if (id==="pm_old" && stale==="missing") throw Object.assign(new Error("No such payment method"),{code:"resource_missing"})
+      return {id,customer:id==="pm_old" && stale==="detached"?"cus_other":f.customerId,livemode:false,type:"card",card:{exp_year:id==="pm_old"?2000:new Date().getUTCFullYear()+1,exp_month:12}}
+    }}} as unknown as StripeBillingClient
+    process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+    try {
+      await syncWorkspaceBilling(f.workspaceId,client)
+      assert.deepEqual(checked,["pm_old","pm_new"])
+      assert.deepEqual(f.state.resumeCalls,[{id:sub.id,key:`fundlane:trial-resume:${sub.id}:${sub.trial_end}:pm_new`}])
+      assert.equal(sub.status,"active")
+    } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
+  }
+})
+
+test("unset lifecycle flag keeps local notices for mixed legacy trial records",()=>{
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  assert.equal(localTrialNoticeEligible("sub_existing"),true)
+  assert.equal(localTrialNoticeEligible(null),true)
+  process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+  try {
+    assert.equal(localTrialNoticeEligible("sub_existing"),false)
+    assert.equal(localTrialNoticeEligible(null),true)
   } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
 })
 
