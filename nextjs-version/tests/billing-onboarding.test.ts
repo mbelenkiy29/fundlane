@@ -39,7 +39,33 @@ before(async()=>{
   ;({GET,POST}=await import("../src/app/api/onboarding/route"))
   ;({createOnboardingCheckoutUrl,getStripeClient}=await import("../src/lib/mca/billing"))
 })
-after(async()=>{clearStripeEnv();await closeDatabaseForTests();await database?.close()})
+after(async()=>{clearStripeEnv();delete process.env.MCA_SIGNUP_MODE;await closeDatabaseForTests();await database?.close()})
+test("invite-only blocks OAuth onboarding creation while existing workspace selection stays available",async()=>{
+  delete process.env.MCA_SIGNUP_MODE
+  const existing=await completeCompanyOnboarding("Invite-only selection fixture")
+  process.env.MCA_SIGNUP_MODE="invite_only"
+  try {
+    const get=await json(await GET())
+    assert.equal(get.body.signupMode,"invite_only")
+    const create=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:"Forbidden company"})})))
+    assert.equal(create.status,403)
+    assert.equal((create.body.error as {code:string}).code,"signup_invite_only")
+    await assert.rejects(completeCompanyOnboarding("Direct forbidden company"),{code:"signup_invite_only"})
+    assert.equal(await getDatabase().prepare("SELECT id FROM workspaces WHERE name=?").get("Forbidden company"),undefined)
+    const select=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({workspaceId:existing.workspaceId})})))
+    assert.equal(select.status,200)
+    assert.equal(select.body.workspaceId,existing.workspaceId)
+  } finally {delete process.env.MCA_SIGNUP_MODE}
+})
+test("workspace creation is limited per client IP before another workspace is created",async()=>{
+  delete process.env.MCA_SIGNUP_MODE
+  const create=(index:number)=>POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json","x-forwarded-for":"192.0.2.54"},body:JSON.stringify({name:`Rate limited company ${index}`})}))
+  for(let index=0;index<10;index++) assert.equal((await create(index)).status,200)
+  const blocked=await json(await create(10))
+  assert.equal(blocked.status,429)
+  assert.equal((blocked.body.error as {code:string}).code,"rate_limit_exceeded")
+  assert.equal(await getDatabase().prepare("SELECT id FROM workspaces WHERE name=?").get("Rate limited company 10"),undefined)
+})
 test("company creation stores a >5 paid quantity and starts one five-seat trial atomically",async()=>{
   clearStripeEnv()
   const warnings:string[]=[]

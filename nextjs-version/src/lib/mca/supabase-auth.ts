@@ -9,6 +9,7 @@ import { DEFAULT_ACTION_VISIBILITY, DEFAULT_FEATURE_FLAGS, DEFAULT_PAGE_VISIBILI
 import { monthlyPriceCents } from "./billing-catalog"
 import { initializeCompanyTrial } from "./company-access"
 import { isStripeCheckoutTrialConfigured, warnUnconfiguredStripeCheckoutTrial } from "./stripe-checkout-trial"
+import { requireOpenSignup } from "./signup-guard"
 
 export const WORKSPACE_COOKIE = "mca_workspace"
 export type SupabaseIdentity = { user: User; email: string; sessionId: string }
@@ -106,6 +107,7 @@ export async function listSupabaseWorkspaces(identity: SupabaseIdentity) {
 }
 
 export async function completeCompanyOnboarding(name: string, selectedSeats = 1) {
+  requireOpenSignup()
   const cardRequiredTrial = isStripeCheckoutTrialConfigured()
   if (cardRequiredTrial) monthlyPriceCents(selectedSeats)
   const identity = await supabaseIdentity()

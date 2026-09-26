@@ -6,6 +6,10 @@ Fundlane uses Supabase Auth for verified email/password identities. The server-o
 
 Configure `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, the restricted runtime `DATABASE_URL`, and the environment's exact `MCA_APP_ORIGIN`. Use different Auth projects for staging and production. Configure production SMTP in Supabase; ordinary previews must never send using production credentials.
 
+`MCA_SIGNUP_MODE` accepts `open` or `invite_only`. Unset or invalid values use `open`, preserving self sign-up, Google onboarding, and existing marketing CTAs. In `invite_only`, company self sign-up and company onboarding creation return HTTP 403; `/sign-up` offers a demo instead. A new invitee can still create an account from a valid, pending invitation link when the invited email matches. Existing memberships, invitation acceptance, and operator creation continue to work. The company creation API also limits requests per client IP to 10 per minute in either mode; auth sign-up and Google initiation retain their existing limits. This flag does not disable Supabase's provider-level account creation through Google; a new Google identity cannot create a Fundlane company while invite-only is active.
+
+`MCA_SHOW_MIGRATED_ACCOUNT_NOTICE` defaults to shown and hides the general `/sign-in` migrated-account helper only when exactly `false`. Set it to `false` after migrated users have been notified through their recovery flow. The default retains the existing sign-in copy until the product owner chooses to hide it. Users marked as needing password setup still receive their specific notice on `/onboarding`.
+
 Set the Supabase Site URL to the environment's public origin (without a trailing slash). Allow that exact host's `/auth/callback` and its continuation query variants in Auth redirect settings; the historical fixed-query allowlist below is insufficient for invitation flows. The built-in PKCE email redirect works when the email is opened in the same browser that requested it. For links that work across devices, configure these **Supabase Go HTML email templates**:
 
 Confirmation:

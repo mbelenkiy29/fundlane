@@ -9,6 +9,14 @@ let hasIdentity = true
 let migrationPending = true
 let recoveryRedirect = ""
 const calls: string[] = []
+const invitationToken = "a".repeat(64)
+mock.module(new URL("../src/lib/mca/supabase-team.ts", import.meta.url).href, { namedExports: {
+  inspectSupabaseInvitation: async (token: string) => {
+    assert.equal(token, invitationToken)
+    calls.push("invitation")
+    return { email: "synthetic@example.test", workspace_name: "Inviting company" }
+  },
+} })
 const client = { auth: {
   signUp: async () => { calls.push("signup"); return { data: { session: null }, error: providerError } },
   updateUser: async () => { calls.push("password"); return { error: providerError } },
@@ -46,7 +54,26 @@ type Action = Parameters<typeof handleSupabaseAuth>[1]
 function request(action: Action, body: unknown = input) {
   return handleSupabaseAuth(new Request("http://localhost/api/auth/test", { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body) }), action)
 }
-beforeEach(() => { providerError = null; hasIdentity = true; migrationPending = true; calls.length = 0 })
+beforeEach(() => { delete process.env.MCA_SIGNUP_MODE; providerError = null; hasIdentity = true; migrationPending = true; calls.length = 0 })
+
+test("company sign-up stays open by default and rejects invite-only before calling Supabase", async () => {
+  assert.equal((await request("company-signup")).status, 200)
+  assert.deepEqual(calls, ["signup"])
+  calls.length = 0
+  process.env.MCA_SIGNUP_MODE = "invite_only"
+  const blocked = await request("company-signup")
+  assert.equal(blocked.status, 403)
+  assert.equal((await blocked.json()).error.code, "signup_invite_only")
+  assert.deepEqual(calls, [])
+  const mismatch = await request("company-signup", { ...input, email: "other@example.test", next: `/accept-invite?token=${invitationToken}` })
+  assert.equal(mismatch.status, 403)
+  assert.equal((await mismatch.json()).error.code, "invitation_account_mismatch")
+  assert.deepEqual(calls, ["invitation"])
+  calls.length = 0
+  const invited = await request("company-signup", { ...input, next: `/accept-invite?token=${invitationToken}` })
+  assert.equal(invited.status, 200)
+  assert.deepEqual(calls, ["invitation", "signup"])
+})
 
 test("recovery request encodes a safe invitation destination through password setup", async () => {
   const invitation = `/accept-invite?token=${"c".repeat(64)}`

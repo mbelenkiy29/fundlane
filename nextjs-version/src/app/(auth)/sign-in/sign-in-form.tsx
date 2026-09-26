@@ -10,7 +10,11 @@ import {
   currentAuthContinuation,
 } from "@/lib/mca/auth-navigation"
 
-export function SignInForm({ magicLinkEnabled = false }: { magicLinkEnabled?: boolean }) {
+export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showMigratedAccountNotice = true }: {
+  magicLinkEnabled?: boolean
+  inviteOnly?: boolean
+  showMigratedAccountNotice?: boolean
+}) {
   const flow = useSignInFlow()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -223,19 +227,19 @@ export function SignInForm({ magicLinkEnabled = false }: { magicLinkEnabled?: bo
         >
           Resend email verification
         </button>
-        <p className="fl-form-privacy">
+        {showMigratedAccountNotice && <p className="fl-form-privacy">
           Existing users:{" "}
           <Link href="/forgot-password" className="fl-inline-link">
             set a new password
           </Link>{" "}
           to activate your migrated account.
-        </p>
+        </p>}
         <p className="fl-form-privacy">
-          New team members join through an invitation.{" "}
+          New team members join through an invitation.{!inviteOnly && <>{" "}
           <Link href="/sign-up" className="fl-inline-link">
             Create a company workspace
           </Link>
-          .
+          .</>}
         </p>
       </form>
     </>
