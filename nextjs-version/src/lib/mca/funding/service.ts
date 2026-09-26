@@ -9,6 +9,7 @@ import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { assertLinkedSubmissionNotFunded, assertOfferRevisionEligibleForClosing, getOfferRevisionForClosing } from "../offers/service"
 import { insertDealSubmissionCache } from "../submissions/repository"
+import { verifiedClosingFlowEnabled } from "../closing/verified-flow"
 import type { ConfirmFundingInput, FundingAccountingWriter, FundingResult, FundingSplitInput } from "./contracts"
 
 type FundingRow = {
@@ -136,6 +137,13 @@ export async function confirmOfferFunding(
     const derivedSource = manualSubmission?.source ?? (lockedOffer.source === "historical" ? "historical" : "live")
     if (input.source && input.source !== derivedSource) throw new AppError(422, "funding_source_mismatch", "Funding source must match the server-side offer and submission history.")
     const source = derivedSource
+    if (verifiedClosingFlowEnabled() && source === "live" && !input.correctionOfEventId) {
+      const reviewed = await database.prepare<{ id: string }>(`SELECT w.id FROM mca_contract_workflows w JOIN mca_documents d
+        ON d.workspace_id=w.workspace_id AND d.deal_id=w.deal_id AND d.id=w.signature_evidence_document_id
+        WHERE w.workspace_id=? AND w.deal_id=? AND w.offer_revision_id=? AND w.state='final_review'
+        AND d.category='closing_document' AND d.processing_state='clean'`).get(actor.workspaceId, input.dealId, input.offerRevisionId)
+      if (!reviewed) throw new AppError(409, "closing_final_review_required", "Complete contract signature evidence and final review before funding this offer.")
+    }
     if (source !== "live" && (actor.source === "api_key" || !["admin", "super_admin"].includes(actor.role ?? ""))) throw new AppError(403, "manual_funding_not_allowed", "Manual and historical funding require a workspace administrator session.")
     const eventId = newId(), advanceId = newId(), createdAt = nowIso()
     const factorRate = revision.factor_rate_millionths === null ? undefined : (Number(revision.factor_rate_millionths) / 1_000_000).toString()

@@ -27,6 +27,7 @@ import { createMerchantOfferSmsTransport } from "./offer-sms"
 import { deliverPsfRequestWithDocuSeal, docuSealPsfConnectionConfigured, recordDocuSealPsfWebhook as processDocuSealPsfWebhook, selectPsfDeliveryProvider } from "./psf-docuseal-service"
 import { assertUsAbaRoutingNumber } from "./aba"
 import { bindFunderEmail, bindMerchantEmail, bindMerchantSms, maskClosingEmail, maskClosingSms, recordRecipientOverrideAudit } from "./recipients"
+import { verifiedClosingFlowEnabled } from "./verified-flow"
 import type { ClosingDelivery, ClosingRequestPreview, ClosingSnapshot, ContractWorkflow, MerchantUploadLink, OfferMessagePreview, OfferRevisionBinding, PsfRequestSummary, StipulationState, StipulationTask } from "./contracts"
 
 type Row = Record<string, string | number | null>
@@ -114,6 +115,7 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
     destinationConfigured: Boolean(psfConfig?.destination_cipher),
     signingSecretConfigured: Boolean(psfConfig?.signing_secret_cipher),
   })
+  const verifiedPsfReady = psfDeliveryReady && (!verifiedClosingFlowEnabled() || docuSealConfigured)
   const [stipRows, contractRows, psfRows, messageRows, deliveryRows, pitchRows] = await Promise.all([
     database.prepare<Row>("SELECT * FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? ORDER BY created_at DESC").all(actor.workspaceId, dealId),
     database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND deal_id=? ORDER BY created_at DESC").all(actor.workspaceId, dealId),
@@ -133,7 +135,8 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
     psfRequests: await Promise.all(psfRows.map((row) => psf(row, actor))), messagePreviews: await Promise.all(messageRows.map((row) => message(row, actor))),
     deliveries: deliveryRows.map(delivery), pitchedRevisionIds: pitchRows.map((row) => String(row.offer_revision_id)),
     capabilities: { psfVisible: mayViewPsf, psfAdmin: actor.source !== "api_key" && (actor.role === "admin" || actor.role === "super_admin") },
-    psfDeliveryReady,
+    psfDeliveryReady: verifiedPsfReady,
+    verifiedFlowEnabled: verifiedClosingFlowEnabled(),
     merchantContact: { email: deal.contactEmail, phone: deal.contactPhone },
     assignableOwners: ownerRows.filter((row) => allowedOwnerIds.has(String(row.id))).map((row) => ({ id: String(row.id), name: String(row.name) })),
     merchantSmsAccounts: smsAccounts.map((item) => ({ id: item.id, label: item.label, senderMasked: item.senderMasked, providerConfigured: item.providerConfigured, isDefault: item.isDefault })),
@@ -141,7 +144,10 @@ export async function getClosingSnapshot(actor: DealActor, dealId: string): Prom
       merchantEmail: postmarkConfigured || process.env.MCA_MERCHANT_EMAIL_WEBHOOK_URL ? "configured; verify delivery before production use" : "unavailable: connect merchant email in Settings",
       merchantSms: smsProviderConfigured ? "ready when merchant text consent is recorded" : "unavailable: connect and assign merchant text messaging in Settings",
       contractDelivery: emailTransportConfigured ? "configured; verify delivery before production use" : "unavailable: connect contract delivery in Settings",
-      psfDelivery: docuSealConfigured
+      contractSignature: "unavailable: no verified contract signature callback is connected; use documented manual evidence review",
+      psfDelivery: verifiedClosingFlowEnabled() && !docuSealConfigured
+        ? "unavailable: connect DocuSeal with an approved PSF template and signed callback"
+        : docuSealConfigured
         ? (psfDeliveryReady
           ? "DocuSeal is configured; verify delivery before production use"
           : "DocuSeal is configured; enable PSF delivery before sending")
@@ -432,6 +438,7 @@ export async function previewContractAction(actor: DealActor, input: { workflowI
   await assertSenderUsable(actor, input.senderId, "submission")
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=?").get(actor.workspaceId, input.workflowId)
   if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
+  if (verifiedClosingFlowEnabled() && ["signed", "final_review"].includes(String(row.state))) throw new AppError(409, "contract_already_signed", "A signed contract cannot be requested or repriced again.")
   const deal = await getDealForDocument(actor, String(row.deal_id))
   const bound = await bindFunderEmail({ funderId: row.funder_id ? String(row.funder_id) : undefined, recipient: input.recipient, overrideReason: input.overrideReason, dealId: deal.id, resourceId: input.workflowId, kind: input.action }, actor)
   await recordRecipientOverrideAudit(actor, bound, { dealId: deal.id, resourceId: input.workflowId, kind: input.action === "request_contract" ? "contract_request" : "repricing_request" })
@@ -481,6 +488,27 @@ export async function sendRequestPreview(actor: DealActor, previewId: string, at
 }
 
 export async function recordContractSignature(actor: DealActor, input: { workflowId: string; source: "external" | "manual"; externalId?: string; evidenceDocumentId?: string; manualReason?: string }): Promise<ContractWorkflow> {
+  if (verifiedClosingFlowEnabled()) return withImmediateTransaction(async (database) => {
+    const row = await database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, input.workflowId)
+    if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
+    await getDealForDocument(actor, String(row.deal_id))
+    if (["signed", "final_review"].includes(String(row.state))) {
+      if (row.signature_source === input.source && row.signature_external_id === (input.externalId?.trim() ?? null)
+        && row.signature_evidence_document_id === (input.evidenceDocumentId ?? null)
+        && row.manual_signature_reason === (input.manualReason?.trim() ?? null)) return contract(row, actor)
+      throw new AppError(409, "signature_conflict", "A different signature decision has already been recorded.")
+    }
+    if (row.state !== "contract_sent") throw new AppError(409, "contract_not_sent", "Send the contract request before recording a signature.")
+    if (input.source === "external") throw new AppError(503, "contract_signature_provider_unavailable", "No verified contract signature callback is connected. Use manual evidence review after provider setup.")
+    const reason = required(input.manualReason, "manualReason", 500)
+    const evidenceId = required(input.evidenceDocumentId, "evidenceDocumentId", 300)
+    const evidence = await getDocument(actor, evidenceId)
+    if (evidence.dealId !== row.deal_id || evidence.category !== "closing_document" || evidence.processingState !== "clean") throw new AppError(422, "signature_evidence_invalid", "Manual signature evidence must be a scan-clean closing document from this deal.")
+    const now = nowIso()
+    const updated = await database.prepare<Row>(`UPDATE mca_contract_workflows SET state='signed',signed_at=?,signature_source='manual',signature_external_id=NULL,signature_evidence_document_id=?,manual_signature_reason=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(now, evidenceId, reason, now, actor.workspaceId, input.workflowId)
+    await recordAuditEvent({ context: actor, action: "closing.contract_signature_recorded", resourceType: "contract_workflow", resourceId: input.workflowId, metadata: { source: "manual", evidenceDocumentId: evidenceId }, correlationId: actor.correlationId, executor: database })
+    return contract(updated!, actor)
+  })
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=?").get(actor.workspaceId, input.workflowId)
   if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
   await getDealForDocument(actor, String(row.deal_id))
@@ -497,6 +525,19 @@ export async function recordContractSignature(actor: DealActor, input: { workflo
 }
 
 export async function markContractFinalReview(actor: DealActor, workflowId: string): Promise<ContractWorkflow> {
+  if (verifiedClosingFlowEnabled()) return withImmediateTransaction(async (database) => {
+    const row = await database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, workflowId)
+    if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
+    await getDealForDocument(actor, String(row.deal_id))
+    if (row.state === "final_review") return contract(row, actor)
+    if (row.state !== "signed" || !row.signed_at || !row.signature_source || !row.signature_evidence_document_id) throw new AppError(409, "signature_evidence_required", "A scan-clean signed document is required before final review.")
+    const evidence = await getDocument(actor, String(row.signature_evidence_document_id))
+    if (evidence.dealId !== row.deal_id || evidence.category !== "closing_document" || evidence.processingState !== "clean") throw new AppError(409, "signature_evidence_required", "The signed document must remain scan-clean before final review.")
+    const now = nowIso()
+    const updated = await database.prepare<Row>("UPDATE mca_contract_workflows SET state='final_review',final_review_at=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *").get(now, now, actor.workspaceId, workflowId)
+    await recordAuditEvent({ context: actor, action: "closing.contract_final_review", resourceType: "contract_workflow", resourceId: workflowId, metadata: { evidenceDocumentId: row.signature_evidence_document_id }, correlationId: actor.correlationId, executor: database })
+    return contract(updated!, actor)
+  })
   const row = await getDatabase().prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=?").get(actor.workspaceId, workflowId)
   if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
   await getDealForDocument(actor, String(row.deal_id))
@@ -548,6 +589,7 @@ export async function updatePsfConfiguration(actor: DealActor, input: { enabled:
   if (suppliedSecret && suppliedSecret.length < 32) throw new AppError(422, "psf_signing_secret_invalid", "Use a PSF signing secret of at least 32 characters.")
   const secretCipher = suppliedSecret ? encryptSensitive(suppliedSecret, actor.workspaceId) : existing?.signing_secret_cipher
   const direct = docuSealPsfConnectionConfigured(actor.workspaceId)
+  if (verifiedClosingFlowEnabled() && input.enabled && !direct) throw new AppError(503, "psf_signature_provider_unavailable", "Connect DocuSeal with an approved PSF template before enabling verified PSF delivery.")
   if (input.enabled && !direct && (!destinationCipher || !secretCipher)) throw new AppError(422, "psf_configuration_incomplete", "Connect DocuSeal or save an HTTPS destination and signing secret before enabling PSF delivery.")
   const now = nowIso()
   await getDatabase().prepare(`INSERT INTO mca_psf_config (workspace_id,enabled,visible_to_reps,destination_cipher,signing_secret_cipher,updated_by_user_id,updated_at)
@@ -572,6 +614,7 @@ async function psfConfigForUse(actor: DealActor): Promise<{ endpoint: string; se
 
 export async function confirmPsfRequest(actor: DealActor, input: { dealId: string; offerId?: string; revisionId?: string; amountCents: number; bankName: string; routingNumber: string; accountNumber: string; businessName: string; contactName: string; contactEmail?: string; overrideReason?: string; idempotencyKey: string; deliver?: boolean; attemptKey?: string }): Promise<{ request: PsfRequestSummary; delivery?: ClosingDelivery }> {
   await psfVisibilityForUse(actor)
+  if (verifiedClosingFlowEnabled() && input.deliver && !docuSealPsfConnectionConfigured(actor.workspaceId)) throw new AppError(503, "psf_signature_provider_unavailable", "Connect DocuSeal with an approved PSF template before sending a verified PSF request.")
   const deal = await getDealForDocument(actor, input.dealId)
   const offer = await resolveOffer(actor, input.dealId, input.offerId, input.revisionId)
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new AppError(422, "amount_invalid", "Enter a positive amount in cents.")
@@ -610,6 +653,7 @@ export async function confirmPsfRequest(actor: DealActor, input: { dealId: strin
 }
 
 export async function recordPsfWebhook(workspaceId: string, rawBody: string, signatureHeader: string | null): Promise<{ requestId: string; state: "signed" | "retained" }> {
+  if (verifiedClosingFlowEnabled()) throw new AppError(503, "psf_signature_provider_unavailable", "Generic PSF callbacks cannot establish a verified signature. Connect DocuSeal and retain its signed documents and audit log.")
   const config = await getDatabase().prepare<Row>("SELECT * FROM mca_psf_config WHERE workspace_id=? AND enabled<>0").get(workspaceId)
   if (!config?.signing_secret_cipher) throw new AppError(404, "psf_webhook_unavailable", "PSF webhook processing is unavailable.")
   const [timestamp, supplied] = (signatureHeader ?? "").split(".", 2), epoch = Number(timestamp)
