@@ -1,11 +1,9 @@
 import { sendTransactionalWebhook } from "./operations/email-transport";
 import "server-only";
 
-import { TRIAL_DAYS } from "./billing-catalog";
 import { AppError } from "./errors";
 import { newId } from "./db";
 import { sendUsesendEmail } from "./intake/usesend";
-import { isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial";
 
 interface EmailMessage {
   recipient: string;
@@ -73,17 +71,14 @@ export function renderBillingEmailContent(message: Pick<BillingEmailMessage,"dat
   const kind = String(message.data.kind)
   const subject = subjects[kind]
   if (!subject) throw new AppError(422,"billing_notification_unknown","Unknown billing notification kind.")
-  const cardRequiredTrial = isStripeCheckoutTrialConfigured()
   const descriptions: Record<string,string> = {
     renewal_payment_failed:"Your company renewal payment has not completed. Update your payment method and pay all outstanding invoices before your grace period ends to keep company access. Monthly fees continue during suspension until the subscription’s effective cancellation date. Open Plans & Billing to review outstanding invoices, pay or cancel. All applicable overdue invoices, including missed months, must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation.",
     billing_paused:"Company operations are paused because a renewal remains unpaid. Monthly fees continue during suspension until the subscription’s effective cancellation date. Outstanding invoices, including missed months, remain due even after cancellation. Plans & Billing remains available to review outstanding invoices, pay or cancel. All applicable overdue invoices must be verified paid before otherwise-eligible access resumes; returning from payment is not confirmation. Separate administrative suspensions remain in effect.",
     billing_recovered:"All applicable overdue invoices have been verified paid. Billing suspension has been cleared. Any separate administrative suspension remains in effect. Payment does not restart a canceled subscription.",
-    trial_ending: cardRequiredTrial
-      ? `Your ${TRIAL_DAYS}-day trial is ending soon. Stripe automatically charges the card entered at Checkout for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.`
-      : "Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
-    trial_ended: cardRequiredTrial
-      ? `Your ${TRIAL_DAYS}-day trial has ended and company operations are paused. Open Plans & Billing to review your subscription and payment status.`
-      : "Your trial has ended and company operations are paused. Your data remains available for recovery. Choose your paid subscription in Plans & Billing.",
+    // These emails only fire for local no-card trials (billing-operations.ts ~lines 91-94).
+    // Stripe Checkout trials are `trialing` with no local trial_ends_at, so they never receive them.
+    trial_ending:"Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately.",
+    trial_ended:"Your trial has ended and company operations are paused. Your data remains available for recovery. Choose your paid subscription in Plans & Billing.",
     payment_action_required:"Your invoice needs payment authentication. Complete the payment on Stripe's hosted invoice page. Seats and access update after Stripe confirms payment.",
     payment_failed:"Your invoice payment failed. Open Plans & Billing, then Payment settings & invoices to update your card in the Billing Portal. Seats and access update after Stripe confirms payment.",
   }
