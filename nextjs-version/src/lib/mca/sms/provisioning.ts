@@ -360,9 +360,9 @@ async function registrationStatus(c: Company, api: TwilioApi) {
         : "pending"
   await getDatabase()
     .prepare(
-      "UPDATE sms_companies SET registration_state=?,updated_at=? WHERE workspace_id=?"
+      "UPDATE sms_companies SET registration_state=?,updated_at=? WHERE workspace_id=? AND registration_state IS DISTINCT FROM ?"
     )
-    .run(state, nowIso(), c.workspace_id)
+    .run(state, nowIso(), c.workspace_id, state)
 }
 export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
   const op = await withImmediateTransaction(async (db) => {

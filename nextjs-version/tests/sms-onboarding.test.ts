@@ -451,22 +451,31 @@ test("managed sender readiness requires eligibility, campaign approval and send 
     await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved' WHERE workspace_id=?").run(owner.workspaceId)
   }
 })
-test("unset cron flag preserves existing approved managed sender availability", async () => {
+test("managed send prerequisites apply with cron flag unset or non-enabling", async () => {
   const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
   assert.ok(n)
   const cronEnabled = process.env.MCA_SMS_CRON_ENABLED
   try {
     delete process.env.MCA_SMS_CRON_ENABLED
     await saveProvider(owner.workspaceId, { ...p, brandSid: undefined })
-    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    await assert.rejects(
+      withImmediateTransaction((db) => reserveManagedSend(db, actor, n.id, "missing-brand", "Application update", "+12125556666")),
+      { code: "sms_setup_incomplete" }
+    )
     const accounts = await listSmsAccounts(actor)
-    assert.equal(accounts.accounts.find((account) => account.id === n.id)?.providerConfigured, true)
+    assert.equal(accounts.accounts.find((account) => account.id === n.id)?.providerConfigured, false)
+    await saveProvider(owner.workspaceId, { ...p, campaignSid: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
     await saveProvider(owner.workspaceId, { ...p, apiKeySecret: undefined })
-    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
     process.env.MCA_SMS_CRON_ENABLED = "TRUE"
-    assert.equal(await managedReady(owner.workspaceId, n.id), true)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
     process.env.MCA_SMS_CRON_ENABLED = "true"
     assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    await saveProvider(owner.workspaceId, p)
+    delete process.env.MCA_SMS_CRON_ENABLED
+    assert.equal(await managedReady(owner.workspaceId, n.id), true)
   } finally {
     if (cronEnabled === undefined) delete process.env.MCA_SMS_CRON_ENABLED
     else process.env.MCA_SMS_CRON_ENABLED = cronEnabled
