@@ -12,16 +12,17 @@ import { createWorkspaceWithAdmin } from "../src/lib/mca/workspaces"
 import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catalog"
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
-import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
+import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
   process.env.DATABASE_URL = database.databaseUrl
   Object.assign(process.env, { MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", MCA_APP_ORIGIN: "http://localhost:3000" })
+  delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
   delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM
 })
 after(async () => {
@@ -304,6 +305,49 @@ test("checkout reuses customer and open session and includes base plus additiona
   assert.match(String(f.state.checkoutParams.integration_identifier),/^fundlane_company_subscription_[a-z]{8}$/)
   assert.equal((await getCompanyAccess(f.workspaceId)).status,"trial")
 })
+test("tax flag off preserves the complete Checkout request",async()=>{
+  delete process.env.MCA_STRIPE_TAX_ENABLED
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  await createBillingCheckout(f.workspaceId,5,false,f.client)
+  assert.deepEqual(f.state.checkoutParams,{
+    mode:"subscription",customer:f.customerId,integration_identifier:"fundlane_company_subscription_ndmotxpw",
+    client_reference_id:f.workspaceId,metadata:{workspace_id:f.workspaceId},payment_method_collection:"always",
+    subscription_data:{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"}},
+    line_items:[{price:"price_base",quantity:1},{price:"price_seats",quantity:4}],
+    success_url:"http://localhost:3000/settings/billing",cancel_url:"http://localhost:3000/settings/billing",
+    expires_at:(Number(f.state.checkoutKey?.split("-").at(-1))+2)*1800,
+  })
+})
+for(const existingCustomer of [false,true]) test(`tax-enabled Checkout ${existingCustomer?"reuses an existing":"creates a new"} customer`,async()=>{
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    const f=await fixture(existingCustomer)
+    if(existingCustomer){f.state.subscriptions=[];f.state.invoices=[]}
+    await initializeCompanyTrial(f.workspaceId,5)
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.createdCustomers,existingCustomer?0:1)
+    assert.equal(f.state.checkoutParams.customer,f.customerId)
+    assert.deepEqual(f.state.checkoutParams.automatic_tax,{enabled:true})
+    assert.equal(f.state.checkoutParams.billing_address_collection,"required")
+    assert.deepEqual(f.state.checkoutParams.tax_id_collection,{enabled:true})
+    assert.deepEqual(f.state.checkoutParams.customer_update,{address:"auto",name:"auto"})
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
+})
+test("price verification checks configured tax behavior without changing the unset rule",async()=>{
+  const f=await fixture(false)
+  const prices={retrieve:async(id:string)=>({...await f.client.prices.retrieve(id),tax_behavior:id==="price_base"?"exclusive":"inclusive"})}
+  const client={...f.client,prices} as StripeBillingClient
+  delete process.env.MCA_STRIPE_TAX_BEHAVIOR
+  await verifyBillingPrices(client)
+  process.env.MCA_STRIPE_TAX_BEHAVIOR="exclusive"
+  try {
+    await assert.rejects(verifyBillingPrices(client),{code:"billing_price_mismatch"})
+    await verifyBillingPrices({...f.client,prices:{retrieve:async(id:string)=>({...await f.client.prices.retrieve(id),tax_behavior:"exclusive"})}} as StripeBillingClient)
+    process.env.MCA_STRIPE_TAX_BEHAVIOR="invalid"
+    await assert.rejects(verifyBillingPrices(client),{code:"billing_tax_behavior_invalid"})
+  } finally {delete process.env.MCA_STRIPE_TAX_BEHAVIOR}
+})
 test("new company Checkout requires a card and one Stripe trial; retries reuse the session",async()=>{
   const f=await fixture(false)
   await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(f.workspaceId,nowIso())
@@ -470,6 +514,28 @@ for (const mode of ["classic","flexible"] as const) test(`SDK ${mode} seat lifec
     assert.equal(http.calls.some(call=>call.path.endsWith("/migrate")),false)
     assert.equal(sub.billing_mode.type,mode)
   } finally { await http.close() }
+})
+test("tax-enabled seat changes activate existing subscriptions and tax both schedule phases",async()=>{
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  const f=await fixture(),http=await createStripeHttpFixture(),url=new URL(http.origin)
+  const client=new Stripe("rk_test_fixture",{apiVersion:"2026-08-26.dahlia",host:url.hostname,port:Number(url.port),protocol:"http",maxNetworkRetries:0})
+  const sub=f.state.subscriptions[0]
+  http.customers.set(f.customerId,{id:f.customerId,livemode:false,metadata:{workspace_id:f.workspaceId}})
+  http.subscriptions.set(f.customerId,[sub]);http.invoices.set(f.customerId,f.state.invoices)
+  try {
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await changeBillingSeats(f.workspaceId,8,f.userId,client)
+    const subscriptionWrites=http.calls.filter(call=>call.method==="POST"&&call.path===`/v1/subscriptions/${sub.id}`)
+    assert.equal(subscriptionWrites.length,2)
+    assert.deepEqual(Object.fromEntries(subscriptionWrites[0].body),{"automatic_tax[enabled]":"true",proration_behavior:"none"})
+    assert.equal(subscriptionWrites[1].body.get("payment_behavior"),"pending_if_incomplete")
+    assert.equal(subscriptionWrites[1].body.get("proration_behavior"),"always_invoice")
+    assert.equal([...subscriptionWrites[1].body.keys()].some(key=>key.startsWith("automatic_tax")),false)
+    await changeBillingSeats(f.workspaceId,2,f.userId,client)
+    const scheduleWrite=http.calls.find(call=>call.method==="POST"&&call.path.startsWith("/v1/subscription_schedules/"))!
+    assert.equal(scheduleWrite.body.get("phases[0][automatic_tax][enabled]"),"true")
+    assert.equal(scheduleWrite.body.get("phases[1][automatic_tax][enabled]"),"true")
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED;await http.close()}
 })
 test("verified paid subscription replaces trial; failed proration cannot grant more seats",async()=>{
   const f=await fixture()

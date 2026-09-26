@@ -24,6 +24,8 @@ Apply **0047_company_subscriptions**, preserving 0046_company_ownership, then **
 
 ```dotenv
 MCA_STRIPE_BILLING_ENABLED=true
+MCA_STRIPE_TAX_ENABLED=false
+MCA_STRIPE_TAX_BEHAVIOR=
 MCA_BILLING_TRIAL_DAYS=14
 MCA_STRIPE_MODE=test
 STRIPE_SECRET_KEY=rk_test_...
@@ -65,7 +67,15 @@ Reviewed with Stripe CLI 1.51.1 on 2026-09-21 against installed `stripe` 22.6.0 
 - Catalog review: `scripts/stripe/setup-catalog.ts` creates the existing licensed monthly USD base and graduated additional-seat prices; `verifyBillingPrices` checks the actual prices/tiers. Billing mode belongs to subscriptions, so no price changes are needed. The dedicated Portal configuration permits payment methods, invoices and period-end cancellation and disables subscription updates, matching the runtime validator.
 - **Portal constraint and application fallback:** [Portal limitations](https://docs.stripe.com/customer-management#limitations) state that customers cannot update or cancel subscriptions with a scheduled update. The application therefore exposes **Cancel at period end** directly in Plans & Billing, including while paused and while a reduction is pending. The authenticated application path below fulfills R5.1; task 4.2 still verifies real-provider behavior and R6.1 compatibility.
 
-Tax activation remains dependent on merchant registrations/settings; this Checkout change does not enable automatic tax.
+### Sales tax decision and activation (#111)
+
+**Current decision-dependent default: tax collection is OFF.** `MCA_STRIPE_TAX_ENABLED` activates only when exactly `true`; unset or `false` preserves the existing Checkout and seat-change requests. Michael and an accountant must decide whether and where to collect tax, confirm registrations and whether the existing prices should be tax-exclusive or tax-inclusive before changing this flag. Enable [Stripe Tax threshold monitoring](https://docs.stripe.com/tax/monitoring) in the Stripe Dashboard meanwhile so approaching economic-nexus thresholds are visible. Monitoring itself does not collect tax.
+
+Before activation, configure applicable [Stripe Tax registrations](https://docs.stripe.com/tax/registering), choose the product tax code (for example `txcd_10103001` for SaaS business use, subject to accountant review), and set both catalog Prices' `tax_behavior` to the approved `exclusive` or `inclusive` value. Existing prices and amounts are not changed by this code; Stripe price tax behavior may require replacement Prices and a reviewed catalog cutover. Set `MCA_STRIPE_TAX_BEHAVIOR` to that approved value to verify both configured Prices; leaving it blank preserves the existing verification. Other values fail verification. Keep `MCA_STRIPE_TAX_ENABLED=false` until configuration and testing are complete.
+
+When enabled, new Checkout sessions request automatic tax, a required billing address, tax ID collection and automatic customer address/name updates. The application always supplies a customer ID, whether newly created or already mapped. An open pre-activation Checkout session is expired and replaced. New Checkout subscriptions inherit automatic tax for trial-end invoices and renewals. Seat changes and reduction schedules carry tax settings; a paid increase on an older subscription first enables automatic tax without proration, then uses the existing payment-gated proration request because Stripe pending updates do not accept tax-setting changes. **Existing subscriptions with no seat change still need a reviewed Stripe Tax activation/cutover before their next renewal; the flag alone does not migrate all subscriptions.**
+
+In the dedicated Stripe Customer Portal configuration, allow customers to update billing address and tax ID in the Stripe Dashboard; retain the existing payment-method, invoice, cancellation and subscription-update settings. This code does not modify the Portal configuration. In Stripe test mode, verify taxable and non-taxable addresses, tax IDs in Checkout and Portal, invoice tax lines at trial end and renewal, and a paid seat-increase proration. Michael must complete these provider checks before live activation; mocked local tests do not prove registration or invoice calculation.
 
 Restricted keys require customers read/write; subscriptions read/write; subscription schedules read/write; prices read; Checkout read/write; portal configurations read and sessions write; invoices read/write (collection controls and missed-month finalization), invoice payments and payment intents read. InvoicePayment reads must support both invoice and payment-intent allocation filters. Catalog provisioning separately needs product/price and Portal configuration writes.
 

@@ -12,6 +12,8 @@ import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, str
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
+const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
+const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -43,11 +45,14 @@ export function priceIds() {
 
 export async function verifyBillingPrices(client: StripeBillingClient) {
   const ids = priceIds()
+  const taxBehavior = process.env.MCA_STRIPE_TAX_BEHAVIOR
+  if (taxBehavior && taxBehavior !== "exclusive" && taxBehavior !== "inclusive") throw new AppError(503, "billing_tax_behavior_invalid", "Stripe tax behavior must be exclusive or inclusive.")
   const [base, seats] = await Promise.all([client.prices.retrieve(ids.base), client.prices.retrieve(ids.seats, { expand: ["tiers"] })])
   const common = (p: Stripe.Price) => p.livemode === stripeLiveMode() && p.active && p.currency === BILLING_CATALOG.currency && p.recurring?.interval === BILLING_CATALOG.interval && p.recurring.interval_count === 1 && p.recurring.usage_type === BILLING_CATALOG.usageType && !p.transform_quantity
   const tiers = seats.tiers ?? []
   if (!common(base) || base.billing_scheme !== BILLING_CATALOG.base.billingScheme || base.unit_amount !== BILLING_CATALOG.base.unitAmountCents || !common(seats) || seats.billing_scheme !== BILLING_CATALOG.additionalSeats.billingScheme || seats.tiers_mode !== BILLING_CATALOG.additionalSeats.tiersMode || tiers.length !== BILLING_CATALOG.additionalSeats.tiers.length ||
-    tiers.some((t, i) => t.up_to !== BILLING_CATALOG.additionalSeats.tiers[i].upTo || t.unit_amount !== BILLING_CATALOG.additionalSeats.tiers[i].unitAmountCents || (t.flat_amount ?? 0) !== 0))
+    tiers.some((t, i) => t.up_to !== BILLING_CATALOG.additionalSeats.tiers[i].upTo || t.unit_amount !== BILLING_CATALOG.additionalSeats.tiers[i].unitAmountCents || (t.flat_amount ?? 0) !== 0) ||
+    (taxBehavior && (base.tax_behavior !== taxBehavior || seats.tax_behavior !== taxBehavior)))
     throw new AppError(503, "billing_price_mismatch", "Stripe prices must match the monthly USD Fundlane graduated seat catalog.")
   return ids
 }
@@ -61,6 +66,7 @@ export interface BillingSubscription {
   pause_collection?: unknown
   pending_update?: unknown
   schedule?: string | { id: string } | null
+  automatic_tax?: { enabled: boolean } | null
   start_date?: number
   ended_at?: number | null
   cancel_at?: number | null
@@ -322,7 +328,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     if (mapping.checkout_session_id) {
       const pending = await client.checkout.sessions.retrieve(mapping.checkout_session_id)
       if (pending.status === "open") {
-        if (mapping.checkout_plan_slug === slug && pending.url) return { url: pending.url }
+        if (mapping.checkout_plan_slug === slug && pending.url && (!stripeTaxEnabled() || pending.automatic_tax?.enabled === true)) return { url: pending.url }
         await client.checkout.sessions.expire(pending.id)
       } else if (pending.status === "complete") {
         const subscriptionId = typeof pending.subscription === "string" ? pending.subscription : pending.subscription?.id
@@ -339,6 +345,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     const trialDays = !history?.trial_started_at && !liveTrialHistory(await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})) ? billingTrialDays() : null
     const slot = Math.floor(Date.now() / 1800000)
     const session = await client.checkout.sessions.create({ mode: "subscription", customer: mapping.stripe_customer_id,
+      ...(stripeTaxEnabled() ? { automatic_tax: { enabled: true }, billing_address_collection: "required" as const, tax_id_collection: { enabled: true }, customer_update: { address: "auto" as const, name: "auto" as const } } : {}),
       integration_identifier: COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER,
       client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
       subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
@@ -460,7 +467,7 @@ function cancellationPhase(phase: Stripe.SubscriptionSchedule.Phase, end: number
     }
     return value
   }
-  return { ...(writable(phase) as Stripe.SubscriptionScheduleUpdateParams.Phase), end_date: end, proration_behavior: "none" }
+  return { ...(writable(phase) as Stripe.SubscriptionScheduleUpdateParams.Phase), ...automaticTaxWhenEnabled(), end_date: end, proration_behavior: "none" }
 }
 
 /** Recovery action: deliberately does not require paid access or successful invoice reconciliation. */
@@ -507,7 +514,7 @@ export async function cancelBillingSubscription(workspaceId: string, actorUserId
         await client.subscriptionSchedules.update(schedule.id,{end_behavior:"cancel",proration_behavior:"none",phases:[cancellationPhase(phase,end)]},{idempotencyKey:`fundlane-cancel-schedule-${schedule.id}-${end}-${generation}`})
       }
     } else if (!(sub.cancel_at && sub.cancel_at<=periodEnd) && !sub.cancel_at_period_end) {
-      await client.subscriptions.update(sub.id,{cancel_at_period_end:true,proration_behavior:"none"},{idempotencyKey:`fundlane-cancel-${sub.id}-${end}-${generation}`})
+      await client.subscriptions.update(sub.id,{cancel_at_period_end:true,proration_behavior:"none",...automaticTaxWhenEnabled()},{idempotencyKey:`fundlane-cancel-${sub.id}-${end}-${generation}`})
     }
     // A lost response or DB rollback is repaired by re-reading provider state on
     // retry. Never report success based on the mutation response alone.
@@ -538,7 +545,7 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       if (sub.status !== "trialing" || sub.pending_update || sub.cancel_at_period_end || sub.cancel_at || sub.schedule) throw new AppError(409,"billing_change_pending","Resolve the pending subscription change before changing seats.")
       if (selectedSeats === current.seatLimit) return getWorkspaceBilling(workspaceId)
       const additional = sub.items.data.find(i => i.price.id === ids.seats)
-      await client.subscriptions.update(sub.id, { proration_behavior: "none", items: selectedSeats === 1
+      await client.subscriptions.update(sub.id, { proration_behavior: "none", ...automaticTaxWhenEnabled(), items: selectedSeats === 1
         ? additional?.id ? [{ id: additional.id, deleted: true }] : []
         : [{ ...(additional?.id ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }] },
       { idempotencyKey: `fundlane-trial-seats-${sub.id}-${current.seatLimit}-${selectedSeats}` })
@@ -558,6 +565,11 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     const additional = sub.items.data.find(i => i.price.id === ids.seats)
     if (selectedSeats > current.seatLimit) {
       if (sub.schedule) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
+      // Stripe pending updates do not accept automatic_tax. Enable it separately
+      // before invoicing the proration when the feature is activated on an older subscription.
+      if (stripeTaxEnabled() && !sub.automatic_tax?.enabled) await client.subscriptions.update(sub.id,
+        { automatic_tax: { enabled: true }, proration_behavior: "none" },
+        { idempotencyKey: `fundlane-tax-${sub.id}` })
       await client.subscriptions.update(sub.id, {
         payment_behavior: "pending_if_incomplete", proration_behavior: "always_invoice",
         items: [{ ...(additional ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }],
@@ -583,8 +595,8 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
         (schedule.metadata?.workspace_id && schedule.metadata.workspace_id!==workspaceId) || (schedule.metadata?.selected_seats && schedule.metadata.selected_seats!==String(selectedSeats))) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
       const phase = schedule.phases[0]
       await client.subscriptionSchedules.update(schedule.id, { metadata: { workspace_id: workspaceId, selected_seats: String(selectedSeats) }, end_behavior: "release", proration_behavior: "none", phases: [
-        { start_date: phase.start_date, end_date: phase.end_date, items: sub.items.data.map(i => ({ price: i.price.id, quantity: i.quantity ?? 1 })), proration_behavior: "none" },
-        { start_date: phase.end_date, items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])], proration_behavior: "none", duration: { interval: "month", interval_count: 1 } },
+        { start_date: phase.start_date, end_date: phase.end_date, items: sub.items.data.map(i => ({ price: i.price.id, quantity: i.quantity ?? 1 })), proration_behavior: "none", ...automaticTaxWhenEnabled() },
+        { start_date: phase.end_date, items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])], proration_behavior: "none", duration: { interval: "month", interval_count: 1 }, ...automaticTaxWhenEnabled() },
       ] }, { idempotencyKey: `fundlane-reduce-${schedule.id}-${selectedSeats}` })
       await db.prepare("UPDATE company_subscription_state SET pending_seats=?,pending_seats_at=?,stripe_schedule_id=?,updated_at=? WHERE workspace_id=?").run(selectedSeats, new Date(phase.end_date * 1000).toISOString(), schedule.id, nowIso(), workspaceId)
     }
