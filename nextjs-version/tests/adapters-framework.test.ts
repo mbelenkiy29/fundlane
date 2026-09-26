@@ -32,6 +32,7 @@ const DEV_SECRET = "dev-adapter-secret-never-leak"
 const PROD_SECRET = "prod-adapter-secret-never-leak"
 const OTHER_SECRET = "other-tenant-adapter-secret-never-leak"
 const RATE_SECRET = "rate-limit-adapter-secret-never-leak"
+const TIMEOUT_SECRET = "timeout-adapter-secret-never-leak"
 
 const ids = {
   workspace: "workspace-adapters",
@@ -87,6 +88,7 @@ const statusAdapter: FunderAdapter = {
   submit: async (job) => {
     const runtime = requireAdapterRuntime()
     seenSecrets.push(runtime.secrets.apiKey ?? "")
+    if (runtime.secrets.apiKey === TIMEOUT_SECRET) throw new Error("synthetic timeout after dispatch")
     const key = `${runtime.credentialId}:${job.attemptKey}`
     const count = (submitCounts.get(key) ?? 0) + 1
     submitCounts.set(key, count)
@@ -230,6 +232,7 @@ function assertNoSecret(value: unknown) {
   assert.equal(text.includes(PROD_SECRET), false)
   assert.equal(text.includes(OTHER_SECRET), false)
   assert.equal(text.includes(RATE_SECRET), false)
+  assert.equal(text.includes(TIMEOUT_SECRET), false)
   assert.equal(text.includes("credentialCipher"), false)
   assert.equal(text.includes("credential_cipher"), false)
 }
@@ -298,6 +301,48 @@ test("sandbox adapter submits and polls with workspace config and no network cre
   const blocked = await submitViaAdapter(job, { environment: "production" })
   assert.equal(blocked.ok, false)
   assert.match(blocked.errorMessage ?? "", /not verified for live delivery/)
+})
+
+test("readiness inventory is default-off, admin-only, scoped, and never treats configuration as live proof", async () => {
+  const previous = process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+  try {
+    const off = await listGet(cookieRequest("/api/mca/adapters", "admin-session-token"))
+    assert.equal((await off.json() as { inventory?: unknown }).inventory, undefined)
+    await upsertAdapterCredential(actor(), { funderId: sandboxFunderId, adapterSlug: "sandbox", environment: "development", secrets: {} })
+    await upsertAdapterCredential(actor(), { funderId: submitFunderId, adapterSlug: "fixture-submit-only", environment: "development", secrets: { apiKey: DEV_SECRET } })
+    process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = "true"
+    const response = await listGet(cookieRequest("/api/mca/adapters", "admin-session-token"))
+    assert.equal(response.status, 200)
+    const body = await response.json() as { inventory: { funders: Array<{ id: string; readiness: string; apiContract: string; credentials: Array<{ present: boolean }> }>; unassignedAdapters: Array<{ slug: string; credentialsPresent: boolean; commercialAccess: string }> } }
+    assert.equal(body.inventory.funders.find((item) => item.id === sandboxFunderId)?.readiness, "sandbox verified")
+    assert.equal(body.inventory.funders.find((item) => item.id === submitFunderId)?.readiness, "untested")
+    assert.equal(body.inventory.funders.find((item) => item.id === submitFunderId)?.credentials[0]?.present, true)
+    assert.match(body.inventory.funders.find((item) => item.id === submitFunderId)?.apiContract ?? "", /No verified/)
+    assert.equal(body.inventory.funders.some((item) => item.id === otherFunderId), false)
+    assert.equal(body.inventory.unassignedAdapters.find((item) => item.slug === "credibly")?.credentialsPresent, false)
+    assert.match(body.inventory.unassignedAdapters.find((item) => item.slug === "credibly")?.commercialAccess ?? "", /not evidenced/)
+    assertNoSecret(body)
+    const reader = await listGet(cookieRequest("/api/mca/adapters", "rep-session-token"))
+    assert.equal((await reader.json() as { inventory?: unknown }).inventory, undefined)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+    else process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = previous
+  }
+})
+
+test("controlled adapter timeout returns an unknown provider outcome without exposing credentials", async () => {
+  await upsertAdapterCredential(actor(), {
+    funderId: statusFunderId,
+    adapterSlug: "fixture-status",
+    environment: "development",
+    secrets: { apiKey: TIMEOUT_SECRET },
+  })
+  const result = await submitViaAdapter(jobFor(statusFunderId, "fixture-status", { attemptKey: "timeout-controlled" }), { environment: "development" })
+  assert.equal(result.ok, false)
+  assert.equal(result.errorCode, "provider_unavailable")
+  assert.ok(result.correlationId)
+  assertNoSecret(result)
+  assert.deepEqual(seenSecrets, [TIMEOUT_SECRET])
 })
 
 test("MIC-124: submit-only adapter cannot status-check", async () => {
