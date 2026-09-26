@@ -49,5 +49,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <><NewDealProvider><DashboardChrome session={session} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={process.env.MCA_ASSISTANT_RUNTIME === "supabase" ? "supabase" : "chatkit"}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
+  return <><NewDealProvider><DashboardChrome session={session} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={["supabase", "vercel_node"].includes(process.env.MCA_ASSISTANT_RUNTIME ?? "") ? "supabase" : "chatkit"}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
 }

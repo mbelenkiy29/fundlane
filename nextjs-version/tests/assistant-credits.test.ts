@@ -2,6 +2,7 @@ import "./helpers/business-auth"
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
+import { Client } from "pg"
 import type Stripe from "stripe"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import {
@@ -52,6 +53,7 @@ import { POST as checkoutRoute } from "../src/app/api/mca/assistant/credits/chec
 import { PATCH as settingsRoute } from "../src/app/api/mca/assistant/credits/admin/route"
 import { GET as notificationsRoute } from "../src/app/api/mca/assistant/notifications/route"
 import { POST as stripeWebhook } from "../src/app/api/webhooks/stripe-credits/route"
+import { GET as assistantCron } from "../src/app/api/cron/assistant/route"
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const sql = (s: string, ...v: unknown[]) =>
   getDatabase()
@@ -240,6 +242,66 @@ test("definitive first-call rejection refunds once; expired reservations release
   await settleCredit(t3.run.id, "charge")
   await cancelConversation(t3.c)
   assert.equal((await getCreditBalance(u)).total, 9)
+})
+test("assistant cron is disabled by default and replays expired credit maintenance once after restart", async () => {
+  const enabled = process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED
+  const secret = process.env.CRON_SECRET
+  const emailUrl = process.env.MCA_EMAIL_WEBHOOK_URL
+  const experience = process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+  const u = await user("admin"), t = await task(u)
+  await sql("UPDATE mca_assistant_runs SET expires_at='2000-01-01' WHERE id=?", t.run.id)
+  await sql(`INSERT INTO mca_credit_balance_events
+    (account_id,month,allowance,included,purchased,threshold_mode,threshold_value,created_at)
+    SELECT a.id,m.month,10,10,0,'fixed',11,? FROM mca_credit_accounts a
+    JOIN mca_credit_months m ON m.account_id=a.id WHERE a.user_id=? AND m.month=?`, nowIso(), u.user_id, new Date().toISOString().slice(0, 7))
+  await sql("UPDATE mca_credit_accounts SET alert_dirty=1 WHERE user_id=?", u.user_id)
+  const request = (token?: string) => new Request("http://localhost/api/cron/assistant", {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  })
+  try {
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = "false"
+    delete process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED
+    assert.deepEqual(await (await assistantCron(request())).json(), { enabled: false })
+    assert.equal((await getCreditBalance(u)).reserved, 1)
+    process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED = "true"
+    process.env.CRON_SECRET = "synthetic-assistant-cron-secret"
+    assert.equal((await assistantCron(request("wrong"))).status, 401)
+    assert.equal((await getCreditBalance(u)).reserved, 1)
+    const first = await assistantCron(request(process.env.CRON_SECRET))
+    assert.equal(first.status, 200)
+    assert.equal((await getCreditBalance(u)).reserved, 0)
+    const notifications = async () => Number((await getDatabase().prepare<{ count: string }>("SELECT count(*) AS count FROM mca_credit_notifications WHERE recipient_user_id=?").get(u.user_id))?.count)
+    const firstCount = await notifications()
+    assert.ok(firstCount > 0)
+    const blocker = new Client({ connectionString: fixture.databaseUrl })
+    await blocker.connect()
+    try {
+      await blocker.query("BEGIN")
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["mca-assistant-maintenance"])
+      const overlap = await assistantCron(request(process.env.CRON_SECRET))
+      assert.equal(overlap.status, 200)
+      assert.equal((await overlap.json()).claimed, false, "overlapping tick must not claim work")
+    } finally {
+      await blocker.query("ROLLBACK")
+      await blocker.end()
+    }
+    await closeDatabaseForTests()
+    const second = await assistantCron(request(process.env.CRON_SECRET))
+    assert.equal(second.status, 200)
+    const entries = await getDatabase().prepare<{ count: string }>("SELECT count(*) AS count FROM mca_credit_ledger WHERE event_key=? AND kind='released'").get(`released:${t.run.id}`)
+    assert.equal(Number(entries?.count), 1)
+    assert.equal(await notifications(), firstCount)
+  } finally {
+    if (enabled === undefined) delete process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED
+    else process.env.MCA_ASSISTANT_MAINTENANCE_ENABLED = enabled
+    if (secret === undefined) delete process.env.CRON_SECRET
+    else process.env.CRON_SECRET = secret
+    if (emailUrl === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = emailUrl
+    if (experience === undefined) delete process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+    else process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = experience
+  }
 })
 test("unverified paid billing cannot grant allowances", async () => {
   const u = await user()

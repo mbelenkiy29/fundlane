@@ -8,6 +8,7 @@ import { getDeal } from "../deals/service"
 import { assistantContext } from "./chatkit-context"
 import { boundedBody, bodyHash, requireAssistant, requireAssistantConfigured, signDelegation } from "./security"
 import { ownedThread } from "./store"
+import { nativeAssistant } from "./native-runtime"
 
 export const chatRequest = z.object({
   type: z.enum(["threads.create", "threads.add_user_message", "threads.retry_after_item", "threads.get_by_id", "threads.list", "threads.update", "threads.delete", "items.list"]),
@@ -40,8 +41,9 @@ export async function chatkitGateway(request: Request, authenticate = requireMem
     const contextDealId = isTurn ? request.headers.get("x-mca-deal-id") || undefined : undefined
     if (contextDealId) { if (contextDealId.length > 128) throw new AppError(400, "invalid_deal", "Invalid deal."); await getDeal(c.actor, contextDealId) }
     await consumeRequestRateLimit(`chatkit:${c.context.workspaceId}:${c.context.userId}:${isTurn ? "turn" : "read"}`, isTurn ? 10 : 120)
+    const native = process.env.MCA_ASSISTANT_RUNTIME === "vercel_node"
     const serviceUrl = process.env.MCA_ASSISTANT_SERVICE_URL
-    if (!serviceUrl || !c.context.sessionId) throw new AppError(503, "assistant_unconfigured", "The assistant is not configured.")
+    if ((!native && !serviceUrl) || !c.context.sessionId) throw new AppError(503, "assistant_unconfigured", "The assistant is not configured.")
     const now = Math.floor(Date.now() / 1000)
     const token = signDelegation({ aud: "mca-chatkit", requestId, userId: c.context.userId, workspaceId: c.context.workspaceId,
       membershipId: c.context.membershipId, sessionId: c.context.sessionId, bodyHash: bodyHash(raw), contextDealId, iat: now, exp: now + 120 })
@@ -57,9 +59,12 @@ export async function chatkitGateway(request: Request, authenticate = requireMem
     request.signal.addEventListener("abort", onAbort, { once: true })
     if (request.signal.aborted) abort.abort()
     timer = setTimeout(onAbort, 120_000)
-    const upstream = await fetch(new URL("/chatkit", serviceUrl.includes("://") ? serviceUrl : `http://${serviceUrl}${serviceUrl.includes(":") ? "" : ":8000"}`), {
-      method: "POST", body: raw, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, signal: abort.signal, redirect: "error",
-    })
+    const upstream = native
+      ? await nativeAssistant(new Request(request.url, { method: "POST", body: raw,
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, signal: abort.signal }))
+      : await fetch(new URL("/chatkit", serviceUrl!.includes("://") ? serviceUrl! : `http://${serviceUrl}${serviceUrl!.includes(":") ? "" : ":8000"}`), {
+          method: "POST", body: raw, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, signal: abort.signal, redirect: "error",
+        })
     if (!upstream.ok || !upstream.body) {
       await upstream.body?.cancel()
       throw new AppError(upstream.status === 429 ? 429 : 502, "assistant_unavailable", "The assistant could not respond. Please retry.")
