@@ -620,14 +620,24 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
   const failedBody = await failedResponse.json() as { receipts: Array<{ id: string; attempts: number; error: string }> }
   assert.ok(failedBody.receipts.some(receipt => receipt.id === retryReceipt.id && receipt.attempts === failed[0].attemptCount))
   assert.equal(JSON.stringify(failedBody).includes("retry@example.test"), false)
+  const providerVerifiedEmail = await provisionUsesendIntegration(adminContext, {
+    apiKey: "us_test_verified", inboundAddress: "receipts@fundlane.io", fromAddress: "receipts@fundlane.io",
+    displayName: "Flag default readiness", publicOrigin: "https://fundlane.io",
+  }, async () => new Response(JSON.stringify([{ id: 7, name: "fundlane.io", status: "SUCCESS" }]), {
+    status: 200, headers: { "content-type": "application/json" },
+  }))
+  assert.ok(providerVerifiedEmail.status.providerServerId)
   delete process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED
   delete process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED
   const hiddenReceipts = await failedReceiptRoute(new Request("https://mca.example.test/api/mca/intake/receipts/run", { headers: { cookie: "mca_session=receipt-admin-token" } }))
   assert.deepEqual(await hiddenReceipts.json(), { receipts: [], deliveryEnabled: false })
   const hiddenIntegrations = await integrationsRoute(new Request("https://mca.example.test/api/mca/intake/integrations", { headers: { cookie: "mca_session=receipt-admin-token" } }))
-  const hiddenBody = await hiddenIntegrations.json() as { privateEmailUiEnabled: boolean; integrations: Array<{ emailReadinessIssues?: string[] }> }
+  const hiddenBody = await hiddenIntegrations.json() as { privateEmailUiEnabled: boolean; integrations: Array<{ id: string; providerServerId?: string; readiness: string; emailReadinessIssues?: string[] }> }
   assert.equal(hiddenBody.privateEmailUiEnabled, false)
   assert.ok(hiddenBody.integrations.every(integration => integration.emailReadinessIssues === undefined))
+  const hiddenVerifiedEmail = hiddenBody.integrations.find(integration => integration.id === providerVerifiedEmail.status.id)
+  assert.ok(hiddenVerifiedEmail, "Test includes an email integration with provider setup evidence")
+  assert.equal(hiddenVerifiedEmail.readiness, "live_unverified")
   assert.ok((await listIntegrationStatuses(adminContext)).every(integration => integration.emailReadinessIssues === undefined))
   process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED = "true"
   process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED = "true"
