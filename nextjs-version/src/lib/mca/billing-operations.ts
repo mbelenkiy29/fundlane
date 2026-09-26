@@ -1,6 +1,6 @@
 import "server-only"
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
-import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripePausedTrialEligible, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, type BillingSubscription, type StripeBillingClient } from "./billing"
+import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripePausedTrialEligible, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, reconcileLicensedSeats, type BillingSubscription, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
@@ -111,6 +111,7 @@ async function reconcileQueuedBillingEvents(client?: StripeBillingClient) {
   for(const [workspaceId,jobs] of byWorkspace) {
     try {
       await syncWorkspaceBilling(workspaceId,client)
+      await reconcileLicensedSeats(workspaceId,client)
       for(const job of jobs) await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',lease_token=NULL,lease_expires_at=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?").run(nowIso(),job.id,leaseToken)
     } catch(error) {
       const message=error instanceof Error?error.message:"Reconciliation failed"
@@ -137,7 +138,7 @@ export async function runBillingMaintenance(client?: StripeBillingClient) {
       if (company.stripe_customer_id && billingEnabled() && !queued.workspaces.has(company.workspace_id)) {
         if (!missingBillingStateFailsClosed()) await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),company.workspace_id)
         else if (!await getDatabase().prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(company.workspace_id)) throw new AppError(409,"billing_state_missing","Resolve the missing billing state in the Platform console before reconciliation.")
-        await syncWorkspaceBilling(company.workspace_id, client); reconciled++
+        await syncWorkspaceBilling(company.workspace_id, client); await reconcileLicensedSeats(company.workspace_id,client); reconciled++
       }
       const access = await getCompanyAccess(company.workspace_id)
       if (!access.allowed) await withImmediateTransaction(async db=>{

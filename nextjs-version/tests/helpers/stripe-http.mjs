@@ -44,8 +44,20 @@ export async function createStripeHttpFixture() {
         }
       }
       else if (url.pathname.startsWith("/v1/subscription_schedules/")) {
-        data = schedules.get(url.pathname.split("/").at(-1))
+        const scheduleId = url.pathname.split("/")[3]
+        data = schedules.get(scheduleId)
+        if(data && req.method==="POST" && url.pathname.endsWith("/release")) {
+          data.status="released"
+          const sub=[...subscriptions.values()].flat().find(value=>value.id===data.subscription)
+          if(sub) sub.schedule=null
+        }
         if(data && req.method==="POST") for(const key of ["workspace_id","selected_seats"]) if(body.has(`metadata[${key}]`)) data.metadata[key]=body.get(`metadata[${key}]`)
+        if(data && req.method==="POST" && body.has("phases[1][start_date]")) {
+          const items=[]
+          for(let index=0;body.has(`phases[1][items][${index}][price]`);index++) items.push({price:body.get(`phases[1][items][${index}][price]`),quantity:Number(body.get(`phases[1][items][${index}][quantity]`))})
+          data.phases=[data.phases[0],{start_date:Number(body.get("phases[1][start_date]")),items}]
+          data.end_behavior=body.get("end_behavior")
+        }
         if(data && req.method==="POST" && body.get("end_behavior")==="cancel") {
           data.end_behavior="cancel"
           data.phases=[{...data.phases.find(phase=>phase.start_date===data.current_phase.start_date),end_date:Number(body.get("phases[0][end_date]"))}]

@@ -18,6 +18,14 @@ const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
 export { stripeTrialLifecycleEnabled } from "./billing-flags"
+export const billingSeatSyncEnabled = () => process.env.MCA_BILLING_SEAT_SYNC_ENABLED === "true" && billingEnabled()
+export const seatsCountPendingInvites = () => process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES === "true"
+/** The sole licensed-count definition for automatic synchronization. */
+export async function licensedSeatCount(workspaceId: string, db: DbExecutor = getDatabase()) {
+  const row = await db.prepare<{count:number}>(`SELECT count(*)::int count FROM memberships WHERE workspace_id=? AND (status='active' OR (status='pending' AND ?::boolean))`).get(workspaceId,seatsCountPendingInvites())
+  return Math.max(1,row?.count ?? 0)
+}
+
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -371,7 +379,7 @@ export async function getWorkspaceBilling(workspaceId: string) {
   const customer = await getDatabase().prepare<{livemode:number;stripe_customer_id:string}>("SELECT livemode,stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id = ?").get(workspaceId)
   const state = await getDatabase().prepare("SELECT * FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
   const recovery = await readBillingRecovery(workspaceId, customer)
-  return { enabled: billingEnabled(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery, cardRequiredTrial: isStripeCheckoutTrialConfigured() }
+  return { enabled: billingEnabled(), seatSyncEnabled: billingSeatSyncEnabled(), seatsCountPendingInvites: seatsCountPendingInvites(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery, cardRequiredTrial: isStripeCheckoutTrialConfigured() }
 }
 
 async function readBillingRecovery(workspaceId: string, customer: { livemode: number; stripe_customer_id: string } | undefined): Promise<import("./billing-display").BillingRecovery> {
@@ -606,9 +614,114 @@ async function ensureBillingState(workspaceId: string, db: DbExecutor) {
   await db.prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at)
     SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING`).run(nowIso(), workspaceId)
 }
-async function assertOccupiedSeats(workspaceId: string, seats: number, db: DbExecutor) {
-  const used = await db.prepare<{ count: number }>("SELECT count(*)::int count FROM memberships WHERE workspace_id=? AND status IN ('active','pending')").get(workspaceId)
-  if ((used?.count ?? 0) > seats) throw new AppError(409, "billing_seats_occupied", "Remove active users or revoke pending invitations before reducing seats.")
+async function assertOccupiedSeats(workspaceId: string, seats: number, db: DbExecutor, automatic = false) {
+  const used = automatic || billingSeatSyncEnabled() ? await licensedSeatCount(workspaceId,db) : (await db.prepare<{ count: number }>("SELECT count(*)::int count FROM memberships WHERE workspace_id=? AND status IN ('active','pending')").get(workspaceId))?.count ?? 0
+  if (used > seats) throw new AppError(409, "billing_seats_occupied", billingSeatSyncEnabled() && !seatsCountPendingInvites() ? "Remove active users before reducing seats." : "Remove active users or revoke pending invitations before reducing seats.")
+}
+
+/** Serialize capacity checks with membership reservations and seat changes. */
+export async function ensureSyncedSeatCapacity(workspaceId:string, actorUserId:string|null, additional:number, client?:StripeBillingClient) {
+  if (!billingSeatSyncEnabled()) return assertBillingCapacity(workspaceId,additional,client)
+  return withImmediateTransaction(async db => {
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
+    const mapping=await db.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
+    const current=mapping ? await syncWorkspaceBilling(workspaceId,client) : null
+    const plan=await getCompanyAccess(workspaceId)
+    if (!plan.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.")
+    const count=await licensedSeatCount(workspaceId,db)
+    const target=count+additional
+    if (current?.subscriptionId && target<=current.seatLimit) {
+      const pending=await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+      if (pending?.pending_seats && pending.pending_seats!==target) {
+        await changeBillingSeats(workspaceId,target,actorUserId,client,true)
+        return
+      }
+    }
+    if (target<=plan.seatLimit) return
+    if (!mapping) throw new AppError(409,"seat_limit_reached","Your company has used its trial seats.")
+    try { await changeBillingSeats(workspaceId,target,actorUserId,client,true) }
+    catch (error) { if (error instanceof AppError && error.code==="billing_change_pending") throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry."); throw error }
+    const refreshed=await getCompanyAccess(workspaceId)
+    if (target>refreshed.seatLimit) throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry.")
+  })
+}
+
+/** Called after a deactivation commits; reconciliation takes the workspace lock. */
+export async function syncSeatsAfterRemoval(workspaceId:string, actorUserId:string, client?:StripeBillingClient) {
+  await reconcileLicensedSeats(workspaceId,client,actorUserId)
+}
+
+function scheduledRenewalSeats(schedule: Stripe.SubscriptionSchedule): number | null {
+  const renewal = schedule.phases[1]
+  if (schedule.phases.length !== 2 || !renewal || renewal.start_date !== schedule.phases[0].end_date || schedule.end_behavior !== "release") return null
+  const ids = priceIds()
+  const base = renewal.items.filter(item => (typeof item.price === "string" ? item.price : item.price?.id) === ids.base)
+  const additional = renewal.items.filter(item => (typeof item.price === "string" ? item.price : item.price?.id) === ids.seats)
+  if (base.length !== 1 || base[0].quantity !== 1 || additional.length > 1 || base.length + additional.length !== renewal.items.length) return null
+  if (additional.length && (!Number.isSafeInteger(additional[0].quantity) || (additional[0].quantity ?? 0) < 1)) return null
+  return 1 + (additional[0]?.quantity ?? 0)
+}
+
+/** Repair provider quantity drift during periodic billing maintenance. */
+export async function reconcileLicensedSeats(workspaceId:string, client?:StripeBillingClient, actorUserId:string|null=null) {
+  if (!billingSeatSyncEnabled()) return
+  await withImmediateTransaction(async db=>{
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
+    const mapping=await db.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
+    if (!mapping) return
+    const count=await licensedSeatCount(workspaceId,db)
+    const current=await syncWorkspaceBilling(workspaceId,client)
+    if (!current.subscriptionId || !["active","trialing"].includes(current.status)) return
+    const pending=await db.prepare<{pending_seats:number|null;stripe_schedule_id:string|null}>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+    const stripe = client??getStripeClient()
+    let repairReduction = false
+    if (pending?.pending_seats) {
+      const sub=await stripe.subscriptions.retrieve(current.subscriptionId)
+      const attached=typeof sub.schedule==="string"?sub.schedule:sub.schedule?.id
+      if (!attached) {
+        await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
+        pending.pending_seats=null
+      } else if (attached!==pending.stripe_schedule_id) throw new AppError(409,"billing_change_pending","An unexpected subscription schedule requires review.")
+      else {
+        const schedule = await stripe.subscriptionSchedules.retrieve(attached)
+        if (schedule.id !== attached || schedule.status !== "active" || schedule.livemode !== stripeLiveMode() ||
+          (typeof schedule.subscription === "string" ? schedule.subscription : schedule.subscription?.id) !== sub.id ||
+          schedule.metadata?.workspace_id !== workspaceId) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
+        const renewalSeats = scheduledRenewalSeats(schedule)
+        if (renewalSeats === null) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
+        repairReduction = renewalSeats !== pending.pending_seats || schedule.metadata.selected_seats !== String(pending.pending_seats)
+      }
+    } else if (current.status === "active") {
+      const sub = await stripe.subscriptions.retrieve(current.subscriptionId)
+      const attached = typeof sub.schedule === "string" ? sub.schedule : sub.schedule?.id
+      if (attached) {
+        const schedule = await stripe.subscriptionSchedules.retrieve(attached)
+        const id = (value:string|{id:string}|null) => typeof value === "string" ? value : value?.id
+        if (schedule.id !== attached || id(schedule.customer) !== id(sub.customer) || id(schedule.subscription) !== sub.id ||
+          schedule.livemode !== stripeLiveMode() || schedule.status !== "active" || schedule.end_behavior === "cancel" ||
+          (schedule.metadata?.workspace_id && schedule.metadata.workspace_id !== workspaceId))
+          throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
+        const renewal = schedule.phases[1]
+        if (renewal && schedule.current_phase?.start_date === renewal.start_date &&
+          scheduledRenewalSeats(schedule) === current.seatLimit && count === current.seatLimit) return
+        // A schedule created before an outer transaction rolled back has no local
+        // pending row. Replay the original creation key to prove it is ours.
+        const prior = (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='renewal'").get(workspaceId))?.count ?? 0
+        const keys = [...new Set([`fundlane-schedule-${sub.id}-${current.periodStart}`,`fundlane-schedule-${sub.id}-${current.periodStart}-${prior}`])]
+        let owned = false
+        for (const key of keys) {
+          try { if ((await stripe.subscriptionSchedules.create({from_subscription:sub.id},{idempotencyKey:key})).id === attached) { owned = true; break } }
+          catch { /* A different key may own this schedule. */ }
+        }
+        if (!owned) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
+        await stripe.subscriptionSchedules.release(attached,{preserve_cancel_date:true},{idempotencyKey:`fundlane-release-orphan-reduction-${attached}`})
+      }
+    }
+    if (count>current.seatLimit) await ensureSyncedSeatCapacity(workspaceId,actorUserId,0,client)
+    else if (pending?.pending_seats===count && !repairReduction) return
+    else if (count===current.seatLimit && !pending?.pending_seats) return
+    else await changeBillingSeats(workspaceId,count,actorUserId,client,true,repairReduction)
+  })
 }
 
 /** Copy writable phase settings, retaining discounts/tax/payment settings as well as seats. */
@@ -696,13 +809,14 @@ export async function cancelBillingSubscription(workspaceId: string, actorUserId
 }
 
 /** Paid increases use Stripe pending updates, so failed payment cannot grant seats. */
-export async function changeBillingSeats(workspaceId: string, selectedSeats: number, actorUserId: string, providedClient?: StripeBillingClient) {
+export async function changeBillingSeats(workspaceId: string, selectedSeats: number, actorUserId: string|null, providedClient?: StripeBillingClient, automatic = false, repairReduction = false) {
   monthlyPriceCents(selectedSeats)
   const client = providedClient ?? getStripeClient()
   const ids = await verifyBillingPrices(client)
-  return withImmediateTransaction(async db => {
+  let releasedSchedule = false
+  try { return await withImmediateTransaction(async db => {
     await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
-    await assertOccupiedSeats(workspaceId, selectedSeats, db)
+    await assertOccupiedSeats(workspaceId, selectedSeats, db, automatic)
     const current = await syncWorkspaceBilling(workspaceId, client)
     if (current.status === "trialing" && current.subscriptionId) {
       const sub = await client.subscriptions.retrieve(current.subscriptionId)
@@ -719,16 +833,46 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     }
     if (!current.subscriptionId || current.status !== "active" || current.paymentPastDue) throw new AppError(409, "billing_payment_required", "An active paid subscription is required to change purchased seats.")
     const state = await db.prepare<{ pending_seats: number | null; stripe_schedule_id: string | null }>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-    if (state?.pending_seats) {
+    const reviseReduction = !!state?.pending_seats && (automatic || billingSeatSyncEnabled()) && (selectedSeats !== state.pending_seats || repairReduction) && (automatic ? selectedSeats <= current.seatLimit : selectedSeats < current.seatLimit)
+    const cancelReduction = !!state?.pending_seats && !automatic && billingSeatSyncEnabled() && selectedSeats >= current.seatLimit
+    if (automatic && state?.pending_seats && selectedSeats > current.seatLimit) throw new AppError(409,"billing_scheduled_reduction_pending","Cancel the scheduled seat reduction in Plans & Billing before adding a paid seat.")
+    if (state?.pending_seats && !reviseReduction && !cancelReduction) {
       if (state.pending_seats === selectedSeats) return getWorkspaceBilling(workspaceId)
       throw new AppError(409, "billing_change_pending", "A seat reduction is already scheduled. Wait for renewal before requesting another change.")
     }
     const sub = await client.subscriptions.retrieve(current.subscriptionId)
     if (sub.pending_update || sub.cancel_at_period_end || sub.cancel_at) throw new AppError(409, "billing_change_pending", "Resolve the pending subscription change before changing seats.")
-    if (selectedSeats === current.seatLimit) return getWorkspaceBilling(workspaceId)
+    if (selectedSeats === current.seatLimit && !cancelReduction && !reviseReduction) return getWorkspaceBilling(workspaceId)
     const additional = sub.items.data.find(i => i.price.id === ids.seats)
+    if (cancelReduction) {
+      if (sub.schedule) {
+        const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id
+        if (state?.stripe_schedule_id !== scheduleId) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before changing seats.")
+        const schedule = await client.subscriptionSchedules.retrieve(scheduleId)
+        const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
+        if (resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.status!=="active" || schedule.end_behavior==="cancel" ||
+          schedule.metadata?.workspace_id!==workspaceId || schedule.metadata?.selected_seats!==String(state.pending_seats) || scheduledRenewalSeats(schedule)!==state.pending_seats)
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
+        await client.subscriptionSchedules.release(scheduleId,{preserve_cancel_date:true},{idempotencyKey:`fundlane-release-reduction-${scheduleId}-${selectedSeats}`})
+        releasedSchedule = true
+      } else if (state?.pending_seats) {
+        // A previous attempt may have released Stripe's schedule before its DB transaction rolled back.
+        if (!state.stripe_schedule_id) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
+        const schedule = await client.subscriptionSchedules.retrieve(state.stripe_schedule_id)
+        const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
+        if (schedule.status!=="released" || resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.metadata?.workspace_id!==workspaceId || schedule.metadata?.selected_seats!==String(state.pending_seats))
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review before changing seats.")
+      }
+      const confirmed = await client.subscriptions.retrieve(sub.id)
+      if (confirmed.schedule) throw new AppError(503,"billing_schedule_unverified","The scheduled reduction could not yet be canceled. Refresh billing and retry.")
+      await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
+      if (selectedSeats === current.seatLimit) {
+        await recordAuditEvent({context:{workspaceId,userId:actorUserId},action:"billing.seat_reduction_canceled",resourceType:"workspace",resourceId:workspaceId,metadata:{seats:current.seatLimit},executor:db})
+        return getWorkspaceBilling(workspaceId)
+      }
+    }
     if (selectedSeats > current.seatLimit) {
-      if (sub.schedule) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
+      if (sub.schedule && !cancelReduction) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
       // Stripe pending updates do not accept automatic_tax. Enable it separately
       // before invoicing the proration when the feature is activated on an older subscription.
       if (stripeTaxEnabled() && !sub.automatic_tax?.enabled) await client.subscriptions.update(sub.id,
@@ -742,30 +886,92 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       // Stripe forbids metadata (and every other parameter) with from_subscription.
       // Replay the exact creation request to prove ownership after create succeeded
       // but metadata/update or local commit failed. Metadata alone isn't proof.
-      const creation = () => client.subscriptionSchedules.create({ from_subscription: sub.id }, { idempotencyKey: `fundlane-schedule-${sub.id}-${current.periodStart}` })
+      const priorReductions = automatic && !state?.pending_seats ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='renewal'").get(workspaceId))?.count ?? 0 : 0
+      const creation = () => client.subscriptionSchedules.create({ from_subscription: sub.id }, { idempotencyKey: `fundlane-schedule-${sub.id}-${current.periodStart}${priorReductions ? `-${priorReductions}` : ""}` })
       let schedule: Stripe.SubscriptionSchedule
       if (sub.schedule) {
         const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id
         schedule = await client.subscriptionSchedules.retrieve(scheduleId)
-        let replay: Stripe.SubscriptionSchedule
-        try { replay = await creation() }
-        catch { throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation could not be verified.") }
-        if (replay.id !== scheduleId) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation does not match this request.")
+        if (state?.stripe_schedule_id !== scheduleId) {
+          let replay: Stripe.SubscriptionSchedule
+          try { replay = await creation() }
+          catch { throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation could not be verified.") }
+          if (replay.id !== scheduleId) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation does not match this request.")
+        } else if (schedule.metadata?.workspace_id !== workspaceId) {
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
+        }
         // Use the fresh retrieval, not the cached creation response: an update may
         // already have succeeded, or an operator may have changed this schedule.
       } else schedule = await creation()
       const resourceId = (value: string | {id:string} | null) => typeof value === "string" ? value : value?.id
       if (resourceId(schedule.customer)!==resourceId(sub.customer) || resourceId(schedule.subscription)!==sub.id || schedule.livemode!==stripeLiveMode() || schedule.status!=="active" || schedule.end_behavior==="cancel" ||
-        (schedule.metadata?.workspace_id && schedule.metadata.workspace_id!==workspaceId) || (schedule.metadata?.selected_seats && schedule.metadata.selected_seats!==String(selectedSeats))) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
+        (schedule.metadata?.workspace_id && schedule.metadata.workspace_id!==workspaceId) || (!reviseReduction && schedule.metadata?.selected_seats && schedule.metadata.selected_seats!==String(selectedSeats))) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
       const phase = schedule.phases[0]
+      const generation = reviseReduction ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed'").get(workspaceId))?.count ?? 0 : null
       await client.subscriptionSchedules.update(schedule.id, { metadata: { workspace_id: workspaceId, selected_seats: String(selectedSeats) }, end_behavior: "release", proration_behavior: "none", phases: [
         { start_date: phase.start_date, end_date: phase.end_date, items: sub.items.data.map(i => ({ price: i.price.id, quantity: i.quantity ?? 1 })), proration_behavior: "none", ...automaticTaxWhenEnabled() },
         { start_date: phase.end_date, items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])], proration_behavior: "none", duration: { interval: "month", interval_count: 1 }, ...automaticTaxWhenEnabled() },
-      ] }, { idempotencyKey: `fundlane-reduce-${schedule.id}-${selectedSeats}` })
+      ] }, { idempotencyKey: `fundlane-reduce-${schedule.id}-${selectedSeats}${generation===null?"":`-${generation}`}` })
       await db.prepare("UPDATE company_subscription_state SET pending_seats=?,pending_seats_at=?,stripe_schedule_id=?,updated_at=? WHERE workspace_id=?").run(selectedSeats, new Date(phase.end_date * 1000).toISOString(), schedule.id, nowIso(), workspaceId)
     }
     await recordAuditEvent({ context: { workspaceId, userId: actorUserId }, action: "billing.seats_changed", resourceType: "workspace", resourceId: workspaceId, metadata: { from: current.seatLimit, to: selectedSeats, effective: selectedSeats > current.seatLimit ? "after_payment" : "renewal" }, executor: db })
     await syncWorkspaceBilling(workspaceId, client)
     return getWorkspaceBilling(workspaceId)
+  }) } catch (error) {
+    if (releasedSchedule) {
+      // Stripe release survives a failed paid update. Remove stale local pending state
+      // so the next reconciliation can restore the reduction for the licensed count.
+      try { await withImmediateTransaction(async db => {
+        await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
+        const current = await client.subscriptions.list({customer:(await db.prepare<{stripe_customer_id:string}>("SELECT stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId))!.stripe_customer_id,status:"all",limit:100})
+        if (current.data.some(subscription => subscription.schedule)) return
+        await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
+      }) } catch { /* The next retry can inspect Stripe and repair this state. */ }
+    }
+    throw error
+  }
+}
+
+/** Read-only Stripe proration estimate for a manual paid seat increase. */
+export async function previewBillingSeatIncrease(workspaceId:string, selectedSeats:number, providedClient?:StripeBillingClient) {
+  monthlyPriceCents(selectedSeats)
+  const client=providedClient??getStripeClient()
+  const mapping=await getDatabase().prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
+  if (!mapping) throw new AppError(409,"billing_customer_required","Choose a paid plan first.")
+  assertBillingMappingMode(mapping)
+  const listed=await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})
+  if (listed.has_more) throw new AppError(503,"billing_multiple_subscriptions","Company subscriptions require administrator review.")
+  const eligible=fundlaneSubscriptions(listed.data as BillingSubscription[],mapping.stripe_customer_id).filter(s=>s.status==="active")
+  if (eligible.length!==1) throw new AppError(409,"billing_payment_required","An active paid subscription is required.")
+  const sub=await client.subscriptions.retrieve(eligible[0].id) as BillingSubscription
+  const current=subscriptionEntitlement(sub)
+  if (selectedSeats<=current.seatLimit || sub.pending_update || sub.schedule || sub.cancel_at || sub.cancel_at_period_end) throw new AppError(409,"billing_change_pending","Choose an increase on an unchanged subscription.")
+  const ids=priceIds(),additional=sub.items.data.find(i=>i.price.id===ids.seats)
+  const prorationDate=Math.floor(Date.now()/1000)
+  const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",proration_date:prorationDate,items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
+  if (preview.livemode!==stripeLiveMode() || preview.currency!==BILLING_CATALOG.currency) throw new AppError(503,"billing_preview_unavailable","Seat price preview is unavailable. Retry before confirming.")
+  if (preview.lines.has_more) throw new AppError(503,"billing_preview_unavailable","Seat price preview is incomplete. Retry before confirming.")
+  // A preview can include older prorations and changes to other subscription items.
+  // An unidentified proration at this timestamp could be part of this seat change.
+  const prorations=preview.lines.data.filter(line=>line.parent?.subscription_item_details?.proration===true)
+  const seatLines=prorations.filter(line=>{
+    const details=line.parent?.subscription_item_details
+    const price=line.pricing?.price_details?.price
+    return line.period?.start===prorationDate && details?.subscription===sub.id &&
+      (additional?.id ? details.subscription_item===additional.id : (typeof price==="string" ? price : price?.id)===ids.seats) &&
+      (!price || (typeof price==="string" ? price : price.id)===ids.seats)
   })
+  const ambiguous=prorations.some(line=>{
+    if (seatLines.includes(line)) return false
+    if (line.period && line.period.start!==prorationDate) return false
+    const details=line.parent?.subscription_item_details
+    const price=line.pricing?.price_details?.price
+    const priceId=typeof price==="string" ? price : price?.id
+    if (details?.subscription===sub.id && additional?.id && details.subscription_item===additional.id && priceId && priceId!==ids.seats) return true
+    return !(details?.subscription && details.subscription!==sub.id) &&
+      !(additional?.id && details?.subscription_item && details.subscription_item!==additional.id) &&
+      !(priceId && priceId!==ids.seats)
+  })
+  const prorationAmount=ambiguous || seatLines.length===0 ? null : seatLines.reduce((total,line)=>total+line.amount,0)
+  return {prorationAmount,currency:preview.currency,selectedSeats}
 }
