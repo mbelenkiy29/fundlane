@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import {formatBillingMoney,validSelectedSeats} from "../src/lib/mca/billing-display"
+import {formatBillingMoney,quotedSeatIncrease,validSelectedSeats} from "../src/lib/mca/billing-display"
 import {BILLING_CATALOG,monthlyPriceCents} from "../src/lib/mca/billing-catalog"
 import { spawnSync } from "node:child_process"
 import type { BillingRecovery } from "../src/lib/mca/billing-display"
@@ -16,6 +16,14 @@ test("money retains cents and distinguishes currencies",()=>{
   assert.equal(formatBillingMoney(BILLING_CATALOG.base.unitAmountCents),"$399.00")
   assert.equal(formatBillingMoney("12345","eur"),"€123.45")
   assert.equal(formatBillingMoney(0),"$0.00")
+})
+test("paid increase confirmation requires a matching verified amount, including zero",()=>{
+  assert.equal(quotedSeatIncrease(null,6),false)
+  assert.equal(quotedSeatIncrease({selectedSeats:6,prorationAmount:null},6),false)
+  assert.equal(quotedSeatIncrease({selectedSeats:5,prorationAmount:1234},6),false)
+  assert.equal(quotedSeatIncrease({selectedSeats:6,prorationAmount:NaN},6),false)
+  assert.equal(quotedSeatIncrease({selectedSeats:6,prorationAmount:0},6),true)
+  assert.equal(quotedSeatIncrease({selectedSeats:6,prorationAmount:1234},6),true)
 })
 test("application cancellation control is available without an access gate and explains scheduled reductions and debt",()=>{
   const result=spawnSync(process.execPath,["--import","tsx","-e",`

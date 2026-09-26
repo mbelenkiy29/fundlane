@@ -972,6 +972,7 @@ export async function previewBillingSeatIncrease(workspaceId:string, selectedSea
       !(additional?.id && details?.subscription_item && details.subscription_item!==additional.id) &&
       !(priceId && priceId!==ids.seats)
   })
-  const prorationAmount=ambiguous || seatLines.length===0 ? null : seatLines.reduce((total,line)=>total+line.amount,0)
+  if (ambiguous || seatLines.length===0) throw new AppError(503,"billing_preview_unavailable","Seat proration could not be verified. Retry before confirming.")
+  const prorationAmount=seatLines.reduce((total,line)=>total+line.amount,0)
   return {prorationAmount,currency:preview.currency,selectedSeats}
 }

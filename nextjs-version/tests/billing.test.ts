@@ -396,13 +396,14 @@ test("paid seat preview excludes renewal charges and pending invoice items",asyn
   assert.equal(calls,1)
   assert.equal(f.state.updates.length,0)
 })
-test("paid seat preview omits an amount when a proration cannot be attributed",async()=>{
+test("paid seat preview fails closed when a proration cannot be attributed",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:{subscription_details:{proration_date:number}})=>({livemode:false,currency:"usd",lines:{has_more:false,data:[
     {amount:1234,period:{start:params.subscription_details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}},
     {amount:200,period:{start:params.subscription_details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id}}},
   ]}})}} as unknown as StripeBillingClient
-  assert.deepEqual(await previewBillingSeatIncrease(f.workspaceId,6,client),{prorationAmount:null,currency:"usd",selectedSeats:6})
+  await assert.rejects(previewBillingSeatIncrease(f.workspaceId,6,client),{code:"billing_preview_unavailable"})
+  assert.equal(f.state.updates.length,0)
 })
 test("incomplete Stripe preview lines fail closed",async()=>{
   const f=await fixture()

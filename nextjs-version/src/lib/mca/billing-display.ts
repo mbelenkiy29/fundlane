@@ -5,6 +5,9 @@ export function formatBillingMoney(cents: number | string, currency = "usd") {
 export function validSelectedSeats(value: number) {
   return Number.isSafeInteger(value) && value >= 1 && value <= 100000
 }
+export function quotedSeatIncrease(preview: { selectedSeats: number; prorationAmount: number | null } | null, selectedSeats: number) {
+  return preview?.selectedSeats === selectedSeats && Number.isSafeInteger(preview.prorationAmount)
+}
 export type BillingRecovery = {
   overdueAmount: number;
   paymentRequired: boolean;
