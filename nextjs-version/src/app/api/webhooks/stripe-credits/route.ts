@@ -31,7 +31,11 @@ export async function POST(request: Request) {
   }
   try {
     await processCreditPaymentEvent(event, stripe)
-    after(() => maintainCreditAlerts().catch(() => {}))
+    try {
+      after(() => maintainCreditAlerts().catch(() => {}))
+    } catch {
+      // Alert maintenance also runs in the worker; never retry an acknowledged payment for scheduling failure.
+    }
     return NextResponse.json({ received: true })
   } catch {
     return NextResponse.json(

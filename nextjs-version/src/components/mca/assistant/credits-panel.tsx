@@ -190,7 +190,7 @@ export function CreditsPanel() {
               Future purchases first repay this balance.
             </p>
           )}
-          {!self.canManage && (
+          {!self.canManage && self.purchasesAvailable && (
             <p className="mt-3 text-sm">
               Ask your company admin to buy more credits or upgrade the company
               plan.
@@ -245,7 +245,8 @@ export function CreditsPanel() {
               Manage company plan
             </Link>
           </section>
-          <section className="space-y-4 rounded-xl border p-5">
+          {admin.purchasesAvailable ? (
+            <section className="space-y-4 rounded-xl border p-5">
             <h2 className="font-medium">Buy extra credits</h2>
             <p className="text-sm">
               100 credits for $10 USD. Added to the selected user in this
@@ -269,17 +270,17 @@ export function CreditsPanel() {
             <div>
               <Button
                 onClick={() => void buy()}
-                disabled={busy || !selected || !admin.purchasesAvailable}
+                disabled={busy || !selected}
               >
                 Buy 100 credits · $10
               </Button>
             </div>
-            {!admin.purchasesAvailable && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Purchases are not configured in this environment yet.
-              </p>
-            )}
-          </section>
+            </section>
+          ) : (
+            <p role="status" className="rounded-xl border p-5 text-sm text-muted-foreground">
+              Extra credit purchases are not available yet.
+            </p>
+          )}
           <section className="space-y-4 rounded-xl border p-5">
             <h2 className="font-medium">Low-credit alerts</h2>
             <p className="text-sm text-muted-foreground">

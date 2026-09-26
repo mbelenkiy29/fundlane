@@ -206,7 +206,7 @@ export async function reserveCredit(
     throw new AppError(
       402,
       "credits_exhausted",
-      "You have no AI credits left. Ask a company admin to buy credits, upgrade, or wait for the monthly reset."
+      "You have no AI credits left. Ask a company admin about your plan or wait for the monthly reset."
     )
   await db
     .prepare(
