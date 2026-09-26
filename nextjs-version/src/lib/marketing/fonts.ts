@@ -1,25 +1,9 @@
-import localFont from 'next/font/local'
+export async function marketingFontClasses(polished: boolean): Promise<string> {
+  if (polished) {
+    const { marketingMono } = await import('./fonts-polished')
+    return marketingMono.variable
+  }
 
-export const marketingHeading = localFont({
-  src: '../../../public/fonts/marketing/InterDisplay-Medium.woff2',
-  weight: '500',
-  display: 'swap',
-  preload: false,
-  adjustFontFallback: 'Arial',
-  variable: '--font-marketing-heading',
-})
-
-export const marketingMono = localFont({
-  src: '../../../public/fonts/marketing/GeistMono-Regular.woff2',
-  display: 'swap',
-  preload: false,
-  variable: '--font-marketing-mono',
-})
-
-export const marketingMetric = localFont({
-  src: '../../../public/fonts/marketing/Geist-Regular.woff2',
-  display: 'swap',
-  preload: false,
-  adjustFontFallback: 'Arial',
-  variable: '--font-marketing-metric',
-})
+  const { marketingHeading, marketingMono, marketingMetric } = await import('./fonts-current')
+  return `${marketingHeading.variable} ${marketingMono.variable} ${marketingMetric.variable}`
+}
