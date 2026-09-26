@@ -14,9 +14,10 @@ import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assert
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
+import { recordTrialGrant, trialAllowedForOwner } from "../src/lib/mca/trial-abuse"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -54,6 +55,61 @@ async function fixture(mapped = true) {
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
 }
+
+test("trial grants limit repeat owners, keep public domains exempt, and flag fingerprint reuse without writes", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const owner = await db.prepare<{email:string}>("SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").get(first.workspaceId)
+  assert.ok(owner)
+  const second = await createWorkspaceWithAdmin({workspaceName:"Second company",adminName:"Owner",adminEmail:owner.email.toUpperCase(),password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    assert.equal(await trialAllowedForOwner(first.workspaceId,db),true)
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    assert.equal((first.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,14,"first owner receives the trial")
+    const sub = {id:`sub_${randomUUID()}`,trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600,default_payment_method:"pm_one"} as Stripe.Subscription
+    const card = {paymentMethods:{retrieve:async()=>({card:{fingerprint:"fp_repeat"}})},setupIntents:{retrieve:async()=>{throw new Error("unexpected")}}} as unknown as Pick<Stripe,"paymentMethods"|"setupIntents">
+    await recordTrialGrant(first.workspaceId,sub,card,db)
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false)
+    const checkoutClient = await fixture(false)
+    const checkout = await createBillingCheckout(second.workspaceId,1,false,checkoutClient.client)
+    assert.ok(checkout.url)
+    assert.equal((checkoutClient.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined,"over-limit checkout remains paid and available")
+    const grant = await db.prepare<{owner_email:string;email_domain:string}>("SELECT owner_email,email_domain FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId)
+    assert.equal(grant?.owner_email,owner.email.toLowerCase())
+    process.env.MCA_TRIAL_LIMIT_PER_USER = "2"
+    process.env.MCA_TRIAL_LIMIT_PER_EMAIL = "2"
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),true)
+    process.env.MCA_TRIAL_LIMIT_PER_DOMAIN = "1"
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false)
+    const gmail = await createWorkspaceWithAdmin({workspaceName:"Public domain",adminName:"Owner",adminEmail:`${randomUUID()}@gmail.com`,password:"Unused fixture password 99!"})
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(gmail.workspaceId,gmail.membershipId,nowIso())
+    await db.prepare("INSERT INTO company_trial_grants (workspace_id,stripe_subscription_id,owner_user_id,owner_email,email_domain,trial_started_at,created_at) SELECT ?,?,m.user_id,lower(u.email),'gmail.com',?,? FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").run(gmail.workspaceId,`sub_${randomUUID()}`,nowIso(),nowIso(),gmail.workspaceId)
+    const anotherGmail = await createWorkspaceWithAdmin({workspaceName:"Another public domain",adminName:"Owner",adminEmail:`${randomUUID()}@gmail.com`,password:"Unused fixture password 99!"})
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(anotherGmail.workspaceId,anotherGmail.membershipId,nowIso())
+    assert.equal(await trialAllowedForOwner(anotherGmail.workspaceId,db),true)
+    await recordTrialGrant(second.workspaceId,{...sub,id:`sub_${randomUUID()}`} as Stripe.Subscription,card,db)
+    const flagged = await db.prepare<{fingerprint_flagged_at:string|null}>("SELECT fingerprint_flagged_at FROM company_trial_grants WHERE workspace_id=?").get(second.workspaceId)
+    assert.ok(flagged?.fingerprint_flagged_at)
+    assert.equal((await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.trial_fingerprint_review'").get(second.workspaceId))?.count,1)
+  } finally {
+    for (const key of ["MCA_TRIAL_ABUSE_LIMITS_ENABLED","MCA_TRIAL_LIMIT_PER_USER","MCA_TRIAL_LIMIT_PER_EMAIL","MCA_TRIAL_LIMIT_PER_DOMAIN"]) delete process.env[key]
+  }
+})
+
+test("reconciliation records a trial even when the subscription is already active", async () => {
+  const f = await fixture()
+  await getDatabase().prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(f.workspaceId,f.membershipId,nowIso())
+  f.state.subscriptions[0].trial_start = Math.floor(Date.now()/1000)-1209600
+  f.state.subscriptions[0].trial_end = Math.floor(Date.now()/1000)-60
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    assert.equal((await getDatabase().prepare<{stripe_subscription_id:string}>("SELECT stripe_subscription_id FROM company_trial_grants WHERE workspace_id=?").get(f.workspaceId))?.stripe_subscription_id,f.state.subscriptions[0].id)
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
 for (const entry of ["standalone", "outer_sync_failure", "outer_failure"] as const) test(`recovery verification failure survives ${entry} rollback with a single pool connection`, { timeout: 20000 }, async () => {
   const previousMax = process.env.MCA_DB_POOL_MAX
   await closeDatabaseForTests()

@@ -11,14 +11,16 @@ const catchupTimestamp = 1790035200003;
 const setupChecklistTimestamp = 1790299200000;
 const totpTimestamp = 1790299200001;
 const demoSubmissionsTimestamp = 1790385600005;
+const trialAbuseTimestamp = 1790385600006;
 const billingRecoveryTimestamp = 1790035200002;
 
 async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS marketing_demo_submissions");
+  await fixture.query("DROP TABLE IF EXISTS company_trial_grants");
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp]);
+  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp]);
 }
 
 async function withFixture(label, run) {
@@ -44,6 +46,7 @@ test("merged fresh schema includes both migration branches; catch-up does not re
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [setupChecklistTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [totpTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [demoSubmissionsTimestamp])).rows[0].n, 1);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [trialAbuseTimestamp])).rows[0].n, 1);
   });
 });
 

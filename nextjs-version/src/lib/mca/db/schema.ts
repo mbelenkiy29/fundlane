@@ -176,6 +176,17 @@ export const workspace_owners = pgTable("workspace_owners", {
   updated_at: text().notNull(),
 }, table => [foreignKey({ columns: [table.workspace_id, table.membership_id], foreignColumns: [memberships.workspace_id, memberships.id] }).onDelete("restrict")]);
 
+export const company_trial_grants = pgTable("company_trial_grants", {
+  workspace_id: text().primaryKey(),
+  stripe_subscription_id: text().notNull().unique(),
+  owner_user_id: text().notNull(),
+  owner_email: text().notNull(), email_domain: text().notNull(), card_fingerprint: text(),
+  trial_started_at: text().notNull(), fingerprint_flagged_at: text(), created_at: text().notNull(),
+}, table => [index("company_trial_grants_owner_user_idx").on(table.owner_user_id),
+  index("company_trial_grants_owner_email_idx").on(table.owner_email),
+  index("company_trial_grants_domain_idx").on(table.email_domain),
+  index("company_trial_grants_fingerprint_idx").on(table.card_fingerprint).where(sql`${table.card_fingerprint} IS NOT NULL`)]);
+
 export const platform_admin_grants = pgTable("platform_admin_grants", {
   user_id: text().primaryKey().references(() => users.id, { onDelete: "restrict" }),
   granted_at: text().notNull(),
