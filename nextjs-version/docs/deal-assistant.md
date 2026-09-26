@@ -6,7 +6,7 @@ Merchant SMS, funder reminder email, and funder submissions use the existing MCA
 
 ## Configuration and release
 
-Apply migrations `0020_curved_mikhail_rasputin` and `0021_assistant_workspace_credits` with the normal checked Neon migration process before enabling the assistant. Rehearse additive migrations on a fresh copy of production, then apply them through the checked Drizzle runner using the direct Neon connection. The sidebar credit screen and notification bell require migration 0021 before this code is served. Historical requests are never charged.
+Existing assistant tables and credit accounting are already in the checked Drizzle migration chain. Follow the Supabase migration release procedure in the app README for an approved environment. This runtime change adds no migration. Historical requests are never charged.
 
 Configure these variables in the app's ignored local environment or deployment secret store:
 
@@ -16,7 +16,7 @@ Configure these variables in the app's ignored local environment or deployment s
 | `OPENAI_API_KEY` | Server-only OpenAI project key. Never expose through a public environment variable. |
 | `MCA_ASSISTANT_MODEL` | Explicit Responses-compatible model with function calling. No implicit model fallback. |
 | `MCA_DATA_ENCRYPTION_KEY` | Existing workspace encryption key, mandatory in production. |
-| `MCA_CLERK_BILLING_ENABLED` | Uses server-verified company plans when true. Intentionally disabled billing receives Free allowances; provider verification errors never grant paid credits. |
+| `MCA_STRIPE_BILLING_ENABLED` | Uses server-verified Stripe company entitlements when exactly `true`. Disabled billing receives Free allowances; provider verification errors never grant paid credits. |
 | `MCA_AI_CREDIT_PURCHASES_ENABLED` | Only exactly `true` enables new credit-pack Checkout when all required settings are present. Unset, `false`, and other values default to off; balance, usage, and alerts remain available. Test with Stripe test credentials before activation. |
 | `STRIPE_SECRET_KEY` | Server-only Stripe key shared with company billing for credit Checkout and existing-purchase reconciliation. Keep configured after disabling purchases while sessions, refunds, or disputes may remain. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for `/api/webhooks/stripe-credits`; keep it configured when the flag is off to verify and process already-paid sessions, refunds, and disputes. |
@@ -53,7 +53,7 @@ Messages, tool results, approval payloads, previews, and serialized SDK state us
 
 ## Verification
 
-From `nextjs-version/`, with the protected Neon verification connection configured:
+From `nextjs-version/`, with a disposable local PostgreSQL test database configured:
 
 ```sh
 node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1 tests/assistant.test.ts tests/assistant-credits.test.ts tests/billing.test.ts tests/billing-http.test.mjs tests/submissions-email.test.ts
@@ -66,9 +66,9 @@ Assistant tests run the real SDK loop and approval serialization with a scripted
 
 ## Credit accounting
 
-Each active member has a separate company account. Free provides 10, Starter 100 and Team 250 monthly credits, currently mapped to the app's verified Clerk plan slugs `free_org`, `mca_starter_test`, and `mca_team_test`. Subscriptions remain in Clerk. Included allowances reset at the first of each calendar month, 00:00 UTC; lazy month creation uses that boundary and never rolls unused included credits over. Removing/rejoining retains the same account. Purchased credits carry forward and are spent after included credits.
+Each active member has a separate company account. Free provides 10, Starter 100 and Team 250 monthly credits, according to verified Stripe company entitlements. Included allowances reset at the first of each calendar month, 00:00 UTC; lazy month creation uses that boundary and never rolls unused included credits over. Removing/rejoining retains the same account. Purchased credits carry forward and are spent after included credits.
 
-One accepted user request reserves one credit under an account row lock. The first model invocation charges it once. History, polling, alerts, and paid approval continuations do not reserve another credit. Pre-execution failures release the reservation; definitive first-call HTTP rejection refunds once. Cancellation or uncertain transport after execution begins consumes the credit. Expired unstarted reservations are released by maintenance. Included credit use is capped by the current effective Clerk allowance. A monthly high-water grant and retained consumption prevent upgrade/downgrade cycles from refilling spent credits. Existing paid resumptions can finish at zero balance. Token counts are recorded separately on runs.
+One accepted user request reserves one credit under an account row lock. The first model invocation charges it once. History, polling, alerts, and paid approval continuations do not reserve another credit. Pre-execution failures release the reservation; definitive first-call HTTP rejection refunds once. Cancellation or uncertain transport after execution begins consumes the credit. Expired unstarted reservations are released by maintenance. Included credit use is capped by the current effective Stripe allowance. A monthly high-water grant and retained consumption prevent upgrade/downgrade cycles from refilling spent credits. Existing paid resumptions can finish at zero balance. Token counts are recorded separately on runs.
 
 Stripe Checkout fixes the pack's currency, price, quantity, buyer, recipient and workspace on the server. Only fresh, verified successful payment state grants credits. Signed events and checkout returns reconcile under a purchase lock, making replay and delayed events idempotent. Partial refunds reverse a proportional number of credits rounded up; active/lost disputes reverse the pack. Won disputes restore the valid grant. Reversals of spent purchased credits create debt; later packs first offset that debt. Failed and expired checkouts grant nothing. No agent tool can initiate purchases.
 
@@ -76,18 +76,9 @@ Stripe Checkout fixes the pack's currency, price, quantity, buyer, recipient and
 
 All active company admins and super-admins receive private in-app warnings and exhausted alerts. The default warning threshold is 20% of monthly allowance remaining, configurable as a percentage or fixed number on `/assistant/credits`. The threshold is compared to usable included plus purchased credits. Credit balance events snapshot the threshold in the same transaction as each balance change. An ordered durable outbox preserves every warning, exhaustion and recovery episode, even when multiple requests or purchases complete before notifications are processed. Reservations alone do not produce premature warnings. A reset, purchase or upgrade above the threshold rearms the next episode.
 
-In-app notifications and email jobs are generated without a model call. Notification or email failures cannot change a committed credit charge. The notification bell provides unread counts, persistent alert history and per-admin mark-as-read. Emails recheck both local admin membership and current Clerk user/company membership immediately before delivery. Payloads contain only user name, company, allowance, remaining balances, reset date and a link with the company and recipient selected; no prompts or deal contents.
+In-app notifications and email jobs are generated without a model call. Notification or email failures cannot change a committed credit charge. The notification bell provides unread counts, persistent alert history and per-admin mark-as-read. Emails recheck both local admin membership and current verified Supabase user and local company membership immediately before delivery. Payloads contain only user name, company, allowance, remaining balances, reset date and a link with the company and recipient selected; no prompts or deal contents.
 
-Run the durable maintenance worker alongside the web process, or schedule its `--once` mode at least once a minute:
-
-```sh
-# Local development, using the ignored .env.local
-pnpm assistant:worker
-# Deployment environment: inject secrets through the hosting platform
-node --conditions=react-server --import tsx scripts/assistant/worker.ts
-# A scheduler may invoke one batch instead of a persistent worker
-node --conditions=react-server --import tsx scripts/assistant/worker.ts --once
-```
+On Vercel Node, set `MCA_ASSISTANT_MAINTENANCE_ENABLED=true` only after staging acceptance, configure `CRON_SECRET`, and schedule one authenticated `GET /api/cron/assistant` each minute. The flag defaults off. This route releases expired reservations, performs experience cleanup when separately enabled, processes alert events, and then delivers queued email outside the single-consumer database lock. See [chatkit-assistant.md](chatkit-assistant.md) and [background-job-runtime.md](background-job-runtime.md) for hosted setup and rollback. The historical `scripts/assistant/worker.ts` remains for local proof or rollback; do not run it alongside the cron schedule.
 
 The web process also attempts maintenance after responses; the worker provides recovery when no browser is open. This is account maintenance, not background delegation or recurring business automation. Monitor `mca_credit_alert_emails` states `queued`, `sending`, `sent`, `retry`, `failed`, `skipped` and `uncertain`. Known rejections and pre-delivery verification failures retry up to three attempts with backoff. Interrupted or uncertain sends are never automatically resent; investigate with the stable notification/delivery ID first. Missing email configuration leaves jobs queued and in-app alerts available.
 
@@ -96,15 +87,3 @@ The transactional webhook must support the `ai_credit_alert` template. Its JSON 
 ## Independent provider verification
 
 Database/fixture success does not establish Stripe or email readiness. Before enabling live packs, configure Stripe test keys and signed test webhooks, run a hosted Checkout payment, delayed payment, replay, refund and dispute cycle, and verify the purchased ledger. Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded`, and `charge.dispute.created/updated/closed`. Verify the transactional email template separately with controlled admin addresses, including rejection and uncertain outcomes. Keep live purchases disabled until test-mode verification succeeds.
-
-## Local verification — September 10, 2026
-
-Migration 0021 was rehearsed on fresh production child `br-long-smoke-ae5x2vue`, then applied to `fundlane` on production branch `br-aged-sun-aeqj80uv` in project `cool-pine-95841889`. Verified ten additive tables, eight foreign keys, nullable workspace-conversation context, the active-run uniqueness constraint and the Drizzle migration hash. Row counts and checksums for deals, assignments, notes, documents and existing assistant histories were unchanged.
-
-The isolated Neon/SDK suites passed for assistant operations, credit accounting, purchases, alerts, Clerk billing and submission email. Additional cases verified approval continuation at zero, retained selected-deal context, invalid-email rejection, delayed alert episodes and unsuccessful-response token accounting. Typecheck and the production build passed; repository lint had no errors and 16 existing warnings. Graphify's code graph, report and aggregated HTML were refreshed.
-
-Live OpenAI checks passed with the retained `gpt-5-mini`, including the complete ten-tool schema and a signed-in read-only pipeline request. That request streamed its result and consumed one credit. Zod's email lookahead pattern caused a provider decoder failure during testing; the model-facing email field now uses a plain string while server-side validation remains strict. The two controlled demo requests rejected during that schema validation were refunded. Current demo balance after the successful request is 9 included credits.
-
-Desktop/sidebar navigation, mobile menu and layout, saved history, record links and the credit-management panel were checked in the running app. The notification badge, low-credit card and mark-as-read controls were checked with a browser fixture; the durable notification backend was checked with isolated database fixtures. No real merchant messages, submissions, payments or alert emails were sent by these checks.
-
-Stripe credentials and the transactional email adapter are not configured locally. Purchases remain disabled. Signed payment/refund/dispute behavior and email retry/uncertainty were fixture-tested; hosted Stripe test-mode Checkout and live account-email delivery still require their separate provider configuration. The local assistant maintenance worker is running. The updated Docker entry point supervises it with the web server on the same persistent volume; other hosting configurations must run it explicitly.

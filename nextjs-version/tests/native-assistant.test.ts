@@ -96,6 +96,34 @@ test("malformed operations and forged or revoked delegations fail before model a
   assert.notEqual((await nativeAssistant(await request(command))).status,200)
   assert.equal(calls,0)
 })
+test("Vercel Node gateway streams without a service URL and rechecks membership", async () => {
+  const { chatkitGateway } = await import("../src/lib/mca/assistant/gateway")
+  const savedRuntime = process.env.MCA_ASSISTANT_RUNTIME, savedEnabled = process.env.MCA_ASSISTANT_ENABLED
+  const savedUrl = process.env.MCA_ASSISTANT_SERVICE_URL
+  process.env.MCA_ASSISTANT_RUNTIME = "vercel_node"
+  process.env.MCA_ASSISTANT_ENABLED = "true"
+  delete process.env.MCA_ASSISTANT_SERVICE_URL
+  const command = { version: 1, type: "threads.create", params: { message_id: randomUUID(), text: "My pipeline?" } }
+  const gatewayRequest = () => new Request("https://example.test/api/mca/chatkit", {
+    method: "POST", headers: { origin: "https://example.test", "content-type": "application/json" }, body: JSON.stringify(command),
+  })
+  try {
+    const response = await chatkitGateway(gatewayRequest(), async () => first)
+    assert.equal(response.status, 200)
+    const events: Record<string, unknown>[] = []
+    for await (const event of decodeSse(response.body!)) events.push(event as Record<string, unknown>)
+    assert.equal(events.at(-1)?.type, "complete")
+    assert.equal(calls, 1)
+    await getDatabase().prepare("UPDATE memberships SET status='deactivated' WHERE id=?").run(first.membershipId)
+    const denied = await chatkitGateway(gatewayRequest(), async () => first)
+    assert.notEqual(denied.status, 200)
+    assert.equal(calls, 1)
+  } finally {
+    await getDatabase().prepare("UPDATE memberships SET status='active' WHERE id=?").run(first.membershipId)
+    for (const [key, value] of [["MCA_ASSISTANT_RUNTIME", savedRuntime], ["MCA_ASSISTANT_ENABLED", savedEnabled], ["MCA_ASSISTANT_SERVICE_URL", savedUrl]] as const)
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+  }
+})
 test("truncated provider streams emit an error and never persist a completed answer", async () => {
   globalThis.fetch = async () => events([{type:"response.output_text.delta",delta:"partial"}])
   const result = await turn({version:1,type:"threads.create",params:{message_id:randomUUID(),text:"My pipeline?"}})

@@ -31,7 +31,7 @@ Application invitations and business messages use the existing transactional del
 - [Provider activation](docs/milestone-05/provider-activation.md)
 - [Deal assistant](docs/deal-assistant.md)
 - [Conversational assistant](docs/assistant-conversations.md)
-- [Python ChatKit service](docs/chatkit-assistant.md)
+- [Global assistant runtime](docs/chatkit-assistant.md)
 
 ## Verification
 
