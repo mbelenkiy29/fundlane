@@ -305,7 +305,9 @@ export function AdapterCredentialsPanel() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={credential.readiness === "live" ? "default" : "outline"}>{credential.readiness}</Badge>
-                  <Badge variant="secondary">{environmentLabel(credential.environment)} environment</Badge>
+                  {payload?.inventory
+                    ? <Badge variant="secondary">{environmentLabel(credential.environment)} environment</Badge>
+                    : <Badge variant={credential.environment === "production" ? "default" : "secondary"}>{environmentLabel(credential.environment)}</Badge>}
                   <Badge variant={credential.hasCredential ? "default" : "outline"}>{credential.hasCredential ? "Credential saved" : "No credential"}</Badge>
                   {!credential.active && <Badge variant="destructive">Inactive</Badge>}
                   {statusAllowed ? <Badge variant="outline">Status poll</Badge> : <Badge variant="outline">Submit only</Badge>}

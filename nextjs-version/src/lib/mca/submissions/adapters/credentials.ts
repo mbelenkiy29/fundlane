@@ -412,7 +412,7 @@ export async function resolveAdapterSecrets(input: {
   }
 }
 
-async function funderNameMap(actor: DealActor): Promise<Map<string, AdapterFunderOption>> {
+async function funderNameMap(actor: DealActor, includeInventory = false): Promise<Map<string, AdapterFunderOption>> {
   const funders = await listFunders(actor, { includeInactive: true })
   const map = new Map<string, AdapterFunderOption>()
   for (const funder of funders) {
@@ -421,7 +421,7 @@ async function funderNameMap(actor: DealActor): Promise<Map<string, AdapterFunde
       id: funder.id,
       name: funder.nickname?.trim() || funder.legalName,
       adapterSlug: apiRoute?.destination,
-      configuredAdapterSlug: funder.routes.find((route) => route.kind === "api")?.destination,
+      ...(includeInventory ? { configuredAdapterSlug: apiRoute?.destination ?? funder.routes.find((route) => route.kind === "api")?.destination } : {}),
       hasApiRoute: Boolean(apiRoute),
     })
   }
@@ -470,9 +470,10 @@ function buildInventory(funders: Map<string, AdapterFunderOption>, records: Stor
 }
 
 export async function listAdapterConnections(actor: DealActor): Promise<AdapterConnectionList> {
+  const includeInventory = isAdmin(actor) && process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED === "true"
   const [records, funders] = await Promise.all([
     listAdapterCredentialRecords(actor.workspaceId),
-    funderNameMap(actor),
+    funderNameMap(actor, includeInventory),
   ])
   const adapters: AdapterCatalogEntry[] = listAdapters().map((adapter) => ({
     slug: adapter.slug,
@@ -484,10 +485,10 @@ export async function listAdapterConnections(actor: DealActor): Promise<AdapterC
   return {
     adapters,
     credentials,
-    funders: visibleFunders,
+    funders: visibleFunders.map((funder) => ({ id: funder.id, name: funder.name, adapterSlug: funder.adapterSlug, hasApiRoute: funder.hasApiRoute })),
     environments: ADAPTER_ENVIRONMENTS,
     canManage: isAdmin(actor),
-    ...(isAdmin(actor) && process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED === "true"
+    ...(includeInventory
       ? { inventory: buildInventory(funders, records) }
       : {}),
   }
