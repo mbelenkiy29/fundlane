@@ -337,6 +337,8 @@ test("processJobDelivery marks sent, failed, or skipped attempts processed witho
 
   const saved = await processJobDelivery(sending)
 
+  assert.equal(saved.state, "sent")
+  assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "sent")
   assert.equal(await attemptCount(saved.id), 1)
   assert.ok(await outboxProcessedAt(saved.id))
   assert.equal(deliveries, 0)
@@ -344,6 +346,34 @@ test("processJobDelivery marks sent, failed, or skipped attempts processed witho
     "SELECT state FROM mca_submission_attempts WHERE job_id = ?",
   ).get(saved.id)
   assert.equal(attempt?.state, "sent")
+  assert.equal((await processJobDelivery(saved)).state, "sent")
+  assert.equal(deliveries, 0)
+})
+
+test("processJobDelivery restores a saved failed attempt without sending again", async () => {
+  const { deal, document } = await seedDeal()
+  const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-failed")
+  await insertAttempt({
+    workspaceId: queued.workspaceId,
+    jobId: queued.id,
+    attemptKey: queued.attemptKey,
+    transport: queued.routeKind,
+    state: "failed",
+    correlationId: newId(),
+    errorCode: "provider_rejected",
+    errorMessage: "Provider rejected the delivery.",
+  })
+  const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
+  deliveries = 0
+
+  const saved = await processJobDelivery(sending)
+
+  assert.equal(saved.state, "failed")
+  assert.equal(saved.reason, "Provider rejected the delivery.")
+  assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "failed")
+  assert.equal(await attemptCount(queued.id), 1)
+  assert.ok(await outboxProcessedAt(queued.id))
+  assert.equal(deliveries, 0)
 })
 
 test("queueSubmissions enqueues submission_delivery when background jobs are enabled", async () => {

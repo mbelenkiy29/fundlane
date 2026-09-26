@@ -12,10 +12,11 @@ import type { MembershipContext } from "../src/lib/mca/types"
 import { getDeal } from "../src/lib/mca/deals/service"
 import { configureIntegration, createJotformRepLink } from "../src/lib/mca/intake/configuration"
 import { ingestProviderDelivery } from "../src/lib/mca/intake/ingress"
-import { createApplicationInvitation, copyApplicationLink, invitationEmailEnabled, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
+import { createApplicationInvitation, copyApplicationLink, invitationEmailEnabled, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, reconcileInvitationDelivery, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
 import { getApplicationOutreachReport } from "../src/lib/mca/applications/report"
 import { OUTREACH_METRICS } from "../src/lib/mca/applications/contracts"
 import { invitationStatus } from "../src/components/mca/applications/invitation-status"
+import { scheduleDueInvitationReminders } from "../src/lib/mca/applications/reminders"
 import { claimBackgroundJob, completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
 import { GET as listRoute, POST as createRoute } from "../src/app/api/mca/applications/route"
 import { POST as sendRoute } from "../src/app/api/mca/applications/[invitationId]/send/route"
@@ -281,6 +282,30 @@ test("provider-confirmed absence requeues the same invitation identity once", as
     assert.deepEqual(keys, [delivery.id, delivery.id])
     assert.ok((await ownedInvitation(ada, invitation.id)).sent_at)
   } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL; if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
+})
+
+test("accepted reminder reconciliation records the reminder event once", async () => {
+  const invitation = await invite()
+  const past = new Date(Date.now() - 3 * 3600_000).toISOString()
+  await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, invitation.id)
+  await scheduleDueInvitationReminders(origin, new Date())
+  const delivery = await getDatabase().prepare<{ id: string; job_id: string }>(
+    "SELECT id,job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND purpose='reminder'",
+  ).get(invitation.id)
+  assert.ok(delivery)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain' WHERE id=?").run(delivery.job_id)
+  const input = { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-reminder-receipt-123" }
+
+  await reconcileInvitationDelivery(admin, invitation.id, input)
+
+  const row = await ownedInvitation(admin, invitation.id)
+  assert.equal(row.reminder_count, 1)
+  assert.ok(row.reminded_at)
+  const events = await getDatabase().prepare<{ count: number }>(
+    "SELECT count(*)::int count FROM mca_application_invitation_events WHERE invitation_id=? AND kind='reminded'",
+  ).get(invitation.id)
+  assert.equal(events?.count, 1)
+  await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, input), code("reconciliation_unavailable"))
 })
 
 test("a paused invitation with no send attempt can be approved again after recovery", async () => {

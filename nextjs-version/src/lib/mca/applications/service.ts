@@ -216,7 +216,11 @@ export async function reconcileInvitationDelivery(actor: DealActor, invitationId
     if (outcome === "accepted") {
       await getDatabase().prepare("UPDATE mca_application_invitation_deliveries SET delivery='sent',accepted_at=? WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, deliveryId)
       if (delivery.purpose === "invite") await getDatabase().prepare("UPDATE mca_application_invitations SET sent_at=COALESCE(sent_at,?) WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, invitationId)
-      else await getDatabase().prepare("UPDATE mca_application_invitations SET reminder_count=reminder_count+1,reminded_at=? WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, invitationId)
+      else {
+        await getDatabase().prepare("UPDATE mca_application_invitations SET reminder_count=reminder_count+1,reminded_at=? WHERE workspace_id=? AND id=?").run(at, actor.workspaceId, invitationId)
+        await getDatabase().prepare("INSERT INTO mca_application_invitation_events(invitation_id,workspace_id,kind,occurred_at) VALUES (?,?,?,?) ON CONFLICT(invitation_id,kind) DO NOTHING")
+          .run(invitationId, actor.workspaceId, "reminded", at)
+      }
       await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',result_json=?,error_code=NULL,updated_at=? WHERE workspace_id=? AND id=?")
         .run(JSON.stringify({ delivery: "sent", reconciled: true }), at, actor.workspaceId, delivery.job_id)
     } else {
