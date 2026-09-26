@@ -8,6 +8,7 @@ import { GET } from "../src/app/api/cron/sms/route"
 import { POST as runLegacySmsJobs } from "../src/app/api/mca/sms/jobs/route"
 import { runScheduledSmsJobs } from "../src/lib/mca/sms/scheduler"
 import { encryptSensitive } from "../src/lib/mca/crypto"
+import { reviewQueue } from "../src/lib/mca/sms/onboarding"
 import type { TwilioApi } from "../src/lib/mca/sms/provisioning"
 
 const previous = { ...process.env }
@@ -91,8 +92,9 @@ test("one database-backed cron consumer runs and reports operation states", asyn
   assert.equal(typeof body.durationMs, "number")
 })
 
-test("bounded cron refresh rotates past companies without campaign or service SIDs", async () => {
+test("bounded refresh rotates after failed calls without changing the review queue", async () => {
   process.env.MCA_DATA_ENCRYPTION_KEY = randomBytes(32).toString("base64url")
+  process.env.MCA_PLATFORM_OPERATOR_USER_IDS = "sms-cron-first-owner"
   const refreshed: string[] = []
   for (const [index, id] of ["sms-cron-first", "sms-cron-second", "sms-cron-third"].entries()) {
     const sid = `AC${String(index + 1).repeat(32)}`
@@ -104,15 +106,40 @@ test("bounded cron refresh rotates past companies without campaign or service SI
     await getDatabase().prepare("INSERT INTO sms_companies (workspace_id,owner_user_id,provider_cipher,created_at,updated_at) VALUES (?,?,?,?,?)")
       .run(id, `${id}-owner`, encryptSensitive(JSON.stringify(config), id), "2020-01-01T00:00:00.000Z", `2020-01-0${index + 1}T00:00:00.000Z`)
   }
+  // The pending company is exactly the 100th review row. Routine refreshes
+  // must not push it out of the bounded operator queue.
+  await getDatabase().prepare("UPDATE sms_companies SET review_state='pending',registration_state='approved' WHERE workspace_id=?").run("sms-cron-third")
+  await getDatabase().prepare("INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) SELECT 'sms-cron-filler-'||n,'SMS filler','America/New_York',5,'{}','{}','{}','2020-01-04T00:00:00.000Z','2020-01-04T00:00:00.000Z' FROM generate_series(1,99) AS n").run()
+  await getDatabase().prepare("INSERT INTO sms_companies (workspace_id,owner_user_id,created_at,updated_at) SELECT 'sms-cron-filler-'||n,'sms-cron-first-owner','2020-01-04T00:00:00.000Z','2020-01-04T00:00:00.000Z' FROM generate_series(1,99) AS n").run()
+  let failRefresh = true
   const api: TwilioApi = async (config, _host, path) => {
-    if (path.includes("/Compliance/Usa2p/")) refreshed.push(config!.accountSid)
+    if (path.includes("/Compliance/Usa2p/")) {
+      refreshed.push(config!.accountSid)
+      if (failRefresh) throw new Error("synthetic provider failure")
+    }
     return path.includes("/Compliance/Usa2p/") ? { campaign_status: "VERIFIED" } : { usage_records: [] }
   }
   const first = await runScheduledSmsJobs(api)
   assert.equal(first.companies, 2)
   assert.deepEqual(refreshed, [])
+  const firstCompany = await getDatabase().prepare<{ updated_at: string; refresh_attempted_at: string | null }>("SELECT updated_at,refresh_attempted_at FROM sms_companies WHERE workspace_id=?").get("sms-cron-first")
+  assert.equal(firstCompany?.updated_at, "2020-01-01T00:00:00.000Z")
+  assert.ok(firstCompany?.refresh_attempted_at)
+  const queue = await reviewQueue({ authType: "session", userId: "sms-cron-first-owner", membershipId: null, workspaceId: "sms-cron-first", role: null, scopes: [], sessionId: null })
+  assert.equal(queue.companies.length, 100)
+  assert.ok(queue.companies.some((company) => company.workspaceId === "sms-cron-third" && company.reviewState === "pending"))
   const second = await runScheduledSmsJobs(api)
   assert.equal(second.companies, 2)
   assert.deepEqual(refreshed, [`AC${"3".repeat(32)}`])
-  assert.deepEqual(second.failedWorkspaces, [])
+  assert.deepEqual(second.failedWorkspaces, ["sms-cron-third"])
+  const failedCompany = await getDatabase().prepare<{ updated_at: string; refresh_attempted_at: string | null }>("SELECT updated_at,refresh_attempted_at FROM sms_companies WHERE workspace_id=?").get("sms-cron-third")
+  assert.equal(failedCompany?.updated_at, "2020-01-03T00:00:00.000Z")
+  assert.ok(failedCompany?.refresh_attempted_at)
+  failRefresh = false
+  const third = await runScheduledSmsJobs(api)
+  assert.equal(third.companies, 2)
+  assert.deepEqual(third.failedWorkspaces, [])
+  assert.deepEqual(refreshed, [`AC${"3".repeat(32)}`, `AC${"3".repeat(32)}`])
+  const unchangedCompany = await getDatabase().prepare<{ updated_at: string }>("SELECT updated_at FROM sms_companies WHERE workspace_id=?").get("sms-cron-third")
+  assert.equal(unchangedCompany?.updated_at, "2020-01-03T00:00:00.000Z")
 })

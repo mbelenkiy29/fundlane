@@ -16,9 +16,11 @@ const billingStateKindTimestamp = 1790385600007;
 const autoSubmitTimestamp = 1790385600008;
 const emailRuntimeTimestamp = 1790385600012;
 const demoNotificationTimestamp = 1790385600013;
+const smsRefreshTimestamp = 1790385600014;
 const billingRecoveryTimestamp = 1790035200002;
 
 async function revertLaterThanCatchup(fixture) {
+  await fixture.query("ALTER TABLE sms_companies DROP COLUMN IF EXISTS refresh_attempted_at");
   await fixture.query("DROP TABLE IF EXISTS mca_email_runtime_lease");
   await fixture.query("DROP TABLE IF EXISTS marketing_demo_submissions");
   await fixture.query("DROP TABLE IF EXISTS mca_auto_submit_decisions, mca_auto_submit_settings");
@@ -29,7 +31,7 @@ async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6, $7, $8)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp, emailRuntimeTimestamp, demoNotificationTimestamp]);
+  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp, emailRuntimeTimestamp, demoNotificationTimestamp, smsRefreshTimestamp]);
 }
 
 async function withFixture(label, run) {
@@ -60,6 +62,7 @@ test("merged fresh schema includes both migration branches; catch-up does not re
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [autoSubmitTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [emailRuntimeTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [demoNotificationTimestamp])).rows[0].n, 1);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [smsRefreshTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM information_schema.columns WHERE table_name='marketing_demo_submissions' AND column_name IN ('notified_at','notification_error','notification_attempts','notification_lease_until','notification_tracking_enabled')")).rows[0].n, 5);
   });
 });
@@ -81,9 +84,10 @@ test("auth-first 0048 deployment receives older application-review schema throug
       (table_name='intake_events' AND column_name='answers_cipher') OR
       (table_name='mca_submission_jobs' AND column_name='approved_package_cipher') OR
       (table_name='company_subscription_state' AND column_name='processing_extension_granted_at') OR
+      (table_name='sms_companies' AND column_name='refresh_attempted_at') OR
       (table_name='workspaces' AND column_name='setup_checklist_dismissed_at') OR
       (table_name='workspaces' AND column_name='require_2fa')`);
-    assert.equal(columns.rows.length, 5);
+    assert.equal(columns.rows.length, 6);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE hash=$1", [applicationReviewHash])).rows[0].n, 0, "Drizzle really skipped the older migration");
     const ledger = (await fixture.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows;
     await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
