@@ -1697,7 +1697,7 @@ test("Stripe trial webhooks dedupe owner reminders, pause access, and recover af
   sub.collection_method="charge_automatically"
   sub.items.data.forEach(item=>{item.current_period_end=trialEnd})
   Object.assign(f.state.invoices[0],{amount_due:0,amount_paid:0,amount_remaining:0})
-  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,trial_ends_at,updated_at) VALUES (?,0,?,?)").run(f.workspaceId,new Date(trialEnd*1000).toISOString(),nowIso())
+  await getDatabase().prepare("UPDATE company_subscription_state SET legacy_exempt=0,updated_at=? WHERE workspace_id=?").run(nowIso(),f.workspaceId)
   await getDatabase().prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET membership_id=EXCLUDED.membership_id").run(f.workspaceId,f.membershipId,nowIso())
   await syncWorkspaceBilling(f.workspaceId,f.client)
   const event=(type:string)=>({id:`evt_${randomUUID()}`,type,livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:trialEnd}}} as Stripe.Event)
@@ -1723,7 +1723,7 @@ test("Stripe trial webhooks dedupe owner reminders, pause access, and recover af
     try {
       await getDatabase().prepare("UPDATE company_billing_notifications SET available_at='1900-01-01' WHERE id=?").run(rows[0].id)
       delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
-      await deliverBillingNotifications(1)
+      await deliverBillingNotifications(1,client)
       assert.equal(sent.length,1)
       assert.equal(sent[0].body.recipient,(await getDatabase().prepare<{email:string}>("SELECT email FROM users WHERE id=?").get(f.userId))?.email)
       assert.match(String(sent[0].body.actionUrl),/\/settings\/billing\?billingAction=portal$/)
@@ -1916,6 +1916,35 @@ test("canceling during trial schedules its end without a charge",async()=>{
   assert.deepEqual(writes,[{cancel_at_period_end:true,proration_behavior:"none"}])
   assert.equal(f.state.invoiceUpdates.length,0)
   assert.equal(f.state.finalizations.length,0)
+})
+
+test("canceling a Stripe trial suppresses late and already queued charge reminders",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],trialEnd=Math.floor(Date.now()/1000)+3*86400
+  sub.status="trialing";sub.trial_start=trialEnd-11*86400;sub.trial_end=trialEnd
+  sub.items.data.forEach(item=>{item.current_period_end=trialEnd})
+  const event=()=>({id:`evt_${randomUUID()}`,type:"customer.subscription.trial_will_end",livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:trialEnd}}} as Stripe.Event)
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async()=>{sub.cancel_at_period_end=true;sub.cancel_at=trialEnd;return sub}},invoices:{...f.client.invoices,createPreview:async()=>{throw new Error("preview unavailable")}}} as unknown as StripeBillingClient
+  process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+  try {
+    await processStripeBillingEvent(event(),client)
+    const queued=await getDatabase().prepare<{id:string}>("SELECT id FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").get(f.workspaceId)
+    assert.ok(queued)
+    await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=?,available_at='1900-01-01' WHERE id=?").run(JSON.stringify({recipient:"owner@example.test",actionUrl:"http://localhost:3000/settings/billing",expiresAt:new Date(Date.now()+86400000).toISOString(),data:{kind:"trial_ending",stripeTrial:true},transport:"webhook"}),queued.id)
+    await cancelBillingSubscription(f.workspaceId,f.userId,client)
+    await processStripeBillingEvent(event(),client)
+    assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").get(f.workspaceId))?.n,1)
+    const sent:unknown[]=[]
+    const server=createServer((request,response)=>{sent.push(request.url);response.writeHead(200);response.end()})
+    await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+    const address=server.address();assert.ok(address&&typeof address!=="string")
+    process.env.MCA_EMAIL_WEBHOOK_URL=`http://127.0.0.1:${address.port}`
+    try {
+      const result=await deliverBillingNotifications(1,client)
+      assert.deepEqual(result,{claimed:1,delivered:0})
+      assert.equal(sent.length,0)
+      assert.ok((await getDatabase().prepare<{delivered_at:string|null}>("SELECT delivered_at FROM company_billing_notifications WHERE id=?").get(queued.id))?.delivered_at)
+    } finally {delete process.env.MCA_EMAIL_WEBHOOK_URL;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
+  } finally {delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED}
 })
 
 test("billing UseSend fallback sends the documented API payload with a stable idempotency key",async()=>{

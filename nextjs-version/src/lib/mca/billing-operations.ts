@@ -1,6 +1,6 @@
 import "server-only"
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
-import { billingEnabled, missingBillingStateFailsClosed, stripeTrialLifecycleEnabled, syncWorkspaceBilling, type StripeBillingClient } from "./billing"
+import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, type BillingSubscription, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
@@ -8,7 +8,7 @@ import { AppError } from "./errors"
 import { recordOperationalError } from "./operations/telemetry"
 
 /** At-least-once delivery; downstream receiver deduplicates the stable correlation ID. */
-export async function deliverBillingNotifications(limit = 50) {
+export async function deliverBillingNotifications(limit = 50, client?: StripeBillingClient) {
   const claimed = await withImmediateTransaction(async db => {
     const rows = await db.prepare<{ id: string; workspace_id: string; kind: string; data: string; attempts: number; created_at: string; delivery_payload:string|null }>(`SELECT id,workspace_id,kind,data,attempts,created_at,delivery_payload FROM company_billing_notifications
       WHERE delivered_at IS NULL AND available_at<=? AND (lease_until IS NULL OR lease_until<?)
@@ -46,6 +46,17 @@ export async function deliverBillingNotifications(limit = 50) {
         payload.content=renderBillingEmailContent(payload)
         const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
         if (!frozen.changes) continue
+      }
+      const notice = row.kind === "trial_ending" ? JSON.parse(row.data) as { stripeTrial?: boolean; subscriptionId?: string; trialEndsAt?: string } : null
+      if (notice?.stripeTrial === true) {
+        const mapping = await getDatabase().prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(row.workspace_id)
+        const subscription = mapping && notice.subscriptionId && notice.trialEndsAt &&
+          await (client ?? getStripeClient()).subscriptions.retrieve(notice.subscriptionId) as BillingSubscription | undefined
+        if (!mapping || !subscription || subscription.id !== notice.subscriptionId || Boolean(mapping.livemode) !== subscription.livemode ||
+            !stripeTrialReminderEligible(subscription,mapping.stripe_customer_id,notice.trialEndsAt!)) {
+          await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(),row.id,row.lease)
+          continue
+        }
       }
       await deliverBillingEmail(payload,row.id)
       await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(), row.id, row.lease)

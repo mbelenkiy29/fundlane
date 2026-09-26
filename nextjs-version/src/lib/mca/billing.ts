@@ -477,6 +477,12 @@ export function verifyStripeBillingEvent(body: string, signature: string | null,
   catch { throw new AppError(400, "billing_webhook_signature_invalid", "Invalid webhook signature.") }
 }
 
+export function stripeTrialReminderEligible(subscription: BillingSubscription, customerId: string, trialEndsAt: string) {
+  return fundlaneSubscriptions([subscription],customerId).length === 1 &&
+    subscription.status === "trialing" && !subscription.cancel_at_period_end && !subscription.cancel_at &&
+    iso(subscription.trial_end) === trialEndsAt
+}
+
 export const BILLING_WEBHOOK_EVENTS = new Set([
   "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed", "checkout.session.expired",
   "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed", "customer.subscription.trial_will_end",
@@ -515,7 +521,7 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     if (stripeTrialLifecycleEnabled() && object.id && ["customer.subscription.trial_will_end","customer.subscription.paused"].includes(event.type)) {
       const candidate = await (providedClient ?? getStripeClient()).subscriptions.retrieve(object.id) as BillingSubscription
       const owned = candidate.id === object.id && fundlaneSubscriptions([candidate],customerId).length === 1
-      if (owned && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000 && candidate.status === "trialing" && candidate.trial_end === object.trial_end) {
+      if (owned && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000 && stripeTrialReminderEligible(candidate,customerId,new Date(object.trial_end*1000).toISOString())) {
         let preview: { amount: number; currency: string; quantity: number } | null = null
         try {
           const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
