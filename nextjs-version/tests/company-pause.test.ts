@@ -95,6 +95,7 @@ test("a pause after claim returns processing work without exhausting attempts; o
 
 test("expired trial rejects system/delegated dispatch immediately and retains inbound applications", async () => {
   const f = await fixture()
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId)
   await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,trial_ends_at,updated_at) VALUES(?,?,?)").run(f.workspaceId, "2000-01-01T00:00:00.000Z", nowIso())
   assert.equal((await getCompanyAccess(f.workspaceId)).allowed, false)
   await assert.rejects(deliverSubmission({ workspaceId: f.workspaceId } as SubmissionJob), { code: "company_paused" })
@@ -111,6 +112,7 @@ test("offline recovery invalidates original approvals across transactional deliv
   const f = await fixture()
   const old = new Date(Date.now() - 2000).toISOString()
   const boundary = new Date(Date.now() - 1000).toISOString()
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(f.workspaceId)
   await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,last_paused_at,updated_at) VALUES(?,1,0,?,?)").run(f.workspaceId, boundary, nowIso())
   assert.equal((await getCompanyAccess(f.workspaceId)).allowed, true)
   await assert.rejects(withOutboundApproval(f.workspaceId, old, async () => assert.fail("stale dispatch")), { code: "company_outbound_reapproval_required" })

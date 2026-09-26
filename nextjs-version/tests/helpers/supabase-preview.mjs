@@ -54,6 +54,10 @@ try {
     ]
   )
   await db.query(
+    "INSERT INTO company_subscription_state (workspace_id,legacy_exempt,state_kind,selected_seats,updated_at) VALUES ($1,1,'synthetic',5,$2)",
+    [workspaceId, now]
+  )
+  await db.query(
     "INSERT INTO users (id,email,name,application_identifier,supabase_user_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6)",
     [userId, email, "Preview Owner", `MCA-${userId}`, user.id, now]
   )

@@ -9,12 +9,13 @@ import { Table,TableHeader,TableHead,TableBody,TableRow,TableCell } from "@/comp
 import { requestJson } from "@/lib/mca/client"
 import type { platformCompany } from "@/lib/mca/platform-console"
 type Detail=Awaited<ReturnType<typeof platformCompany>>
-export function CompanyControls({id,paused,owner,ownerCandidates,notifications}:{id:string;paused:boolean}&Pick<Detail,"owner"|"ownerCandidates"|"notifications">) {
+export function CompanyControls({id,paused,billingState,owner,ownerCandidates,notifications}:{id:string;paused:boolean}&Pick<Detail,"billingState"|"owner"|"ownerCandidates"|"notifications">) {
   const router=useRouter(),[reason,setReason]=useState(""),[until,setUntil]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("")
   const [membershipId,setMembershipId]=useState(""),[resendId,setResendId]=useState<string|null>(null)
+  const [resolution,setResolution]=useState("")
   async function run(input:Record<string,unknown>) {
     setBusy(true);setError("");setNotice("")
-    try{await requestJson(`/api/platform/companies/${id}`,{method:"POST",body:JSON.stringify({...input,reason})});setNotice(input.action==="notification_retry"||input.action==="notification_resend"?"Notification queued for delivery. No email was sent inline; the action was audited.":"Company updated. The action was recorded in the audit log.");setResendId(null);router.refresh()}
+    try{const result=await requestJson<{resolutionInserted?:boolean}>(`/api/platform/companies/${id}`,{method:"POST",body:JSON.stringify({...input,reason})});setNotice(input.action==="resolve_missing_state"&&result.resolutionInserted===false?"Billing state already exists. No changes or new audit event were recorded.":input.action==="notification_retry"||input.action==="notification_resend"?"Notification queued for delivery. No email was sent inline; the action was audited.":"Company updated. The action was recorded in the audit log.");setResendId(null);router.refresh()}
     catch(e){setError(e instanceof Error?e.message:"Action failed.")}finally{setBusy(false)}
   }
   const disabled=busy||!reason.trim()
@@ -23,6 +24,7 @@ export function CompanyControls({id,paused,owner,ownerCandidates,notifications}:
     <p className="text-sm text-muted-foreground">Unpausing clears only the manual hold; normal subscription rules still apply. Extensions never change original trial dates or charge a payment.</p>
     {error&&<p role="alert" className="text-destructive">{error}</p>}{notice&&<p role="status">{notice}</p>}
     <Label className="grid gap-2">Audit reason for any action below (required)<Input value={reason} maxLength={1000} onChange={event=>setReason(event.target.value)} required/></Label>
+    {!billingState&&<section className="space-y-3 rounded border p-3"><h3 className="font-semibold">Resolve missing billing state</h3><p className="text-sm">Choose only after reviewing this company. The action inserts once, records the reason and never changes an existing state.</p><Label className="grid max-w-sm gap-2">Resolution<select value={resolution} onChange={event=>setResolution(event.target.value)} className="h-9 rounded-md border bg-background px-3"><option value="">Select a resolution</option><option value="start_trial_required">Require billing setup (no trial starts)</option><option value="mark_internal">Mark internal demo (exempt)</option><option value="legacy_exempt">Explicit legacy exemption</option></select></Label><Button variant="outline" disabled={disabled||!resolution} onClick={()=>void run({action:"resolve_missing_state",resolution})}>Apply chosen resolution</Button></section>}
     <div className="flex flex-wrap gap-3"><Button variant={paused?"outline":"destructive"} disabled={disabled} onClick={()=>void run({action:"access",manualPaused:!paused})}>{paused?"Clear manual pause":"Pause company access"}</Button><Button variant="outline" disabled={disabled} onClick={()=>void run({action:"reconcile"})}>Reconcile with Stripe</Button></div>
     <Label className="grid max-w-sm gap-2">Extend access until (your local time)<Input type="datetime-local" value={until} onChange={event=>setUntil(event.target.value)}/></Label>
     <div className="flex flex-wrap gap-3"><Button variant="outline" disabled={disabled||!until||!Number.isFinite(Date.parse(until))||Date.parse(until)<=Date.now()} onClick={()=>void run({action:"access",accessExtendedUntil:new Date(until).toISOString()})}>Set access extension</Button><Button variant="outline" disabled={disabled} onClick={()=>void run({action:"access",accessExtendedUntil:null})}>Clear extension</Button></div>

@@ -15,6 +15,7 @@ export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } fro
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
+export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -177,6 +178,7 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
       const access = await getCompanyAccess(workspaceId)
       return { ...freeEntitlement(), status: access.status, seatLimit: access.seatLimit, source: "free" as const, syncedAt: nowIso() }
     }
+    if (missingBillingStateFailsClosed()) await requireBillingState(workspaceId,db)
     assertBillingMappingMode(mapping)
     const client = providedClient ?? getStripeClient()
     let live: BillingSubscription[]
@@ -208,7 +210,7 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
       }
     }
     let current = currentEntitlement(live, mapping.stripe_customer_id)
-    await ensureBillingState(workspaceId, db)
+    if (!missingBillingStateFailsClosed()) await ensureBillingState(workspaceId,db)
     const accessHistory = await db.prepare<{legacy_exempt:number;access_extended_until:string|null}>("SELECT legacy_exempt,access_extended_until FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     const successor = live.find(s=>s.id===current.subscriptionId)
     if (!accessHistory?.legacy_exempt) for (const ended of live) {
@@ -239,9 +241,9 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
     if (subscription?.status === "trialing") await db.prepare("UPDATE company_subscription_state SET selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
     if (subscription && current.status === "active" && !unpaid) {
       await captureCompanyPauseBoundary(workspaceId,db,paid?.paid_at ? Date.parse(paid.paid_at) : Date.now())
-      const converted = await db.prepare("UPDATE company_subscription_state SET legacy_exempt=0 WHERE workspace_id=? AND legacy_exempt=1").run(workspaceId)
+      const converted = await db.prepare("UPDATE company_subscription_state SET legacy_exempt=0,state_kind='customer' WHERE workspace_id=? AND legacy_exempt=1").run(workspaceId)
       if (converted.changes) await recordAuditEvent({context:{workspaceId,userId:null,source:"system"},action:"billing.legacy_exemption_converted",resourceType:"workspace",resourceId:workspaceId,metadata:{subscriptionId:current.subscriptionId},executor:db})
-      await db.prepare("UPDATE company_subscription_state SET legacy_exempt=0, selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
+      await db.prepare("UPDATE company_subscription_state SET legacy_exempt=0,state_kind='customer', selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
       const reduction = await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL WHERE workspace_id=? AND pending_seats=? AND pending_seats_at<=?").run(workspaceId, current.seatLimit, nowIso())
       if (reduction.changes) await recordAuditEvent({context:{workspaceId,userId:null,source:"system"},action:"billing.seat_reduction_applied",resourceType:"workspace",resourceId:workspaceId,metadata:{seatLimit:current.seatLimit},executor:db})
     }
@@ -338,7 +340,8 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     const workspace = await db.prepare<{ name: string }>("SELECT name FROM workspaces WHERE id = ? FOR UPDATE").get(workspaceId)
     if (!workspace) throw new AppError(404, "workspace_not_found", "Company not found.")
     await assertOccupiedSeats(workspaceId, selectedSeats, db)
-    await ensureBillingState(workspaceId, db)
+    if (missingBillingStateFailsClosed()) await requireBillingState(workspaceId, db)
+    else await ensureBillingState(workspaceId, db)
     let mapping = await db.prepare<{ stripe_customer_id: string; livemode:number; checkout_session_id: string | null; checkout_plan_slug: string | null }>("SELECT stripe_customer_id, livemode, checkout_session_id, checkout_plan_slug FROM workspace_stripe_customers WHERE workspace_id = ?").get(workspaceId)
     if (mapping) assertBillingMappingMode(mapping)
     if (!mapping) {
@@ -478,6 +481,9 @@ export async function runImmediateBillingReconcile(
   }
 }
 
+async function requireBillingState(workspaceId: string, db: DbExecutor) {
+  if (!await db.prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)) throw new AppError(409,"billing_state_missing","Resolve the missing billing state before this billing operation.")
+}
 async function ensureBillingState(workspaceId: string, db: DbExecutor) {
   await db.prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at)
     SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING`).run(nowIso(), workspaceId)
@@ -516,6 +522,7 @@ export async function cancelBillingSubscription(workspaceId: string, actorUserId
     if (!await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)) throw new AppError(404,"workspace_not_found","Company not found.")
     const mapping = await db.prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
     if (!mapping) throw new AppError(409,"billing_subscription_missing","There is no company subscription to cancel.")
+    if (missingBillingStateFailsClosed()) await requireBillingState(workspaceId,db)
     assertBillingMappingMode(mapping)
     const listed = await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})
     if (listed.has_more) throw new AppError(503,"billing_multiple_subscriptions","Company subscriptions require administrator review.")
@@ -560,7 +567,7 @@ export async function cancelBillingSubscription(workspaceId: string, actorUserId
     sub = await client.subscriptions.retrieve(sub.id)
     fundlaneSubscriptions([sub],mapping.stripe_customer_id)
     if (sub.status!=="canceled" && sub.cancel_at!==end && !(sub.cancel_at_period_end && (sub.items.data.find(i=>i.price.id===priceIds().base)?.current_period_end ?? sub.current_period_end)===end)) throw new AppError(503,"billing_cancellation_unverified","Cancellation could not yet be verified. Retry cancellation to confirm; existing invoices remain due.")
-    await ensureBillingState(workspaceId,db)
+    if (!missingBillingStateFailsClosed()) await ensureBillingState(workspaceId,db)
     await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
     await recordAuditEvent({context:{workspaceId,userId:actorUserId},action:"billing.cancellation_scheduled",resourceType:"subscription",resourceId:sub.id,metadata:{cancelAt:iso(end)},executor:db})
     return {cancelAt:iso(end),alreadyCanceled:sub.status==="canceled"}

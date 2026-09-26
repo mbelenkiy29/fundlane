@@ -68,6 +68,7 @@ export const workspace_billing = pgTable("workspace_billing", {
 export const company_subscription_state = pgTable("company_subscription_state", {
   workspace_id: text().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
   legacy_exempt: integer().notNull().default(0),
+  state_kind: text(),
   trial_started_at: text(), trial_ends_at: text(),
   selected_seats: integer().notNull().default(1), pending_seats: integer(), pending_seats_at: text(), stripe_schedule_id: text(),
   manual_paused: integer().notNull().default(0), manual_reason: text(), last_paused_at: text(), access_extended_until: text(),
@@ -75,6 +76,7 @@ export const company_subscription_state = pgTable("company_subscription_state", 
   collection_paused: integer().notNull().default(0), updated_at: text().notNull(),
 }, table => [
   check("company_subscription_state_legacy_exempt_check", sql`${table.legacy_exempt} IN (0,1)`),
+  check("company_subscription_state_kind_check", sql`${table.state_kind} IN ('customer','internal_demo','synthetic','legacy_exempt')`),
   check("company_subscription_state_selected_seats_check", sql`${table.selected_seats} >= 1`),
   check("company_subscription_state_pending_seats_check", sql`${table.pending_seats} >= 1`),
   check("company_subscription_state_manual_paused_check", sql`${table.manual_paused} IN (0,1)`),

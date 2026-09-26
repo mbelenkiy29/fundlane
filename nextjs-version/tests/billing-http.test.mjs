@@ -17,6 +17,7 @@ before(async () => {
   stripe = await createStripeHttpFixture()
   owner = await login("owner@example.test")
   const now = new Date().toISOString(), trialEnd = new Date(Date.now() + 14 * 86400000).toISOString()
+  await db.query("DELETE FROM company_subscription_state WHERE workspace_id=$1 AND state_kind='internal_demo'",[owner.workspaceId])
   await db.query("INSERT INTO company_subscription_state(workspace_id,trial_started_at,trial_ends_at,selected_seats,updated_at) VALUES($1,$2,$3,5,$2)",[owner.workspaceId,now,trialEnd])
   await db.query("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES($1,$2,$3)",[owner.workspaceId,owner.membershipId,now])
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {

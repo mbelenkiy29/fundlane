@@ -1,6 +1,6 @@
 import "server-only"
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent } from "./db"
-import { billingEnabled, syncWorkspaceBilling, type StripeBillingClient } from "./billing"
+import { billingEnabled, missingBillingStateFailsClosed, syncWorkspaceBilling, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
@@ -92,7 +92,8 @@ export async function runBillingMaintenance(client?: StripeBillingClient) {
   for (const company of companies) {
     try {
       if (company.stripe_customer_id && billingEnabled() && !queued.workspaces.has(company.workspace_id)) {
-        await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),company.workspace_id)
+        if (!missingBillingStateFailsClosed()) await getDatabase().prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),company.workspace_id)
+        else if (!await getDatabase().prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(company.workspace_id)) throw new AppError(409,"billing_state_missing","Resolve the missing billing state in the Platform console before reconciliation.")
         await syncWorkspaceBilling(company.workspace_id, client); reconciled++
       }
       const access = await getCompanyAccess(company.workspace_id)
@@ -133,7 +134,8 @@ export async function setPlatformCompanyAccess(workspaceId: string, actorUserId:
   return withImmediateTransaction(async db => {
     const workspace = await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
     if (!workspace) throw new AppError(404,"workspace_not_found","Company not found.")
-    await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),workspaceId)
+    if (!missingBillingStateFailsClosed()) await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) SELECT id,1,seat_limit,? FROM workspaces WHERE id=? ON CONFLICT(workspace_id) DO NOTHING").run(nowIso(),workspaceId)
+    else if (!await db.prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)) throw new AppError(409,"billing_state_missing","Resolve the missing billing state before editing access.")
     await captureCompanyPauseBoundary(workspaceId,db)
     if (input.manualPaused === true) {
       const old = await db.prepare<{manual_paused:number}>("SELECT manual_paused FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)

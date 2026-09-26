@@ -9,7 +9,7 @@ mock.module(new URL("../src/lib/mca/platform-auth.ts",import.meta.url).href,{nam
 mock.module(new URL("../src/lib/mca/auth.ts",import.meta.url).href,{namedExports:{assertTrustedMutation:(request:Request)=>{originChecks++;if(request.headers.get("origin")!=="https://app.example")throw new AppError(403,"untrusted_origin","Untrusted origin.")}}})
 mock.module(new URL("../src/lib/mca/platform-console.ts",import.meta.url).href,{namedExports:{
   platformQuerySchema:z.object({q:z.string().default(""),status:z.string().default(""),offset:z.coerce.number().int().min(0).default(0)}),
-  platformActionSchema:z.object({action:z.literal("access"),reason:z.string().min(1),manualPaused:z.boolean()}),
+  platformActionSchema:z.discriminatedUnion("action",[z.object({action:z.literal("access"),reason:z.string().min(1),manualPaused:z.boolean()}),z.object({action:z.literal("resolve_missing_state"),resolution:z.enum(["start_trial_required","mark_internal","legacy_exempt"]),reason:z.string().min(1)})]),
   platformCompanies:async()=>{reads++;return []},platformCompany:async()=>{reads++;return {}},platformPayments:async()=>{reads++;return {}},platformAudit:async()=>{reads++;return []},
   platformMutation:async(id:string,actor:string)=>{mutations++;return {id,actor}},
 }})
@@ -23,7 +23,7 @@ const request=(body?:object,origin="https://app.example")=>new Request("https://
 test("all platform routes reject absent grants and AAL1 before reading or mutating records",async()=>{
   for(const [status,code] of [[401,"authentication_required"],[403,"platform_admin_required"],[403,"mfa_required"]] as const){
     denial=new AppError(status,code,"Denied")
-    for(const response of await Promise.all([companies.GET(request()),company.GET(request(),context),payments.GET(request()),audit.GET(request()),company.POST(request({action:"access",reason:"test",manualPaused:true}),context),...['notification_retry','notification_resend','assign_owner'].map(action=>company.POST(request({action,notificationId:"notice",membershipId:"member",reason:"Reviewed"}),context))])){
+    for(const response of await Promise.all([companies.GET(request()),company.GET(request(),context),payments.GET(request()),audit.GET(request()),company.POST(request({action:"access",reason:"test",manualPaused:true}),context),company.POST(request({action:"resolve_missing_state",resolution:"mark_internal",reason:"Reviewed"}),context),...['notification_retry','notification_resend','assign_owner'].map(action=>company.POST(request({action,notificationId:"notice",membershipId:"member",reason:"Reviewed"}),context))])){
       assert.equal(response.status,status);assert.equal((await response.json()).error.code,code);assert.equal(response.headers.get("location"),null)
     }
   }
@@ -37,4 +37,6 @@ test("authorized routes retain origin protection, reason validation and trusted 
   assert.equal(mutations,0)
   const response=await company.POST(request({action:"access",reason:"Support request",manualPaused:true,actor:"forged"}),context)
   assert.equal(response.status,200);assert.deepEqual(await response.json(),{id:"company",actor:"operator"});assert.equal(mutations,1)
+  const resolution=await company.POST(request({action:"resolve_missing_state",resolution:"start_trial_required",reason:"Owner decision",actor:"forged"}),context)
+  assert.equal(resolution.status,200);assert.deepEqual(await resolution.json(),{id:"company",actor:"operator"});assert.equal(mutations,2)
 })

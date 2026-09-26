@@ -6,6 +6,10 @@ import {createWorkspaceWithAdmin} from "../src/lib/mca/workspaces"
 import {getDatabase,nowIso,closeDatabaseForTests,recordAuditEvent} from "../src/lib/mca/db"
 import {platformCompanies,platformCompany,platformPayments,platformAudit,platformMutation,platformQuerySchema} from "../src/lib/mca/platform-console"
 import {initializeCompanyTrial} from "../src/lib/mca/company-access"
+async function initializeSyntheticTrial(workspaceId:string,seats:number) {
+  await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=? AND state_kind='internal_demo'").run(workspaceId)
+  return initializeCompanyTrial(workspaceId,seats)
+}
 let database:Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let workspaceId:string,userId:string
 before(async()=>{
@@ -42,7 +46,7 @@ test("audit search returns persisted billing reasons without raw metadata",async
 })
 test("access filters evaluate trial and manual pause before applying the result limit",async()=>{
   const company=await createWorkspaceWithAdmin({workspaceName:"Trial filter company",adminName:"Owner",adminEmail:`${randomUUID()}@example.test`,password:"Fixture password 99!",role:"admin"})
-  await initializeCompanyTrial(company.workspaceId,12)
+  await initializeSyntheticTrial(company.workspaceId,12)
   assert.equal((await platformCompanies({q:"Trial filter",status:"access:trial",offset:0}))[0]?.id,company.workspaceId)
   await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=1 WHERE workspace_id=?").run(company.workspaceId)
   assert.equal((await platformCompanies({q:"Trial filter",status:"access:trial",offset:0})).length,0)
@@ -96,6 +100,26 @@ test("initial owner assignment validates company, administrative role and status
   assert.equal((await platformCompanies({q:detail.owner!.email,status:"",offset:0}))[0]?.id,company.workspaceId)
   const audits=await db.prepare<{metadata:string}>("SELECT metadata FROM audit_events WHERE workspace_id=? AND action='billing.platform_owner_assigned'").all(company.workspaceId)
   assert.equal(audits.length,1);assert.equal(JSON.parse(audits[0].metadata).reason,"Verified legacy administrator")
+})
+test("Platform reconciliation retains the missing-state legacy path when the flag is unset",async()=>{
+  const company=await fixture("Missing state reconciliation"),db=getDatabase()
+  await db.prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(company.workspaceId)
+  const previousFlag=process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
+  const previousBilling=process.env.MCA_STRIPE_BILLING_ENABLED
+  try {
+    delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
+    process.env.MCA_STRIPE_BILLING_ENABLED="true"
+    const detail=await platformMutation(company.workspaceId,userId,{action:"reconcile",reason:"Legacy operator reconciliation"})
+    assert.equal(detail.billingState,null)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_subscription_state WHERE workspace_id=?").get(company.workspaceId),undefined)
+    const audit=await db.prepare<{metadata:string}>("SELECT metadata FROM audit_events WHERE workspace_id=? AND action='billing.platform_reconciled'").get(company.workspaceId)
+    assert.equal(JSON.parse(audit!.metadata).reason,"Legacy operator reconciliation")
+    process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED="true"
+    await assert.rejects(platformMutation(company.workspaceId,userId,{action:"reconcile",reason:"Strict operator reconciliation"}),{code:"billing_state_missing"})
+  } finally {
+    if(previousFlag===undefined) delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED;else process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED=previousFlag
+    if(previousBilling===undefined) delete process.env.MCA_STRIPE_BILLING_ENABLED;else process.env.MCA_STRIPE_BILLING_ENABLED=previousBilling
+  }
 })
 test("refund/dispute reporting keeps gross, successful refunds and open balances separate by currency and date",async()=>{
   const company=await fixture("Financial reporting dates"),db=getDatabase()
