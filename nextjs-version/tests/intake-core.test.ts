@@ -19,8 +19,12 @@ import { associateIntakeIntegration, claimAttachmentJob, claimReceipt, completeA
 import { attachIntakeDocument, fetchPrivateAttachment, ingestApplication, listIntakeSummaries, processAttachmentJob, replayIntake, scheduleAttachment } from "../src/lib/mca/intake/service"
 import { POST as intakePost } from "../src/app/api/mca/intake/route"
 import { POST as integrationPost } from "../src/app/api/mca/intake/integrations/route"
+import { GET as failedReceiptRoute } from "../src/app/api/mca/intake/receipts/run/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
+process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED = "true"
+process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED = "true"
+process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
 delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
 
 const ids = {
@@ -377,7 +381,8 @@ test("MIC-184 Postmark Basic ingress validates the genuine payload before one as
     return new Response(JSON.stringify({ ID: 42, Name: "MCA Workspace", InboundHash: "providerhash42" }), { status: 200, headers: { "content-type": "application/json" } })
   })
   assert.equal(provisioned.status.inboundAddress, "providerhash42@inbound.postmarkapp.com")
-  assert.equal(provisioned.status.readiness, "live_configured")
+  assert.equal(provisioned.status.readiness, "live_unverified")
+  assert.ok(provisioned.status.emailReadinessIssues?.includes("Allowed sender rules are missing"))
   assert.deepEqual(setupCalls.map((call) => [call.method, call.token]), [["GET", "postmark-account-token"], ["PUT", "postmark-account-token"]])
   const hook = new URL(String(setupCalls[1].body?.InboundHookUrl))
   assert.equal(hook.origin, "https://mca.example.test"); assert.equal(hook.username, "mca"); assert.ok(hook.password)
@@ -476,7 +481,8 @@ test("MIC-184 useSend HMAC ingress extracts one lead, refuses unauthorized sende
     return new Response(JSON.stringify([{ id: 7, name: "fundlane.io", status: "SUCCESS" }]), { status: 200, headers: { "content-type": "application/json" } })
   })
   assert.equal(provisioned.status.inboundAddress, "applications@fundlane.io")
-  assert.equal(provisioned.status.readiness, "live_configured")
+  assert.equal(provisioned.status.readiness, "live_unverified")
+  assert.ok(provisioned.status.emailReadinessIssues?.includes("Allowed sender rules are missing"))
   assert.equal(provisioned.status.emailGateway, "usesend")
   assert.equal(provisioned.status.providerServerId, "7")
   assert.equal(provisioned.webhookUrl, `https://fundlane.io/api/mca/intake/email/${provisioned.status.id}`)
@@ -598,6 +604,13 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
     throw new Error("response lost after provider accepted the request")
   } })
   assert.equal(failed[0].state, "failed")
+  await getDatabase().prepare("INSERT INTO sessions(id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at) VALUES (?,?,?,?,?,?,?)")
+    .run("receipt-admin-session", ids.adminUser, ids.adminMember, hashOpaqueToken("receipt-admin-token"), new Date(Date.now() + 60_000).toISOString(), new Date().toISOString(), new Date().toISOString())
+  const failedResponse = await failedReceiptRoute(new Request("https://mca.example.test/api/mca/intake/receipts/run", { headers: { cookie: "mca_session=receipt-admin-token" } }))
+  assert.equal(failedResponse.status, 200)
+  const failedBody = await failedResponse.json() as { receipts: Array<{ id: string; attempts: number; error: string }> }
+  assert.ok(failedBody.receipts.some(receipt => receipt.id === retryReceipt.id && receipt.attempts === failed[0].attemptCount))
+  assert.equal(JSON.stringify(failedBody).includes("retry@example.test"), false)
   const staleReceiptCompletion = await completeReceipt(ids.workspace, retryReceipt.id, abandonedReceipt.receipt.leaseToken!, { state: "sent", providerMessageId: "late-mail" })
   assert.equal(staleReceiptCompletion.completed, false)
   assert.equal(staleReceiptCompletion.receipt.state, "failed")

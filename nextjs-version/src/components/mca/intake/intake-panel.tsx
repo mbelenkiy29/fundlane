@@ -16,8 +16,10 @@ type Integration = {
   allowedHosts: string[]; senderRules: string[]; assignmentPool: string[]; initialStatus: string
   inboundAddress?: string; contractKey?: string; attachmentMethod?: string; emailGateway?: "usesend" | "postmark" | "custom"
   providerServerId?: string; readiness: "local_tested" | "live_unverified" | "live_configured"; updatedAt: string
+  emailReadinessIssues?: string[]
 }
 type Intake = { intakeId: string; provider: string; eventId: string; dealId: string | null; state: string; warnings: string[]; errorCode?: string; errorMessage?: string; attachmentStates: Record<string, number>; updatedAt: string }
+type FailedReceipt = { id: string; intakeId: string; state: string; attempts: number; error?: string }
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" })
@@ -31,6 +33,8 @@ const providers = ["jotform", "fillout", "highlevel", "docuseal", "custom", "zoh
 export function IntakePanel() {
   const [integrations, setIntegrations] = React.useState<Integration[]>([])
   const [intakes, setIntakes] = React.useState<Intake[]>([])
+  const [failedReceipts, setFailedReceipts] = React.useState<FailedReceipt[]>([])
+  const [receiptDeliveryEnabled, setReceiptDeliveryEnabled] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState<string>()
   const [error, setError] = React.useState<string>()
@@ -46,11 +50,12 @@ export function IntakePanel() {
   const load = React.useCallback(async () => {
     setLoading(true); setError(undefined)
     try {
-      const [configured, history] = await Promise.all([
+      const [configured, history, receiptHistory] = await Promise.all([
         jsonRequest<{ integrations: Integration[] }>("/api/mca/intake/integrations"),
         jsonRequest<{ intakes: Intake[] }>("/api/mca/intake"),
+        jsonRequest<{ receipts: FailedReceipt[]; deliveryEnabled: boolean }>("/api/mca/intake/receipts/run"),
       ])
-      setIntegrations(configured.integrations); setIntakes(history.intakes)
+      setIntegrations(configured.integrations); setIntakes(history.intakes); setFailedReceipts(receiptHistory.receipts); setReceiptDeliveryEnabled(receiptHistory.deliveryEnabled)
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load intake settings.") }
     finally { setLoading(false) }
   }, [])
@@ -177,6 +182,7 @@ export function IntakePanel() {
       <CardContent>
         {!integrations.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No intake providers are configured. Add the first connection below.</div> : <div className="space-y-4">
           {integrations.map((integration) => <div key={integration.id} className="rounded-lg border p-4">
+            {integration.provider === "email" && <p role="status" className="mb-2 text-sm text-muted-foreground">{integration.emailReadinessIssues?.length ? `Private email unavailable: ${integration.emailReadinessIssues.join("; ")}.` : "Private email configuration ready; verify a real provider round trip before activation."}</p>}
             <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><p className="font-medium">{integration.displayName}</p><Badge variant="outline">{integration.provider}</Badge>{integration.emailGateway && <Badge variant="outline">{integration.emailGateway}</Badge>}<Badge variant={integration.enabled ? "secondary" : "outline"}>{integration.enabled ? "Active" : "Disabled"}</Badge><Badge variant={integration.readiness === "live_configured" ? "secondary" : "outline"}>{integration.readiness.replace(/_/g, " ")}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Binding {integration.binding ?? integration.inboundAddress ?? "not set"} · credential {integration.credential} · version {integration.credentialVersion}</p>{integration.contractKey && <p className="mt-1 text-xs text-muted-foreground">Contract {integration.contractKey} · attachments {integration.attachmentMethod ?? "none"}</p>}{integration.providerServerId && <p className="mt-1 text-xs text-muted-foreground">{integration.emailGateway === "usesend" ? "Verified useSend domain" : "Verified Postmark server"} {integration.providerServerId}</p>}{integration.emailGateway === "usesend" && integration.mapping.fromAddress && <p className="mt-1 text-xs text-muted-foreground">Receipts from {integration.mapping.fromAddress}</p>}</div>{integration.approvalState !== "approved" && <Badge variant="destructive">Custom contract pending</Badge>}</div>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <form onSubmit={(event) => { event.preventDefault(); void rotate(integration, event.currentTarget) }} className="flex flex-wrap gap-2"><Input className="min-w-44 flex-1" name="credential" type="password" placeholder="New private read credential" aria-label="New private read credential" /><Input className="min-w-44 flex-1" name="credentialExpiresAt" placeholder="Expiry ISO timestamp" aria-label="Credential expiry ISO timestamp" /><Input className="min-w-44 flex-1" name="admissionSecret" type="password" placeholder="Leave blank to generate a webhook secret" aria-label="New webhook secret" /><Button type="submit" variant="outline" size="sm" disabled={busy === `rotate:${integration.id}`}><RotateCw className="size-4" />Rotate</Button></form>
@@ -237,7 +243,8 @@ export function IntakePanel() {
     </CardContent></Card>
 
     <Card><CardHeader><div className="flex items-center justify-between gap-3"><div><CardTitle>Intake activity</CardTitle><CardDescription>Recoverable errors and attachment checkpoints stay visible here.</CardDescription></div><Button size="sm" variant="outline" onClick={() => void load()}><RefreshCw className="size-4" />Refresh</Button></div></CardHeader><CardContent>
-      <div className="mb-4 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void run("/api/mca/intake/jobs/run", "jobs", "Due attachment jobs processed.")} disabled={busy === "jobs"}><Play className="size-4" />Retry files</Button><Button size="sm" variant="outline" onClick={() => void run("/api/mca/intake/receipts/run", "receipts", "Pending receipt delivery processed.")} disabled={busy === "receipts"}><Clipboard className="size-4" />Send receipts</Button></div>
+      {failedReceipts.length > 0 && <div role="status" className="mb-3 rounded-lg border border-amber-500 p-3 text-sm"><p className="font-medium">Failed email receipts ({failedReceipts.length})</p>{failedReceipts.map(receipt => <p key={receipt.id} className="mt-1">Intake {receipt.intakeId}: {receipt.error ?? "Delivery failed"} · {receipt.attempts} attempts. {receipt.error === "company_paused_review_required" ? "Company review is required before another send." : "Use Send receipts to retry the same delivery identity."}</p>)}</div>}
+      <div className="mb-4 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void run("/api/mca/intake/jobs/run", "jobs", "Due attachment jobs processed.")} disabled={busy === "jobs"}><Play className="size-4" />Retry files</Button><Button size="sm" variant="outline" onClick={() => void run("/api/mca/intake/receipts/run", "receipts", "Pending receipt delivery processed.")} disabled={busy === "receipts" || !receiptDeliveryEnabled} title={!receiptDeliveryEnabled ? "Private email receipt delivery is unavailable." : undefined}><Clipboard className="size-4" />Send receipts</Button>{!receiptDeliveryEnabled && <span className="self-center text-xs text-muted-foreground">Private email receipt delivery is unavailable.</span>}</div>
       {!intakes.length ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No applications have arrived yet.</p> : <div className="space-y-3">{intakes.map((intake) => <div key={intake.intakeId} className="rounded-lg border p-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{intake.provider}</Badge><Badge variant={intake.state === "error" ? "destructive" : "secondary"}>{intake.state}</Badge><span className="font-mono text-xs text-muted-foreground">{intake.eventId}</span></div><p className="mt-2 text-sm">{intake.errorMessage ?? (intake.dealId ? `Deal ${intake.dealId}` : "Awaiting review")}</p>{Object.keys(intake.attachmentStates).length > 0 && <p className="mt-1 text-xs text-muted-foreground">Files: {Object.entries(intake.attachmentStates).map(([state, count]) => `${state} ${count}`).join(" · ")}</p>}{intake.warnings.length > 0 && <p className="mt-2 text-sm text-amber-700">{intake.warnings.join(" ")}</p>}{intake.dealId && <a className="mt-2 inline-block text-sm underline" href={`/deals?deal=${intake.dealId}`}>Open deal</a>}{intake.provider === "email" && intake.state === "error" && !["sender_not_allowed", "forwarding_confirmation_review"].includes(intake.errorCode ?? "") && <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void run(`/api/mca/intake/${intake.intakeId}/replay`, `replay:${intake.intakeId}`, "Reviewed email saved as a deal.", { reviewedApplication: { legalName: String(data.get("legalName")), contactEmail: String(data.get("contactEmail")) || undefined } }) }}><Input name="legalName" aria-label="Reviewed business name" placeholder="Reviewed business name" required maxLength={200} /><Input name="contactEmail" aria-label="Reviewed merchant email" placeholder="Merchant email (optional)" type="email" /><Button type="submit" size="sm" disabled={busy === `replay:${intake.intakeId}`}>Create reviewed deal</Button></form>}{(intake.state === "error" || (intake.provider === "email" && intake.state === "file_pending")) && <Button className="mt-2" size="sm" variant="outline" onClick={() => void run(`/api/mca/intake/${intake.intakeId}/replay`, `replay:${intake.intakeId}`, "Intake replayed.")} disabled={busy === `replay:${intake.intakeId}`}>Replay</Button>}</div>)}</div>}
     </CardContent></Card>
   </div>

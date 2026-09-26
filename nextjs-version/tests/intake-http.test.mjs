@@ -31,7 +31,7 @@ before(async () => {
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
     cwd: root,
     env: testDatabase.env({
-      MCA_USESEND_API_KEY: "", MCA_USESEND_FROM: "",
+      MCA_USESEND_API_KEY: "", MCA_USESEND_FROM: "", MCA_PRIVATE_EMAIL_INTAKE_ENABLED: "true", MCA_PRIVATE_EMAIL_DELIVERY_ENABLED: "true", MCA_EMAIL_SENDER_VERIFIED: "true",
       ...supabaseFixture.env, NODE_ENV: "development", NEXT_DIST_DIR: dist, MCA_DOCUMENT_STORAGE_PATH: join(temp, "vault"), MCA_APP_ORIGIN: baseUrl, MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString("base64url"), MCA_DOCUMENT_TOKEN_SECRET: randomBytes(32).toString("base64url"), MCA_BOOTSTRAP_WORKSPACE_NAME: "Intake HTTP Test", MCA_BOOTSTRAP_ADMIN_EMAIL: "intake-http@example.test", MCA_BOOTSTRAP_ADMIN_PASSWORD: "Correct Intake Password 99!", MCA_DOCUMENT_SCANNER: "", MCA_DOCUMENT_AI_PROVIDER: "", OPENAI_API_KEY: "", MCA_DOCUMENT_AI_MODEL: "", MCA_INTAKE_RECEIPT_WEBHOOK_URL: "", MCA_INTAKE_WORKER_TOKEN: "" }),
     stdio: ["ignore", "pipe", "pipe"],
   })

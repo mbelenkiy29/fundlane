@@ -12,6 +12,7 @@ import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
 import { effectivePageVisibility, isActionAllowed } from "../policy"
 import { getWorkspaceSettings } from "../workspaces"
 import { invitationInput, type ApplicationInvitation, type InvitationDelivery } from "./contracts"
+import { emailSenderVerified } from "../intake/email-readiness"
 
 export interface InvitationRecord {
   id: string; workspace_id: string; integration_id: string; membership_id: string; client_name: string
@@ -148,12 +149,12 @@ export async function completeInvitationSubmission(row: InvitationRecord, intake
 }
 
 export function invitationEmailEnabled(): boolean {
-  if (process.env.NODE_ENV !== "production") return true
-  return Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) && process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED === "true"
+  return process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED === "true" && emailSenderVerified()
+    && ((Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) && Boolean(process.env.MCA_EMAIL_WEBHOOK_TOKEN)) || process.env.NODE_ENV !== "production")
 }
 function assertInvitationEmailEnabled(): void {
+  if (!invitationEmailEnabled()) throw new AppError(503, "invitation_email_disabled", "Application emails need a verified sender and receiver. Ask an administrator to complete email setup, or copy the link.")
   assertEmailDeliveryConfigured()
-  if (process.env.NODE_ENV === "production" && process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED !== "true") throw new AppError(503, "invitation_email_disabled", "Application emails are not enabled yet. Ask an administrator to complete email setup, or copy the link.")
 }
 export async function queueInvitationEmail(actor: DealActor, id: string, requestKey: string, origin: string): Promise<{ jobId: string }> {
   await assertApplicationAccess(actor, true)

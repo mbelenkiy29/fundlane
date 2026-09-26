@@ -6,15 +6,15 @@ import { actorForDeals } from "../deals/service"
 import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
-import { invitationActive, invitationUrl, type InvitationRecord } from "./service"
+import { invitationActive, invitationEmailEnabled as emailEnabled, invitationUrl, type InvitationRecord } from "./service"
 
 const CADENCE_MS = [2 * 3600_000, 24 * 3600_000, 72 * 3600_000]
 
 function invitationEmailEnabled(): void {
-  assertEmailDeliveryConfigured()
-  if (process.env.NODE_ENV === "production" && process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED !== "true") {
+  if (!emailEnabled()) {
     throw new AppError(503, "invitation_email_disabled", "Application emails are not enabled yet.")
   }
+  assertEmailDeliveryConfigured()
 }
 
 function dueForReminder(row: { reminder_count: number; last_activity_at: string | null }, now: Date): boolean {

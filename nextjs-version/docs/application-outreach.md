@@ -1,5 +1,11 @@
 # Client invitations and employee outreach
 
+## Private delivery activation (#39)
+
+`MCA_APPLICATION_INVITATION_EMAIL_ENABLED=false` remains the invitation gate. Set `MCA_EMAIL_SENDER_VERIFIED=true` only after every transactional and receipt receiver From domain is verified in its email provider console, then configure `MCA_EMAIL_WEBHOOK_URL` and `MCA_EMAIL_WEBHOOK_TOKEN` on web and cron runtime. The receiver must authenticate that bearer token, accept the `application_invitation` and `application_invitation_reminder` templates, and durably deduplicate the `idempotency-key` header before sending. A lost response, worker crash, or admin **Retry email** reuses the delivery ID as the same key. A deliberate resend creates a new delivery ID. The Applications page keeps sending unavailable until both flags and an authenticated receiver are configured in production. Default values of both flags are `false`.
+
+The optional `GET /api/cron/private-email` route consumes only invitation email/reminder jobs and intake receipts. Set `MCA_PRIVATE_EMAIL_CRON_ENABLED=true` and `CRON_SECRET` on the Vercel runtime after a synthetic receiver round trip; install one `*/5 * * * *` schedule for that route in Vercel. It is independent of `/api/cron/jobs` and has no `vercel.json` entry. Review failed delivery rows in the Applications activity history and retry there. Keep this cron flag off until the receiver's durable deduplication is verified. Configure the receiver sender domain with SPF/DKIM/DMARC in its provider console; company-domain DNS is owned by #53. No provider account, DNS record, hosted schedule, or live send is installed by this code change.
+
 Employees use `/applications` to create a client invitation, send or resend an email, or copy a client link. Each invitation retains its original employee and Jotform binding. The admin report in `/reports` joins that attribution to existing deal outcome calculations; reassigning a deal does not transfer acquisition credit.
 
 ## Behavior and access

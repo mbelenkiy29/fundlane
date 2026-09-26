@@ -35,6 +35,7 @@ import {
 import { attachIntakeDocument, ingestApplication, intakePayloadChecksum, scheduleAttachment } from "./service"
 import type { IntakeResult, NormalizedIntakeInput } from "./contracts"
 import { receiptEmailContent, sendUsesendEmail, usesendInboundEmail } from "./usesend"
+import { emailSenderVerified, privateEmailDeliveryEnabled, privateEmailIntakeEnabled } from "./email-readiness"
 
 interface InboundAttachment {
   id?: string
@@ -203,6 +204,7 @@ export async function ingestEmailDelivery(input: {
 }
 
 async function admittedEmail(input: Parameters<typeof ingestEmailDelivery>[0]) {
+  if (!privateEmailIntakeEnabled()) throw new AppError(503, "email_intake_disabled", "Private email intake is unavailable.")
   const integration = await findIntegrationByPublicId(input.integrationId, true)
   if (!integration || integration.provider !== "email") throw new AppError(404, "integration_not_found", "The email intake route was not found.")
   verifyProviderAdmission(input.request, input.rawBody, integration)
@@ -228,6 +230,7 @@ export async function queueInboundEmail(input: Parameters<typeof ingestEmailDeli
 }
 
 export async function processQueuedEmail(actor: DealActor, integrationId: string, payload: { emailCipher: string; appOrigin: string }): Promise<IntakeResult> {
+  if (!privateEmailIntakeEnabled()) throw new AppError(503, "email_intake_disabled", "Private email intake is unavailable.")
   const integration = await findIntegrationByPublicId(integrationId, true)
   if (!integration || !integration.enabled || integration.workspaceId !== actor.workspaceId || integration.provider !== "email") throw new AppError(403, "integration_disabled", "The original email integration is no longer available.")
   return processEmail(JSON.parse(decryptSensitive(payload.emailCipher, actor.workspaceId)) as InboundEmail, integration, { appOrigin: payload.appOrigin })
@@ -236,6 +239,7 @@ export async function processQueuedEmail(actor: DealActor, integrationId: string
 type EmailProcessingOptions = Pick<Parameters<typeof ingestEmailDelivery>[0], "appOrigin" | "extractor"> & { reviewedApplication?: DealWriteInput }
 
 export async function replayEmailIntake(actor: DealActor, intakeId: string, options: EmailProcessingOptions): Promise<IntakeResult> {
+  if (!privateEmailIntakeEnabled()) throw new AppError(503, "email_intake_disabled", "Private email intake is unavailable.")
   if (actor.role !== "admin" && actor.role !== "super_admin") throw new AppError(403, "permission_denied", "Only administrators can replay private email intake.")
   const record = await findIntake(actor.workspaceId, intakeId)
   if (!record?.emailSource || !record.integrationId) throw new AppError(409, "email_source_unavailable", "This older intake has no retained email. Redeliver the original email from your provider.")
@@ -371,17 +375,19 @@ async function usesendReceiptTransport(workspaceId: string, intakeId: string): P
   return undefined
 }
 
-export async function deliverPendingReceipts(options: { workspaceId?: string; fetchImpl?: typeof fetch } = {}): Promise<ReceiptRecord[]> {
+export async function deliverPendingReceipts(options: { workspaceId?: string; fetchImpl?: typeof fetch; limit?: number } = {}): Promise<ReceiptRecord[]> {
+  if (!privateEmailDeliveryEnabled()) throw new AppError(503, "receipt_delivery_disabled", "Private email receipt delivery is unavailable.")
   const endpoint = process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
   const results: ReceiptRecord[] = []
   let unconfigured = 0
-  for (const receipt of await listPendingReceipts(options.workspaceId)) {
+  for (const receipt of await listPendingReceipts(options.workspaceId, options.limit)) {
     if (!(await (await import("../company-access")).getCompanyAccess(receipt.workspaceId)).allowed) {
       await getDatabase().prepare("UPDATE intake_receipts SET state='failed',last_error='company_paused_review_required',updated_at=? WHERE workspace_id=? AND id=? AND (lease_token IS NULL OR lease_expires_at<=?)")
         .run(nowIso(), receipt.workspaceId, receipt.id, nowIso())
       continue
     }
     const usesend = await usesendReceiptTransport(receipt.workspaceId, receipt.intakeId)
+    if (!usesend && !emailSenderVerified()) { unconfigured += 1; continue }
     if (!usesend && !endpoint) {
       unconfigured += 1
       continue

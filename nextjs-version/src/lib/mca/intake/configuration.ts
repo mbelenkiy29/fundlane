@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createHash } from "node:crypto"
+import { emailIntakeReadiness } from "./email-readiness"
 import { createOpaqueToken, hashOpaqueToken } from "../crypto"
 import { getDatabase, newId, nowIso, recordAuditEvent } from "../db"
 import { AppError } from "../errors"
@@ -80,6 +81,7 @@ export interface IntegrationStatus {
   providerServerId?: string
   lastDeliveryAt?: string
   readiness: "local_tested" | "live_unverified" | "live_configured"
+  emailReadinessIssues?: string[]
   updatedAt: string
 }
 
@@ -101,8 +103,16 @@ function status(record: IntegrationRecord): IntegrationStatus {
     inboundAddress: record.inboundAddress, updatedAt: record.updatedAt,
     contractKey: record.contractKey, attachmentMethod: record.attachmentMethod,
     emailGateway: record.emailGateway, providerServerId: record.providerServerId,
+    ...(record.provider === "email" ? { emailReadinessIssues: emailIntakeReadiness({
+      enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
+      admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway,
+      providerEvidenceHash: record.providerEvidenceHash, fromAddress: record.mapping.fromAddress,
+      credentialConfigured: record.credentialConfigured,
+    }) } : {}),
     readiness: record.provider === "email" && (record.emailGateway === "usesend" || record.emailGateway === "postmark")
-      ? record.providerEvidenceHash ? "live_configured" : "live_unverified"
+      ? emailIntakeReadiness({ enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
+        admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway, providerEvidenceHash: record.providerEvidenceHash,
+        fromAddress: record.mapping.fromAddress, credentialConfigured: record.credentialConfigured }).length === 0 ? "live_configured" : "live_unverified"
       : record.provider === "zoho" ? "live_unverified" : "local_tested",
   }
 }
