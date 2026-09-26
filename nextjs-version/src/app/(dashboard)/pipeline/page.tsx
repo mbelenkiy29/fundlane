@@ -5,7 +5,7 @@ import { DealsWorkspace } from "./components/pipeline-workspace"
 export default function PipelinePage() {
   return (
     <Suspense fallback={<PipelineLoading />}>
-      <DealsWorkspace />
+      <DealsWorkspace autoSubmitEnabled={process.env.MCA_AUTO_SUBMIT_ENABLED === "true"} />
     </Suspense>
   )
 }

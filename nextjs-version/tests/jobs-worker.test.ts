@@ -14,6 +14,7 @@ import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeart
 import { GET as runCron } from "../src/app/api/cron/jobs/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
+import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { persistNewDestination } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
@@ -355,6 +356,62 @@ test("enabled cron completes only its eligible private export", async () => {
   } finally {
     if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME
     else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET
+    else process.env.CRON_SECRET = oldSecret
+  }
+})
+
+test("cron claims auto-submit only when both runtime and feature flags are on; legacy worker also handles it", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldFeature = process.env.MCA_AUTO_SUBMIT_ENABLED
+  const oldSecret = process.env.CRON_SECRET
+  try {
+    process.env.MCA_AUTO_SUBMIT_ENABLED = "true"
+    const funder = await createFunder(actor(), {
+      idempotencyKey: "cron-auto-score-funder",
+      legalName: "Cron Score Capital LLC",
+      routes: [{ kind: "email", label: "Submissions", destination: "scores@cron.example.test", documentExceptions: [], active: true }],
+    })
+    const deal = (await createDeal(actor(), {
+      idempotencyKey: "cron-auto-score-deal", legalName: "Cron Score Merchant LLC", entityType: "llc",
+      address: { line1: "1 Main St", city: "New York", state: "NY", postalCode: "10001" },
+      startDate: "2020-01-01", industry: "restaurants", naicsCode: "722511", monthlyRevenue: 20_000,
+      ficoScore: 680, requestedAmount: 50_000, requestedTermMonths: 12, fundingPurpose: "working capital",
+    })).deal
+    await setAutoSubmitSettings(actor(), { mode: "score_only", minMatchScore: 80, maxFundersPerDeal: 3, eligibleFunderIds: [funder.funder.id] })
+    const now = new Date().toISOString()
+    await getDatabase().prepare(`INSERT INTO mca_completeness_results
+      (id,workspace_id,deal_id,ready,version,rule_snapshot,findings_json,findings_fingerprint,checked_at)
+      VALUES (?,?,?,1,1,'{}','[]','ready',?)`).run("cron-auto-complete", actor().workspaceId, deal.id, now)
+    const job = await enqueueBackgroundJob({ actor: actor(), kind: "auto_submit", resourceId: deal.id,
+      idempotencyKey: "cron-auto-score-job", payload: { completenessVersion: 1, dealVersion: deal.version, mode: "score_only" } })
+    const request = () => new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } })
+    const state = async () => (await getDatabase().prepare<{ state: string; attempts: number }>("SELECT state,attempts FROM mca_background_jobs WHERE id=?").get(job.id))
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    delete process.env.MCA_JOB_RUNTIME
+    assert.deepEqual(await (await runCron(request())).json(), { enabled: false })
+    assert.deepEqual(await state(), { state: "queued", attempts: 0 })
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    delete process.env.MCA_AUTO_SUBMIT_ENABLED
+    assert.equal((await (await runCron(request())).json()).processed, 0)
+    assert.deepEqual(await state(), { state: "queued", attempts: 0 })
+    process.env.MCA_AUTO_SUBMIT_ENABLED = "true"
+    assert.equal((await (await runCron(request())).json()).processed, 1)
+    assert.deepEqual(await state(), { state: "complete", attempts: 1 })
+    const decisions = await getDatabase().prepare<{ outcome: string }>("SELECT outcome FROM mca_auto_submit_decisions WHERE workspace_id=? AND deal_id=?").all(actor().workspaceId, deal.id)
+    assert.ok(decisions.length > 0)
+    assert.ok(decisions.every(decision => decision.outcome === "scored"))
+    assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_jobs WHERE workspace_id=? AND deal_id=?").get(actor().workspaceId, deal.id))?.n, 0)
+
+    const legacy = await enqueueBackgroundJob({ actor: actor(), kind: "auto_submit", resourceId: deal.id,
+      idempotencyKey: "legacy-auto-score-job", payload: { completenessVersion: 1, dealVersion: deal.version, mode: "score_only" } })
+    assert.equal(await runNextBackgroundJob(["auto_submit"]), true)
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(legacy.id))?.state, "complete")
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME
+    else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldFeature === undefined) delete process.env.MCA_AUTO_SUBMIT_ENABLED
+    else process.env.MCA_AUTO_SUBMIT_ENABLED = oldFeature
     if (oldSecret === undefined) delete process.env.CRON_SECRET
     else process.env.CRON_SECRET = oldSecret
   }

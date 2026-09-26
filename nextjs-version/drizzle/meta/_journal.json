@@ -372,6 +372,13 @@
       "when": 1790385600007,
       "tag": "0058_billing_state_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790385600008,
+      "tag": "0059_auto_submit",
+      "breakpoints": true
     }
   ]
 }

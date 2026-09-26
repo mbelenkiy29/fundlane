@@ -64,6 +64,7 @@ export interface SubmissionJobView {
   dealVersion: number
   createdAt: string
   updatedAt: string
+  autoSubmitted?: boolean
 }
 
 export interface SubmissionSelection {
@@ -72,6 +73,7 @@ export interface SubmissionSelection {
   documents: Array<{ id: string; filename: string; category: string; checksum: string; byteLength: number }>
   funders: SubmissionSelectionFunder[]
   jobs: SubmissionJobView[]
+  autoDecisions?: Array<{ funder_id: string; score: number; outcome: string; reason: string; submission_job_id: string | null; created_at: string }>
 }
 
 export interface ConfirmSubmissionsResult extends QueueSubmissionsResult {
@@ -169,11 +171,14 @@ async function queueDestination(input: {
   funderId: string
   confirmationKey: string
   analysisRunId?: string
+  autoSubmitDecisionId?: string
   privilegedRetry?: boolean
   privilegedReason?: string
   approvedPackage?: SubmissionJob["approvedPackage"]
   deferDelivery?: boolean
   dealVersion: number
+  expectedDealVersion?: number
+  expectedAutoApiRoute?: SubmissionJob["route"]
   dealEin?: string | null
   merchantId?: string | null
   documents: DocumentSummary[]
@@ -194,6 +199,10 @@ async function queueDestination(input: {
       state: "preflight_failed",
       reason: reasonFromErrors(preflight.errors, "The requested funder was not found."),
     }
+  }
+  if (input.expectedAutoApiRoute && (!funder.active || preflight.route.kind !== "api"
+    || JSON.stringify(preflight.route) !== JSON.stringify(input.expectedAutoApiRoute))) {
+    return { jobId: newId(), funderId: input.funderId, state: "preflight_failed", reason: "The approved API route changed before automatic submission." }
   }
 
   const merchantIdentityKey = submissionMerchantIdentityKey({
@@ -236,7 +245,10 @@ async function queueDestination(input: {
     confirmationKey: input.confirmationKey,
     attemptKey: input.confirmationKey,
     analysisRunId: input.analysisRunId,
+    autoSubmitDecisionId: input.autoSubmitDecisionId,
     dealVersion: input.dealVersion,
+    expectedDealVersion: input.expectedDealVersion,
+    expectedAutoApiRoute: input.expectedAutoApiRoute,
     approvedPackage: input.approvedPackage,
     documentVersions: input.approvedPackage?.originalVersions ?? freezeDocumentVersions(input.documents),
     packageDocumentIds: preflight.originals.map((document) => document.documentId),
@@ -270,6 +282,9 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
     throw new AppError(403, "privileged_retry_forbidden", "The 24-hour duplicate rule can be overridden only by someone who can submit this deal.")
   }
   const deal = await getDealForDocument(input.actor, input.dealId)
+  if (input.expectedDealVersion !== undefined && deal.version !== input.expectedDealVersion) {
+    throw new AppError(409, "deal_version_changed", "The deal changed before automatic submission.")
+  }
   await assertSubmissionSendGates(input.actor, deal.id)
   const documents = await listSubmissionDocuments(input.actor, input.dealId)
   const sender = await probeSubmissionSender(input.actor)
@@ -285,9 +300,12 @@ export async function queueSubmissions(input: QueueSubmissionsInput): Promise<Qu
         deferDelivery: input.deferDelivery,
         confirmationKey: input.confirmationKey,
         analysisRunId: input.analysisRunId,
+        autoSubmitDecisionId: input.autoSubmitDecisionId,
         privilegedRetry: input.privilegedRetry,
         privilegedReason: input.privilegedReason,
         dealVersion: deal.version,
+        expectedDealVersion: input.expectedDealVersion,
+        expectedAutoApiRoute: input.expectedAutoApiRoute,
         dealEin: deal.ein,
         merchantId: deal.merchantId,
         documents,
@@ -341,6 +359,9 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
   const sender = await probeSubmissionSender(actor)
   const dataMerch = await latestDataMerch(actor.workspaceId, deal.id)
   const jobs = await listJobsForDeal(actor.workspaceId, deal.id)
+  const autoDecisions = process.env.MCA_AUTO_SUBMIT_ENABLED === "true"
+    ? await (await import("../underwriting/auto-submit")).listAutoSubmitDecisions(actor, deal.id) : []
+  const autoJobIds = new Set(autoDecisions.map(decision => decision.submission_job_id))
   return {
     dealId: deal.id,
     dealVersion: deal.version,
@@ -365,7 +386,8 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
         checklist: checklistForRoute(documents, route ?? preflight.route),
       }
     }),
-    jobs: jobs.map(toJobView),
+    jobs: jobs.map(job => ({ ...toJobView(job), ...(autoJobIds.has(job.id) ? { autoSubmitted: true } : {}) })),
+    ...(autoDecisions.length ? { autoDecisions } : {}),
   }
 }
 

@@ -8,9 +8,12 @@ import type { DeliverResult, OutgoingDocument, SubmissionJob } from "./contracts
 import { sendSubmissionEmail } from "./email-templates"
 import { createPortalTask } from "./portal"
 import { deliverWebhook } from "./webhook"
+import { autoDeliveryBlockReason } from "./auto-delivery-gate"
 
 export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
   await assertCompanyOperational(job.workspaceId)
+  const autoBlock = await autoDeliveryBlockReason(job)
+  if (autoBlock) return { ok: false, state: "skipped", correlationId: job.id, errorCode: "auto_submit_cancelled", errorMessage: autoBlock }
   if (isSandboxSubmissionJob(job)) {
     return deliverSandboxSubmission(job)
   }

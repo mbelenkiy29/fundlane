@@ -321,6 +321,7 @@ export async function createDeal(actor: DealActor, input: CreateDealInput, trans
   const visible = assertVisible(actor, saved.record)
   if (saved.inserted) {
     await recordAuditEvent({ context: actor, action: "deal.created", resourceType: "deal", resourceId: visible.id, metadata: { version: 1, draftState: visible.draftState }, correlationId: actor.correlationId })
+    if (process.env.MCA_AUTO_SUBMIT_ENABLED === "true") await (await import("../underwriting/auto-submit")).enqueueAutoSubmitIfEnabled(actor, visible.id, 0, visible.version)
     if (forcedAttachId) {
       await recordAuditEvent({
         context: actor,
@@ -355,6 +356,10 @@ export async function updateDealRecord(actor: DealActor, id: string, input: Upda
   merged.draftState = merged.missingRequiredFields.length ? "partial" : "submission_ready"
   const saved = await updateDeal(merged, input.expectedVersion, activity(actor, input.assignments ? "assigned" : "updated", `Updated fields: ${changed.join(", ") || "none"}`, merged.version, now))
   await recordAuditEvent({ context: actor, action: "deal.updated", resourceType: "deal", resourceId: id, metadata: { version: saved.version, fields: changed }, correlationId: actor.correlationId })
+  if (process.env.MCA_AUTO_SUBMIT_ENABLED === "true") {
+    const completeness = await (await import("../underwriting/completeness")).getCompleteness(actor, id)
+    await (await import("../underwriting/auto-submit")).enqueueAutoSubmitIfEnabled(actor, id, completeness?.version ?? 0, saved.version)
+  }
   if (input.assignments) {
     await (await import("../comms/workflow-events")).emitDealAssignedWebhook(actor, id)
   }
@@ -393,6 +398,10 @@ export async function applyBulkDealUpdate(actor: DealActor, id: string, input: {
   const summary = statusChanged ? `Status changed: ${current.status} → ${nextStatus}. ${input.reason}` : `Bulk update: ${changed.join(", ") || "no fields"}`
   const saved = await updateDeal(merged, input.expectedVersion, activity(actor, statusChanged ? "status_changed" : updateInput.assignments ? "assigned" : "updated", summary, merged.version, now, statusChanged ? { from: current.status, to: nextStatus } : undefined), input.transactionCheckpoint)
   await recordAuditEvent({ context: actor, action: "deal.bulk_updated", resourceType: "deal", resourceId: id, metadata: { version: saved.version, fields: changed, fromStatus: current.status, toStatus: nextStatus }, correlationId: actor.correlationId })
+  if (process.env.MCA_AUTO_SUBMIT_ENABLED === "true") {
+    const completeness = await (await import("../underwriting/completeness")).getCompleteness(actor, id)
+    await (await import("../underwriting/auto-submit")).enqueueAutoSubmitIfEnabled(actor, id, completeness?.version ?? 0, saved.version)
+  }
   if (statusChanged) {
     await (await import("../comms/workflow-events")).emitDealStatusUpdatedWebhook(actor, {
       dealId: id,

@@ -46,6 +46,10 @@ export interface QueueSubmissionsInput {
   funderIds: string[]
   analysisRunId?: string
   confirmationKey: string
+  expectedDealVersion?: number
+  autoSubmitDecisionId?: string
+  /** Route approved by the auto-submit worker; checked again when the job is inserted. */
+  expectedAutoApiRoute?: FunderRoute
   approvedPackages?: Record<string, ApprovedSubmissionPackage>
   deferDelivery?: boolean
   privilegedRetry?: boolean
@@ -85,6 +89,7 @@ export interface SubmissionJob {
   confirmationKey: string
   attemptKey: string
   analysisRunId?: string
+  autoSubmitDecisionId?: string
   dealVersion: number
   documentVersions: Array<{ documentId: string; checksum: string; category: string }>
   packageDocumentIds: string[]
