@@ -79,6 +79,8 @@ export interface BillingSubscription {
   trial_end?: number | null
   default_payment_method?: string | Stripe.PaymentMethod | null
   pending_setup_intent?: string | Stripe.SetupIntent | null
+  trial_settings?: { end_behavior?: { missing_payment_method?: string } } | null
+  collection_method?: string
   items: { data: Array<{ id?: string; quantity?: number | null; current_period_start?: number; current_period_end?: number; price: { id: string } }> }
 }
 export interface BillingEntitlement {
@@ -114,6 +116,40 @@ function fundlaneSubscriptions(subscriptions: BillingSubscription[], customerId:
     fundlaneSubscriptionItems(subscription)
     return true
   })
+}
+
+async function resumePausedTrial(subscription: BillingSubscription, customerId: string, client: StripeBillingClient) {
+  if (!stripeTrialLifecycleEnabled() || subscription.status !== "paused" || subscription.trial_settings?.end_behavior?.missing_payment_method !== "pause" ||
+    !subscription.trial_end || subscription.trial_end * 1000 > Date.now() || subscription.collection_method !== "charge_automatically" || subscription.pause_collection) return subscription
+  const customer = await client.customers.retrieve(customerId)
+  if (customer.deleted || customer.livemode !== stripeLiveMode()) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+  const method = subscription.default_payment_method ?? customer.invoice_settings?.default_payment_method
+  if (!method) return subscription
+  const methodId = typeof method === "string" ? method : method.id
+  const paymentMethod = await client.paymentMethods.retrieve(methodId)
+  if ((typeof paymentMethod.customer === "string" ? paymentMethod.customer : paymentMethod.customer?.id) !== customerId || paymentMethod.livemode !== stripeLiveMode()) return subscription
+  const now = new Date()
+  if (paymentMethod.type !== "card" || !paymentMethod.card || paymentMethod.card.exp_year < now.getUTCFullYear() ||
+    (paymentMethod.card.exp_year === now.getUTCFullYear() && paymentMethod.card.exp_month < now.getUTCMonth() + 1)) return subscription
+  const resumed = await client.subscriptions.resume(subscription.id, { billing_cycle_anchor: "now" }, { idempotencyKey: `fundlane:trial-resume:${subscription.id}:${subscription.trial_end}:${methodId}` }) as BillingSubscription
+  if (resumed.id !== subscription.id || fundlaneSubscriptions([resumed],customerId).length !== 1) throw new AppError(503,"billing_customer_mismatch","Company billing identity could not be verified.")
+  return resumed
+}
+
+function trialInvoicePreview(invoice: Stripe.Invoice, subscription: BillingSubscription, customerId: string) {
+  if (invoice.livemode !== stripeLiveMode() || (typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id) !== customerId ||
+    !Number.isSafeInteger(invoice.total) || invoice.total < 0 || invoice.currency !== "usd" || invoice.lines.has_more !== false) return null
+  const expected = subscription.items.data
+  const lines = invoice.lines.data.filter(line => line.parent?.type === "subscription_item_details" &&
+    line.parent.subscription_item_details?.subscription === subscription.id && !line.parent.subscription_item_details.proration)
+  if (lines.length !== expected.length || expected.some(item => {
+    if (!item.id || !Number.isSafeInteger(item.quantity) || (item.quantity ?? 0) < 1) return true
+    const matches = lines.filter(line => line.parent?.subscription_item_details?.subscription_item === item.id &&
+      (typeof line.pricing?.price_details?.price === "string" ? line.pricing.price_details.price : line.pricing?.price_details?.price?.id) === item.price.id)
+    return matches.length !== 1 || matches[0].quantity !== item.quantity
+  })) return null
+  const quantity = expected.reduce((sum, item) => sum + (item.quantity ?? 0), 0)
+  return Number.isSafeInteger(quantity) && quantity > 0 ? { amount: invoice.total, currency: invoice.currency, quantity } : null
 }
 
 export function subscriptionEntitlement(subscription: BillingSubscription): BillingEntitlement {
@@ -211,6 +247,11 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
       }
     }
     let current = currentEntitlement(live, mapping.stripe_customer_id)
+    const currentIndex = live.findIndex(subscription => subscription.id === current.subscriptionId)
+    if (currentIndex >= 0 && stripeTrialLifecycleEnabled() && live[currentIndex].status === "paused") {
+      live[currentIndex] = await resumePausedTrial(live[currentIndex], mapping.stripe_customer_id, client)
+      current = currentEntitlement(live, mapping.stripe_customer_id)
+    }
     if (!missingBillingStateFailsClosed()) await ensureBillingState(workspaceId,db)
     const accessHistory = await db.prepare<{legacy_exempt:number;access_extended_until:string|null}>("SELECT legacy_exempt,access_extended_until FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
     const successor = live.find(s=>s.id===current.subscriptionId)
@@ -423,9 +464,11 @@ export const BILLING_WEBHOOK_EVENTS = new Set([
 
 export async function processStripeBillingEvent(event: Stripe.Event, providedClient?: StripeBillingClient) {
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
-  if (!BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
+  if (event.type === "customer.updated" && !stripeTrialLifecycleEnabled()) return { ignored: true }
+  if (event.type !== "customer.updated" && !BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
   const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null; trial_end?:number|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
+  if (event.type === "customer.updated") customerId = object.id
   if (!customerId && object.charge) {
     // Refund/dispute events may need a provider lookup; skip it for a known receipt.
     const existing = await getDatabase().prepare("SELECT event_id FROM stripe_billing_events WHERE event_id=?").get(event.id)
@@ -446,18 +489,21 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     } else if (object.id && event.type === "invoice.payment_failed") {
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id,receivedAt:nowIso()})
     }
-    if (stripeTrialLifecycleEnabled() && object.id && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000) {
-      let preview: { amount: number; currency: string; quantity: number } | null = null
-      try {
-        const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
-        const quantity = invoice.lines.data.reduce((sum, line) => sum + (Number.isSafeInteger(line.quantity) && line.quantity! > 0 ? line.quantity! : 0), 0)
-        if (invoice.livemode === event.livemode && (typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id) === customerId && Number.isSafeInteger(invoice.total) && invoice.total >= 0 && invoice.currency === "usd" && quantity > 0)
-          preview = { amount: invoice.total, currency: invoice.currency, quantity }
-      } catch { /* A preview outage must not suppress the trial reminder. */ }
-      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString(),...preview})
+    if (stripeTrialLifecycleEnabled() && object.id && ["customer.subscription.trial_will_end","customer.subscription.paused"].includes(event.type)) {
+      const candidate = await (providedClient ?? getStripeClient()).subscriptions.retrieve(object.id) as BillingSubscription
+      const owned = candidate.id === object.id && fundlaneSubscriptions([candidate],customerId).length === 1
+      if (owned && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000 && candidate.status === "trialing" && candidate.trial_end === object.trial_end) {
+        let preview: { amount: number; currency: string; quantity: number } | null = null
+        try {
+          const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
+          preview = trialInvoicePreview(invoice,candidate,customerId)
+        } catch { /* A preview outage must not suppress the trial reminder. */ }
+        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString(),...preview})
+      }
+      if (owned && event.type === "customer.subscription.paused" && candidate.status === "paused" && candidate.trial_settings?.end_behavior?.missing_payment_method === "pause" &&
+        candidate.trial_end && candidate.trial_end * 1000 <= Date.now() && candidate.collection_method === "charge_automatically" && !candidate.pause_collection)
+        await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-paused:${object.id}`,"trial_paused",{subscriptionId:object.id})
     }
-    if (stripeTrialLifecycleEnabled() && object.id && event.type === "customer.subscription.paused")
-      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-paused:${object.id}`,"trial_paused",{subscriptionId:object.id})
     const jobId = newId()
     await db.prepare(`INSERT INTO mca_background_jobs
       (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)

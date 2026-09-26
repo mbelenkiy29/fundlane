@@ -80,13 +80,13 @@ test("customer billing copy does not claim PayPal or bank transfer support", () 
   }
 })
 
-test("trial-ending and trial-ended emails avoid obsolete no-card claims in both modes", () => {
+test("local trial emails keep their no-card wording in both checkout modes", () => {
   for (const configured of [false, true]) {
     withStripeMode(configured, () => {
       assert.equal(isStripeCheckoutTrialConfigured(), configured)
       const emails = renderTrialEmails()
-      assert.match(emails.trial_ending.text, /Your trial is ending soon/)
-      assert.match(emails.trial_ending.html, /Your trial is ending soon/)
+      assert.match(emails.trial_ending.text, /Your no-card trial is ending soon/)
+      assert.match(emails.trial_ending.html, /Your no-card trial is ending soon/)
       assert.match(emails.trial_ended.text, /Your data remains available for recovery/)
       assert.match(emails.trial_ended.html, /Your data remains available for recovery/)
       for (const email of Object.values(emails)) {
@@ -95,6 +95,17 @@ test("trial-ending and trial-ended emails avoid obsolete no-card claims in both 
       }
     })
   }
+})
+
+test("unset lifecycle flag preserves the original local trial email body", () => {
+  const previous=process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
+  try {
+    const url="https://app.example.test/settings/billing"
+    const result=renderBillingEmailContent({data:{kind:"trial_ending",trialEndsAt:"2030-01-01T00:00:00Z"},actionUrl:url})
+    const description="Your no-card trial is ending soon. Choose your paid seat quantity in Plans & Billing to continue. Checkout starts your paid subscription immediately."
+    assert.deepEqual(result,{subject:"Your Fundlane trial ends soon",text:`${description}\n\nDeadline: 2030-01-01T00:00:00Z\n\nPlans & Billing: ${url}`,html:`<p>${description.replace("Plans & Billing","Plans &amp; Billing")}</p><p>Deadline: 2030-01-01T00:00:00Z</p><p><a href="${url}">Open Plans &amp; Billing</a></p>`})
+  } finally { if(previous===undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED;else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED=previous }
 })
 
 test("unconfigured Stripe keeps the no-card trial wording", () => {
