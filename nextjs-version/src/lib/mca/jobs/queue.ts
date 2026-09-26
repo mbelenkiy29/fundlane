@@ -155,6 +155,14 @@ export async function completeBackgroundJob(job: BackgroundJob, result: unknown)
   if (!completed.changes) throw new Error("background_job_lease_lost")
 }
 
+/** Keep the same leased job available for a later observation without using a retry attempt. */
+export async function deferBackgroundJob(job: BackgroundJob, availableAt: string): Promise<void> {
+  const deferred = await getDatabase().prepare(`UPDATE mca_background_jobs SET state='queued',attempts=GREATEST(0,attempts-1),
+    available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?`)
+    .run(availableAt, nowIso(), job.id, job.lease_token)
+  if (!deferred.changes) throw new Error("background_job_lease_lost")
+}
+
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {
   if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)

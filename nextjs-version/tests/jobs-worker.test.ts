@@ -1,7 +1,7 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { Client } from "pg"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { DocumentStorage } from "../src/lib/mca/documents/storage"
@@ -17,7 +17,7 @@ import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
-import { persistNewDestination } from "../src/lib/mca/submissions/repository"
+import { insertAttempt, persistNewDestination, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
@@ -237,6 +237,70 @@ test("heartbeat is written even when the queue is empty", async () => {
     "SELECT document_worker_heartbeat_at FROM mca_private.ops_control WHERE id",
   ).get()
   assert.ok(heartbeat?.document_worker_heartbeat_at)
+})
+
+test("guarded API worker retry revisits a recent sending attempt after ten minutes", async () => {
+  const previousGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  try {
+    const funder = (await createFunder(actor(), {
+      idempotencyKey: "jobs-guarded-api-funder",
+      legalName: "Guarded API Capital LLC",
+      routes: [{ kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true }],
+    })).funder
+    const submission = (await persistNewDestination({
+      workspaceId: actor().workspaceId,
+      dealId,
+      funderId: funder.id,
+      displayFunderName: funder.legalName,
+      routeKind: "api",
+      route: { id: "guarded-api", kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true },
+      state: "queued",
+      confirmationKey: "jobs-guarded-api-send",
+      attemptKey: "jobs-guarded-api-send",
+      dealVersion: 1,
+      documentVersions: [],
+      packageDocumentIds: [],
+      preflightErrors: [],
+      merchantIdentityKey: `deal:${dealId}`,
+      packageFingerprint: "",
+      createdByUserId: null,
+      actor: actor(),
+    })).job
+    await insertAttempt({ workspaceId: submission.workspaceId, jobId: submission.id, attemptKey: submission.attemptKey,
+      transport: "api", state: "sending", correlationId: newId() })
+    await updateJobRecord(submission.workspaceId, submission.id, { state: "sending" })
+    assert.equal(await recoverSubmissionOutbox(), 1)
+    assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
+
+    const waiting = await getDatabase().prepare<{ id: string; state: string; attempts: number; available_at: string }>(
+      "SELECT id,state,attempts,available_at FROM mca_background_jobs WHERE kind='submission_delivery' AND resource_id=?",
+    ).get(submission.id)
+    assert.equal(waiting?.state, "queued")
+    assert.equal(waiting?.attempts, 0)
+    assert.ok(Date.parse(waiting!.available_at) > Date.now())
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE id=?").get(submission.id))?.state, "sending")
+    assert.equal(await recoverSubmissionOutbox(), 0)
+    assert.equal(await runNextBackgroundJob(["submission_delivery"]), false)
+
+    await getDatabase().prepare("UPDATE mca_submission_attempts SET created_at=? WHERE job_id=?")
+      .run(new Date(Date.now() - 11 * 60_000).toISOString(), submission.id)
+    await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?")
+      .run(new Date(Date.now() - 1_000).toISOString(), waiting!.id)
+    assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
+    const settled = await getDatabase().prepare<{ state: string; reason: string }>("SELECT state,reason FROM mca_submission_jobs WHERE id=?").get(submission.id)
+    assert.equal(settled?.state, "failed")
+    assert.match(settled?.reason ?? "", /uncertain/)
+    const attempt = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM mca_submission_attempts WHERE job_id=?").get(submission.id)
+    assert.equal(attempt?.state, "failed")
+    assert.equal(attempt?.error_code, "delivery_uncertain")
+    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_submission_attempts WHERE job_id=?").get(submission.id))?.count, 1)
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(waiting!.id))?.state, "complete")
+    assert.ok((await getDatabase().prepare<{ processed_at: string | null }>("SELECT processed_at FROM mca_submission_outbox WHERE job_id=?").get(submission.id))?.processed_at)
+  } finally {
+    if (previousGuard === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previousGuard
+  }
 })
 
 test("legacy scan completion stays unchanged when both new runtime flags are unset", async () => {
