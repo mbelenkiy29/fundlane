@@ -8,7 +8,7 @@ Owner: Michael Belenkiy. Execute hosted drills only in an approved nonproduction
 
 The document host is the only worker with a dedicated heartbeat in this monitor. Generic job owners are observed through due queue age and expired leases; messaging and other schedulers need separate hosted owner and heartbeat acceptance before claiming full worker coverage. The recovery endpoint limits an authenticated administrator to 60 inventory reads and 10 decisions per minute through the existing request-rate table.
 
-The existing deployed monitor rules remain: three bad checks for website/database/queue age/expired leases/document heartbeat, immediate ambiguous email, five recent email failures or five errors. Billing reconciliation retries and the additional rules below are controlled by `MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED=true` and require the existing `MCA_OPERATIONS_ALERTS_ENABLED=true` for delivery. An unset flag preserves current delivery. Configure these as **Supabase platform-monitor secrets**, not browser settings:
+The existing deployed monitor rules remain: three bad checks for website/database/queue age/expired leases/document heartbeat, immediate ambiguous email and billing reconciliation retries, five recent email failures or five errors. Only the additional rules below are controlled by `MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED=true`; delivery still requires the existing `MCA_OPERATIONS_ALERTS_ENABLED=true`. An unset recovery flag preserves current delivery. Configure these as **Supabase platform-monitor secrets**, not browser settings:
 
 | Variable | Default | Action |
 | --- | ---: | --- |
