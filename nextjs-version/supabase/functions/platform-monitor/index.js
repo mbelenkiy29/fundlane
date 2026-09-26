@@ -43,12 +43,13 @@ function incidentTransition(previous, bad, threshold, now) {
 }
 
 // src/lib/mca/operations/monitor.ts
-async function queueMetrics(db) {
+async function queueMetrics(db, documentRuntimeEnabled = false) {
   const [row] = await db.query(`SELECT
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='queued') queued,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='running') running,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='failed') failed,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='queued' AND attempts>0) retrying,
+    (SELECT count(*)::int FROM mca_background_jobs WHERE kind='billing_reconcile' AND state='queued' AND attempts>0) "billingRetrying",
     ((SELECT count(*) FROM mca_background_jobs WHERE state='running' AND lease_expires_at::timestamptz < now()) +
      (SELECT count(*) FROM mca_email_worker_leases WHERE expires_at::timestamptz < now()))::int expired,
     COALESCE((SELECT greatest(0,extract(epoch FROM now()-min(available_at::timestamptz)))::int FROM mca_background_jobs WHERE state='queued' AND available_at::timestamptz<=now()),0) AS "oldestSeconds",
@@ -62,7 +63,9 @@ async function queueMetrics(db) {
     ((SELECT count(*) FROM mca_email_messages WHERE direction='outbound' AND state='failed' AND updated_at::timestamptz>=now()-interval '10 minutes')+
       (SELECT count(*) FROM mca_background_jobs WHERE kind='application_invitation_email' AND state='failed' AND updated_at::timestamptz>=now()-interval '10 minutes'))::int "recentEmailFailures",
     (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors",
-    (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds"`);
+    (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds",
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','draft_extract','intake_process') AND state='failed') AS "documentFailed",
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable"`, [documentRuntimeEnabled]);
   return row;
 }
 async function runMonitor(db, config, fetcher = fetch) {
@@ -104,7 +107,7 @@ async function runMonitor(db, config, fetcher = fetch) {
     const websiteMs = Math.round(performance.now() - started);
     let metrics = null;
     try {
-      metrics = await queueMetrics(db);
+      metrics = await queueMetrics(db, config.documentRuntimeEnabled);
     } catch {
     }
     await db.query(
@@ -124,6 +127,7 @@ async function runMonitor(db, config, fetcher = fetch) {
       ["website", !websiteOk, 3],
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
+      ["billing_reconciliation", metrics ? metrics.billingRetrying > 0 : null, 1],
       ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],
@@ -282,6 +286,7 @@ Deno.serve(async (request) => {
         origin: env("MCA_APP_ORIGIN"),
         token: secret,
         alerts: env("MCA_OPERATIONS_ALERTS_ENABLED") === "true",
+        documentRuntimeEnabled: env("MCA_DOCUMENT_JOB_RUNTIME") === "vercel_cron" || env("MCA_NATIVE_DOCUMENT_EXECUTOR") === "true",
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN")

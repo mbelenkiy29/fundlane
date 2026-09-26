@@ -1,6 +1,7 @@
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { spawnSync } from "node:child_process"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
 import { readFileSync } from "node:fs"
@@ -14,6 +15,7 @@ import {
   documentWorkerReady,
   type Incident,
 } from "../src/lib/mca/operations/contracts"
+import { documentRuntimeEnabled } from "../src/lib/mca/jobs/document-runtime"
 import { GET as healthGet } from "../src/app/api/internal/health/route"
 import {
   runMonitor as monitorTick,
@@ -382,4 +384,60 @@ test("document worker ready vs lag surfaces metrics, health workerReady, inciden
     /Document worker heartbeat is stale\./
   )
   assert.match(dashboard, /documentWorkerReady/)
+})
+
+test("document failure metrics and owner alerts stay off with unset runtime flags", async () => {
+  const previousRuntime = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const previousNative = process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+  const id = randomUUID()
+  try {
+    await database.query(`INSERT INTO workspaces
+      (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
+      VALUES ('status-fixture','Status fixture','UTC',5,'{}','{}','{}',now()::text,now()::text)`)
+    await database.query(`INSERT INTO mca_background_jobs
+      (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,attempts,available_at,created_at,updated_at,error_code)
+      VALUES ($1,'status-fixture','document_scan',$1,$1,'{}','{}','fixture','failed',3,now(),now(),now(),'scanner_unavailable')`, [id])
+    delete process.env.MCA_DOCUMENT_JOB_RUNTIME
+    delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR
+    assert.equal(documentRuntimeEnabled(), false)
+    assert.equal((await queueMetrics(db, documentRuntimeEnabled())).documentFailed, 0)
+    assert.equal((await queueMetrics(db, documentRuntimeEnabled())).scannerUnavailable, 0)
+    process.env.MCA_DOCUMENT_JOB_RUNTIME = "VERCEL_CRON"
+    assert.equal(documentRuntimeEnabled(), false)
+    process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+    assert.equal(documentRuntimeEnabled(), true)
+    assert.equal((await queueMetrics(db, documentRuntimeEnabled())).documentFailed, 1)
+    assert.equal((await queueMetrics(db, documentRuntimeEnabled())).scannerUnavailable, 1)
+    delete process.env.MCA_DOCUMENT_JOB_RUNTIME
+    process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = "true"
+    assert.equal(documentRuntimeEnabled(), true)
+    assert.equal((await queueMetrics(db, documentRuntimeEnabled())).documentFailed, 1)
+    const preview = {
+      ...await platformStatus("24h"),
+      latest: {
+        checked_at: new Date().toISOString(), website_ok: true, database_ok: true,
+        website_ms: 12, database_ms: 12, deployment: null,
+        metrics: { ...await queueMetrics(db, true), documentWorkerHeartbeatAgeSeconds: 1 },
+      },
+    }
+    const rendered = spawnSync(process.execPath, ["--import", "tsx", "-e", `
+      const React = require('react');
+      const { renderToStaticMarkup } = require('react-dom/server');
+      const { StatusDashboard } = require('./src/components/mca/operations/status-dashboard.tsx');
+      const preview = ${JSON.stringify(preview)};
+      console.log(JSON.stringify([false, true].map(documentRuntimeEnabled => {
+        const html = renderToStaticMarkup(React.createElement(StatusDashboard, { preview, documentRuntimeEnabled }));
+        return [html.includes('waiting for a scanner verdict'), html.includes('document or intake job has failed')];
+      })));
+    `], { encoding: "utf8" })
+    assert.equal(rendered.status, 0, rendered.stderr)
+    assert.deepEqual(JSON.parse(rendered.stdout), [[false, false], [true, true]])
+    const page = readFileSync(resolve(process.cwd(), "src/app/admin/status/page.tsx"), "utf8")
+    assert.match(page, /<StatusDashboard documentRuntimeEnabled={documentRuntimeEnabled\(\)} \/>/)
+  } finally {
+    await database.query("DELETE FROM mca_background_jobs WHERE id=$1", [id])
+    await database.query("DELETE FROM workspaces WHERE id='status-fixture'")
+    if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
+    if (previousNative === undefined) delete process.env.MCA_NATIVE_DOCUMENT_EXECUTOR; else process.env.MCA_NATIVE_DOCUMENT_EXECUTOR = previousNative
+  }
 })

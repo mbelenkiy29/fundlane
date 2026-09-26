@@ -13,11 +13,12 @@ export type MonitorConfig = {
   origin: string
   token: string
   alerts: boolean
+  documentRuntimeEnabled?: boolean
   recipient?: string
   webhook?: string
   webhookToken?: string
 }
-export async function queueMetrics(db: MonitorDb): Promise<Metrics> {
+export async function queueMetrics(db: MonitorDb, documentRuntimeEnabled = false): Promise<Metrics> {
   const [row] = await db.query(`SELECT
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='queued') queued,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='running') running,
@@ -38,8 +39,8 @@ export async function queueMetrics(db: MonitorDb): Promise<Metrics> {
       (SELECT count(*) FROM mca_background_jobs WHERE kind='application_invitation_email' AND state='failed' AND updated_at::timestamptz>=now()-interval '10 minutes'))::int "recentEmailFailures",
     (SELECT count(*)::int FROM mca_private.ops_errors WHERE occurred_at>=now()-interval '5 minutes') "recentErrors",
     (SELECT EXTRACT(EPOCH FROM now() - document_worker_heartbeat_at)::int FROM mca_private.ops_control WHERE id) AS "documentWorkerHeartbeatAgeSeconds",
-    (SELECT count(*)::int FROM mca_background_jobs WHERE kind IN ('document_upload','document_scan','draft_scan','assistant_scan','draft_extract','intake_process') AND state='failed') AS "documentFailed",
-    (SELECT count(*)::int FROM mca_background_jobs WHERE kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable"`)
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','draft_extract','intake_process') AND state='failed') AS "documentFailed",
+    (SELECT count(*)::int FROM mca_background_jobs WHERE $1::boolean AND kind IN ('document_upload','document_scan','draft_scan','assistant_scan','intake_process') AND error_code='scanner_unavailable' AND state IN ('queued','failed')) AS "scannerUnavailable"`, [documentRuntimeEnabled])
   return row as Metrics
 }
 export async function runMonitor(
@@ -98,7 +99,7 @@ export async function runMonitor(
     const websiteMs = Math.round(performance.now() - started)
     let metrics: Metrics | null = null
     try {
-      metrics = await queueMetrics(db)
+      metrics = await queueMetrics(db, config.documentRuntimeEnabled)
     } catch {
       /* A failed aggregate remains unavailable. */
     }

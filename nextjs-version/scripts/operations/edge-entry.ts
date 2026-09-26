@@ -40,6 +40,7 @@ Deno.serve(async (request) => {
         origin: env("MCA_APP_ORIGIN")!,
         token: secret,
         alerts: env("MCA_OPERATIONS_ALERTS_ENABLED") === "true",
+        documentRuntimeEnabled: env("MCA_DOCUMENT_JOB_RUNTIME") === "vercel_cron" || env("MCA_NATIVE_DOCUMENT_EXECUTOR") === "true",
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN"),

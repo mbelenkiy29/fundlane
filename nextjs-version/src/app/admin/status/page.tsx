@@ -3,6 +3,7 @@ import { redirect, notFound } from "next/navigation"
 import { requirePlatformOwner } from "@/lib/mca/operations/access"
 import { AppError } from "@/lib/mca/errors"
 import { StatusDashboard } from "@/components/mca/operations/status-dashboard"
+import { documentRuntimeEnabled } from "@/lib/mca/jobs/document-runtime"
 export const dynamic = "force-dynamic"
 export default async function Page() {
   try {
@@ -17,7 +18,7 @@ export default async function Page() {
       <Link href="/home" className="text-sm text-muted-foreground">
         ← Back to Fundlane
       </Link>
-      <StatusDashboard />
+      <StatusDashboard documentRuntimeEnabled={documentRuntimeEnabled()} />
     </main>
   )
 }
