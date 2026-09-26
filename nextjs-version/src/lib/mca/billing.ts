@@ -328,7 +328,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     if (mapping.checkout_session_id) {
       const pending = await client.checkout.sessions.retrieve(mapping.checkout_session_id)
       if (pending.status === "open") {
-        if (mapping.checkout_plan_slug === slug && pending.url && (!stripeTaxEnabled() || pending.automatic_tax?.enabled === true)) return { url: pending.url }
+        if (mapping.checkout_plan_slug === slug && pending.url && (pending.automatic_tax?.enabled === true) === stripeTaxEnabled()) return { url: pending.url }
         await client.checkout.sessions.expire(pending.id)
       } else if (pending.status === "complete") {
         const subscriptionId = typeof pending.subscription === "string" ? pending.subscription : pending.subscription?.id

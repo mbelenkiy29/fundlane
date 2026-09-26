@@ -319,6 +319,40 @@ test("tax flag off preserves the complete Checkout request",async()=>{
     expires_at:(Number(f.state.checkoutKey?.split("-").at(-1))+2)*1800,
   })
 })
+test("turning tax off expires an open tax-enabled Checkout and creates an untaxed session",async()=>{
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.deepEqual(f.state.checkoutParams.automatic_tax,{enabled:true})
+    const client={...f.client,checkout:{sessions:{
+      ...f.client.checkout.sessions,
+      retrieve:async(id:string)=>({id,status:"open",url:"https://checkout.stripe.com/taxed",automatic_tax:{enabled:true}}),
+    }}} as StripeBillingClient
+    delete process.env.MCA_STRIPE_TAX_ENABLED
+    const result=await createBillingCheckout(f.workspaceId,5,false,client)
+    assert.equal(result.url,"https://checkout.stripe.com/test")
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+    assert.equal("automatic_tax" in f.state.checkoutParams,false)
+    assert.equal("billing_address_collection" in f.state.checkoutParams,false)
+    assert.equal("tax_id_collection" in f.state.checkoutParams,false)
+    assert.equal("customer_update" in f.state.checkoutParams,false)
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
+})
+test("turning tax on expires an open untaxed Checkout and creates a tax-enabled session",async()=>{
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  await createBillingCheckout(f.workspaceId,5,false,f.client)
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+    assert.deepEqual(f.state.checkoutParams.automatic_tax,{enabled:true})
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
+})
 for(const existingCustomer of [false,true]) test(`tax-enabled Checkout ${existingCustomer?"reuses an existing":"creates a new"} customer`,async()=>{
   process.env.MCA_STRIPE_TAX_ENABLED="true"
   try {
