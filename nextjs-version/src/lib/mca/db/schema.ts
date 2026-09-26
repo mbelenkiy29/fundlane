@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigint, bigserial, boolean, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigint, bigserial, boolean, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey, timestamp } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -1911,6 +1911,10 @@ export const mca_email_reads = pgTable("mca_email_reads", {
 export const mca_email_worker_leases = pgTable("mca_email_worker_leases", {
   sender_id:text().primaryKey().references(() => mca_email_senders.id),workspace_id:text().notNull().references(() => workspaces.id),token:text().notNull(),expires_at:text().notNull(),
 })
+export const mca_email_runtime_lease = pgTable("mca_email_runtime_lease", {
+  id: integer().primaryKey().default(1), token: text().notNull(), expires_at: timestamp({ withTimezone: true }).notNull(),
+  last_started_at: timestamp({ withTimezone: true }).notNull(), last_completed_at: timestamp({ withTimezone: true }),
+}, table => [check("mca_email_runtime_lease_id_check", sql`${table.id} = 1`)])
 
 export const intake_notifications = pgTable("intake_notifications", {
   id: text().primaryKey().notNull(),

@@ -14,9 +14,11 @@ const demoSubmissionsTimestamp = 1790385600005;
 const trialAbuseTimestamp = 1790385600006;
 const billingStateKindTimestamp = 1790385600007;
 const autoSubmitTimestamp = 1790385600008;
+const emailRuntimeTimestamp = 1790385600012;
 const billingRecoveryTimestamp = 1790035200002;
 
 async function revertLaterThanCatchup(fixture) {
+  await fixture.query("DROP TABLE IF EXISTS mca_email_runtime_lease");
   await fixture.query("DROP TABLE IF EXISTS marketing_demo_submissions");
   await fixture.query("DROP TABLE IF EXISTS mca_auto_submit_decisions, mca_auto_submit_settings");
   await fixture.query("ALTER TABLE mca_submission_jobs DROP COLUMN IF EXISTS auto_submit_decision_id");
@@ -26,7 +28,7 @@ async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp]);
+  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6, $7)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp, emailRuntimeTimestamp]);
 }
 
 async function withFixture(label, run) {
@@ -55,6 +57,7 @@ test("merged fresh schema includes both migration branches; catch-up does not re
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [trialAbuseTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [billingStateKindTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [autoSubmitTimestamp])).rows[0].n, 1);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [emailRuntimeTimestamp])).rows[0].n, 1);
   });
 });
 

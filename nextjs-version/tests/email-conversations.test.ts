@@ -48,6 +48,7 @@ import {
 } from "../src/lib/mca/email-conversations/providers"
 import { POST as sendPost } from "../src/app/api/mca/email/messages/route"
 import { GET as contextGet } from "../src/app/api/mca/email/context/route"
+import { GET as cronGet } from "../src/app/api/cron/email-conversations/route"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let rep: DealActor, admin: DealActor, other: DealActor
@@ -59,6 +60,8 @@ let sent: RemoteEmail[] = [],
   calls = 0,
   mode: "ok" | "rate" | "unknown" | "lost" | "denied" = "ok",
   sendingReply = ""
+let holdSend: Promise<void> | null = null
+let onSend: (() => void) | null = null
 const db = () => getDatabase()
 before(async () => {
   fixture = await createPostgresTestDatabase("email_conversations")
@@ -133,7 +136,7 @@ after(async () => {
 })
 beforeEach(async () => {
   await db().execute(
-    "DELETE FROM mca_email_reads; DELETE FROM mca_email_messages; DELETE FROM mca_email_conversations; DELETE FROM mca_email_worker_leases; DELETE FROM mca_email_oauth_states; DELETE FROM mca_email_sender_members; DELETE FROM mca_email_senders"
+    "DELETE FROM mca_email_runtime_lease; DELETE FROM mca_email_reads; DELETE FROM mca_email_messages; DELETE FROM mca_email_conversations; DELETE FROM mca_email_worker_leases; DELETE FROM mca_email_oauth_states; DELETE FROM mca_email_sender_members; DELETE FROM mca_email_senders"
   )
   await db()
     .prepare("UPDATE memberships SET status='active' WHERE workspace_id=?")
@@ -151,6 +154,9 @@ beforeEach(async () => {
   calls = 0
   mode = "ok"
   sendingReply = ""
+  holdSend = null
+  onSend = null
+  delete process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME
   setSenderOAuthFetchForTests(async (input) => {
     const url = String(input)
     if (url.includes("token"))
@@ -166,6 +172,8 @@ beforeEach(async () => {
     const url = new URL(String(input))
     if (init?.method === "POST") {
       calls++
+      onSend?.()
+      if (holdSend) await holdSend
       if (mode === "rate")
         return new Response("", {
           status: 429,
@@ -820,6 +828,51 @@ test("an active worker lease is not stolen; expired sending work becomes unknown
     (await emailMessages(rep, q.conversationId)).messages[0].state,
     "unknown"
   )
+})
+test("email cron defaults off and rejects unauthenticated enabled ticks", async () => {
+  const id = await sender(), q = await queueEmail(rep, input(id))
+  const request = () => new Request("https://app.example.test/api/cron/email-conversations")
+  assert.deepEqual(await (await cronGet(request())).json(), { enabled: false })
+  assert.equal(calls, 0)
+  process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = "vercel_cron"
+  process.env.CRON_SECRET = "synthetic-cron-secret"
+  assert.equal((await cronGet(request())).status, 401)
+  assert.equal(calls, 0)
+  assert.equal((await db().prepare<MessageRow>("SELECT * FROM mca_email_messages WHERE id=?").get(q.id))?.state, "queued")
+})
+test("overlapping cron ticks share one global claim and send once", async () => {
+  const id = await sender()
+  await queueEmail(rep, input(id))
+  process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = "vercel_cron"
+  process.env.CRON_SECRET = "synthetic-cron-secret"
+  let release!: () => void
+  holdSend = new Promise<void>(resolve => { release = resolve })
+  const entered = new Promise<void>(resolve => { onSend = resolve })
+  const request = () => new Request("https://app.example.test/api/cron/email-conversations", { headers: { authorization: "Bearer synthetic-cron-secret" } })
+  const first = cronGet(request())
+  try {
+    await entered
+    const duplicate = await cronGet(request())
+    assert.equal((await duplicate.json()).skipped, true)
+  } finally {
+    release()
+  }
+  assert.equal((await first).status, 200)
+  assert.equal(calls, 1)
+})
+test("cron restart reconciles interrupted and uncertain sends without a second dispatch", async () => {
+  const id = await sender(), q = await queueEmail(rep, input(id))
+  process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = "vercel_cron"
+  process.env.CRON_SECRET = "synthetic-cron-secret"
+  const request = () => new Request("https://app.example.test/api/cron/email-conversations", { headers: { authorization: "Bearer synthetic-cron-secret" } })
+  await db().prepare("UPDATE mca_email_messages SET state='sending' WHERE id=?").run(q.id)
+  assert.equal((await cronGet(request())).status, 200)
+  assert.equal(calls, 0)
+  assert.equal((await emailMessages(rep, q.conversationId)).messages[0].state, "unknown")
+  await due()
+  assert.equal((await cronGet(request())).status, 200)
+  assert.equal(calls, 0)
+  await assert.rejects(() => queueEmail(rep, { body: "Reply", idempotencyKey: newId() }, q.conversationId), { code: "email_delivery_pending" })
 })
 test("conversation pagination follows recent activity without leaking denied deals", async () => {
   const id = await sender()

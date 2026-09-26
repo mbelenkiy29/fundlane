@@ -47,6 +47,10 @@ File/runtime bounds: deal and draft uploads and assistant scans are capped at 25
 
 ## Other schedulers and queues
 
+### Email conversation consumer (#38)
+
+`GET /api/cron/email-conversations` is a separate Vercel Node consumer. It is inert unless `MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron`, then requires the existing `CRON_SECRET` bearer token. Each tick has a 230-second deadline under a 300-second function maximum and the existing worker processes at most 25 senders and 10 conversations per sender. Migration `0063_email_conversation_runtime.sql` provides one database-wide claim with a 310-second expiry, longer than the function maximum, and a last-completed timestamp. Existing per-sender token leases still fence writes. Unknown provider outcomes and interrupted `sending` rows remain blocked until Sent-mail reconciliation; company pause still prevents dispatch. The owner status page exposes queue age, expired/revoked senders, sync failures, stale syncs, and a tick older than ten minutes. Configure exactly one five-minute Vercel schedule after staging acceptance; do not add a second Edge or Render consumer. See [email conversations](email-conversations.md) for provider setup and pilot checks.
+
 These are separate from `mca_background_jobs`; production status for each remains **unverified from source; needs live inventory**. Runtime and exact operational timing require hosted verification before activation.
 
 | Owner/source | Work, lease/retry, and selected ownership |
@@ -78,7 +82,7 @@ These are separate from `mca_background_jobs`; production status for each remain
 | --- | --- |
 | Export and auto-submit cron on Vercel | `MCA_JOB_RUNTIME=vercel_cron`, existing `CRON_SECRET`, restricted pooled `DATABASE_URL`, `MCA_DB_POOL_MAX=2`, `MCA_DOCUMENT_STORAGE_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `MCA_APP_ORIGIN`, and the existing Supabase browser keys for the web app. `MCA_BACKGROUND_JOBS=enabled` remains the enqueue switch where used; `MCA_AUTO_SUBMIT_ENABLED=true` additionally permits auto-submit enqueue and claim. No migration-owner URL/key in runtime. |
 | Native document host, future #36 | Restricted pooled `DATABASE_URL`, `MCA_DB_POOL_MAX` sized for one worker, `MCA_DATA_ENCRYPTION_KEY`, `MCA_APP_ORIGIN`, `MCA_DOCUMENT_STORAGE_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, private document/quarantine/artifact bucket names if overridden, `MCA_DOCUMENT_SCANNER=clamscan` or `clamdscan`, matching native scanner executable/signature database and Poppler. Provider keys only for features being accepted. Keep absent until hosted proof. |
-| Messaging Edge, future #38 | `MCA_EDGE_WORKER_TOKEN` (at least 32 bytes), restricted database credentials, `MCA_DATA_ENCRYPTION_KEY`, `MCA_APP_ORIGIN`, sender OAuth credentials, and worker-control activation. Set one schedule only after hosted sender lease/reconnect proof. |
+| Historical Messaging Edge handler | `MCA_EDGE_WORKER_TOKEN` (at least 32 bytes), restricted database credentials, `MCA_DATA_ENCRYPTION_KEY`, `MCA_APP_ORIGIN`, sender OAuth credentials, and worker-control activation. Leave its schedule disabled when the #38 Vercel consumer is active. |
 | Billing/comms existing routes | Existing `CRON_SECRET` and their current provider configuration; do not change schedule ownership in this issue. |
 
 Secrets belong in the target secret store. Do not copy production values into agent or disposable environments.
