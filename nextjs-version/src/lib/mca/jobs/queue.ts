@@ -121,8 +121,15 @@ export async function claimBackgroundJob(kinds?: readonly BackgroundJobKind[]): 
     else if (!kinds || kinds.some(kind => ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(kind))) {
       // Outbound intent is not replayed after recovery. Keep the idempotency row and
       // require a fresh reviewed request; never consume an attempt for a pause.
+      const preserveGuardedAttempt = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+        ? ` AND NOT (kind='submission_delivery' AND EXISTS (
+          SELECT 1 FROM mca_submission_jobs s JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key
+          JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
+          WHERE s.id=mca_background_jobs.resource_id AND s.workspace_id=mca_background_jobs.workspace_id
+            AND s.route_kind='api' AND s.state='sending' AND a.state='sending'))`
+        : ""
       await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='company_paused',updated_at=?
-        WHERE workspace_id=? AND state='queued' AND kind IN ('auto_submit','submission_delivery','application_invitation_email','application_invitation_reminder')`).run(now, company.workspace_id)
+        WHERE workspace_id=? AND state='queued' AND kind IN ('auto_submit','submission_delivery','application_invitation_email','application_invitation_reminder')${preserveGuardedAttempt}`).run(now, company.workspace_id)
       await getDatabase().prepare(`UPDATE mca_submission_jobs SET state='failed',reason='Company paused. Review and submit again after recovery.',updated_at=?
         WHERE workspace_id=? AND state='queued' AND id IN (SELECT resource_id FROM mca_background_jobs WHERE workspace_id=? AND kind='submission_delivery' AND state='failed' AND error_code='company_paused')`).run(now, company.workspace_id, company.workspace_id)
     }
@@ -163,11 +170,21 @@ export async function deferBackgroundJob(job: BackgroundJob, availableAt: string
   if (!deferred.changes) throw new Error("background_job_lease_lost")
 }
 
+async function guardedSendingDeliveryPending(job: BackgroundJob): Promise<boolean> {
+  if (job.kind !== "submission_delivery" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return false
+  const row = await getDatabase().prepare<{ id: string }>(`SELECT s.id FROM mca_submission_jobs s
+    JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
+    JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
+    WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`).get(job.resource_id, job.workspace_id)
+  return Boolean(row)
+}
+
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {
   if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
+    const preserveGuardedAttempt = await guardedSendingDeliveryPending(job)
     await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,attempts=GREATEST(0,attempts-1),error_code='company_paused',available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
-      .run(outbound ? "failed" : "queued", new Date(Date.now() + 60_000).toISOString(), nowIso(), job.id, job.lease_token)
+      .run(outbound && !preserveGuardedAttempt ? "failed" : "queued", new Date(Date.now() + 60_000).toISOString(), nowIso(), job.id, job.lease_token)
     return
   }
   const permanent = error instanceof AppError && error.status < 500

@@ -50,7 +50,26 @@ async function refreshCache(job: SubmissionJob): Promise<void> {
   })
 }
 
-export async function processJobDelivery(job: SubmissionJob): Promise<SubmissionJob> {
+async function settleUncertainDelivery(job: SubmissionJob): Promise<SubmissionJob> {
+  const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
+  await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
+  const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
+  if (job.autoSubmitDecisionId) await recordAutoDeliveryCancellation(job, "manual_retry_required")
+  await refreshCache(saved)
+  await markOutboxProcessed(job.id, reason)
+  return saved
+}
+
+export async function processJobDelivery(job: SubmissionJob, options: { observeGuardedAttemptOnly?: boolean } = {}): Promise<SubmissionJob> {
+  if (options.observeGuardedAttemptOnly) {
+    // A provider request has already begun. Observation must never initiate another send,
+    // even if the row changes between the worker's lookup and this read.
+    const current = await findJobById(job.workspaceId, job.id)
+    if (!current || current.state !== "sending" || current.routeKind !== "api" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return current ?? job
+    const attempt = await findAttempt(current.id, current.attemptKey)
+    if (attempt?.state !== "sending") return current
+    return Date.now() - Date.parse(attempt.createdAt) >= 10 * 60_000 ? settleUncertainDelivery(current) : current
+  }
   await assertCompanyOperational(job.workspaceId)
   if (job.state !== "queued" && job.state !== "sending") {
     await markOutboxProcessed(job.id)
@@ -60,21 +79,10 @@ export async function processJobDelivery(job: SubmissionJob): Promise<Submission
   const existing = await findAttempt(job.id, job.attemptKey)
   const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
   if (existing?.state === "sending" && ((job.autoSubmitDecisionId && !guardUnknownSend) || (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000))) {
-    const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
-    await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
-    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
-    await recordAutoDeliveryCancellation(job, "manual_retry_required")
-    await refreshCache(saved)
-    await markOutboxProcessed(job.id, reason)
-    return saved
+    return settleUncertainDelivery(job)
   }
   if (existing && job.approvedPackage && existing.state === "sending" && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) {
-    const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
-    await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
-    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
-    await refreshCache(saved)
-    await markOutboxProcessed(job.id, reason)
-    return saved
+    return settleUncertainDelivery(job)
   }
   if (existing && (job.approvedPackage || isCompletedAttempt(existing.state))) {
     const current = await findJobById(job.workspaceId, job.id)

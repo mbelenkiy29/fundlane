@@ -239,65 +239,88 @@ test("heartbeat is written even when the queue is empty", async () => {
   assert.ok(heartbeat?.document_worker_heartbeat_at)
 })
 
-test("guarded API worker retry revisits a recent sending attempt after ten minutes", async () => {
+test("guarded API worker retry settles uncertain delivery after deferral, expiry, and company pause", async (t) => {
   const previousGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
   process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
   try {
-    const funder = (await createFunder(actor(), {
-      idempotencyKey: "jobs-guarded-api-funder",
-      legalName: "Guarded API Capital LLC",
-      routes: [{ kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true }],
-    })).funder
-    const submission = (await persistNewDestination({
-      workspaceId: actor().workspaceId,
-      dealId,
-      funderId: funder.id,
-      displayFunderName: funder.legalName,
-      routeKind: "api",
-      route: { id: "guarded-api", kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true },
-      state: "queued",
-      confirmationKey: "jobs-guarded-api-send",
-      attemptKey: "jobs-guarded-api-send",
-      dealVersion: 1,
-      documentVersions: [],
-      packageDocumentIds: [],
-      preflightErrors: [],
-      merchantIdentityKey: `deal:${dealId}`,
-      packageFingerprint: "",
-      createdByUserId: null,
-      actor: actor(),
-    })).job
-    await insertAttempt({ workspaceId: submission.workspaceId, jobId: submission.id, attemptKey: submission.attemptKey,
-      transport: "api", state: "sending", correlationId: newId() })
-    await updateJobRecord(submission.workspaceId, submission.id, { state: "sending" })
-    assert.equal(await recoverSubmissionOutbox(), 1)
-    assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
+    for (const scenario of ["ordinary", "expired", "paused"] as const) await t.test(scenario, async () => {
+      const funder = (await createFunder(actor(), {
+        idempotencyKey: `jobs-guarded-api-funder-${scenario}`,
+        legalName: `Guarded API Capital ${scenario} LLC`,
+        routes: [{ kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true }],
+      })).funder
+      const submission = (await persistNewDestination({
+        workspaceId: actor().workspaceId,
+        dealId,
+        funderId: funder.id,
+        displayFunderName: funder.legalName,
+        routeKind: "api",
+        route: { id: "guarded-api", kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true },
+        state: "queued",
+        confirmationKey: `jobs-guarded-api-send-${scenario}`,
+        attemptKey: `jobs-guarded-api-send-${scenario}`,
+        dealVersion: 1,
+        documentVersions: [],
+        packageDocumentIds: [],
+        preflightErrors: [],
+        merchantIdentityKey: `deal:${dealId}`,
+        packageFingerprint: "",
+        createdByUserId: null,
+        actor: actor(),
+      })).job
+      await insertAttempt({ workspaceId: submission.workspaceId, jobId: submission.id, attemptKey: submission.attemptKey,
+        transport: "api", state: "sending", correlationId: newId() })
+      await updateJobRecord(submission.workspaceId, submission.id, { state: "sending" })
+      assert.equal(await recoverSubmissionOutbox(), 1)
+      if (scenario === "expired") {
+        await getDatabase().prepare("UPDATE mca_background_jobs SET created_at=? WHERE resource_id=? AND kind='submission_delivery'")
+          .run(new Date(Date.now() - 24 * 60 * 60_000 + 30_000).toISOString(), submission.id)
+      }
+      assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
 
-    const waiting = await getDatabase().prepare<{ id: string; state: string; attempts: number; available_at: string }>(
-      "SELECT id,state,attempts,available_at FROM mca_background_jobs WHERE kind='submission_delivery' AND resource_id=?",
-    ).get(submission.id)
-    assert.equal(waiting?.state, "queued")
-    assert.equal(waiting?.attempts, 0)
-    assert.ok(Date.parse(waiting!.available_at) > Date.now())
-    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE id=?").get(submission.id))?.state, "sending")
-    assert.equal(await recoverSubmissionOutbox(), 0)
-    assert.equal(await runNextBackgroundJob(["submission_delivery"]), false)
+      const waiting = await getDatabase().prepare<{ id: string; state: string; attempts: number; available_at: string }>(
+        "SELECT id,state,attempts,available_at FROM mca_background_jobs WHERE kind='submission_delivery' AND resource_id=?",
+      ).get(submission.id)
+      assert.equal(waiting?.state, "queued")
+      assert.equal(waiting?.attempts, 0)
+      assert.ok(Date.parse(waiting!.available_at) > Date.now())
+      assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE id=?").get(submission.id))?.state, "sending")
+      assert.equal(await recoverSubmissionOutbox(), 0)
+      assert.equal(await runNextBackgroundJob(["submission_delivery"]), false)
 
-    await getDatabase().prepare("UPDATE mca_submission_attempts SET created_at=? WHERE job_id=?")
-      .run(new Date(Date.now() - 11 * 60_000).toISOString(), submission.id)
-    await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?")
-      .run(new Date(Date.now() - 1_000).toISOString(), waiting!.id)
-    assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
-    const settled = await getDatabase().prepare<{ state: string; reason: string }>("SELECT state,reason FROM mca_submission_jobs WHERE id=?").get(submission.id)
-    assert.equal(settled?.state, "failed")
-    assert.match(settled?.reason ?? "", /uncertain/)
-    const attempt = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM mca_submission_attempts WHERE job_id=?").get(submission.id)
-    assert.equal(attempt?.state, "failed")
-    assert.equal(attempt?.error_code, "delivery_uncertain")
-    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_submission_attempts WHERE job_id=?").get(submission.id))?.count, 1)
-    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(waiting!.id))?.state, "complete")
-    assert.ok((await getDatabase().prepare<{ processed_at: string | null }>("SELECT processed_at FROM mca_submission_outbox WHERE job_id=?").get(submission.id))?.processed_at)
+      if (scenario === "expired") {
+        // The approval was valid when the provider request began, but is stale at observation.
+        await getDatabase().prepare("UPDATE mca_background_jobs SET created_at=? WHERE id=?")
+          .run(new Date(Date.now() - 24 * 60 * 60_000 - 1_000).toISOString(), waiting!.id)
+      }
+      if (scenario === "paused") {
+        await getDatabase().prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,manual_paused,updated_at)
+          VALUES (?,?,1,?) ON CONFLICT (workspace_id) DO UPDATE SET manual_paused=1,updated_at=EXCLUDED.updated_at`)
+          .run(actor().workspaceId, 1, new Date().toISOString())
+        assert.equal(await runNextBackgroundJob(["submission_delivery"]), false)
+        assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(waiting!.id))?.state, "queued")
+        assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_submission_jobs WHERE id=?").get(submission.id))?.state, "sending")
+        await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=0,updated_at=? WHERE workspace_id=?")
+          .run(new Date().toISOString(), actor().workspaceId)
+      }
+      await getDatabase().prepare("UPDATE mca_submission_attempts SET created_at=? WHERE job_id=?")
+        .run(new Date(Date.now() - 11 * 60_000).toISOString(), submission.id)
+      await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?")
+        .run(new Date(Date.now() - 1_000).toISOString(), waiting!.id)
+      assert.equal(await runNextBackgroundJob(["submission_delivery"]), true)
+      const settled = await getDatabase().prepare<{ state: string; reason: string }>("SELECT state,reason FROM mca_submission_jobs WHERE id=?").get(submission.id)
+      assert.equal(settled?.state, "failed")
+      assert.match(settled?.reason ?? "", /uncertain/)
+      const attempt = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM mca_submission_attempts WHERE job_id=?").get(submission.id)
+      assert.equal(attempt?.state, "failed")
+      assert.equal(attempt?.error_code, "delivery_uncertain")
+      assert.equal((await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_submission_attempts WHERE job_id=?").get(submission.id))?.count, 1)
+      assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(waiting!.id))?.state, "complete")
+      assert.ok((await getDatabase().prepare<{ processed_at: string | null }>("SELECT processed_at FROM mca_submission_outbox WHERE job_id=?").get(submission.id))?.processed_at)
+    })
   } finally {
+    await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=0,updated_at=? WHERE workspace_id=?")
+      .run(new Date().toISOString(), actor().workspaceId)
     if (previousGuard === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
     else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previousGuard
   }

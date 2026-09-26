@@ -28,9 +28,9 @@ import { withOutboundApproval } from "../outbound-approval"
 import { executionSignal, outsideExecutionScope, withExecutionDeadline } from "./execution"
 import { documentRuntimeEnabled } from "./document-runtime"
 
-async function dispatch(job: BackgroundJob): Promise<unknown> {
+async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
-  if (["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
+  if (!observeGuardedAttemptOnly && ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
   if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   if (job.kind === "application_invitation_reminder") return (await import("../applications/reminders")).processInvitationReminder(job)
   if (job.kind === "document_scan") {
@@ -85,7 +85,7 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
       const submission = await findJobById(job.workspace_id, job.resource_id)
       if (!submission) throw new AppError(404, "submission_not_found", "Submission not found.")
       await getDealForDocument(actor, submission.dealId)
-      return processJobDelivery(submission)
+      return processJobDelivery(submission, { observeGuardedAttemptOnly })
     }
   }
 }
@@ -120,6 +120,15 @@ export async function touchDocumentWorkerHeartbeat(): Promise<void> {
   await getDatabase().prepare("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=? WHERE id").run(nowIso())
 }
 
+async function guardedSendingAttempt(job: BackgroundJob): Promise<{ created_at: string } | undefined> {
+  if (job.kind !== "submission_delivery" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return undefined
+  return getDatabase().prepare<{ created_at: string }>(`SELECT a.created_at FROM mca_submission_jobs s
+    JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
+    JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
+    WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`)
+    .get(job.resource_id, job.workspace_id)
+}
+
 export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<boolean> {
   const job = await claimBackgroundJob(kinds)
   if (!job) return false
@@ -129,16 +138,19 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
   })().catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
-    const result = await runAsBackgroundWorker(() => outbound ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job))
+    const observeOnly = Boolean(await guardedSendingAttempt(job))
+    const result = await runAsBackgroundWorker(() => outbound && !observeOnly ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job, observeOnly))
     if (job.kind === "submission_delivery" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
-      const pending = await getDatabase().prepare<{ created_at: string }>(`SELECT a.created_at FROM mca_submission_jobs s
-        JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
-        JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
-        WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`)
-        .get(job.resource_id, job.workspace_id)
+      const pending = await guardedSendingAttempt(job)
       if (pending) {
         const dueAt = new Date(Math.max(Date.now() + 1_000, Date.parse(pending.created_at) + 10 * 60_000)).toISOString()
         await deferBackgroundJob(job, dueAt)
+        return true
+      }
+      // If an observation raced with another state change, revisit through the
+      // ordinary dispatch path instead of completing an unprocessed outbox.
+      if (observeOnly && result && typeof result === "object" && "state" in result && ["queued", "sending"].includes(String(result.state))) {
+        await deferBackgroundJob(job, new Date(Date.now() + 1_000).toISOString())
         return true
       }
     }
