@@ -109,6 +109,17 @@ async function assertSeatAvailable(database: ReturnType<typeof getDatabase>, wor
   if (row.count >= workspace.seat_limit) throw new AppError(409, "seat_limit_reached", "No workspace seats are available.");
 }
 
+function pendingInvitationLimit(): number {
+  const configured = Number(process.env.MCA_BILLING_MAX_PENDING_INVITATIONS);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : 25;
+}
+
+async function assertPendingInvitationCapacity(database: ReturnType<typeof getDatabase>, workspaceId: string): Promise<void> {
+  const row = await database.prepare<{ count: number }>("SELECT count(*)::int count FROM memberships WHERE workspace_id = ? AND status = 'pending'").get(workspaceId);
+  if (!row) throw new Error("Pending invitation count query did not return a row.");
+  if (row.count >= pendingInvitationLimit()) throw new AppError(409, "pending_invitation_limit_reached", "This workspace has too many pending invitations. Activate or deactivate an invited member before sending another.");
+}
+
 export async function inviteMember(
   context: MembershipContext,
   input: {
@@ -162,6 +173,7 @@ export async function inviteMember(
     if (prior?.status === "active" || prior?.status === "pending") {
       throw new AppError(409, "membership_exists", "This person already has a reserved seat in the workspace.");
     }
+    if (billingSeatSyncEnabled()) await assertPendingInvitationCapacity(database, context.workspaceId);
     if (billingSeatSyncEnabled()) await ensureSyncedSeatCapacity(context.workspaceId,context.userId,seatsCountPendingInvites()?1:0,billingClient);
     const membershipId = prior?.id ?? newId();
     if (prior) {

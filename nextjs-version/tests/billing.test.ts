@@ -22,7 +22,7 @@ import { createSession } from "../src/lib/mca/sessions"
 import { acceptSupabaseInvitation } from "../src/lib/mca/supabase-team"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_BILLING_SEAT_SYNC_ENABLED", "MCA_BILLING_SEATS_COUNT_PENDING_INVITES", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_BILLING_SEAT_SYNC_ENABLED", "MCA_BILLING_SEATS_COUNT_PENDING_INVITES", "MCA_BILLING_MAX_PENDING_INVITATIONS", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -381,13 +381,44 @@ test("licensed count includes pending invitations only when explicitly configure
   assert.equal(await licensedSeatCount(f.workspaceId),2)
   delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES
 })
-test("paid seat preview is read only and quotes Stripe's invoice estimate",async()=>{
+test("paid seat preview excludes renewal charges and pending invoice items",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   let calls=0
-  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:unknown)=>{calls++;assert.deepEqual(params,{customer:f.customerId,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",items:[{id:"si_seats",quantity:5}]}});return{livemode:false,currency:"usd",amount_due:1234}}}} as unknown as StripeBillingClient
-  assert.deepEqual(await previewBillingSeatIncrease(f.workspaceId,6,client),{amountDue:1234,currency:"usd",selectedSeats:6})
+  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:unknown)=>{calls++;assert.deepEqual(params,{customer:f.customerId,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",items:[{id:"si_seats",quantity:5}]}});return{livemode:false,currency:"usd",amount_due:9999,lines:{has_more:false,data:[
+    {amount:8000,parent:{subscription_item_details:{proration:false}}},
+    {amount:1234,parent:{subscription_item_details:{proration:true}}},
+    {amount:-200,parent:{subscription_item_details:{proration:true}}},
+    {amount:965,parent:{invoice_item_details:{invoice_item:"ii_unrelated"}}},
+  ]}}}}} as unknown as StripeBillingClient
+  assert.deepEqual(await previewBillingSeatIncrease(f.workspaceId,6,client),{prorationAmount:1034,currency:"usd",selectedSeats:6})
   assert.equal(calls,1)
   assert.equal(f.state.updates.length,0)
+})
+test("incomplete Stripe preview lines fail closed",async()=>{
+  const f=await fixture()
+  const client={...f.client,invoices:{...f.client.invoices,createPreview:async()=>({livemode:false,currency:"usd",amount_due:5000,lines:{has_more:true,data:[{amount:100,parent:{subscription_item_details:{proration:true}}}]}})}} as unknown as StripeBillingClient
+  await assert.rejects(previewBillingSeatIncrease(f.workspaceId,6,client),{code:"billing_preview_unavailable"})
+})
+for (const countPending of [false,true]) test(`sync mode caps concurrent pending invitations with pending-count ${countPending}`,async()=>{
+  const f=await fixture(),context={workspaceId:f.workspaceId,userId:f.userId,membershipId:f.membershipId,role:"admin" as const,authType:"session" as const,scopes:[],sessionId:null}
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES=String(countPending)
+  process.env.MCA_BILLING_MAX_PENDING_INVITATIONS="2"
+  try {
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    const results=await Promise.allSettled(Array.from({length:3},(_,i)=>inviteMember(context,{email:`${randomUUID()}@example.test`,name:`Invitee ${i}`,role:"rep"},"http://localhost:3000",f.client)))
+    assert.equal(results.filter(result=>result.status==="fulfilled").length,2)
+    assert.equal(results.filter(result=>result.status==="rejected"&&(result.reason as {code?:string}).code==="pending_invitation_limit_reached").length,1)
+    const pending=await getDatabase().prepare<{id:string}>("SELECT id FROM memberships WHERE workspace_id=? AND status='pending'").all(f.workspaceId)
+    assert.equal(pending.length,2)
+    await deactivateMembership(context,pending[0].id,f.client)
+    await inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Replacement",role:"rep"},"http://localhost:3000",f.client)
+    assert.equal((await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM memberships WHERE workspace_id=? AND status='pending'").get(f.workspaceId))?.count,2)
+  } finally {
+    delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
+    delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES
+    delete process.env.MCA_BILLING_MAX_PENDING_INVITATIONS
+  }
 })
 test("automatic paid increase grants only after Stripe reports the paid seat and retries use one key",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]

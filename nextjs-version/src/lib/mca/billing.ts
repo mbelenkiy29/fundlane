@@ -844,5 +844,11 @@ export async function previewBillingSeatIncrease(workspaceId:string, selectedSea
   const ids=priceIds(),additional=sub.items.data.find(i=>i.price.id===ids.seats)
   const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
   if (preview.livemode!==stripeLiveMode() || preview.currency!==BILLING_CATALOG.currency) throw new AppError(503,"billing_preview_unavailable","Seat price preview is unavailable. Retry before confirming.")
-  return {amountDue:preview.amount_due,currency:preview.currency,selectedSeats}
+  if (preview.lines.has_more) throw new AppError(503,"billing_preview_unavailable","Seat price preview is incomplete. Retry before confirming.")
+  // The preview invoice can also contain renewal charges and pending invoice items.
+  // Stripe marks the lines created by this subscription change as prorations.
+  const prorationAmount=preview.lines.data
+    .filter(line=>line.parent?.subscription_item_details?.proration===true)
+    .reduce((total,line)=>total+line.amount,0)
+  return {prorationAmount,currency:preview.currency,selectedSeats}
 }

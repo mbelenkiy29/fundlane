@@ -22,7 +22,7 @@ mock.module(new URL("../src/lib/mca/billing.ts", import.meta.url).href, { namedE
     assert.equal(workspaceId, "workspace-one")
     assert.equal(selectedSeats, 6)
     previewCalls++
-    return { selectedSeats, amountDue: 1234, currency: "usd" }
+    return { selectedSeats, prorationAmount: 1234, currency: "usd" }
   },
 } })
 

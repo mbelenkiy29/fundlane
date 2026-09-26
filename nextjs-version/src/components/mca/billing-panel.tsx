@@ -33,7 +33,7 @@ export function BillingProrationPolicy({ enabled }: { enabled:boolean }) {
 }
 export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: boolean; onContinue?: () => void }) {
   const [state,setState]=useState<BillingResponse|null>(null),[seats,setSeats]=useState(1),[busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("")
-  const [preview,setPreview]=useState<{selectedSeats:number;amountDue:number;currency:string}|null>(null)
+  const [preview,setPreview]=useState<{selectedSeats:number;prorationAmount:number;currency:string}|null>(null)
   const autoPortalOpened=useRef(false)
   const hasSubscription=Boolean(state?.billing?.subscriptionId&&!['canceled','incomplete_expired'].includes(state.billing.status))
   const minimumSeats=state?.seatSyncEnabled&&!state.seatsCountPendingInvites?Math.max(1,state.activeSeats):Math.max(1,state?.occupiedSeats??0)
@@ -46,7 +46,7 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
   },[load,onboarding,seats])
   const previewIncrease=useCallback(async()=>{
     setBusy(true);setError("");setPreview(null)
-    try { setPreview(await requestJson<{selectedSeats:number;amountDue:number;currency:string}>("/api/billing/seats/preview",{method:"POST",body:JSON.stringify({selectedSeats:seats})})) }
+    try { setPreview(await requestJson<{selectedSeats:number;prorationAmount:number;currency:string}>("/api/billing/seats/preview",{method:"POST",body:JSON.stringify({selectedSeats:seats})})) }
     catch(e){setError(e instanceof Error?e.message:"Seat preview is unavailable.")}finally{setBusy(false)}
   },[seats])
   useEffect(()=>{if(!autoPortalOpened.current&&state?.canManagePayment&&new URLSearchParams(window.location.search).get("billingAction")==="portal") {autoPortalOpened.current=true;void action("portal")}},[action,state?.canManagePayment])
@@ -70,7 +70,7 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
       <Card><CardHeader><CardTitle>Monthly subscription</CardTitle></CardHeader><CardContent className="space-y-4"><SeatSelector value={seats} onChange={value=>{setSeats(value);setPreview(null)}} minimum={minimumSeats}/>
         <p className="text-sm text-muted-foreground">{state.cardRequiredTrial?"Checkout collects a card and starts the trial shown there for new companies. After the trial, Stripe charges for the selected seats unless you cancel before it ends in Plans & Billing or the Stripe billing portal. Trial seat changes take effect immediately; paid increases activate after payment and reductions apply at renewal.":state.seatSyncEnabled&&!state.seatsCountPendingInvites?"Checkout activates paid access immediately and ends the no-card trial. Seat increases are prorated and activate after payment. Reductions apply at renewal and cannot go below active members.":"Checkout activates paid access immediately and ends the no-card trial. Seat increases are prorated and activate after payment. Reductions apply at renewal and cannot go below active members plus pending invitations."}</p>
         <BillingProrationPolicy enabled={state.seatSyncEnabled}/>
-        {preview?.selectedSeats===seats&&<p role="status">Stripe estimates {formatBillingMoney(preview.amountDue)} {preview.currency.toUpperCase()} due now for this increase. The final invoice may reflect taxes or account changes. Confirm to submit the increase.</p>}
+        {preview?.selectedSeats===seats&&<p role="status">Estimated proration for this seat increase: {formatBillingMoney(preview.prorationAmount)} {preview.currency.toUpperCase()}. This excludes unrelated invoice charges; taxes and account changes may affect the final amount. Confirm to submit the increase.</p>}
         <div className="flex flex-wrap gap-3"><Button disabled={!state.enabled||busy||!validSelectedSeats(seats)||seats<minimumSeats||state.billing?.status==="incomplete"} onClick={()=>void (state.seatSyncEnabled&&hasSubscription&&state.billing?.status==="active"&&seats>(state.billing?.seatLimit??0)&&preview?.selectedSeats!==seats?previewIncrease():action(hasSubscription?"seats":"checkout"))}>{state.seatSyncEnabled&&hasSubscription&&state.billing?.status==="active"&&seats>(state.billing?.seatLimit??0)?preview?.selectedSeats===seats?"Confirm seat increase":"Preview seat increase":hasSubscription?"Update paid seats":"Subscribe now"}</Button>{state.canManagePayment&&<Button variant="outline" disabled={busy||!state.enabled} onClick={()=>void action("portal")}>Payment settings & invoices</Button>}<Button variant="outline" disabled={busy} onClick={()=>void action("sync")}>Refresh billing</Button></div>
         {state.billing?.status==="incomplete"&&<p className="text-sm text-muted-foreground">Your initial payment is incomplete. Resolve it in payment settings before changing seats.</p>}
         {state.canManagePayment&&<BillingCancellation enabled={state.enabled} busy={busy} onCancel={()=>void action("cancel")}/>}
