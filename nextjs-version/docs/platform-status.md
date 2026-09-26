@@ -25,7 +25,7 @@ Only allowlisted telemetry metadata is stored. Never pass exception messages, re
 
 Alert emails contain only component, timestamp, a safe opening/reminder/recovery summary, and the owner dashboard URL. The shared webhook transport is used by both application email and the monitor. No fallback provider is added. Provider timeouts remain unknown and do not automatically retry. Review ambiguous alert delivery in native provider logs before reconciling its record; business-message retry rules are unaffected.
 
-Health/database failures need three consecutive checks. Queue age over ten minutes and expired leases also need three checks. Five errors in five minutes, any ambiguous outbound send, or five email failures in ten minutes open an incident immediately. One alert is sent per tick; six-hour reminders and three-healthy-check recoveries suppress repeated notifications.
+Health/database failures need three consecutive checks. Queue age over ten minutes and expired leases also need three checks. A retrying `billing_reconcile` job opens a dedicated `billing_reconciliation` incident on one check; the durable job remains queued with backoff until reconciliation succeeds. Five errors in five minutes, any ambiguous outbound send, or five email failures in ten minutes open an incident immediately. One alert is sent per tick; six-hour reminders and three-healthy-check recoveries suppress repeated notifications.
 
 ## Failure and rollback
 

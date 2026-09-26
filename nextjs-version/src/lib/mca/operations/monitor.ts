@@ -23,6 +23,7 @@ export async function queueMetrics(db: MonitorDb): Promise<Metrics> {
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='running') running,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='failed') failed,
     (SELECT count(*)::int FROM mca_background_jobs WHERE state='queued' AND attempts>0) retrying,
+    (SELECT count(*)::int FROM mca_background_jobs WHERE kind='billing_reconcile' AND state='queued' AND attempts>0) "billingRetrying",
     ((SELECT count(*) FROM mca_background_jobs WHERE state='running' AND lease_expires_at::timestamptz < now()) +
      (SELECT count(*) FROM mca_email_worker_leases WHERE expires_at::timestamptz < now()))::int expired,
     COALESCE((SELECT greatest(0,extract(epoch FROM now()-min(available_at::timestamptz)))::int FROM mca_background_jobs WHERE state='queued' AND available_at::timestamptz<=now()),0) AS "oldestSeconds",
@@ -116,6 +117,7 @@ export async function runMonitor(
       ["website", !websiteOk, 3],
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
+      ["billing_reconciliation", metrics ? metrics.billingRetrying > 0 : null, 1],
       ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],

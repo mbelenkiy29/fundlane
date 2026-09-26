@@ -2,6 +2,7 @@ import { createServer } from "node:http"
 import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog.ts"
 export async function createStripeHttpFixture() {
   const subscriptions = new Map(), customers = new Map(), checkouts = new Map(), invoices = new Map(), schedules = new Map(), calls = []
+  let subscriptionListDelayMs = 0
   const scheduleCreations = new Map()
   const server = createServer(async (req, res) => {
     try {
@@ -10,7 +11,7 @@ export async function createStripeHttpFixture() {
       const body = new URLSearchParams(raw)
       calls.push({ method: req.method, path: url.pathname, body, idempotencyKey: req.headers["idempotency-key"], apiVersion: req.headers["stripe-version"] })
       let data
-      if (req.method === "GET" && url.pathname === "/v1/subscriptions") data = { object: "list", data: subscriptions.get(url.searchParams.get("customer")) ?? [], has_more: false }
+      if (req.method === "GET" && url.pathname === "/v1/subscriptions") { if (subscriptionListDelayMs) await new Promise(resolve => setTimeout(resolve, subscriptionListDelayMs)); data = { object: "list", data: subscriptions.get(url.searchParams.get("customer")) ?? [], has_more: false } }
       else if (req.method === "GET" && url.pathname.startsWith("/v1/prices/")) {
         const id = url.pathname.split("/").at(-1)
         data = { id, active: true, livemode: false, currency: "usd", recurring: { interval: "month", interval_count: 1, usage_type: "licensed" }, ...(id === "price_base" ? { billing_scheme: "per_unit", unit_amount: BILLING_CATALOG.base.unitAmountCents } : { billing_scheme: "tiered", tiers_mode: "graduated", tiers: BILLING_CATALOG.additionalSeats.tiers.map(tier => ({ up_to: tier.upTo, unit_amount: tier.unitAmountCents, flat_amount: null })) }) }
@@ -78,5 +79,5 @@ export async function createStripeHttpFixture() {
     } catch { res.writeHead(500).end() }
   })
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
-  return { origin: `http://127.0.0.1:${server.address().port}`, subscriptions, customers, checkouts, invoices, schedules, calls, close: () => new Promise(resolve => server.close(resolve)) }
+  return { origin: `http://127.0.0.1:${server.address().port}`, subscriptions, customers, checkouts, invoices, schedules, calls, setSubscriptionListDelay: ms => { subscriptionListDelayMs = ms }, close: () => new Promise(resolve => server.close(resolve)) }
 }

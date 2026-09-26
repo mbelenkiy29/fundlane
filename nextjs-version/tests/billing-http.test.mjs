@@ -87,7 +87,11 @@ test("webhook tampering is rejected and duplicate or outdated events queue for l
   const body = JSON.stringify({ id: "evt_billing_http", type: "customer.subscription.updated", livemode: false, data: { object: { customer: customer().id, status: "canceled" } } })
   const signature = signatureClient.webhooks.generateTestHeaderString({ payload: body, secret: "whsec_fixture" })
   assert.equal((await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body + " ", headers: { "stripe-signature": signature } })).response.status, 400)
+  stripe.setSubscriptionListDelay(2500)
+  const started = performance.now()
   const first = await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body, headers: { "stripe-signature": signature } })
+  assert.ok(performance.now() - started < 2000, "receipt response must not wait for the slow provider read")
+  stripe.setSubscriptionListDelay(0)
   assert.equal(first.response.status, 200)
   assert.equal(first.payload.queued, true)
   assert.equal(first.payload.workspaceId, owner.workspaceId)
@@ -95,7 +99,7 @@ test("webhook tampering is rejected and duplicate or outdated events queue for l
   const duplicate = await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body, headers: { "stripe-signature": signature } })
   assert.equal(duplicate.response.status, 200)
   assert.equal(duplicate.payload.duplicate, true)
-  const deadline = Date.now() + 3000
+  const deadline = Date.now() + 6000
   while ((await request("/api/billing")).payload.billing.seatLimit !== 20 && Date.now() < deadline) await new Promise(r => setTimeout(r, 50))
   assert.equal((await request("/api/billing")).payload.billing.seatLimit, 20)
   assert.equal((await db.query("SELECT state FROM mca_background_jobs WHERE id=$1", [first.payload.jobId])).rows[0].state, "complete")
