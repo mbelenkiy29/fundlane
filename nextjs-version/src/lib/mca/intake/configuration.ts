@@ -94,7 +94,7 @@ function assertAdmin(actor: MembershipContext): void {
 function status(record: IntegrationRecord): IntegrationStatus {
   const binding = record.formId ?? record.templateId ?? record.locationId ?? null
   const showEmailReadiness = record.provider === "email" && privateEmailUiEnabled()
-  const emailReadinessIssues = showEmailReadiness ? emailIntakeReadiness({
+  const emailReadinessIssues = record.provider === "email" ? emailIntakeReadiness({
     enabled: record.enabled, inboundAddress: record.inboundAddress, senderRules: record.senderRules,
     admissionSecretHash: record.admissionSecretHash, emailGateway: record.emailGateway,
     providerEvidenceHash: record.providerEvidenceHash, fromAddress: record.mapping.fromAddress,
@@ -110,10 +110,9 @@ function status(record: IntegrationRecord): IntegrationStatus {
     inboundAddress: record.inboundAddress, updatedAt: record.updatedAt,
     contractKey: record.contractKey, attachmentMethod: record.attachmentMethod,
     emailGateway: record.emailGateway, providerServerId: record.providerServerId,
-    ...(emailReadinessIssues ? { emailReadinessIssues } : {}),
+    ...(showEmailReadiness ? { emailReadinessIssues } : {}),
     readiness: record.provider === "email" && (record.emailGateway === "usesend" || record.emailGateway === "postmark")
-      ? emailReadinessIssues ? emailReadinessIssues.length === 0 ? "live_configured" : "live_unverified"
-        : record.providerEvidenceHash ? "live_configured" : "live_unverified"
+      ? emailReadinessIssues?.length === 0 ? "live_configured" : "live_unverified"
       : record.provider === "zoho" ? "live_unverified" : "local_tested",
   }
 }
