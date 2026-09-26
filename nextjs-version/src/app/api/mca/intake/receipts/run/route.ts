@@ -4,12 +4,13 @@ import { apiError } from "@/lib/mca/errors"
 import { deliverPendingReceipts } from "@/lib/mca/intake/email"
 import { intakeWorkerScope } from "@/lib/mca/intake/worker-auth"
 import { getDatabase } from "@/lib/mca/db"
-import { privateEmailDeliveryEnabled } from "@/lib/mca/intake/email-readiness"
+import { privateEmailDeliveryEnabled, privateEmailUiEnabled } from "@/lib/mca/intake/email-readiness"
 
 export const runtime = "nodejs"
 export async function GET(request: Request) {
   try {
     const actor = await requireMembershipAccess(request, ["admin", "super_admin"])
+    if (!privateEmailUiEnabled()) return NextResponse.json({ receipts: [], deliveryEnabled: false }, { headers: { "cache-control": "private, no-store" } })
     const receipts = await getDatabase().prepare<{ id: string; intakeId: string; state: string; attempts: number; error: string | null }>(
       `SELECT id,intake_id AS "intakeId",state,attempt_count AS attempts,last_error AS error
        FROM intake_receipts WHERE workspace_id=? AND state='failed' ORDER BY updated_at DESC LIMIT 100`,

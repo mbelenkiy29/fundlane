@@ -1,7 +1,7 @@
 import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
-import { createHash, createHmac, generateKeyPairSync, sign as cryptoSign } from "node:crypto"
+import { createHash, createHmac, generateKeyPairSync, randomUUID, sign as cryptoSign } from "node:crypto"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
@@ -10,7 +10,7 @@ import type { DealActor } from "../src/lib/mca/deals/schema"
 import { getDeal } from "../src/lib/mca/deals/service"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
-import { configureIntegration, createJotformRepLink, provisionPostmarkIntegration, provisionUsesendIntegration, rotateIntegrationCredentials } from "../src/lib/mca/intake/configuration"
+import { configureIntegration, createJotformRepLink, listIntegrationStatuses, provisionPostmarkIntegration, provisionUsesendIntegration, rotateIntegrationCredentials } from "../src/lib/mca/intake/configuration"
 import { ingestProviderDelivery } from "../src/lib/mca/intake/ingress"
 import { ingestEmailDelivery, deliverPendingReceipts, readInboundEmailBody } from "../src/lib/mca/intake/email"
 import { usesendSignature } from "../src/lib/mca/intake/usesend"
@@ -20,6 +20,7 @@ import { attachIntakeDocument, fetchPrivateAttachment, ingestApplication, listIn
 import { POST as intakePost } from "../src/app/api/mca/intake/route"
 import { POST as integrationPost } from "../src/app/api/mca/intake/integrations/route"
 import { GET as failedReceiptRoute } from "../src/app/api/mca/intake/receipts/run/route"
+import { GET as integrationsRoute } from "../src/app/api/mca/intake/integrations/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED = "true"
@@ -297,9 +298,14 @@ test("MIC-184 custom email deduplicates message identity, ignores signature grap
   assert.equal((await listPendingReceipts(ids.workspace)).length >= 1, true)
   await assert.rejects(() => deliverPendingReceipts({ workspaceId: ids.workspace }), (error: { code?: string }) => error.code === "receipt_delivery_unconfigured")
   process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL = "https://mail.example.test/intake"
+  let missingTokenCalls = 0
+  await assert.rejects(() => deliverPendingReceipts({ workspaceId: ids.workspace, fetchImpl: async () => { missingTokenCalls++; return new Response() } }), (error: { code?: string }) => error.code === "receipt_delivery_unconfigured")
+  assert.equal(missingTokenCalls, 0)
+  process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN = "fixture-receiver-token"
   const delivered = await deliverPendingReceipts({ workspaceId: ids.workspace, fetchImpl: async () => new Response(JSON.stringify({ id: "mail-1" }), { status: 200, headers: { "content-type": "application/json" } }) })
   assert.ok(delivered.some((receipt) => receipt.state === "sent" && receipt.providerMessageId === "mail-1"))
   delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
+  delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN
 
   const rejectedBody = JSON.stringify({ ...payload, messageId: "message-rejected", from: "attacker@outside.example" })
   const rejected = await ingestEmailDelivery({ integrationId: configured.status.id, request: new Request("https://mca.example.test/email", { method: "POST", headers: { authorization: `Bearer ${configured.admissionSecret}` }, body: rejectedBody }), rawBody: rejectedBody, appOrigin: "https://mca.example.test", extractor })
@@ -367,9 +373,11 @@ test("MIC-184 Postmark Basic ingress validates the genuine payload before one as
   assert.ok((await listIntakeSummaries(adminActor)).some((item) => item.eventId === "forwarding-review" && item.errorCode === "forwarding_confirmation_review"))
 
   process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL = "https://mail.example.test/intake"
+  process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN = "fixture-receiver-token"
   const receipts = await deliverPendingReceipts({ workspaceId: ids.workspace, fetchImpl: async () => new Response(JSON.stringify({ id: "postmark-receipt-fixture" }), { status: 200, headers: { "content-type": "application/json" } }) })
   assert.ok(receipts.some((item) => item.intakeId === ("intakeId" in first ? first.intakeId : "") && item.state === "sent"))
   delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
+  delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN
 
   const setupCalls: Array<{ url: string; method: string; token: string | null; body?: Record<string, unknown> }> = []
   const provisioned = await provisionPostmarkIntegration(adminContext, {
@@ -572,6 +580,7 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
     dealLink: "https://mca.example.test/deals/queue", addDocumentLink: "https://mca.example.test/deals/queue?addDocument=1", warnings: [],
   })
   process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL = "https://mail.example.test/intake"
+  process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN = "fixture-receiver-token"
   let releaseReceipt!: () => void
   let receiptStarted!: () => void
   const receiptStart = new Promise<void>((resolve) => { receiptStarted = resolve })
@@ -611,6 +620,17 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
   const failedBody = await failedResponse.json() as { receipts: Array<{ id: string; attempts: number; error: string }> }
   assert.ok(failedBody.receipts.some(receipt => receipt.id === retryReceipt.id && receipt.attempts === failed[0].attemptCount))
   assert.equal(JSON.stringify(failedBody).includes("retry@example.test"), false)
+  delete process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED
+  delete process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED
+  const hiddenReceipts = await failedReceiptRoute(new Request("https://mca.example.test/api/mca/intake/receipts/run", { headers: { cookie: "mca_session=receipt-admin-token" } }))
+  assert.deepEqual(await hiddenReceipts.json(), { receipts: [], deliveryEnabled: false })
+  const hiddenIntegrations = await integrationsRoute(new Request("https://mca.example.test/api/mca/intake/integrations", { headers: { cookie: "mca_session=receipt-admin-token" } }))
+  const hiddenBody = await hiddenIntegrations.json() as { privateEmailUiEnabled: boolean; integrations: Array<{ emailReadinessIssues?: string[] }> }
+  assert.equal(hiddenBody.privateEmailUiEnabled, false)
+  assert.ok(hiddenBody.integrations.every(integration => integration.emailReadinessIssues === undefined))
+  assert.ok((await listIntegrationStatuses(adminContext)).every(integration => integration.emailReadinessIssues === undefined))
+  process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED = "true"
+  process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED = "true"
   const staleReceiptCompletion = await completeReceipt(ids.workspace, retryReceipt.id, abandonedReceipt.receipt.leaseToken!, { state: "sent", providerMessageId: "late-mail" })
   assert.equal(staleReceiptCompletion.completed, false)
   assert.equal(staleReceiptCompletion.receipt.state, "failed")
@@ -621,6 +641,7 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
   assert.equal(retried[0].state, "sent")
   assert.deepEqual(transportKeys, [`intake-receipt:${retryReceipt.id}`, `intake-receipt:${retryReceipt.id}`])
   delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
+  delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN
 })
 
 test("MIC-152 direct HTTP intake rejects unauthenticated creation", async () => {
@@ -715,4 +736,54 @@ test("MIC-184 labelled email text extracts one lead and ambiguous multiple busin
   assert.equal(deal.legalName, "Harbor Bakery LLC"); assert.equal(deal.contactEmail, "owner@example.test")
   const ambiguous = await deliver("multiple-businesses", "Business name: Harbor Bakery LLC\nBusiness name: Different Merchant LLC")
   assert.equal(ambiguous.state, "error"); assert.equal(ambiguous.dealId, null)
+})
+
+test("MIC-184 receipt batch passes a full page of unconfigured rows to reach eligible useSend receipts", async () => {
+  const configured = await configureIntegration(adminContext, {
+    provider: "email", emailGateway: "usesend", displayName: "Receipt batch useSend",
+    inboundAddress: "batch@fundlane.io", senderRules: ["@trusted.example"], assignmentPool: [ids.repAMember],
+    mapping: { fromAddress: "MCA Intake <intake@fundlane.io>" }, credential: "us_batch_fixture",
+  })
+  const baseline = await ingestApplication(adminActor, { schemaVersion: 1, provider: "custom", eventId: "receipt-batch-baseline", application: { legalName: "Batch Baseline LLC" } })
+  const earlyIntakeId = randomUUID()
+  await getDatabase().prepare(`INSERT INTO intake_events
+    (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,created_at,updated_at)
+    SELECT ?,workspace_id,provider,?,payload_checksum,application_cipher,state,created_at,updated_at FROM intake_events WHERE id=?`)
+    .run(earlyIntakeId, "receipt-batch-early", baseline.intakeId)
+  await associateIntakeIntegration(ids.workspace, earlyIntakeId, configured.status.id)
+  const early = await enqueueReceipt({ workspaceId: ids.workspace, intakeId: earlyIntakeId, recipient: "early@example.test", warnings: [] })
+  await getDatabase().prepare("UPDATE intake_receipts SET updated_at=? WHERE id=?").run("2019-12-31T00:00:00.000Z", early.id)
+  const blockedIds: string[] = []
+  for (let index = 0; index < 26; index++) {
+    const intakeId = randomUUID()
+    await getDatabase().prepare(`INSERT INTO intake_events
+      (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,created_at,updated_at)
+      SELECT ?,workspace_id,provider,?,payload_checksum,application_cipher,state,created_at,updated_at FROM intake_events WHERE id=?`)
+      .run(intakeId, `receipt-batch-blocked-${index}`, baseline.intakeId)
+    const receipt = await enqueueReceipt({ workspaceId: ids.workspace, intakeId, recipient: `blocked-${index}@example.test`, warnings: [] })
+    blockedIds.push(receipt.id)
+    await getDatabase().prepare("UPDATE intake_receipts SET updated_at=? WHERE id=?").run(new Date(Date.UTC(2020, 0, 1, 0, 0, index)).toISOString(), receipt.id)
+  }
+  const eligibleIntakeId = randomUUID()
+  await getDatabase().prepare(`INSERT INTO intake_events
+    (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,created_at,updated_at)
+    SELECT ?,workspace_id,provider,?,payload_checksum,application_cipher,state,created_at,updated_at FROM intake_events WHERE id=?`)
+    .run(eligibleIntakeId, "receipt-batch-eligible", baseline.intakeId)
+  await associateIntakeIntegration(ids.workspace, eligibleIntakeId, configured.status.id)
+  const eligible = await enqueueReceipt({ workspaceId: ids.workspace, intakeId: eligibleIntakeId, recipient: "eligible@example.test", warnings: [] })
+  await getDatabase().prepare("UPDATE intake_receipts SET updated_at=? WHERE id=?").run("2020-01-02T00:00:00.000Z", eligible.id)
+  process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL = "https://mail.example.test/intake"
+  delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN
+  let calls = 0
+  const delivered = await deliverPendingReceipts({ workspaceId: ids.workspace, limit: 3, fetchImpl: async (url, init) => {
+    calls++
+    assert.equal(String(url), "https://app.usesend.com/api/v1/emails")
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer us_batch_fixture")
+    if (calls === 1) throw new Error("synthetic lost provider response")
+    return new Response(JSON.stringify({ emailId: "batch-accepted" }), { status: 200, headers: { "content-type": "application/json" } })
+  } })
+  assert.deepEqual(delivered.map(receipt => [receipt.id, receipt.state]), [[early.id, "failed"], [eligible.id, "sent"]])
+  assert.equal(calls, 2)
+  assert.ok((await listPendingReceipts(ids.workspace)).filter(receipt => blockedIds.includes(receipt.id)).every(receipt => receipt.attemptCount === 0))
+  delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL
 })
