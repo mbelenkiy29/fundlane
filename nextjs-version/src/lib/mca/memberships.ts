@@ -1,6 +1,6 @@
 import "server-only";
 import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
-import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, syncSeatsAfterRemoval, type StripeBillingClient } from "./billing";
+import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, licensedSeatCount, syncWorkspaceBilling, syncSeatsAfterRemoval, type StripeBillingClient } from "./billing";
 
 import { createOpaqueToken, hashOpaqueToken, hashPassword } from "./crypto";
 import { hashSupabaseInvitationToken } from "./invitation-token";
@@ -11,6 +11,7 @@ import { createSession } from "./sessions";
 import type { InvitationResult, MembershipContext, MembershipSummary, Role } from "./types";
 import { isActionAllowed } from "./policy";
 import { getWorkspaceSettings } from "./workspaces";
+import { getCompanyAccess } from "./company-access";
 
 interface MembershipRow {
   id: string;
@@ -170,11 +171,29 @@ export async function inviteMember(
     }
     const prior = await database.prepare<{ id: string; status: string }>("SELECT id, status FROM memberships WHERE workspace_id = ? AND user_id = ? FOR UPDATE")
       .get(context.workspaceId, user.id);
+    if (billingSeatSyncEnabled() && prior?.status === "pending") {
+      const retry = await database.prepare<{ id: string; delivery_status: string }>("SELECT id, delivery_status FROM invitations WHERE membership_id = ? AND status = 'pending' FOR UPDATE").get(prior.id);
+      if (retry && ["pending", "failed"].includes(retry.delivery_status)) {
+        const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1_000).toISOString();
+        await database.prepare("UPDATE invitations SET token_hash = ?, expires_at = ?, delivery_status = 'pending', updated_at = ? WHERE id = ?")
+          .run(hashSupabaseInvitationToken(token), expiresAt, timestamp, retry.id);
+        return { invitationId: retry.id, membershipId: prior.id, email, expiresAt, token, needsSync: true };
+      }
+    }
     if (prior?.status === "active" || prior?.status === "pending") {
       throw new AppError(409, "membership_exists", "This person already has a reserved seat in the workspace.");
     }
     if (billingSeatSyncEnabled()) await assertPendingInvitationCapacity(database, context.workspaceId);
-    if (billingSeatSyncEnabled()) await ensureSyncedSeatCapacity(context.workspaceId,context.userId,seatsCountPendingInvites()?1:0,billingClient);
+    let needsSync = billingSeatSyncEnabled();
+    if (needsSync) {
+      const mapped = await database.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId);
+      const current = mapped ? await syncWorkspaceBilling(context.workspaceId,billingClient,false) : null;
+      const access = await getCompanyAccess(context.workspaceId);
+      if (!access.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.");
+      const reduction = await database.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(context.workspaceId);
+      const target = await licensedSeatCount(context.workspaceId,database) + (seatsCountPendingInvites() ? 1 : 0);
+      needsSync = target > access.seatLimit || !!reduction?.pending_seats || !!(current?.subscriptionId && target > current.seatLimit);
+    }
     const membershipId = prior?.id ?? newId();
     if (prior) {
       await database.prepare(`UPDATE memberships SET role = ?, manager_membership_id = ?, status = 'pending',
@@ -201,8 +220,17 @@ export async function inviteMember(
         invitationId, context.workspaceId, membershipId, email, hashSupabaseInvitationToken(token), expiresAt,
         correlationId, context.userId, timestamp, timestamp,
       );
-    return { invitationId, membershipId, email, expiresAt, token };
+    return { invitationId, membershipId, email, expiresAt, token, needsSync };
   });
+  // The reservation is durable before any Stripe write. A failed payment or process
+  // interruption leaves an undelivered invitation that the same request can retry.
+  if (created.needsSync) {
+    try { await ensureSyncedSeatCapacity(context.workspaceId,context.userId,0,billingClient); }
+    catch (error) {
+      await getDatabase().prepare("UPDATE invitations SET delivery_status = 'failed', updated_at = ? WHERE id = ? AND delivery_status = 'pending'").run(nowIso(),created.invitationId);
+      throw error;
+    }
+  }
   return finishInvitationDelivery(context, created, appOrigin);
 }
 
@@ -230,7 +258,7 @@ async function finishInvitationDelivery(
   }
 }
 
-export async function resendInvitation(context: MembershipContext, invitationId: string, appOrigin: string): Promise<InvitationResult> {
+export async function resendInvitation(context: MembershipContext, invitationId: string, appOrigin: string, billingClient?: StripeBillingClient): Promise<InvitationResult> {
 
   if (!isActionAllowed(context.role, "inviteUsers", (await getWorkspaceSettings(context.workspaceId)).actionVisibility)) {
     throw new AppError(403, "action_disabled", "Inviting team members is disabled for this workspace.");
@@ -252,6 +280,13 @@ export async function resendInvitation(context: MembershipContext, invitationId:
       .run(hashSupabaseInvitationToken(token), expiresAt, timestamp, current.id);
     return { invitationId: current.id, membershipId: previous.membership_id, email: previous.email, expiresAt, token };
   });
+  if (billingSeatSyncEnabled()) {
+    try { await ensureSyncedSeatCapacity(context.workspaceId,context.userId,0,billingClient); }
+    catch (error) {
+      await getDatabase().prepare("UPDATE invitations SET delivery_status = 'failed', updated_at = ? WHERE id = ? AND delivery_status = 'pending'").run(nowIso(),created.invitationId);
+      throw error;
+    }
+  }
   return finishInvitationDelivery(context, created, appOrigin);
 }
 

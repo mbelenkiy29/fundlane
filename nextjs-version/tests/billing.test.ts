@@ -464,9 +464,31 @@ test("concurrent pending-count invites serialize and unpaid increase cannot rese
   const invites=await Promise.allSettled(Array.from({length:5},(_,i)=>inviteMember(context,{email:`${randomUUID()}@example.test`,name:`Invitee ${i}`,role:"rep"},"http://localhost:3000",f.client)))
   assert.equal(invites.filter(result=>result.status==="fulfilled").length,4)
   assert.equal(invites.filter(result=>result.status==="rejected"&&(result.reason as {code?:string}).code==="billing_seat_payment_required").length,1)
-  assert.equal(await licensedSeatCount(f.workspaceId),5)
+  assert.equal(await licensedSeatCount(f.workspaceId),6,"unpaid invitation remains reserved but undelivered")
   delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
   delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES
+})
+test("paid Stripe success with a lost response leaves a durable undelivered invitation for retry",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  const context={workspaceId:f.workspaceId,userId:f.userId,membershipId:f.membershipId,role:"admin" as const,authType:"session" as const,scopes:[],sessionId:null}
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES="true"
+  try {
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    for(let i=0;i<4;i++) await inviteMember(context,{email:`${randomUUID()}@example.test`,name:`Invitee ${i}`,role:"rep"},"http://localhost:3000",f.client)
+    const email=`${randomUUID()}@example.test`
+    let writes=0
+    const lost={...f.client,subscriptions:{...f.client.subscriptions,update:async()=>{writes++;sub.items.data[1].quantity=5;throw new Error("lost Stripe response")}}} as unknown as StripeBillingClient
+    await assert.rejects(inviteMember(context,{email,name:"Paid invitee",role:"rep"},"http://localhost:3000",lost),/lost Stripe response/)
+    const reserved=await getDatabase().prepare<{id:string;delivery_status:string}>("SELECT i.id,i.delivery_status FROM invitations i WHERE i.workspace_id=? AND i.email=?").get(f.workspaceId,email)
+    assert.equal(reserved?.delivery_status,"failed")
+    assert.equal(await licensedSeatCount(f.workspaceId),6)
+    const retried=await inviteMember(context,{email,name:"Paid invitee",role:"rep"},"http://localhost:3000",lost)
+    assert.equal(retried.id,reserved?.id)
+    assert.equal(retried.delivery,"preview")
+    assert.equal(writes,1,"retry observes the paid capacity without another Stripe write")
+    await assert.rejects(inviteMember(context,{email,name:"Paid invitee",role:"rep"},"http://localhost:3000",lost),{code:"membership_exists"})
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES}
 })
 test("active-only mode buys on acceptance and keeps an unpaid invitation pending",async()=>{
   const f=await fixture(),context={workspaceId:f.workspaceId,userId:f.userId,membershipId:f.membershipId,role:"admin" as const,authType:"session" as const,scopes:[],sessionId:null}
@@ -555,6 +577,25 @@ test("adding a member immediately revises a scheduled reduction to the current p
     assert.equal(revisions.length,2)
     assert.equal(revisions[1].body.get("metadata[selected_seats]"),"5")
     assert.equal(revisions[1].body.get("phases[1][items][1][quantity]"),"4")
+  } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
+})
+test("a later automatic reduction uses its attached schedule for revision",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],http=await createStripeHttpFixture(),url=new URL(http.origin)
+  const sdk=new Stripe("rk_test_fixture",{apiVersion:"2026-08-26.dahlia",host:url.hostname,port:Number(url.port),protocol:"http",maxNetworkRetries:0})
+  const client={...f.client,subscriptions:sdk.subscriptions,subscriptionSchedules:sdk.subscriptionSchedules} as StripeBillingClient
+  process.env.MCA_BILLING_SEAT_SYNC_ENABLED="true"
+  http.subscriptions.set(f.customerId,[sub]);http.invoices.set(f.customerId,f.state.invoices)
+  try {
+    await syncWorkspaceBilling(f.workspaceId,client)
+    await changeBillingSeats(f.workspaceId,4,f.userId,client,true)
+    await changeBillingSeats(f.workspaceId,5,f.userId,client)
+    await changeBillingSeats(f.workspaceId,3,f.userId,client,true)
+    const attached=sub.schedule as string
+    assert.match(String(http.calls.filter(call=>call.path==="/v1/subscription_schedules").at(-1)?.idempotencyKey),/-1$/)
+    await ensureSyncedSeatCapacity(f.workspaceId,f.userId,3,client)
+    assert.equal(sub.schedule,attached)
+    assert.equal((await getDatabase().prepare<{pending_seats:number}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,4)
+    assert.equal(http.schedules.get(attached).metadata.selected_seats,"4")
   } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;await http.close()}
 })
 test("reconciliation repairs a reduction revision after the membership transaction rolls back",async()=>{
@@ -681,21 +722,25 @@ test("an invitation needing a paid seat preserves its scheduled reduction",async
     }
     const scheduleId=sub.schedule as string
     const writesBefore=http.calls.filter(call=>call.method==="POST").length
-    await assert.rejects(inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Unpaid invitee",role:"rep"},"http://localhost:3000",client),
+    const unpaidEmail=`${randomUUID()}@example.test`
+    await assert.rejects(inviteMember(context,{email:unpaidEmail,name:"Unpaid invitee",role:"rep"},"http://localhost:3000",client),
       {code:"billing_scheduled_reduction_pending",message:/Cancel the scheduled seat reduction in Plans & Billing/})
     assert.equal(http.calls.filter(call=>call.method==="POST").length,writesBefore,"failed invitation makes no Stripe writes")
     assert.equal(sub.schedule,scheduleId)
     assert.equal(http.schedules.get(scheduleId).status,"active")
     assert.equal(http.schedules.get(scheduleId).phases[1].items[1].quantity,4)
     assert.equal((await getDatabase().prepare<{pending_seats:number;stripe_schedule_id:string}>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,5)
-    assert.equal(await licensedSeatCount(f.workspaceId),5,"failed invitation does not reserve a seat")
+    assert.equal(await licensedSeatCount(f.workspaceId),6,"failed payment keeps an undelivered reservation for retry")
+    const unpaidMembership=await getDatabase().prepare<{membership_id:string}>("SELECT membership_id FROM invitations WHERE workspace_id=? AND email=? AND status='pending'").get(f.workspaceId,unpaidEmail)
+    assert.ok(unpaidMembership)
+    await deactivateMembership(context,unpaidMembership.membership_id,client)
     await changeBillingSeats(f.workspaceId,5,f.userId,client)
     assert.equal(sub.schedule,null,"manual seat action releases the reduction")
     assert.equal(http.schedules.get(scheduleId).status,"released")
     assert.equal((await getDatabase().prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(f.workspaceId))?.pending_seats,null)
     let paidUpdates=0
     const paidClient={...client,subscriptions:{list:sdk.subscriptions.list.bind(sdk.subscriptions),retrieve:sdk.subscriptions.retrieve.bind(sdk.subscriptions),update:async()=>{paidUpdates++;sub.items.data[1].quantity=5;return sub}}} as unknown as StripeBillingClient
-    await inviteMember(context,{email:`${randomUUID()}@example.test`,name:"Paid invitee",role:"rep"},"http://localhost:3000",paidClient)
+    await inviteMember(context,{email:unpaidEmail,name:"Paid invitee",role:"rep"},"http://localhost:3000",paidClient)
     assert.equal(paidUpdates,1,"automatic increase resumes after manual cancellation")
     assert.equal(await licensedSeatCount(f.workspaceId),6)
   } finally {delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED;delete process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES;await http.close()}

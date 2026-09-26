@@ -619,28 +619,31 @@ async function assertOccupiedSeats(workspaceId: string, seats: number, db: DbExe
   if (used > seats) throw new AppError(409, "billing_seats_occupied", billingSeatSyncEnabled() && !seatsCountPendingInvites() ? "Remove active users before reducing seats." : "Remove active users or revoke pending invitations before reducing seats.")
 }
 
-/** Called under the workspace row lock before adding a licensed membership. */
+/** Serialize capacity checks with membership reservations and seat changes. */
 export async function ensureSyncedSeatCapacity(workspaceId:string, actorUserId:string|null, additional:number, client?:StripeBillingClient) {
   if (!billingSeatSyncEnabled()) return assertBillingCapacity(workspaceId,additional,client)
-  const mapping=await getDatabase().prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
-  const current=mapping ? await syncWorkspaceBilling(workspaceId,client) : null
-  const plan=await getCompanyAccess(workspaceId)
-  if (!plan.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.")
-  const count=await licensedSeatCount(workspaceId)
-  const target=count+additional
-  if (current?.subscriptionId && target<=current.seatLimit) {
-    const pending=await getDatabase().prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-    if (pending?.pending_seats && pending.pending_seats!==target) {
-      await changeBillingSeats(workspaceId,target,actorUserId,client,true)
-      return
+  return withImmediateTransaction(async db => {
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
+    const mapping=await db.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId)
+    const current=mapping ? await syncWorkspaceBilling(workspaceId,client) : null
+    const plan=await getCompanyAccess(workspaceId)
+    if (!plan.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.")
+    const count=await licensedSeatCount(workspaceId,db)
+    const target=count+additional
+    if (current?.subscriptionId && target<=current.seatLimit) {
+      const pending=await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+      if (pending?.pending_seats && pending.pending_seats!==target) {
+        await changeBillingSeats(workspaceId,target,actorUserId,client,true)
+        return
+      }
     }
-  }
-  if (target<=plan.seatLimit) return
-  if (!mapping) throw new AppError(409,"seat_limit_reached","Your company has used its trial seats.")
-  try { await changeBillingSeats(workspaceId,target,actorUserId,client,true) }
-  catch (error) { if (error instanceof AppError && error.code==="billing_change_pending") throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry."); throw error }
-  const refreshed=await getCompanyAccess(workspaceId)
-  if (target>refreshed.seatLimit) throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry.")
+    if (target<=plan.seatLimit) return
+    if (!mapping) throw new AppError(409,"seat_limit_reached","Your company has used its trial seats.")
+    try { await changeBillingSeats(workspaceId,target,actorUserId,client,true) }
+    catch (error) { if (error instanceof AppError && error.code==="billing_change_pending") throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry."); throw error }
+    const refreshed=await getCompanyAccess(workspaceId)
+    if (target>refreshed.seatLimit) throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry.")
+  })
 }
 
 /** Called after a deactivation commits; reconciliation takes the workspace lock. */
@@ -883,16 +886,20 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       // Stripe forbids metadata (and every other parameter) with from_subscription.
       // Replay the exact creation request to prove ownership after create succeeded
       // but metadata/update or local commit failed. Metadata alone isn't proof.
-      const priorReductions = automatic && !sub.schedule && !state?.pending_seats ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='renewal'").get(workspaceId))?.count ?? 0 : 0
+      const priorReductions = automatic && !state?.pending_seats ? (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='renewal'").get(workspaceId))?.count ?? 0 : 0
       const creation = () => client.subscriptionSchedules.create({ from_subscription: sub.id }, { idempotencyKey: `fundlane-schedule-${sub.id}-${current.periodStart}${priorReductions ? `-${priorReductions}` : ""}` })
       let schedule: Stripe.SubscriptionSchedule
       if (sub.schedule) {
         const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id
         schedule = await client.subscriptionSchedules.retrieve(scheduleId)
-        let replay: Stripe.SubscriptionSchedule
-        try { replay = await creation() }
-        catch { throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation could not be verified.") }
-        if (replay.id !== scheduleId) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation does not match this request.")
+        if (state?.stripe_schedule_id !== scheduleId) {
+          let replay: Stripe.SubscriptionSchedule
+          try { replay = await creation() }
+          catch { throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation could not be verified.") }
+          if (replay.id !== scheduleId) throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review; its creation does not match this request.")
+        } else if (schedule.metadata?.workspace_id !== workspaceId) {
+          throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
+        }
         // Use the fresh retrieval, not the cached creation response: an update may
         // already have succeeded, or an operator may have changed this schedule.
       } else schedule = await creation()
