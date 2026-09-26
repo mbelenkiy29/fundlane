@@ -18,13 +18,24 @@ Recovery:
 <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=recovery&amp;redirect_to={{ .RedirectTo | urlquery }}">Reset your password</a>
 ```
 
+### Optional magic-link sign-in
+
+Set server-only `MCA_MAGIC_LINK_ENABLED=true` to show **Email me a sign-in link** on `/sign-in` and enable `POST /api/auth/magic-link`. The default is `false`. The endpoint uses Supabase `signInWithOtp` with `shouldCreateUser: false`, so it only sends links for existing Auth accounts. It returns the same confirmation for known and unknown addresses and limits requests to 10 per IP and 3 per normalized email per minute. The callback starts the same app TOTP challenge as password sign-in; workspace-required enrollment remains enforced on protected access. An existing migrated account still needs its password-recovery setup before it can access the app.
+
+In each Supabase Auth project where this is enabled, configure SMTP and set the **Magic Link** email template to the following Go HTML. Keep the confirmation and recovery templates above. Add the exact environment origin's `/auth/callback` URL, including `flow=magic-link` and the permitted `next` continuation query variants, to the Auth redirect URL allowlist. The Site URL must match `MCA_APP_ORIGIN`. Do this separately for previews using a nonproduction project; no hosted setting is changed by this code.
+
+Magic Link template:
+```html
+<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=magiclink&amp;redirect_to={{ .RedirectTo | urlquery }}">Sign in to Fundlane</a>
+```
+
 `urlquery` is the Go template function: encode the entire `.RedirectTo` as **one query value**. Do not append `?token_hash` to `.RedirectTo`, which already contains `?next=...`, or hardcode `next=/onboarding`. HTML `&amp;` separators become `&` when the link is followed. These links supply the actual `.TokenHash` to `verifyOtp`; they do not need a PKCE `code`, browser verifier, or `.ConfirmationURL`. Do not substitute `.Token` for `.TokenHash`.
 
 The application creates `.RedirectTo` using its canonical origin and sanitized continuation. The callback independently validates the encoded URL's exact origin and `/auth/callback` path, extracts `next`, and applies its destination allowlist again. It never redirects to `.RedirectTo` itself. Untrusted or absent values fall back to onboarding (through password setup for recovery). Carrying this non-authorizing destination in the URL supports cross-device verification; no server-stored continuation identifier is required. Possession of an invitation token still requires the matching verified identity and explicit server-side acceptance.
 
 Recovery requests wrap the final destination in `/reset-password?next=...`. Both PKCE and token-hash callbacks preserve that destination through password setup; success returns to the invitation or other allowed final destination. Expired recovery links return to the recovery request screen with that same sanitized destination. Migrated identities still use the existing server-only `allowPasswordSetup` gate and metadata-clearing process.
 
-If the email template includes `{{ .Token }}`, the verification screen also accepts that code. Only email/signup and recovery token types are accepted; callback destinations are explicitly allowlisted. Require verified email and a minimum 12-character password in project Auth settings. Signup and password reset also validate password length on the application server.
+If the email template includes `{{ .Token }}`, the verification screen also accepts that code. Email/signup and recovery token types are accepted; `magiclink` is accepted only while its server flag is enabled. Callback destinations are explicitly allowlisted. Require verified email and a minimum 12-character password in project Auth settings. Signup and password reset also validate password length on the application server.
 
 Company invitations use the existing `MCA_EMAIL_WEBHOOK_URL` business-email integration. They contain a server-generated, hashed, 72-hour application invitation token. The invitee must also authenticate with a verified matching Supabase email. Resends rotate the token while preserving the invitation identity and reserved seat. Deactivation or acceptance invalidates outstanding links. Delivery failures preserve pending reservations for an administrator to retry; development-only delivery previews are returned when no business email provider is configured.
 

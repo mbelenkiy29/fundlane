@@ -124,6 +124,7 @@ test("only Google OAuth code callbacks skip TOTP; email and recovery stay challe
   assert.equal(isGoogleOauthCallback({ hasCode: false, hasTokenHash: true, type: "recovery", provider: "google", next: "/reset-password?next=%2Fonboarding" }), false)
   assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: null, provider: "google", next: "/reset-password?next=%2Fonboarding" }), false)
   assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: "signup", provider: "google", next: "/onboarding" }), false)
+  assert.equal(isGoogleOauthCallback({ hasCode: true, hasTokenHash: false, type: "magiclink", provider: "google", next: "/onboarding" }), false)
 })
 
 test("Google sign-in does not require a second factor after Google authentication", async () => {
