@@ -18,15 +18,43 @@ async function owner(workspaceId: string, db: DbExecutor) {
 export async function trialAllowedForOwner(workspaceId: string, db: DbExecutor) {
   if (!trialAbuseLimitsEnabled()) return true
   const identity = await owner(workspaceId,db)
-  if (!identity) return true // Missing owner data must not deny a first trial.
+  if (!identity) return false // A trial without a stable identity cannot be reserved safely.
   const perUser = positiveLimit(process.env.MCA_TRIAL_LIMIT_PER_USER,1)!
   const perEmail = positiveLimit(process.env.MCA_TRIAL_LIMIT_PER_EMAIL,1)!
   const perDomain = positiveLimit(process.env.MCA_TRIAL_LIMIT_PER_DOMAIN,null)
+  // Checkout holds these transaction locks through session creation and reservation.
+  // Sort keys so overlapping user/email/domain checks cannot deadlock.
+  const keys = [`user:${identity.userId}`,`email:${identity.email}`]
+  if (perDomain && identity.domain && !freeMailDomains.has(identity.domain)) keys.push(`domain:${identity.domain}`)
+  for (const key of keys.sort()) await db.prepare("SELECT pg_advisory_xact_lock(105, hashtext(?))").get(key)
   const count = async (column:"owner_user_id"|"owner_email"|"email_domain", value:string) =>
-    (await db.prepare<{count:number}>(`SELECT count(*)::int count FROM company_trial_grants WHERE ${column}=? AND workspace_id<>?`).get(value,workspaceId))?.count ?? 0
+    (await db.prepare<{count:number}>(`SELECT count(*)::int count FROM (
+      SELECT workspace_id FROM company_trial_grants WHERE ${column}=? AND workspace_id<>?
+      UNION
+      SELECT workspace_id FROM company_trial_reservations WHERE ${column}=? AND workspace_id<>? AND expires_at>?
+    ) used`).get(value,workspaceId,value,workspaceId,nowIso()))?.count ?? 0
   if (await count("owner_user_id",identity.userId) >= perUser || await count("owner_email",identity.email) >= perEmail) return false
   if (perDomain && identity.domain && !freeMailDomains.has(identity.domain) && await count("email_domain",identity.domain) >= perDomain) return false
   return true
+}
+
+/** Call after Stripe creates the session, inside the eligibility transaction. */
+export async function reserveTrialForCheckout(workspaceId:string, sessionId:string, expiresAt:number, db:DbExecutor) {
+  if (!trialAbuseLimitsEnabled()) return
+  const identity = await owner(workspaceId,db)
+  if (!identity) return
+  await db.prepare(`INSERT INTO company_trial_reservations
+    (workspace_id,checkout_session_id,owner_user_id,owner_email,email_domain,expires_at,created_at)
+    VALUES (?,?,?,?,?,?,?) ON CONFLICT (workspace_id) DO UPDATE SET
+    checkout_session_id=EXCLUDED.checkout_session_id,owner_user_id=EXCLUDED.owner_user_id,
+    owner_email=EXCLUDED.owner_email,email_domain=EXCLUDED.email_domain,
+    expires_at=EXCLUDED.expires_at,created_at=EXCLUDED.created_at`).run(
+    workspaceId,sessionId,identity.userId,identity.email,identity.domain,new Date(expiresAt*1000).toISOString(),nowIso())
+}
+
+export async function releaseTrialReservation(workspaceId:string, sessionId:string, db:DbExecutor) {
+  if (!trialAbuseLimitsEnabled()) return
+  await db.prepare("DELETE FROM company_trial_reservations WHERE workspace_id=? AND checkout_session_id=?").run(workspaceId,sessionId)
 }
 
 export async function recordTrialGrant(workspaceId:string, subscription:Stripe.Subscription, client:Pick<Stripe,"paymentMethods"|"setupIntents">, db:DbExecutor) {
@@ -52,10 +80,11 @@ export async function recordTrialGrant(workspaceId:string, subscription:Stripe.S
   if (!existing) await db.prepare(`INSERT INTO company_trial_grants (workspace_id,stripe_subscription_id,owner_user_id,owner_email,email_domain,card_fingerprint,trial_started_at,created_at)
     VALUES (?,?,?,?,?,?,?,?)`).run(workspaceId,subscription.id,identity.userId,identity.email,identity.domain,fingerprint,new Date(subscription.trial_start*1000).toISOString(),nowIso())
   else if (fingerprint && !existing.card_fingerprint) await db.prepare("UPDATE company_trial_grants SET card_fingerprint=? WHERE workspace_id=?").run(fingerprint,workspaceId)
+  await db.prepare("DELETE FROM company_trial_reservations WHERE workspace_id=?").run(workspaceId)
   if (!fingerprint || existing?.fingerprint_flagged_at || process.env.MCA_TRIAL_FINGERPRINT_ACTION === "off") return
   const repeat = await db.prepare<{workspace_id:string}>("SELECT workspace_id FROM company_trial_grants WHERE card_fingerprint=? AND workspace_id<>? LIMIT 1").get(fingerprint,workspaceId)
   if (repeat) {
-    const flagged = await db.prepare("UPDATE company_trial_grants SET fingerprint_flagged_at=? WHERE workspace_id=? AND fingerprint_flagged_at IS NULL").run(nowIso(),workspaceId)
-    if (flagged.changes) await recordAuditEvent({context:{workspaceId,userId:null,source:"system"},action:"billing.trial_fingerprint_review",resourceType:"workspace",resourceId:workspaceId,metadata:{subscriptionId:subscription.id,priorWorkspaceId:repeat.workspace_id},executor:db})
+    const flagged = await db.prepare("UPDATE company_trial_grants SET fingerprint_flagged_at=?, fingerprint_prior_workspace_id=? WHERE workspace_id=? AND fingerprint_flagged_at IS NULL").run(nowIso(),repeat.workspace_id,workspaceId)
+    if (flagged.changes) await recordAuditEvent({context:{workspaceId,userId:null,source:"system"},action:"billing.trial_fingerprint_review",resourceType:"workspace",resourceId:workspaceId,metadata:{subscriptionId:subscription.id},executor:db})
   }
 }

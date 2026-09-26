@@ -181,11 +181,19 @@ export const company_trial_grants = pgTable("company_trial_grants", {
   stripe_subscription_id: text().notNull().unique(),
   owner_user_id: text().notNull(),
   owner_email: text().notNull(), email_domain: text().notNull(), card_fingerprint: text(),
-  trial_started_at: text().notNull(), fingerprint_flagged_at: text(), created_at: text().notNull(),
+  trial_started_at: text().notNull(), fingerprint_flagged_at: text(), fingerprint_prior_workspace_id: text(), created_at: text().notNull(),
 }, table => [index("company_trial_grants_owner_user_idx").on(table.owner_user_id),
   index("company_trial_grants_owner_email_idx").on(table.owner_email),
   index("company_trial_grants_domain_idx").on(table.email_domain),
   index("company_trial_grants_fingerprint_idx").on(table.card_fingerprint).where(sql`${table.card_fingerprint} IS NOT NULL`)]);
+
+export const company_trial_reservations = pgTable("company_trial_reservations", {
+  workspace_id: text().primaryKey(), checkout_session_id: text().notNull().unique(),
+  owner_user_id: text().notNull(), owner_email: text().notNull(), email_domain: text().notNull(),
+  expires_at: text().notNull(), created_at: text().notNull(),
+}, table => [index("company_trial_reservations_owner_user_idx").on(table.owner_user_id, table.expires_at),
+  index("company_trial_reservations_owner_email_idx").on(table.owner_email, table.expires_at),
+  index("company_trial_reservations_domain_idx").on(table.email_domain, table.expires_at)]);
 
 export const platform_admin_grants = pgTable("platform_admin_grants", {
   user_id: text().primaryKey().references(() => users.id, { onDelete: "restrict" }),

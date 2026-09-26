@@ -17,6 +17,7 @@ const billingRecoveryTimestamp = 1790035200002;
 async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS marketing_demo_submissions");
   await fixture.query("DROP TABLE IF EXISTS company_trial_grants");
+  await fixture.query("DROP TABLE IF EXISTS company_trial_reservations");
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
