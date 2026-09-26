@@ -1405,6 +1405,34 @@ export const mca_analysis_settings = pgTable("mca_analysis_settings", {
 	updated_by_user_id: text(),
 });
 
+export const mca_auto_submit_settings = pgTable("mca_auto_submit_settings", {
+	workspace_id: text().primaryKey().notNull(),
+	mode: text().default("off").notNull(),
+	min_match_score: integer().default(80).notNull(),
+	max_funders_per_deal: integer().default(3).notNull(),
+	eligible_funder_ids: text().default("[]").notNull(),
+	updated_at: text().notNull(),
+	updated_by_user_id: text(),
+});
+
+export const mca_auto_submit_decisions = pgTable("mca_auto_submit_decisions", {
+	id: text().primaryKey().notNull(),
+	workspace_id: text().notNull(),
+	deal_id: text().notNull(),
+	deal_version: integer().notNull(),
+	completeness_version: integer().notNull(),
+	funder_id: text().notNull(),
+	score: integer().notNull(),
+	outcome: text().notNull(),
+	reason: text().notNull(),
+	submission_job_id: text(),
+	retry_count: integer().default(0).notNull(),
+	created_at: text().notNull(),
+}, (table) => [
+	unique("mca_auto_submit_decisions_unique").on(table.workspace_id, table.deal_id, table.funder_id),
+	index("mca_auto_submit_decisions_deal_idx").on(table.workspace_id, table.deal_id, table.created_at.desc()),
+]);
+
 export const mca_analysis_runs = pgTable("mca_analysis_runs", {
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),

@@ -29,7 +29,7 @@ import { executionSignal, outsideExecutionScope, withExecutionDeadline } from ".
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
-  if (["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
+  if (["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
   if (job.kind === "intake_process") return (await import("../intake/processing")).processIntakeJob(job)
   if (job.kind === "application_invitation_reminder") return (await import("../applications/reminders")).processInvitationReminder(job)
   if (job.kind === "document_scan") {
@@ -40,6 +40,7 @@ async function dispatch(job: BackgroundJob): Promise<unknown> {
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {
+    case "auto_submit": return (await import("../underwriting/auto-submit")).processAutoSubmit(actor, job.resource_id, payload.completenessVersion, payload.mode, payload.dealVersion)
     case "application_invitation_email": return (await import("../applications/service")).processInvitationEmail(actor, job)
     case "drive_preview":
     case "drive_apply": {
@@ -111,7 +112,7 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
   if (!job) return false
   const heartbeat = setInterval(() => { void heartbeatBackgroundJob(job).catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
-    const outbound = ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
+    const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     const result = await runAsBackgroundWorker(() => outbound ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job))
     await completeBackgroundJob(job, result)
     console.info(JSON.stringify({ event: "worker_job_completed", jobId: job.id, kind: job.kind }))

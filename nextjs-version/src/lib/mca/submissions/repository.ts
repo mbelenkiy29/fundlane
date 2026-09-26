@@ -3,7 +3,9 @@ import "server-only"
 import { encryptSensitive, decryptSensitive } from "../crypto"
 import { getDatabase, newId, parseJson, withImmediateTransaction, type DbExecutor } from "../db"
 import type { DealActor } from "../deals/schema"
+import { AppError } from "../errors"
 import type { FunderRoute, FunderRouteKind } from "../funders/contracts"
+import { findFunderByIdForUpdate, toFunderRecord } from "../funders/directory-repository"
 import { nowIso } from "./clock"
 import type { AttemptState, JobState, SubmissionAttempt, SubmissionJob } from "./contracts"
 
@@ -74,6 +76,8 @@ export interface JobInsert {
   attemptKey: string
   analysisRunId?: string
   dealVersion: number
+  expectedDealVersion?: number
+  expectedAutoApiRoute?: FunderRoute
   documentVersions: SubmissionJob["documentVersions"]
   packageDocumentIds: string[]
   preflightErrors: Array<{ field: string; message: string }>
@@ -400,6 +404,34 @@ export async function insertDealSubmissionCache(input: {
 
 export async function persistNewDestination(input: JobInsert): Promise<{ job: SubmissionJob; created: boolean }> {
   return withImmediateTransaction(async (executor) => {
+    if (input.expectedDealVersion !== undefined) {
+      const current = await executor.prepare<{ version: number }>(
+        "SELECT version FROM deals WHERE workspace_id=? AND id=? FOR UPDATE",
+      ).get(input.workspaceId, input.dealId)
+      if (current?.version !== input.expectedDealVersion) throw new AppError(409, "deal_version_changed", "The deal changed before automatic submission.")
+    }
+    if (input.expectedAutoApiRoute) {
+      const approved = input.expectedAutoApiRoute
+      const stored = await findFunderByIdForUpdate(executor, input.workspaceId, input.funderId)
+      const current = stored ? toFunderRecord(stored) : undefined
+      const activeRoute = current?.routes.find(route => route.active)
+      const { adapterReadiness } = await import("./adapters/registry")
+      const { resolveAdapterEnvironment, resolveAdapterSecrets } = await import("./adapters/credentials")
+      const environment = resolveAdapterEnvironment()
+      const readiness = adapterReadiness(approved.destination)
+      const routeMatches = approved.kind === "api" && activeRoute?.kind === "api"
+        && JSON.stringify(activeRoute) === JSON.stringify(approved)
+        && JSON.stringify(input.route) === JSON.stringify(approved)
+        && input.routeKind === "api"
+      const environmentReady = (readiness === "live" && environment === "production" && !current?.sandbox)
+        || (readiness === "sandbox" && environment === "development" && Boolean(current?.sandbox))
+      const credential = routeMatches && current?.active && environmentReady
+        ? await resolveAdapterSecrets({ workspaceId: input.workspaceId, funderId: input.funderId, environment, adapterSlug: approved.destination })
+        : undefined
+      if (!routeMatches || !current?.active || !environmentReady || !credential?.capabilities.submit) {
+        throw new AppError(409, "auto_submit_route_changed", "The approved API route is no longer ready for automatic submission.")
+      }
+    }
     const saved = await insertJob(input, executor)
     if (!saved.created) return saved
     const processedAt = input.state === "queued" ? undefined : nowIso()

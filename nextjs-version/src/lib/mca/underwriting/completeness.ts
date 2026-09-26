@@ -123,6 +123,7 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
     metadata: { version: result.version, ready: result.ready, findingCount: findings.length },
     correlationId: actor.correlationId,
   })
+  if (result.ready && process.env.MCA_AUTO_SUBMIT_ENABLED === "true") await (await import("./auto-submit")).enqueueAutoSubmitIfEnabled(actor, deal.id, result.version, deal.version)
   return result
 }
 

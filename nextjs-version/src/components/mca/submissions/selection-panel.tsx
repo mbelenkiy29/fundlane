@@ -50,6 +50,7 @@ type JobView = {
   dealVersion: number
   createdAt: string
   updatedAt: string
+  autoSubmitted?: boolean
 }
 
 type SelectionPayload = {
@@ -58,6 +59,7 @@ type SelectionPayload = {
   documents: Array<{ id: string; filename: string; category: string; checksum: string; byteLength: number }>
   funders: SelectionFunder[]
   jobs: JobView[]
+  autoDecisions?: Array<{ funder_id: string; score: number; outcome: string; reason: string; submission_job_id: string | null; created_at: string }>
 }
 
 type ConfirmPayload = {
@@ -360,6 +362,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
             </ul>
           </div>
         )}
+        {payload?.autoDecisions && payload.autoDecisions.length > 0 && <div className="space-y-1 text-sm"><p className="font-medium">Automatic decisions</p>{payload.autoDecisions.map((decision, index) => <p key={`${decision.funder_id}:${index}`} className="text-muted-foreground">{funders.find(item => item.id === decision.funder_id)?.legalName ?? decision.funder_id}: {decision.outcome} (score {decision.score}) — {decision.reason}</p>)}</div>}
         {!results && jobs.length > 0 && (
           <div className="space-y-2">
             <p className="text-sm font-medium">Existing jobs</p>
@@ -368,6 +371,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                 <li key={job.jobId} className="flex flex-wrap items-center gap-2">
                   <Badge variant={stateVariant(job.state)}>{stateLabel(job.state)}</Badge>
                   <span>{job.displayFunderName}</span>
+                  {job.autoSubmitted && <Badge variant="secondary">Auto-submitted</Badge>}
                   {job.reason ? <span className="text-muted-foreground">{job.reason}</span> : null}
                 </li>
               ))}

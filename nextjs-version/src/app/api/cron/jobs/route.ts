@@ -8,8 +8,8 @@ import type { BackgroundJobKind } from "@/lib/mca/jobs/queue"
 export const runtime = "nodejs"
 export const maxDuration = 300
 
-// These jobs generate private exports without native binaries or outbound delivery.
-const VERCEL_JOB_KINDS: readonly BackgroundJobKind[] = ["export_create", "export"]
+// Auto-submit scoring is opt-in; its submission delivery remains a separate job.
+const EXPORT_JOB_KINDS: readonly BackgroundJobKind[] = ["export_create", "export"]
 const BUDGET_MS = 240_000
 const MAX_JOBS = 3
 
@@ -22,10 +22,12 @@ export async function GET(request: Request) {
     const expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     const started = Date.now()
+    const kinds: readonly BackgroundJobKind[] = process.env.MCA_AUTO_SUBMIT_ENABLED === "true"
+      ? [...EXPORT_JOB_KINDS, "auto_submit"] : EXPORT_JOB_KINDS
     let processed = 0
     await withExecutionDeadline(async () => {
       while (processed < MAX_JOBS && Date.now() - started < BUDGET_MS - 10_000) {
-        if (!(await runNextBackgroundJob(VERCEL_JOB_KINDS))) break
+        if (!(await runNextBackgroundJob(kinds))) break
         processed++
       }
     }, request.signal, BUDGET_MS - 10_000)

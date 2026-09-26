@@ -18,7 +18,7 @@ export function inBackgroundWorker(): boolean { return execution.getStore() === 
 export function runAsBackgroundWorker<T>(callback: () => Promise<T>): Promise<T> { return execution.run(true, callback) }
 export function backgroundJobsEnabled(): boolean { return process.env.MCA_BACKGROUND_JOBS === "enabled" || Boolean(process.env.VERCEL) }
 
-export type BackgroundJobKind = "application_invitation_email" | "application_invitation_reminder" | "intake_process" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
+export type BackgroundJobKind = "auto_submit" | "application_invitation_email" | "application_invitation_reminder" | "intake_process" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
 export interface BackgroundJob {
   id: string; workspace_id: string; kind: BackgroundJobKind; resource_id: string; actor_json: string; payload_json: string
   state: "queued" | "running" | "complete" | "failed"; attempts: number; lease_token: string | null
@@ -64,6 +64,7 @@ export async function getBackgroundJob(actor: DealActor, id: string): Promise<Ba
     if (!submission) throw new AppError(404, "job_not_found", "The operation was not found.")
     await getDealForDocument(actor, submission.dealId)
   }
+  if (row.kind === "auto_submit") await getDealForDocument(actor, row.resource_id)
   if (row.kind === "export") await (await import("../exports/service")).getExportJob(actor, row.resource_id)
   if (row.kind === "export_create") {
     const { assertCanExportKind } = await import("../exports/service")
@@ -117,11 +118,11 @@ export async function claimBackgroundJob(kinds?: readonly BackgroundJobKind[]): 
   const allowed: string[] = []
   for (const company of companies) {
     if ((await getCompanyAccess(company.workspace_id)).allowed) allowed.push(company.workspace_id)
-    else if (!kinds || kinds.some(kind => ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(kind))) {
+    else if (!kinds || kinds.some(kind => ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(kind))) {
       // Outbound intent is not replayed after recovery. Keep the idempotency row and
       // require a fresh reviewed request; never consume an attempt for a pause.
       await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='company_paused',updated_at=?
-        WHERE workspace_id=? AND state='queued' AND kind IN ('submission_delivery','application_invitation_email','application_invitation_reminder')`).run(now, company.workspace_id)
+        WHERE workspace_id=? AND state='queued' AND kind IN ('auto_submit','submission_delivery','application_invitation_email','application_invitation_reminder')`).run(now, company.workspace_id)
       await getDatabase().prepare(`UPDATE mca_submission_jobs SET state='failed',reason='Company paused. Review and submit again after recovery.',updated_at=?
         WHERE workspace_id=? AND state='queued' AND id IN (SELECT resource_id FROM mca_background_jobs WHERE workspace_id=? AND kind='submission_delivery' AND state='failed' AND error_code='company_paused')`).run(now, company.workspace_id, company.workspace_id)
     }
@@ -156,7 +157,7 @@ export async function completeBackgroundJob(job: BackgroundJob, result: unknown)
 
 export async function failBackgroundJob(job: BackgroundJob, error: unknown): Promise<void> {
   if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) {
-    const outbound = ["submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
+    const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     await getDatabase().prepare("UPDATE mca_background_jobs SET state=?,attempts=GREATEST(0,attempts-1),error_code='company_paused',available_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?")
       .run(outbound ? "failed" : "queued", new Date(Date.now() + 60_000).toISOString(), nowIso(), job.id, job.lease_token)
     return

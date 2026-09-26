@@ -1,0 +1,9 @@
+# Auto-submit
+
+`MCA_AUTO_SUBMIT_ENABLED=true` exposes workspace auto-submit settings and enables readiness-triggered scoring. Unset or any other value leaves the feature off. An administrator must additionally choose `score_only` or `auto_submit`; the workspace default is `off`.
+
+The defaults are minimum match score 80, maximum 3 funders per deal, and no eligible funders selected. A new deal, a deal edit, or a new ready document completeness result enqueues a background job. `score_only` records scores and decisions without sending. `auto_submit` requires complete application fields, ready documents, confirmed positions, an eligible score, a selected active funder, and a configured API adapter. Live adapters can only send in production; the sandbox adapter can only send to sandbox funders in development. Named fixture adapters are unavailable for live delivery.
+
+Automatic sends use the regular submission queue and delivery worker, including outbound action approval and the 2-minute retry and 24-hour same-funder duplicate blocks. Automatic sends cannot use the manual privileged override. A submitted deal and funder pair is permanently excluded from later automatic sends, even after the 24-hour duplicate window or an ordinary deal edit. The maximum funders per deal counts previous automatic submissions across all runs. Failed queueing and preflight attempts remain retryable under the same decision record; an uncertain delivery requires a manual retry. Decisions and reasons appear in the deal's Submissions tab.
+
+Migration `0059_auto_submit.sql` is additive. Apply it through the reviewed release migration process before setting the global flag. Local tests use only disposable PostgreSQL; hosted Auth, Storage, and real adapter acceptance require an approved nonproduction environment with synthetic records.
