@@ -14,6 +14,7 @@ export type MonitorConfig = {
   token: string
   alerts: boolean
   documentRuntimeEnabled?: boolean
+  billingReconciliationAlertsEnabled?: boolean
   recipient?: string
   webhook?: string
   webhookToken?: string
@@ -120,7 +121,7 @@ export async function runMonitor(
       ["website", !websiteOk, 3],
       ["database", !databaseOk, 3],
       ["server_errors", metrics ? metrics.recentErrors >= 5 : null, 1],
-      ["billing_reconciliation", metrics ? metrics.billingRetrying > 0 : null, 1],
+      ["billing_reconciliation", config.billingReconciliationAlertsEnabled && metrics ? metrics.billingRetrying > 0 : null, 1],
       ["queue_age", metrics ? metrics.oldestSeconds > 600 : null, 3],
       ["expired_leases", metrics ? metrics.expired > 0 : null, 3],
       ["ambiguous_email", metrics ? metrics.emailUnknown > 0 : null, 1],

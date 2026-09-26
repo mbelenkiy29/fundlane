@@ -41,6 +41,7 @@ Deno.serve(async (request) => {
         token: secret,
         alerts: env("MCA_OPERATIONS_ALERTS_ENABLED") === "true",
         documentRuntimeEnabled: env("MCA_DOCUMENT_JOB_RUNTIME") === "vercel_cron" || env("MCA_NATIVE_DOCUMENT_EXECUTOR") === "true",
+        billingReconciliationAlertsEnabled: env("MCA_BILLING_RECONCILIATION_ALERTS_ENABLED") === "true",
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN"),
