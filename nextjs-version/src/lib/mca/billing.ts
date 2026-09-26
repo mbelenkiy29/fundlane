@@ -8,7 +8,7 @@ export { initializeCompanyTrial } from "./company-access"
 import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-reconciliation"
 import { webhookVerificationTime } from "./maintenance/replay-clock"
 import { recordOperationalError } from "./operations/telemetry"
-import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern } from "./stripe-checkout-trial"
+import { cardRequiredTrial, isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern, trialRequiresCard } from "./stripe-checkout-trial"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
 import { stripeTrialLifecycleEnabled } from "./billing-flags"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
@@ -379,7 +379,7 @@ export async function getWorkspaceBilling(workspaceId: string) {
   const customer = await getDatabase().prepare<{livemode:number;stripe_customer_id:string}>("SELECT livemode,stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id = ?").get(workspaceId)
   const state = await getDatabase().prepare("SELECT * FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
   const recovery = await readBillingRecovery(workspaceId, customer)
-  return { enabled: billingEnabled(), seatSyncEnabled: billingSeatSyncEnabled(), seatsCountPendingInvites: seatsCountPendingInvites(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery, cardRequiredTrial: isStripeCheckoutTrialConfigured() }
+  return { enabled: billingEnabled(), seatSyncEnabled: billingSeatSyncEnabled(), seatsCountPendingInvites: seatsCountPendingInvites(), testMode: process.env.MCA_STRIPE_MODE !== "live", billing: billing ?? null, occupiedSeats: usage?.count ?? 0, canManagePayment: Boolean(customer), modeCutoverRequired: !!customer && Boolean(customer.livemode) !== (process.env.MCA_STRIPE_MODE === "live"), access: await getCompanyAccess(workspaceId), state, recovery, cardRequiredTrial: cardRequiredTrial(), checkoutUnavailable: trialRequiresCard() && !isStripeCheckoutTrialConfigured() }
 }
 
 async function readBillingRecovery(workspaceId: string, customer: { livemode: number; stripe_customer_id: string } | undefined): Promise<import("./billing-display").BillingRecovery> {
@@ -418,7 +418,10 @@ function liveTrialHistory(list: Stripe.ApiList<Stripe.Subscription>) {
 }
 
 export async function createOnboardingCheckoutUrl(workspaceId: string, role: string, selectedSeats: number, providedClient?: StripeBillingClient) {
-  if (!isStripeCheckoutTrialConfigured()) return undefined
+  if (!isStripeCheckoutTrialConfigured()) {
+    if (trialRequiresCard() && (await getCompanyAccess(workspaceId)).reason === "finish_setup") await recordOperationalError("billing", "card_required_trial_checkout_unconfigured")
+    return undefined
+  }
   const access = await getCompanyAccess(workspaceId)
   if (!access.allowed && ["admin","super_admin"].includes(role) && access.reason === "finish_setup") {
     const state = await getDatabase().prepare<{selected_seats:number}>("SELECT selected_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
@@ -427,6 +430,8 @@ export async function createOnboardingCheckoutUrl(workspaceId: string, role: str
 }
 
 export async function createBillingCheckout(workspaceId: string, selectedSeats: number, onboarding = false, providedClient?: StripeBillingClient) {
+  if (trialRequiresCard() && !isStripeCheckoutTrialConfigured() && (onboarding || (await getCompanyAccess(workspaceId)).reason === "finish_setup"))
+    throw new AppError(503, "billing_checkout_unavailable", "Billing is temporarily unavailable. Please try again later.")
   monthlyPriceCents(selectedSeats)
   const client = providedClient ?? getStripeClient()
   const ids = await verifyBillingPrices(client)

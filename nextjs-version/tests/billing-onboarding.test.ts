@@ -39,7 +39,7 @@ before(async()=>{
   ;({GET,POST}=await import("../src/app/api/onboarding/route"))
   ;({createOnboardingCheckoutUrl,getStripeClient}=await import("../src/lib/mca/billing"))
 })
-after(async()=>{clearStripeEnv();delete process.env.MCA_SIGNUP_MODE;await closeDatabaseForTests();await database?.close()})
+after(async()=>{clearStripeEnv();delete process.env.MCA_SIGNUP_MODE;delete process.env.MCA_TRIAL_REQUIRES_CARD;await closeDatabaseForTests();await database?.close()})
 test("invite-only blocks OAuth onboarding creation while existing workspace selection stays available",async()=>{
   delete process.env.MCA_SIGNUP_MODE
   const existing=await completeCompanyOnboarding("Invite-only selection fixture")
@@ -156,6 +156,49 @@ test("unconfigured POST onboarding starts a local trial and never constructs Str
     assert.throws(()=>getStripeClient(),/not enabled/)
     assert.match(warnings.join("\n"),/using the legacy no-card 14-day trial/)
   } finally {warn.mock.restore()}
+})
+test("card-required flag keeps a misconfigured new company in finish_setup without Stripe calls",async()=>{
+  clearStripeEnv()
+  process.env.MCA_TRIAL_REQUIRES_CARD="true"
+  const errors:string[]=[]
+  const error=mock.method(console,"error",(message:string)=>{errors.push(String(message))})
+  try {
+    const get=await json(await GET())
+    assert.equal(get.body.cardRequiredTrial,true)
+    assert.equal(get.body.checkoutUnavailable,true)
+    const created=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:"Unavailable card checkout company",selectedSeats:7})})))
+    assert.equal(created.status,200)
+    assert.equal(created.body.checkoutUrl,undefined)
+    assert.equal(created.body.checkoutUnavailable,true)
+    const workspaceId=String(created.body.workspaceId)
+    const state=await getDatabase().prepare<{trial_started_at:string|null;trial_ends_at:string|null;selected_seats:number;legacy_exempt:number;seat_limit:number}>("SELECT s.*,w.seat_limit FROM company_subscription_state s JOIN workspaces w ON w.id=s.workspace_id WHERE s.workspace_id=?").get(workspaceId)
+    assert.equal(state?.trial_started_at,null)
+    assert.equal(state?.trial_ends_at,null)
+    assert.equal(state?.selected_seats,7)
+    assert.equal(state?.seat_limit,1)
+    assert.equal(state?.legacy_exempt,0)
+    assert.deepEqual(await getCompanyAccess(workspaceId),{allowed:false,status:"paused",reason:"finish_setup",seatLimit:1,trialEndsAt:null,graceEndsAt:null,manualPaused:false})
+    const retry=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:"Unavailable card checkout company",selectedSeats:12})})))
+    assert.equal(retry.body.workspaceId,workspaceId)
+    assert.equal((await getDatabase().prepare<{selected_seats:number}>("SELECT selected_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId))?.selected_seats,7)
+    assert.ok(errors.some(message=>message.includes('"code":"card_required_trial_checkout_unconfigured"')))
+    assert.throws(()=>getStripeClient(),/not enabled/)
+    const {createBillingCheckout}=await import("../src/lib/mca/billing")
+    await assert.rejects(createBillingCheckout(workspaceId,7,true,{} as never),{code:"billing_checkout_unavailable"})
+    await getDatabase().prepare("UPDATE company_subscription_state SET access_extended_until=? WHERE workspace_id=?").run(new Date(Date.now()+86400000).toISOString(),workspaceId)
+    assert.equal((await getCompanyAccess(workspaceId)).status,"extended")
+  } finally {error.mock.restore();delete process.env.MCA_TRIAL_REQUIRES_CARD}
+})
+test("enabling card requirement does not pause an existing local trial",async()=>{
+  clearStripeEnv()
+  const existing=await completeCompanyOnboarding("Existing local trial company",3)
+  process.env.MCA_TRIAL_REQUIRES_CARD="true"
+  try {
+    const selected=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({workspaceId:existing.workspaceId})})))
+    assert.equal(selected.status,200)
+    assert.equal(selected.body.checkoutUnavailable,false)
+    assert.equal((await getCompanyAccess(existing.workspaceId)).status,"trial")
+  } finally {delete process.env.MCA_TRIAL_REQUIRES_CARD}
 })
 test("configured onboarding returns a mocked Checkout URL and finish_setup access",async()=>{
   setStripeEnv()

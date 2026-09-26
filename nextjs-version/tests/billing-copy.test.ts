@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { renderBillingEmailContent } from "../src/lib/mca/email"
 import { pricingFaqCopy } from "../src/lib/mca/billing-faq"
-import { isStripeCheckoutTrialConfigured } from "../src/lib/mca/stripe-checkout-trial"
+import { cardRequiredTrial, isStripeCheckoutTrialConfigured } from "../src/lib/mca/stripe-checkout-trial"
 
 const sourceRoot = join(import.meta.dirname, "../src")
 const copyPaths = [
@@ -185,6 +185,48 @@ test("pricing FAQ JSON stays on the no-card answers used when Stripe is not conf
   assert.match(faq.find(item => item.question === "Is there a free trial available?")?.answer ?? "", /No credit card is required/)
   assert.match(faq.find(item => /payment methods/i.test(item.question))?.answer ?? "", /card/)
   assert.match(faq.find(item => /annual/i.test(item.question))?.answer ?? "", /monthly/)
+})
+
+test("card-required flag removes reachable no-card copy with invalid Stripe settings", () => {
+  const previous=process.env.MCA_TRIAL_REQUIRES_CARD
+  process.env.MCA_TRIAL_REQUIRES_CARD="true"
+  try {
+    withStripeMode(false, () => {
+      assert.equal(isStripeCheckoutTrialConfigured(),false)
+      assert.equal(cardRequiredTrial(),true)
+      const faqs=pricingFaqCopy(false,14)
+      assert.match(faqs.find(item=>item.id===2)?.answer??"",/Enter a card at Stripe Checkout/)
+      assert.doesNotMatch(JSON.stringify(faqs),/no credit card|no card/i)
+      const localEmail=renderBillingEmailContent({data:{kind:"trial_ending"},actionUrl:"https://app.example.test/settings/billing"})
+      assert.match(localEmail.text,/Your existing trial is ending soon/)
+      assert.doesNotMatch(localEmail.text+localEmail.html,/no.card/i)
+      const onboarding=readFileSync(join(sourceRoot,"app/(auth)/onboarding/page.tsx"),"utf8")
+      const panel=readFileSync(join(sourceRoot,"components/mca/billing-panel.tsx"),"utf8")
+      assert.match(onboarding,/account\.cardRequiredTrial\?.*:"Start a 14-day trial with no card/)
+      assert.match(panel,/state\.cardRequiredTrial\?.*:" No card required; up to 5 trial users/)
+      assert.match(panel,/state\.cardRequiredTrial\?.*:"Checkout activates paid access immediately and ends the no-card trial/)
+    })
+  } finally {if(previous===undefined)delete process.env.MCA_TRIAL_REQUIRES_CARD;else process.env.MCA_TRIAL_REQUIRES_CARD=previous}
+})
+
+test("only the exact true flag enables the card requirement when Stripe is invalid", () => {
+  const previous=process.env.MCA_TRIAL_REQUIRES_CARD
+  try {
+    withStripeMode(false, () => {
+      for(const value of [undefined,"false","TRUE","1"]){
+        if(value===undefined)delete process.env.MCA_TRIAL_REQUIRES_CARD
+        else process.env.MCA_TRIAL_REQUIRES_CARD=value
+        assert.equal(cardRequiredTrial(),false)
+      }
+      process.env.MCA_TRIAL_REQUIRES_CARD="true"
+      assert.equal(cardRequiredTrial(),true)
+    })
+    withStripeMode(true, () => {
+      process.env.STRIPE_SECRET_KEY="sk_live_invalid_for_test_mode"
+      assert.equal(isStripeCheckoutTrialConfigured(),false)
+      assert.equal(cardRequiredTrial(),true)
+    })
+  } finally {if(previous===undefined)delete process.env.MCA_TRIAL_REQUIRES_CARD;else process.env.MCA_TRIAL_REQUIRES_CARD=previous}
 })
 
 restoreStripeEnv()

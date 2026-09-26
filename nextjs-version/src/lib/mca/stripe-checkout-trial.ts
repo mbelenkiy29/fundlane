@@ -41,6 +41,8 @@ export function stripeCheckoutTrialConfiguration() {
 }
 
 export const isStripeCheckoutTrialConfigured = () => stripeCheckoutTrialConfiguration().configured
+export const trialRequiresCard = () => process.env.MCA_TRIAL_REQUIRES_CARD === "true"
+export const cardRequiredTrial = () => trialRequiresCard() || isStripeCheckoutTrialConfigured()
 
 export function warnUnconfiguredStripeCheckoutTrial() {
   const { missing } = stripeCheckoutTrialConfiguration()

@@ -8,7 +8,7 @@ import type { MembershipContext, Role } from "./types"
 import { DEFAULT_ACTION_VISIBILITY, DEFAULT_FEATURE_FLAGS, DEFAULT_PAGE_VISIBILITY } from "./workspaces"
 import { monthlyPriceCents } from "./billing-catalog"
 import { initializeCompanyTrial } from "./company-access"
-import { isStripeCheckoutTrialConfigured, warnUnconfiguredStripeCheckoutTrial } from "./stripe-checkout-trial"
+import { cardRequiredTrial, warnUnconfiguredStripeCheckoutTrial } from "./stripe-checkout-trial"
 import { requireOpenSignup } from "./signup-guard"
 
 export const WORKSPACE_COOKIE = "mca_workspace"
@@ -108,8 +108,8 @@ export async function listSupabaseWorkspaces(identity: SupabaseIdentity) {
 
 export async function completeCompanyOnboarding(name: string, selectedSeats = 1) {
   requireOpenSignup()
-  const cardRequiredTrial = isStripeCheckoutTrialConfigured()
-  if (cardRequiredTrial) monthlyPriceCents(selectedSeats)
+  const requiresCard = cardRequiredTrial()
+  if (requiresCard) monthlyPriceCents(selectedSeats)
   const identity = await supabaseIdentity()
   if (!identity) throw new AppError(401, "authentication_required", "Verify your email and sign in before continuing.")
   const workspaceId = await withImmediateTransaction(async db => {
@@ -127,7 +127,7 @@ export async function completeCompanyOnboarding(name: string, selectedSeats = 1)
     const membershipId = newId()
     await db.prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)`).run(membershipId,id,userId,now,now)
     await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(id,membershipId,now)
-    if (cardRequiredTrial) {
+    if (requiresCard) {
       await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,state_kind,selected_seats,updated_at) VALUES (?,0,'customer',?,?)").run(id,selectedSeats,now)
     } else {
       warnUnconfiguredStripeCheckoutTrial()
