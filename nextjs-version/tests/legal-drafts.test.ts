@@ -97,9 +97,12 @@ test("enabled drafts are visible but cannot authorize demo collection at /privac
     assert.match(agreement, /"href":"\/privacy"/)
   })
   for (const url of ["https://preview.example.test/privacy/", "https://fundlane.io/privacy?from=demo", "https://fundlane.io/%70rivacy"]) {
-    withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true", MCA_MARKETING_PRIVACY_URL: url }, () => {
-      assert.equal(getDemoConfiguration().enabled, false)
-    })
+    for (const databaseEnabled of ["false", "true"]) {
+      withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true", MCA_DEMO_DB_SUBMISSIONS_ENABLED: databaseEnabled, MCA_MARKETING_PRIVACY_URL: url }, () => {
+        assert.equal(getDemoConfiguration().enabled, false)
+        assert.equal(getDemoConfiguration().privacyUrl, null)
+      })
+    }
   }
   withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true", MCA_MARKETING_PRIVACY_URL: "https://fundlane.io/approved-notice" }, () => {
     assert.equal(getDemoConfiguration().enabled, true)
