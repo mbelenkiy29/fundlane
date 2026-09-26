@@ -16,7 +16,7 @@ import { createApplicationInvitation, copyApplicationLink, invitationEmailEnable
 import { getApplicationOutreachReport } from "../src/lib/mca/applications/report"
 import { OUTREACH_METRICS } from "../src/lib/mca/applications/contracts"
 import { invitationStatus } from "../src/components/mca/applications/invitation-status"
-import { scheduleDueInvitationReminders } from "../src/lib/mca/applications/reminders"
+import { processInvitationReminder, scheduleDueInvitationReminders } from "../src/lib/mca/applications/reminders"
 import { claimBackgroundJob, completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
 import { GET as listRoute, POST as createRoute } from "../src/app/api/mca/applications/route"
 import { POST as sendRoute } from "../src/app/api/mca/applications/[invitationId]/send/route"
@@ -32,6 +32,7 @@ const originalFetch = globalThis.fetch
 process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
 process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
 const originalEmailUrl = process.env.MCA_EMAIL_WEBHOOK_URL
+const originalRuntimeKinds = process.env.MCA_JOB_RUNTIME_KINDS
 const origin = "https://fundlane.example.test"
 const workspace = "outreach-workspace", otherWorkspace = "outreach-other"
 const actions = { createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: true, viewCompanyFinancials: true }
@@ -42,6 +43,7 @@ const code = (expected: string) => (error: unknown) => (error as { code?: string
 
 before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
+  process.env.MCA_JOB_RUNTIME_KINDS = "application_invitation_email,application_invitation_reminder"
   fixture = await createPostgresTestDatabase("outreach")
   Object.assign(process.env, fixture.env())
   const db = getDatabase(), at = nowIso()
@@ -59,6 +61,7 @@ before(async () => {
 after(async () => {
   globalThis.fetch = originalFetch
   if (originalEmailUrl === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL; else process.env.MCA_EMAIL_WEBHOOK_URL = originalEmailUrl
+  if (originalRuntimeKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = originalRuntimeKinds
   await closeDatabaseForTests(); await fixture?.close()
 })
 async function invite(a = ada, name = `Client ${randomUUID()}`) {
@@ -334,6 +337,88 @@ test("reconciliation rejects an unset runtime and a legacy failed delivery witho
     assert.equal(job?.result_json, null)
     assert.equal((await getDatabase().prepare<{ delivery: string | null }>("SELECT delivery FROM mca_application_invitation_deliveries WHERE id=?").get(delivery.id))?.delivery, null)
   } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
+})
+
+test("a failed pre-provider claim remains visible and can be reconciled for invitations and reminders", async () => {
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+  let sends = 0
+  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
+  try {
+    const invitation = await invite()
+    const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+    const first = await runningJob(queued.jobId)
+    await failBackgroundJob(first, new Error("killed before provider marker"))
+    const second = await runningJob(queued.jobId)
+    let invitationFailure: unknown
+    try { await processInvitationEmail(ada, second) } catch (error) { invitationFailure = error }
+    assert.ok(code("delivery_uncertain")(invitationFailure))
+    await failBackgroundJob(second, invitationFailure)
+    const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
+    assert.equal(delivery.requiresReconciliation, true)
+    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))?.result_json, null)
+    assert.equal(sends, 0)
+    delete process.env.MCA_JOB_RUNTIME_KINDS
+    try { await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain")) }
+    finally { process.env.MCA_JOB_RUNTIME_KINDS = "application_invitation_email,application_invitation_reminder" }
+    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
+    await reconcileInvitationDelivery(admin, invitation.id, { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-preflight" })
+    const retried = await runningJob(queued.jobId)
+    assert.equal((await processInvitationEmail(admin, retried)).delivery, "sent")
+    await completeBackgroundJob(retried, { delivery: "sent" })
+    assert.equal(sends, 1)
+
+    const reminderInvitation = await invite()
+    const past = new Date(Date.now() - 3 * 3600_000).toISOString()
+    await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, reminderInvitation.id)
+    await scheduleDueInvitationReminders(origin)
+    const reminder = (await getDatabase().prepare<{ id: string; job_id: string }>("SELECT id,job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND purpose='reminder'").get(reminderInvitation.id))!
+    const firstReminder = await runningJob(reminder.job_id)
+    await failBackgroundJob(firstReminder, new Error("killed before provider marker"))
+    const secondReminder = await runningJob(reminder.job_id)
+    let failure: unknown
+    try { await processInvitationReminder(secondReminder) } catch (error) { failure = error }
+    assert.ok(code("delivery_uncertain")(failure))
+    await failBackgroundJob(secondReminder, failure)
+    const listed = (await listApplicationInvitations(admin)).find(row => row.id === reminderInvitation.id)!.deliveries[0]
+    assert.equal(listed.requiresReconciliation, true)
+    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(reminder.job_id))?.result_json, null)
+    assert.equal(sends, 1)
+    await reconcileInvitationDelivery(admin, reminderInvitation.id, { deliveryId: reminder.id, outcome: "accepted", evidence: "provider-receipt-reminder-preflight" })
+    assert.equal((await ownedInvitation(admin, reminderInvitation.id)).reminder_count, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
+  }
+})
+
+test("unset invitation kinds preserve the existing private email retry behavior", async () => {
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  const priorKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  delete process.env.MCA_JOB_RUNTIME_KINDS
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+  let sends = 0
+  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
+  try {
+    const invitation = await invite()
+    const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+    const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
+    assert.equal((await reconcileRoute(request(`/api/mca/applications/${invitation.id}/reconcile`, admin, "POST", { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-receipt-disabled-123" }), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 404)
+    const first = await runningJob(queued.jobId)
+    await failBackgroundJob(first, new Error("before provider"))
+    const retried = await runningJob(queued.jobId)
+    assert.equal((await processInvitationEmail(ada, retried)).delivery, "sent")
+    assert.equal(sends, 1)
+    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))?.result_json, null)
+  } finally {
+    globalThis.fetch = originalFetch
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
+    if (priorKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = priorKinds
+  }
 })
 
 test("a paused invitation with no send attempt can be approved again after recovery", async () => {

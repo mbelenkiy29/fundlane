@@ -9,6 +9,7 @@ import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
+import { runtimeKinds } from "../jobs/runtime-kinds"
 import { effectivePageVisibility, isActionAllowed } from "../policy"
 import { getWorkspaceSettings } from "../workspaces"
 import { invitationInput, reconcileDeliveryInput, type ApplicationInvitation, type InvitationDelivery } from "./contracts"
@@ -32,6 +33,13 @@ const selection = `SELECT a.*, i.form_id AS current_form_id, i.display_name AS f
   JOIN users u ON u.id=m.user_id
   LEFT JOIN intake_events e ON e.id=a.intake_id AND e.workspace_id=a.workspace_id`
 const admin = (actor: DealActor) => actor.role === "admin" || actor.role === "super_admin"
+export function invitationRuntimeEnabled(kind: "application_invitation_email" | "application_invitation_reminder"): boolean {
+  return process.env.MCA_JOB_RUNTIME === "vercel_cron" && runtimeKinds().includes(kind)
+}
+function requiresDeliveryReconciliation(delivery: { state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }, kind: "application_invitation_email" | "application_invitation_reminder"): boolean {
+  return invitationRuntimeEnabled(kind) && delivery.state === "failed" && !delivery.delivery &&
+    (isVercelDeliveryAttempt(delivery.result_json) && delivery.attempts > 0 || delivery.error_code === "delivery_uncertain" && delivery.attempts > 1)
+}
 function invalidLink(): AppError { return new AppError(410, "invitation_inactive", "This application link is expired, completed, or no longer active. Ask your representative for a new link.") }
 
 export async function assertApplicationAccess(actor: DealActor, write = false): Promise<void> {
@@ -84,7 +92,7 @@ export async function listApplicationInvitations(actor: DealActor): Promise<Appl
     requestedAmountCents: row.requested_amount_cents, lastStep: row.last_step, reminderCount: Number(row.reminder_count ?? 0),
     intakeId: row.intake_id, intakeError: row.intake_error, dealId: row.deal_id,
     deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code,
-      requiresReconciliation: process.env.MCA_JOB_RUNTIME === "vercel_cron" && isVercelDeliveryAttempt(d.result_json) && d.state === "failed" && !d.delivery && d.attempts > 0,
+      requiresReconciliation: requiresDeliveryReconciliation(d, d.purpose === "reminder" ? "application_invitation_reminder" : "application_invitation_email"),
     })),
   }))
 }
@@ -168,7 +176,8 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      if (process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(prior.result_json)) {
+      if (invitationRuntimeEnabled("application_invitation_email") || isVercelDeliveryAttempt(prior.result_json) ||
+        prior.error_code === "delivery_uncertain" && prior.attempts > 1) {
         // A pause before the first attempt cannot have reached the provider. A fresh
         // delivery records the user's renewed approval after recovery.
         if (prior.error_code !== "company_paused" || prior.attempts !== 0) throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
@@ -192,13 +201,13 @@ export function isVercelDeliveryAttempt(resultJson: string | null): boolean {
   try { return (JSON.parse(resultJson) as { deliveryRuntime?: string }).deliveryRuntime === "vercel_cron" } catch { return false }
 }
 export async function markVercelDeliveryAttempt(job: BackgroundJob): Promise<void> {
-  if (process.env.MCA_JOB_RUNTIME !== "vercel_cron") return
+  if (!invitationRuntimeEnabled(job.kind as "application_invitation_email" | "application_invitation_reminder")) return
   const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET result_json=? WHERE workspace_id=? AND id=? AND state='running' AND lease_token=?")
     .run(JSON.stringify({ deliveryRuntime: "vercel_cron" }), job.workspace_id, job.id, job.lease_token)
   if (!saved.changes) throw new Error("background_job_lease_lost")
 }
 export async function reconcileInvitationDelivery(actor: DealActor, invitationId: string, input: unknown): Promise<void> {
-  if (process.env.MCA_JOB_RUNTIME !== "vercel_cron") throw new AppError(404, "reconciliation_unavailable", "Invitation delivery reconciliation is unavailable.")
+  if (!invitationRuntimeEnabled("application_invitation_email") && !invitationRuntimeEnabled("application_invitation_reminder")) throw new AppError(404, "reconciliation_unavailable", "Invitation delivery reconciliation is unavailable.")
   await assertApplicationAccess(actor, true)
   if (!admin(actor)) throw new AppError(403, "admin_required", "An administrator must reconcile email delivery.")
   const parsed = reconcileDeliveryInput.safeParse(input)
@@ -209,7 +218,7 @@ export async function reconcileInvitationDelivery(actor: DealActor, invitationId
     const delivery = await getDatabase().prepare<{ job_id: string; purpose: string; state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }>(`SELECT d.job_id,d.purpose,j.state,d.delivery,j.attempts,j.error_code,j.result_json FROM mca_application_invitation_deliveries d
       JOIN mca_background_jobs j ON j.id=d.job_id AND j.workspace_id=d.workspace_id
       WHERE d.workspace_id=? AND d.invitation_id=? AND d.id=? FOR UPDATE OF d,j`).get(actor.workspaceId, invitationId, deliveryId)
-    if (!delivery || delivery.state !== "failed" || delivery.delivery || !isVercelDeliveryAttempt(delivery.result_json) || delivery.attempts === 0) throw new AppError(409, "reconciliation_unavailable", "This delivery is not an uncertain failed send.")
+    if (!delivery || !requiresDeliveryReconciliation(delivery, delivery.purpose === "reminder" ? "application_invitation_reminder" : "application_invitation_email")) throw new AppError(409, "reconciliation_unavailable", "This delivery is not an uncertain failed send.")
     const latest = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_application_invitation_deliveries WHERE workspace_id=? AND invitation_id=? ORDER BY created_at DESC,id DESC LIMIT 1").get(actor.workspaceId, invitationId)
     if (latest?.id !== deliveryId) throw new AppError(409, "reconciliation_unavailable", "Review the latest delivery before reconciling another attempt.")
     if (outcome === "not_sent" && !invitationActive(invitation)) throw invalidLink()
@@ -240,7 +249,7 @@ export async function processInvitationEmail(actor: DealActor, job: BackgroundJo
   const attempt = await getDatabase().prepare<{ invitation_id: string; delivery: "sent" | "preview" | null }>("SELECT invitation_id,delivery FROM mca_application_invitation_deliveries WHERE workspace_id=? AND id=? AND job_id=?").get(actor.workspaceId, job.resource_id, job.id)
   if (!attempt) throw new AppError(404, "delivery_not_found", "Invitation delivery not found.")
   if (attempt.delivery) return { delivery: attempt.delivery }
-  if ((process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(job.result_json)) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
+  if ((invitationRuntimeEnabled("application_invitation_email") || isVercelDeliveryAttempt(job.result_json)) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
   const row = await ownedInvitation(actor, attempt.invitation_id)
   if (!invitationActive(row)) throw invalidLink()
   assertInvitationEmailEnabled()

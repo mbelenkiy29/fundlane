@@ -6,7 +6,7 @@ import { actorForDeals } from "../deals/service"
 import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
-import { invitationActive, invitationEmailEnabled as emailEnabled, invitationUrl, isVercelDeliveryAttempt, markVercelDeliveryAttempt, type InvitationRecord } from "./service"
+import { invitationActive, invitationEmailEnabled as emailEnabled, invitationRuntimeEnabled, invitationUrl, isVercelDeliveryAttempt, markVercelDeliveryAttempt, type InvitationRecord } from "./service"
 
 const CADENCE_MS = [2 * 3600_000, 24 * 3600_000, 72 * 3600_000]
 
@@ -70,7 +70,7 @@ export async function processInvitationReminder(job: BackgroundJob): Promise<{ d
   ).get(job.workspace_id, job.resource_id, job.id)
   if (!attempt) throw new AppError(404, "delivery_not_found", "Invitation reminder not found.")
   if (attempt.delivery) return { delivery: attempt.delivery }
-  if ((process.env.MCA_JOB_RUNTIME === "vercel_cron" || isVercelDeliveryAttempt(job.result_json)) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous reminder may have reached the provider. Reconcile its correlation ID before retrying.")
+  if ((invitationRuntimeEnabled("application_invitation_reminder") || isVercelDeliveryAttempt(job.result_json)) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous reminder may have reached the provider. Reconcile its correlation ID before retrying.")
   const row = await resolveApplicationInvitationFromId(job.workspace_id, attempt.invitation_id)
   const scheduledAt = row?.last_activity_at ? Date.parse(row.last_activity_at) + (CADENCE_MS[row.reminder_count] ?? 0) : NaN
   if (!row || !invitationActive(row) || row.submitted_at || !dueForReminder(row, new Date()) || !Number.isFinite(scheduledAt) || Date.now() - scheduledAt > 24 * 3600_000) {
