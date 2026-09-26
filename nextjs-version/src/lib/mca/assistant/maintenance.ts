@@ -5,7 +5,7 @@ import { removeStoredFile } from "./files"
 import { providerClient } from "./hosted-tools"
 
 /** Durable, idempotent cleanup. Resource deletion is safe to retry after a lost reply. */
-export async function maintainAssistantExperience() {
+export async function maintainAssistantExperience(maxCleanupJobs = 30) {
   if (!experienceEnabled()) return
   const db = getDatabase(),
     now = nowIso()
@@ -43,7 +43,7 @@ export async function maintainAssistantExperience() {
       )
       .run(newId(), file.id, file.workspace_id, file.run_id, now)
   // A crashed worker's lease expires; separate workers claim different rows.
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < maxCleanupJobs; i++) {
     const job = await withTransaction(async (tx) => {
       const row = await tx
         .prepare<{
