@@ -5,24 +5,27 @@ import { scheduleIntakeProcessing } from "../../src/lib/mca/intake/processing"
 import { scheduleDueInvitationReminders } from "../../src/lib/mca/applications/reminders"
 import { runDueAttachmentJobs } from "../../src/lib/mca/intake/service"
 import { cleanupWorkerStorage } from "../../src/lib/mca/jobs/cleanup"
+import type { BackgroundJobKind } from "../../src/lib/mca/jobs/queue"
+const nativeKinds: readonly BackgroundJobKind[] = ["document_upload", "document_scan", "draft_scan", "assistant_scan", "intake_process"]
 let stopped = false
 process.on("SIGTERM", () => { stopped = true })
 process.on("SIGINT", () => { stopped = true })
 async function main() {
+  const nativeOnly = process.env.MCA_NATIVE_DOCUMENT_EXECUTOR === "true"
   let maintenanceAt = 0
   let intakeAt = 0
   try {
     while (!stopped) {
       try {
-        if (Date.now() >= intakeAt) {
+        if (!nativeOnly && Date.now() >= intakeAt) {
           await runDueAttachmentJobs(5)
           await scheduleIntakeProcessing(25)
           await scheduleDueInvitationReminders(process.env.MCA_APP_ORIGIN ?? "")
           intakeAt = Date.now() + 5000
         }
         await touchDocumentWorkerHeartbeat()
-        await recoverSubmissionOutbox()
-        const worked = await runNextBackgroundJob()
+        if (!nativeOnly) await recoverSubmissionOutbox()
+        const worked = await runNextBackgroundJob(nativeOnly ? nativeKinds : undefined)
         if (Date.now() >= maintenanceAt) {
           await cleanupWorkerStorage()
           maintenanceAt = Date.now() + 60_000

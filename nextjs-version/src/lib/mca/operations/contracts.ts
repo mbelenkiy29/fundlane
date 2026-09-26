@@ -16,6 +16,8 @@ export type Metrics = {
   recentEmailFailures: number
   recentErrors: number
   documentWorkerHeartbeatAgeSeconds: number | null
+  documentFailed: number
+  scannerUnavailable: number
 }
 export function documentWorkerReady(metrics: {
   documentWorkerHeartbeatAgeSeconds: number | null

@@ -156,7 +156,17 @@ export function StatusDashboard({ preview }: { preview?: Status }) {
           role="alert"
           className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
         >
-          Document worker has not claimed work recently.
+          Document worker heartbeat is stale. Check the document cron schedule, CRON_SECRET, database access, and native executor logs.
+        </p>
+      )}
+      {metrics && metrics.scannerUnavailable > 0 && (
+        <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          {metrics.scannerUnavailable} document job{metrics.scannerUnavailable === 1 ? " is" : "s are"} waiting for a scanner verdict. Check native executor health or Cloudmersive credentials; retry failed scans after recovery.
+        </p>
+      )}
+      {metrics && metrics.documentFailed > 0 && (
+        <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          {metrics.documentFailed} document or intake job{metrics.documentFailed === 1 ? " has" : "s have"} failed. Inspect worker job error codes and retry only after the cause is resolved.
         </p>
       )}
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
