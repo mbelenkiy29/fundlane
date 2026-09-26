@@ -14,9 +14,11 @@ import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assert
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail } from "../src/lib/mca/billing-operations"
+import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
+import type { DbExecutor } from "../src/lib/mca/db"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -40,7 +42,7 @@ async function fixture(mapped = true) {
   if (mapped) await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,created_at) VALUES (?,?,?)").run(local.workspaceId,customerId,nowIso())
   const sub = subscription(customerId)
   const invoice = { id:`in_${suffix}`,customer:customerId,livemode:false,status:"paid",billing_reason:"subscription_create",currency:"usd",amount_due:71500,amount_paid:71500,amount_remaining:0,hosted_invoice_url:null,period_start:sub.items.data[0].current_period_start,period_end:sub.items.data[0].current_period_end,created:Math.floor(Date.now()/1000),parent:{subscription_details:{subscription:sub.id}},attempt_count:1,due_date:null,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:Math.floor(Date.now()/1000) as number|null} }
-   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,expires:0,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,checkoutKey:undefined as string|undefined,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
+   const state = { subscriptions: mapped ? [sub] : [] as BillingSubscription[], invoices: mapped ? [invoice] : [] as typeof invoice[],fail:false,createdCustomers:0,checkouts:0,expires:0,checkoutStatus:"open" as "open"|"expired"|"complete",checkoutSubscription:null as string|null,updates:[] as Record<string,unknown>[], invoiceUpdates:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, finalizations:[] as Array<{id:string;params:Record<string,unknown>;key:string|undefined}>, invoiceReads:0, checkoutParams:{} as Record<string,unknown>,checkoutKey:undefined as string|undefined,priceAmount:BILLING_CATALOG.base.unitAmountCents,processing:false }
   const client = {
     customers:{ create:async()=>{state.createdCustomers++;return{id:customerId,livemode:false}},retrieve:async()=>({id:customerId,livemode:false,metadata:{workspace_id:local.workspaceId}}) },
     subscriptions:{ list:async()=>{if(state.fail)throw new Error("outage");return{data:state.subscriptions,has_more:false}},retrieve:async(id:string)=>state.subscriptions.find(s=>s.id===id),update:async(_id:string,params:Record<string,unknown>)=>{state.updates.push(params);if("pause_collection" in params)sub.pause_collection=params.pause_collection ? {behavior:"keep_as_draft"} : null;return sub} },
@@ -49,11 +51,212 @@ async function fixture(mapped = true) {
     invoices:{list:async()=>{state.invoiceReads++;return{data:structuredClone(state.invoices),has_more:false}},finalizeInvoice:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.finalizations.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params,{status:"open",hosted_invoice_url:`https://invoice.stripe.com/i/${id}`,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:null}});return structuredClone(target)},update:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.invoiceUpdates.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params);return structuredClone(target)}},
     invoicePayments:{list:async(params:{invoice?:string;payment?:{payment_intent?:string}})=>({data:state.processing?state.invoices.filter(i=>i.amount_remaining>0 && (!params.invoice || params.invoice===i.id) && (!params.payment?.payment_intent || params.payment.payment_intent===`pi_${i.id}`)).map(i=>({id:`ip_${i.id}`,invoice:i.id,livemode:false,status:"open",amount_requested:i.amount_remaining,amount_paid:null,currency:"usd",payment:{type:"payment_intent",payment_intent:`pi_${i.id}`}})):[],has_more:false})},
     paymentIntents:{retrieve:async(id:string)=>({id,customer:customerId,livemode:false,currency:"usd",amount:71500,amount_received:0,status:"processing"})},
-    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:"open",url:"https://checkout.stripe.com/test"}),expire:async()=>{state.expires++;return{}}}},
+    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:state.checkoutStatus,subscription:state.checkoutSubscription,url:"https://checkout.stripe.com/test"}),expire:async()=>{state.expires++;state.checkoutStatus="expired";return{}}}},
     subscriptionSchedules:{create:async(params:Record<string,unknown>)=>{assert.deepEqual(params,{from_subscription:sub.id});return{id:`sched_${suffix}`,customer:customerId,subscription:sub.id,livemode:false,status:"active",metadata:{},phases:[{start_date:sub.items.data[0].current_period_start,end_date:sub.items.data[0].current_period_end}]}},update:async()=>({})},
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
 }
+
+test("trial grants limit repeat owners, keep public domains exempt, and flag fingerprint reuse without writes", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const owner = await db.prepare<{email:string}>("SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").get(first.workspaceId)
+  assert.ok(owner)
+  const second = await createWorkspaceWithAdmin({workspaceName:"Second company",adminName:"Owner",adminEmail:owner.email.toUpperCase(),password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    assert.equal(await trialAllowedForOwner(first.workspaceId,db),true)
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    assert.equal((first.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,14,"first owner receives the trial")
+    const reserved = await db.prepare<{checkout_session_id:string}>("SELECT checkout_session_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId)
+    assert.ok(reserved?.checkout_session_id)
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    assert.equal(first.state.checkouts,1,"the same workspace reuses its open trial Checkout")
+    assert.equal((await db.prepare<{checkout_session_id:string}>("SELECT checkout_session_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId))?.checkout_session_id,reserved.checkout_session_id)
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"another workspace cannot claim the open trial")
+    const checkoutClient = await fixture(false)
+    const checkout = await createBillingCheckout(second.workspaceId,1,false,checkoutClient.client)
+    assert.ok(checkout.url)
+    assert.equal((checkoutClient.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined,"second Checkout before reconciliation is paid")
+    const sub = {id:`sub_${randomUUID()}`,trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600,default_payment_method:"pm_one"} as Stripe.Subscription
+    const card = {paymentMethods:{retrieve:async()=>({card:{fingerprint:"fp_repeat"}})},setupIntents:{retrieve:async()=>{throw new Error("unexpected")}}} as unknown as Pick<Stripe,"paymentMethods"|"setupIntents">
+    await recordTrialGrant(first.workspaceId,sub,card,db)
+    assert.equal((await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId)),undefined)
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false)
+    const grant = await db.prepare<{owner_email:string;email_domain:string}>("SELECT owner_email,email_domain FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId)
+    assert.equal(grant?.owner_email,owner.email.toLowerCase())
+    process.env.MCA_TRIAL_LIMIT_PER_USER = "2"
+    process.env.MCA_TRIAL_LIMIT_PER_EMAIL = "2"
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),true)
+    process.env.MCA_TRIAL_LIMIT_PER_DOMAIN = "1"
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false)
+    const gmail = await createWorkspaceWithAdmin({workspaceName:"Public domain",adminName:"Owner",adminEmail:`${randomUUID()}@gmail.com`,password:"Unused fixture password 99!"})
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(gmail.workspaceId,gmail.membershipId,nowIso())
+    await db.prepare("INSERT INTO company_trial_grants (workspace_id,stripe_subscription_id,owner_user_id,owner_email,email_domain,trial_started_at,created_at) SELECT ?,?,m.user_id,lower(u.email),'gmail.com',?,? FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").run(gmail.workspaceId,`sub_${randomUUID()}`,nowIso(),nowIso(),gmail.workspaceId)
+    const anotherGmail = await createWorkspaceWithAdmin({workspaceName:"Another public domain",adminName:"Owner",adminEmail:`${randomUUID()}@gmail.com`,password:"Unused fixture password 99!"})
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(anotherGmail.workspaceId,anotherGmail.membershipId,nowIso())
+    assert.equal(await trialAllowedForOwner(anotherGmail.workspaceId,db),true)
+    await recordTrialGrant(second.workspaceId,{...sub,id:`sub_${randomUUID()}`} as Stripe.Subscription,card,db)
+    const flagged = await db.prepare<{fingerprint_flagged_at:string|null}>("SELECT fingerprint_flagged_at FROM company_trial_grants WHERE workspace_id=?").get(second.workspaceId)
+    assert.ok(flagged?.fingerprint_flagged_at)
+    assert.equal((await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.trial_fingerprint_review'").get(second.workspaceId))?.count,1)
+    const audit = await db.prepare<{metadata:string}>("SELECT metadata FROM audit_events WHERE workspace_id=? AND action='billing.trial_fingerprint_review'").get(second.workspaceId)
+    assert.ok(audit)
+    assert.equal(audit.metadata.includes(first.workspaceId),false,"tenant audit metadata hides the other workspace")
+    assert.equal((await db.prepare<{fingerprint_prior_workspace_id:string}>("SELECT fingerprint_prior_workspace_id FROM company_trial_grants WHERE workspace_id=?").get(second.workspaceId))?.fingerprint_prior_workspace_id,first.workspaceId)
+  } finally {
+    for (const key of ["MCA_TRIAL_ABUSE_LIMITS_ENABLED","MCA_TRIAL_LIMIT_PER_USER","MCA_TRIAL_LIMIT_PER_EMAIL","MCA_TRIAL_LIMIT_PER_DOMAIN"]) delete process.env[key]
+  }
+})
+
+test("grant reconciliation keeps the owner who reserved Checkout after ownership transfers", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const original = await db.prepare<{user_id:string;email:string}>("SELECT m.user_id,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.id=?").get(first.membershipId)
+  assert.ok(original)
+  const sameOwner = await createWorkspaceWithAdmin({workspaceName:"Original owner's other company",adminName:"Owner",adminEmail:original.email,password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(sameOwner.workspaceId,sameOwner.membershipId,nowIso())
+  const replacement = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(replacement.workspaceId,replacement.membershipId,nowIso())
+  const replacementUser = await db.prepare<{user_id:string}>("SELECT user_id FROM memberships WHERE id=?").get(replacement.membershipId)
+  assert.ok(replacementUser)
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    const reservation = await db.prepare<{owner_user_id:string;owner_email:string;email_domain:string}>("SELECT owner_user_id,owner_email,email_domain FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId)
+    assert.deepEqual(reservation,{owner_user_id:original.user_id,owner_email:original.email.toLowerCase(),email_domain:"example.test"})
+    const newMembership = randomUUID()
+    await db.prepare("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)").run(newMembership,first.workspaceId,replacementUser.user_id,nowIso(),nowIso())
+    await db.prepare("UPDATE workspace_owners SET membership_id=?,updated_at=? WHERE workspace_id=?").run(newMembership,nowIso(),first.workspaceId)
+    const trial = {...subscription(first.customerId,5,"trialing"),trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600}
+    first.state.subscriptions.push(trial)
+    await syncWorkspaceBilling(first.workspaceId,first.client)
+    const grant = await db.prepare<{owner_user_id:string;owner_email:string;email_domain:string}>("SELECT owner_user_id,owner_email,email_domain FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId)
+    assert.deepEqual(grant,reservation)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId),undefined)
+    assert.equal(await trialAllowedForOwner(sameOwner.workspaceId,db),false,"the original owner still uses their one trial")
+    assert.equal(await trialAllowedForOwner(replacement.workspaceId,db),true,"the new owner did not claim this trial")
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("invalid fingerprint action warns and explicitly falls back to flag", () => {
+  const previous = process.env.MCA_TRIAL_FINGERPRINT_ACTION
+  const warnings:string[] = []
+  const originalWarn = console.warn
+  console.warn = (message: string) => { warnings.push(message) }
+  try {
+    process.env.MCA_TRIAL_FINGERPRINT_ACTION = "ignore"
+    assert.equal(trialFingerprintAction(),"flag")
+    assert.deepEqual(warnings,["Invalid MCA_TRIAL_FINGERPRINT_ACTION; falling back to flag."])
+    process.env.MCA_TRIAL_FINGERPRINT_ACTION = "off"
+    assert.equal(trialFingerprintAction(),"off")
+    delete process.env.MCA_TRIAL_FINGERPRINT_ACTION
+    assert.equal(trialFingerprintAction(),"flag")
+    assert.equal(warnings.length,1)
+  } finally {
+    console.warn = originalWarn
+    if (previous === undefined) delete process.env.MCA_TRIAL_FINGERPRINT_ACTION
+    else process.env.MCA_TRIAL_FINGERPRINT_ACTION = previous
+  }
+})
+
+test("expired trial Checkout releases its reservation for another workspace", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const owner = await db.prepare<{email:string}>("SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").get(first.workspaceId)
+  assert.ok(owner)
+  const second = await createWorkspaceWithAdmin({workspaceName:"Second company",adminName:"Owner",adminEmail:owner.email,password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
+  const secondClient = await fixture(false)
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    first.state.checkoutStatus = "expired"
+    await syncWorkspaceBilling(first.workspaceId,first.client)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId),undefined)
+    await createBillingCheckout(second.workspaceId,1,false,secondClient.client)
+    assert.equal((secondClient.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,14)
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("completed trial Checkout stays counted past reservation expiry until a lagging subscription is granted", async () => {
+  const db = getDatabase()
+  const first = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(first.workspaceId,first.membershipId,nowIso())
+  const owner = await db.prepare<{email:string}>("SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=?").get(first.workspaceId)
+  assert.ok(owner)
+  const second = await createWorkspaceWithAdmin({workspaceName:"Same owner",adminName:"Owner",adminEmail:owner.email,password:"Unused fixture password 99!"})
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(first.workspaceId,1,false,first.client)
+    await db.prepare("UPDATE company_trial_reservations SET expires_at=? WHERE workspace_id=?").run(new Date(Date.now()-1000).toISOString(),first.workspaceId)
+    first.state.checkoutStatus = "complete"
+    const trial = {...subscription(first.customerId,5,"trialing"),trial_start:Math.floor(Date.now()/1000),trial_end:Math.floor(Date.now()/1000)+1209600}
+    first.state.checkoutSubscription = trial.id
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"expired timestamp cannot free a completed Checkout")
+    const secondClient = await fixture(false)
+    await createBillingCheckout(second.workspaceId,1,false,secondClient.client)
+    assert.equal((secondClient.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined)
+    const laggingClient = {...first.client,subscriptions:{...first.client.subscriptions,retrieve:async()=>trial}} as unknown as StripeBillingClient
+    await syncWorkspaceBilling(first.workspaceId,laggingClient)
+    assert.equal(first.state.subscriptions.length,0,"subscription list still lags")
+    assert.equal((await db.prepare<{stripe_subscription_id:string}>("SELECT stripe_subscription_id FROM company_trial_grants WHERE workspace_id=?").get(first.workspaceId))?.stripe_subscription_id,trial.id)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId),undefined)
+    assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"durable grant continues to count")
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("completed Checkout without a trial releases its reservation", async () => {
+  const db = getDatabase()
+  const f = await fixture(false)
+  await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(f.workspaceId,f.membershipId,nowIso())
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await createBillingCheckout(f.workspaceId,1,false,f.client)
+    const paid = subscription(f.customerId)
+    f.state.subscriptions.push(paid)
+    f.state.checkoutStatus = "complete"
+    f.state.checkoutSubscription = paid.id
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    assert.equal(await db.prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(f.workspaceId),undefined)
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("disabled trial limits make no reservation queries or writes", async () => {
+  delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED
+  const forbidden = {prepare: () => { throw new Error("disabled trial limits touched the database") }} as unknown as DbExecutor
+  assert.equal(await trialAllowedForOwner("workspace",forbidden),true)
+  await reserveTrialForCheckout("workspace","cs_disabled",Math.floor(Date.now()/1000)+3600,forbidden)
+  await releaseTrialReservation("workspace","cs_disabled",forbidden)
+})
+
+test("enabled trial limits require an owner identity before granting trial Checkout", async () => {
+  const f = await fixture(false)
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    assert.equal(await trialAllowedForOwner(f.workspaceId,getDatabase()),false)
+    await createBillingCheckout(f.workspaceId,1,false,f.client)
+    assert.equal((f.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,undefined)
+    assert.equal(await getDatabase().prepare("SELECT workspace_id FROM company_trial_reservations WHERE workspace_id=?").get(f.workspaceId),undefined)
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
+
+test("reconciliation records a trial even when the subscription is already active", async () => {
+  const f = await fixture()
+  await getDatabase().prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(f.workspaceId,f.membershipId,nowIso())
+  f.state.subscriptions[0].trial_start = Math.floor(Date.now()/1000)-1209600
+  f.state.subscriptions[0].trial_end = Math.floor(Date.now()/1000)-60
+  process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  try {
+    await syncWorkspaceBilling(f.workspaceId,f.client)
+    assert.equal((await getDatabase().prepare<{stripe_subscription_id:string}>("SELECT stripe_subscription_id FROM company_trial_grants WHERE workspace_id=?").get(f.workspaceId))?.stripe_subscription_id,f.state.subscriptions[0].id)
+  } finally { delete process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED }
+})
 for (const entry of ["standalone", "outer_sync_failure", "outer_failure"] as const) test(`recovery verification failure survives ${entry} rollback with a single pool connection`, { timeout: 20000 }, async () => {
   const previousMax = process.env.MCA_DB_POOL_MAX
   await closeDatabaseForTests()

@@ -9,6 +9,7 @@ import { enqueueBillingNotification, reconcileBillingInvoices } from "./billing-
 import { webhookVerificationTime } from "./maintenance/replay-clock"
 import { recordOperationalError } from "./operations/telemetry"
 import { isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern } from "./stripe-checkout-trial"
+import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
@@ -18,7 +19,7 @@ const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { en
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
 export const billingRole = (role: string) => ["admin", "super_admin"].includes(role) ? BILLING_ADMIN_ROLE : BILLING_EMPLOYEE_ROLE
-export type StripeBillingClient = Pick<Stripe, "customers" | "subscriptions" | "subscriptionSchedules" | "prices" | "checkout" | "billingPortal" | "webhooks" | "invoices" | "invoicePayments" | "paymentIntents" | "charges" | "refunds" | "disputes">
+export type StripeBillingClient = Pick<Stripe, "customers" | "subscriptions" | "subscriptionSchedules" | "prices" | "checkout" | "billingPortal" | "webhooks" | "invoices" | "invoicePayments" | "paymentIntents" | "paymentMethods" | "setupIntents" | "charges" | "refunds" | "disputes">
 
 export function assertBillingMappingMode(mapping: {livemode:number}) {
   if (Boolean(mapping.livemode) !== stripeLiveMode()) throw new AppError(409,"billing_mode_cutover_required","This company has a customer in the other Stripe mode. A platform operator must complete an explicit billing cutover; existing access and records are retained.")
@@ -74,6 +75,8 @@ export interface BillingSubscription {
   current_period_end?: number | null
   trial_start?: number | null
   trial_end?: number | null
+  default_payment_method?: string | Stripe.PaymentMethod | null
+  pending_setup_intent?: string | Stripe.SetupIntent | null
   items: { data: Array<{ id?: string; quantity?: number | null; current_period_start?: number; current_period_end?: number; price: { id: string } }> }
 }
 export interface BillingEntitlement {
@@ -183,6 +186,27 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
       live = result.data as BillingSubscription[]
     } catch { throw new AppError(503, "billing_unavailable", "Company billing verification is temporarily unavailable. Existing access is unchanged; please retry.") }
     live = fundlaneSubscriptions(live, mapping.stripe_customer_id)
+    // A delayed webhook may first reconcile a trial after it has ended.
+    const grantedTrial = live.find(s => s.trial_start && s.trial_end)
+    if (grantedTrial) await recordTrialGrant(workspaceId,grantedTrial as Stripe.Subscription,client,db)
+    if (trialAbuseLimitsEnabled() && !grantedTrial) {
+      const reservation = await db.prepare<{checkout_session_id:string}>("SELECT checkout_session_id FROM company_trial_reservations WHERE workspace_id=?").get(workspaceId)
+      if (reservation) {
+        // A completed Checkout can arrive before its subscription is visible in a
+        // subscription list. Keep the claim until that subscription can be checked.
+        const session = await client.checkout.sessions.retrieve(reservation.checkout_session_id)
+        if (session.status === "expired") await releaseTrialReservation(workspaceId,session.id,db)
+        else if (session.status === "complete" && session.subscription) {
+          const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription.id
+          const completed = live.find(s => s.id === subscriptionId) ?? await client.subscriptions.retrieve(subscriptionId)
+          if (completed) {
+            const [managed] = fundlaneSubscriptions([completed], mapping.stripe_customer_id)
+            if (managed?.trial_start && managed.trial_end) await recordTrialGrant(workspaceId,managed as Stripe.Subscription,client,db)
+            else if (managed) await releaseTrialReservation(workspaceId,session.id,db)
+          }
+        }
+      }
+    }
     let current = currentEntitlement(live, mapping.stripe_customer_id)
     await ensureBillingState(workspaceId, db)
     const accessHistory = await db.prepare<{legacy_exempt:number;access_extended_until:string|null}>("SELECT legacy_exempt,access_extended_until FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
@@ -330,6 +354,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
       if (pending.status === "open") {
         if (mapping.checkout_plan_slug === slug && pending.url && (pending.automatic_tax?.enabled === true) === stripeTaxEnabled()) return { url: pending.url }
         await client.checkout.sessions.expire(pending.id)
+        await releaseTrialReservation(workspaceId,pending.id,db)
       } else if (pending.status === "complete") {
         const subscriptionId = typeof pending.subscription === "string" ? pending.subscription : pending.subscription?.id
         const previous = subscriptionId ? await client.subscriptions.retrieve(subscriptionId) : null
@@ -338,21 +363,24 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
         if (!previous || !["canceled", "incomplete_expired"].includes(previous.status))
           throw new AppError(409, "billing_checkout_pending", "Your checkout is being reconciled. Retry billing sync before starting another checkout.")
       }
+      if (pending.status === "expired") await releaseTrialReservation(workspaceId,pending.id,db)
     }
     // Subscription history and the original trial marker prevent a second trial after
     // a canceled subscription or an expired Checkout. Neither is reset by retrying.
     const history = await db.prepare<{trial_started_at:string|null}>("SELECT trial_started_at FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-    const trialDays = !history?.trial_started_at && !liveTrialHistory(await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})) ? billingTrialDays() : null
+    const trialDays = !history?.trial_started_at && !liveTrialHistory(await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})) && await trialAllowedForOwner(workspaceId,db) ? billingTrialDays() : null
     const slot = Math.floor(Date.now() / 1800000)
+    const expiresAt = (slot + 2) * 1800
     const session = await client.checkout.sessions.create({ mode: "subscription", customer: mapping.stripe_customer_id,
       ...(stripeTaxEnabled() ? { automatic_tax: { enabled: true }, billing_address_collection: "required" as const, tax_id_collection: { enabled: true }, customer_update: { address: "auto" as const, name: "auto" as const } } : {}),
       integration_identifier: COMPANY_CHECKOUT_INTEGRATION_IDENTIFIER,
       client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
       subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
       line_items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])],
-      success_url: returnUrl, cancel_url: returnUrl, expires_at: (slot + 2) * 1800,
+      success_url: returnUrl, cancel_url: returnUrl, expires_at: expiresAt,
     }, { idempotencyKey: `fundlane-checkout-${workspaceId}-${slug}-${mapping.checkout_session_id ?? "initial"}-${slot}` })
     if (session.livemode !== stripeLiveMode() || !session.url) throw new AppError(503, "billing_checkout_unavailable", "Checkout is temporarily unavailable.")
+    if (trialDays) await reserveTrialForCheckout(workspaceId,session.id,expiresAt,db)
     await db.prepare("UPDATE workspace_stripe_customers SET checkout_session_id = ?, checkout_plan_slug = ? WHERE workspace_id = ?").run(session.id, slug, workspaceId)
     return { url: session.url }
   })
