@@ -21,6 +21,6 @@ export function getDemoConfiguration() {
     webhookUrl,
     token,
     databaseEnabled,
-    enabled: databaseEnabled || Boolean(privacyUrl && webhookUrl && token),
+    enabled: Boolean(privacyUrl && (databaseEnabled || (webhookUrl && token))),
   }
 }

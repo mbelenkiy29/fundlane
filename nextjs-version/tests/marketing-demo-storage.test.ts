@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
+import { decryptSensitive } from "../src/lib/mca/crypto"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
 import { isDemoStorageAvailable, notifyDemoSubmission, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -8,7 +9,9 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 test("demo submissions persist once and reject conflicting request IDs", async () => {
   const db = await createPostgresTestDatabase("demo_submissions")
   const previous = process.env.DATABASE_URL
+  const previousKey = process.env.MCA_DATA_ENCRYPTION_KEY
   process.env.DATABASE_URL = db.databaseUrl
+  process.env.MCA_DATA_ENCRYPTION_KEY = randomBytes(32).toString("base64url")
   try {
     assert.equal(await isDemoStorageAvailable(), true)
     const id = randomUUID()
@@ -16,11 +19,19 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     assert.equal(await storeDemoSubmission(id, contact), true)
     assert.equal(await storeDemoSubmission(id, contact), false)
     await assert.rejects(storeDemoSubmission(id, { ...contact, brokerage: "Different" }))
-    const rows = await db.query("SELECT request_id, name, email, brokerage, team_size, message, created_at FROM marketing_demo_submissions")
+    const rows = await db.query("SELECT * FROM marketing_demo_submissions")
     assert.equal(rows.rows.length, 1)
-    assert.equal(rows.rows[0].request_id, id)
-    assert.equal(rows.rows[0].email, contact.email)
-    assert.ok(rows.rows[0].created_at)
+    const row = rows.rows[0] as { request_id: string; payload_cipher: string; payload_digest: string; created_at: Date }
+    assert.deepEqual(Object.keys(row).sort(), ["created_at", "payload_cipher", "payload_digest", "request_id"])
+    assert.equal(row.request_id, id)
+    assert.ok(row.payload_cipher.startsWith("v1."))
+    assert.deepEqual(JSON.parse(decryptSensitive(row.payload_cipher, `marketing-demo-submission:${id}`)), contact)
+    assert.throws(() => decryptSensitive(row.payload_cipher, "marketing-demo-submission:another-request"))
+    assert.equal(JSON.stringify(row).includes(contact.email), false)
+    assert.equal(JSON.stringify(row).includes(contact.name), false)
+    assert.equal(JSON.stringify(row).includes(contact.brokerage), false)
+    assert.equal(JSON.stringify(row).includes(contact.message), false)
+    assert.ok(row.created_at)
     const security = await db.query("SELECT relrowsecurity FROM pg_class WHERE oid = 'marketing_demo_submissions'::regclass")
     assert.equal(security.rows[0].relrowsecurity, true)
     await db.query("DROP TABLE marketing_demo_submissions")
@@ -29,6 +40,8 @@ test("demo submissions persist once and reject conflicting request IDs", async (
     await closeDatabaseForTests()
     if (previous === undefined) delete process.env.DATABASE_URL
     else process.env.DATABASE_URL = previous
+    if (previousKey === undefined) delete process.env.MCA_DATA_ENCRYPTION_KEY
+    else process.env.MCA_DATA_ENCRYPTION_KEY = previousKey
     await db.close()
   }
 })

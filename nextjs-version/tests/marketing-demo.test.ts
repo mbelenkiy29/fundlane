@@ -164,6 +164,14 @@ test("unconfigured destination/privacy and unavailable rate storage fail closed"
   })
   assert.equal((await disabled.handler(request())).status, 503)
   assert.equal(disabled.sent.length, 0)
+  let stored = 0
+  const unpublishedDatabase = fixture({
+    configuration: () => ({ ...configuration(), enabled: false, databaseEnabled: true, privacyUrl: null }),
+    store: async () => { stored++; return true },
+  })
+  assert.equal((await unpublishedDatabase.handler(request())).status, 503)
+  assert.equal(stored, 0)
+  assert.equal(unpublishedDatabase.rateKeys.length, 0)
   const broken = fixture({
     rateLimit: async () => {
       throw new Error("private database error")
@@ -274,6 +282,14 @@ test("production configuration requires HTTPS destination, token and approved pr
     process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED = "TRUE"
     assert.equal(getDemoConfiguration().databaseEnabled, false)
     process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED = "true"
+    assert.equal(getDemoConfiguration().enabled, true)
+    delete process.env.MCA_MARKETING_PRIVACY_URL
+    assert.equal(getDemoConfiguration().databaseEnabled, true)
+    assert.equal(getDemoConfiguration().privacyUrl, null)
+    assert.equal(getDemoConfiguration().enabled, false)
+    process.env.MCA_MARKETING_PRIVACY_URL = "http://fundlane.io/privacy"
+    assert.equal(getDemoConfiguration().enabled, false)
+    process.env.MCA_MARKETING_PRIVACY_URL = "https://fundlane.io/privacy"
     assert.equal(getDemoConfiguration().enabled, true)
   } finally {
     if (oldFlag === undefined) delete process.env.MCA_DEMO_DB_SUBMISSIONS_ENABLED

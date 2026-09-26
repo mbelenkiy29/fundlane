@@ -1,11 +1,7 @@
 CREATE TABLE IF NOT EXISTS marketing_demo_submissions (
   request_id text PRIMARY KEY,
   payload_digest text NOT NULL,
-  name text NOT NULL,
-  email text NOT NULL,
-  brokerage text NOT NULL,
-  team_size text NOT NULL,
-  message text NOT NULL DEFAULT '',
+  payload_cipher text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 --> statement-breakpoint

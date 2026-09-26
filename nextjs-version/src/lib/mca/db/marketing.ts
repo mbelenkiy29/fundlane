@@ -11,10 +11,6 @@ export const marketingDemoRequests = pgTable("marketing_demo_requests", {
 export const marketingDemoSubmissions = pgTable("marketing_demo_submissions", {
   request_id: text().primaryKey(),
   payload_digest: text().notNull(),
-  name: text().notNull(),
-  email: text().notNull(),
-  brokerage: text().notNull(),
-  team_size: text().notNull(),
-  message: text().notNull().default(""),
+  payload_cipher: text().notNull(),
   created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("marketing_demo_submissions_created_idx").on(table.created_at.desc())])

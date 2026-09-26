@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createHash } from "node:crypto"
+import { encryptSensitive, hmacScopedToken } from "../mca/crypto"
 import { getDatabase } from "../mca/db"
 import { sendUsesendEmail } from "../mca/intake/usesend"
 import type { DemoRequest } from "./demo-schema"
@@ -17,13 +17,15 @@ export async function isDemoStorageAvailable(): Promise<boolean> {
 }
 
 export async function storeDemoSubmission(requestId: string, contact: Contact): Promise<boolean> {
-  const digest = createHash("sha256").update(JSON.stringify(contact)).digest("hex")
+  const payload = JSON.stringify(contact)
+  const digest = hmacScopedToken("marketing-demo-submission", requestId, payload)
+  const cipher = encryptSensitive(payload, `marketing-demo-submission:${requestId}`)
   const inserted = await getDatabase().queryOne<{ request_id: string }>(
     `INSERT INTO marketing_demo_submissions
-      (request_id, payload_digest, name, email, brokerage, team_size, message)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+      (request_id, payload_digest, payload_cipher)
+     VALUES (?, ?, ?)
      ON CONFLICT (request_id) DO NOTHING RETURNING request_id`,
-    [requestId, digest, contact.name, contact.email, contact.brokerage, contact.teamSize, contact.message]
+    [requestId, digest, cipher]
   )
   if (inserted) return true
   const existing = await getDatabase().queryOne<{ payload_digest: string }>(

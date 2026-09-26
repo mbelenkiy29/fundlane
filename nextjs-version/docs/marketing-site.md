@@ -5,21 +5,28 @@ The public homepage is `/`; `/landing` permanently redirects to it. `/demo` host
 ## Enable demo requests
 
 Direct database delivery is available after migration `0056_marketing_demo_submissions.sql`.
-Set `MCA_DEMO_DB_SUBMISSIONS_ENABLED=true` to accept requests into the private
-`marketing_demo_submissions` table. Its default is `false`, retaining the
-existing webhook route until the migration is released. When enabled, the page
+Set `MCA_DEMO_DB_SUBMISSIONS_ENABLED=true` and configure
+`MCA_MARKETING_PRIVACY_URL` to an approved HTTPS privacy notice to accept requests
+into the private `marketing_demo_submissions` table. The flag defaults to `false`,
+retaining the existing webhook route until the migration is released. The privacy
+URL remains a publication gate in both delivery modes. When enabled, the page
 checks database availability before enabling the form. A successful API response
 means the row was stored; email notification is best effort. Repeated request IDs
 with identical normalized fields are accepted without creating another row or
-resending email. Rows contain only form fields, an opaque request ID, a payload
-digest, and creation time; no raw IP address is stored.
+resending email. Contact details, including team size and message, are encrypted
+as one payload with the existing `MCA_DATA_ENCRYPTION_KEY` and bound to the opaque
+request ID. Plaintext columns contain only that ID, a keyed retry digest, and
+creation time; no raw IP address is stored. Preserve the encryption key when
+retaining or moving these rows.
 
 Set `MCA_DEMO_NOTIFY_EMAIL` to the monitored sales inbox. Notifications use
 the existing `MCA_USESEND_API_KEY` and `MCA_USESEND_FROM` settings. Missing
 configuration or provider failure emits a `marketing_demo_notification_skipped`
 or `marketing_demo_notification_failed` metric and does not reject a stored lead.
-Review the private table for leads until email delivery has been verified with
-a synthetic submission. `MCA_SUPPORT_EMAIL`, already used by the help center,
+Monitor notification delivery and verify it with a synthetic submission before
+relying on the inbox. The private table holds encrypted contact details and has
+no admin list view; database access alone shows only ciphertext and metadata.
+`MCA_SUPPORT_EMAIL`, already used by the help center,
 provides the `/demo` mailto fallback when storage is unavailable. If it is
 unset, the page shows a neutral unavailable message without an invented address.
 
@@ -39,7 +46,7 @@ Configure these server-only values in the intended deployment:
 - `MCA_DEMO_WEBHOOK_TOKEN`: bearer credential for that receiver.
 - `MCA_MARKETING_PRIVACY_URL`: HTTPS URL of the approved privacy notice. Do not point this at a placeholder page.
 
-All three must be valid before the legacy webhook path accepts requests. With missing configuration and the database flag unset, the form is visibly unavailable and its API returns 503. There is no preview-success mode. The homepage privacy link is rendered at build time; rebuild after configuring it. `/demo` reads configuration at request time.
+All three must be valid before the legacy webhook path accepts requests. With missing privacy configuration in either mode, the form is visibly unavailable and its API returns 503. There is no preview-success mode. The homepage privacy link is rendered at build time; rebuild after configuring it. `/demo` reads configuration at request time.
 
 The existing Postgres `request_rate_windows` table provides shared limits across application instances: five attempts per client address per minute and 120 total attempts per minute. Configure the ingress to overwrite forwarded client-address headers. Rate-store outages fail closed. No separate rate-limit migration is needed. The endpoint also validates same-origin browser requests, content type, an actual 12 KB streamed body limit, allowed fields, and a honeypot. Do not reuse this anonymous endpoint for authenticated merchant intake.
 
