@@ -105,6 +105,10 @@ test("real delivery history pins provider choice across environment changes and 
     (id,workspace_id,deal_id,kind,record_id,attempt_key,channel,state,recipient_cipher,payload_hash,correlation_id,external_id,error_code,error_message,created_at,updated_at)
     VALUES ('legacy-provider-pin',?,?, 'psf_request','legacy-psf-request','legacy-attempt','webhook','pending',NULL,?,'legacy-correlation',NULL,NULL,NULL,?,?)`).run(workspaceId, dealId, "b".repeat(64), now, now)
   assert.equal(await selectPsfDeliveryProvider(workspaceId, "legacy-psf-request", { connectionJson: JSON.stringify([connection]) }), "webhook")
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  try {
+    await assert.rejects(() => selectPsfDeliveryProvider(workspaceId, "legacy-psf-request", { connectionJson: JSON.stringify([connection]) }), (error: { code?: string }) => error.code === "psf_signature_provider_unavailable")
+  } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED }
   await assert.rejects(() => selectPsfDeliveryProvider(workspaceId, "unreserved-request", { connectionJson: "{broken" }), (error: { code?: string }) => error.code === "docuseal_configuration_invalid")
   await getDatabase().prepare(`INSERT INTO mca_closing_deliveries
     (id,workspace_id,deal_id,kind,record_id,attempt_key,channel,state,recipient_cipher,payload_hash,correlation_id,external_id,error_code,error_message,created_at,updated_at)

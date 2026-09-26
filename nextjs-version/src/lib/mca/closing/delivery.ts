@@ -193,7 +193,10 @@ const liveTransport: ClosingTransport = {
         ? { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown", errorMessage: "The provider may have accepted the request. Check provider activity before retrying." }
         : { state: "failed", correlationId: request.correlationId, errorCode: "provider_rejected", errorMessage: `Provider rejected the request with HTTP ${response.status}.` }
       const responseBody = await response.json().catch(() => ({})) as { id?: unknown; externalId?: unknown }
-      const externalId = String(responseBody.externalId ?? responseBody.id ?? response.headers.get("x-request-id") ?? "").slice(0, 300) || undefined
+      const identity = responseBody.externalId ?? responseBody.id ?? response.headers.get("x-request-id")
+      const externalId = verifiedClosingFlowEnabled()
+        ? ((typeof identity === "string" || typeof identity === "number") && String(identity).trim() ? String(identity).slice(0, 300) : undefined)
+        : String(identity ?? "").slice(0, 300) || undefined
       if (verifiedClosingFlowEnabled() && !externalId) return { state: "blocked", correlationId: request.correlationId, errorCode: "provider_outcome_unknown", errorMessage: "The provider did not return a durable delivery identity. Check provider activity before retrying." }
       return { state: "sent", correlationId: request.correlationId, externalId }
     } catch {

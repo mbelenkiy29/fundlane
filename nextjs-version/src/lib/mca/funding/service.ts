@@ -137,7 +137,7 @@ export async function confirmOfferFunding(
     const derivedSource = manualSubmission?.source ?? (lockedOffer.source === "historical" ? "historical" : "live")
     if (input.source && input.source !== derivedSource) throw new AppError(422, "funding_source_mismatch", "Funding source must match the server-side offer and submission history.")
     const source = derivedSource
-    if (verifiedClosingFlowEnabled() && source === "live" && !input.correctionOfEventId) {
+    if (verifiedClosingFlowEnabled() && source === "live") {
       const reviewed = await database.prepare<{ id: string }>(`SELECT w.id FROM mca_contract_workflows w JOIN mca_documents d
         ON d.workspace_id=w.workspace_id AND d.deal_id=w.deal_id AND d.id=w.signature_evidence_document_id
         WHERE w.workspace_id=? AND w.deal_id=? AND w.offer_revision_id=? AND w.state='final_review'
