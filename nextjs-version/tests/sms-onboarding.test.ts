@@ -51,6 +51,7 @@ const env = { ...process.env },
     apiKeySid: `SK${"b".repeat(32)}`,
     apiKeySecret: "synthetic-key",
     serviceSid: `MG${"c".repeat(32)}`,
+    brandSid: `BN${"c".repeat(32)}`,
     campaignSid: `QE${"d".repeat(32)}`,
   }
 const profile = {
@@ -356,6 +357,17 @@ test("number purchase recovers a lost provider response without buying a second 
   )
   assert.equal(await managedReady(owner.workspaceId, op.id), false)
 })
+test("expired worker lease quarantines an uncertain paid purchase without calling Twilio", async () => {
+  const id = "synthetic-expired-purchase"
+  const now = nowIso()
+  await getDatabase().prepare("INSERT INTO sms_operations (id,workspace_id,kind,request_key,payload_cipher,state,step,lease_until,created_at,updated_at) VALUES (?,?,'purchase',?,?,'running','purchase',?,?,?)")
+    .run(id, owner.workspaceId, id, encryptSensitive(JSON.stringify({ kind: "purchase", phone: "+12125559999" }), owner.workspaceId), "2000-01-01T00:00:00.000Z", now, now)
+  let providerCalls = 0
+  await runProvisioning(id, async () => { providerCalls++; throw new Error("unexpected provider call") })
+  const state = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM sms_operations WHERE id=?").get(id)
+  assert.deepEqual(state, { state: "needs_review", error_code: "provider_outcome_unknown" })
+  assert.equal(providerCalls, 0)
+})
 test("registration callbacks reject forged signatures and preserve the newest status", async () => {
   const n = await getDatabase()
     .prepare<{
@@ -410,6 +422,29 @@ test("registration callbacks reject forged signatures and preserve the newest st
   await getDatabase()
     .prepare("UPDATE sms_companies SET suspended=0 WHERE workspace_id=?")
     .run(owner.workspaceId)
+})
+test("managed sender readiness requires eligibility, campaign approval and send credentials", async () => {
+  const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  const eligibility = process.env.MCA_SMS_ELIGIBILITY_REFERENCE
+  try {
+    delete process.env.MCA_SMS_ELIGIBILITY_REFERENCE
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    process.env.MCA_SMS_ELIGIBILITY_REFERENCE = eligibility
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='pending' WHERE workspace_id=?").run(owner.workspaceId)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved' WHERE workspace_id=?").run(owner.workspaceId)
+    await saveProvider(owner.workspaceId, { ...p, campaignSid: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    await saveProvider(owner.workspaceId, { ...p, brandSid: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    await saveProvider(owner.workspaceId, { ...p, apiKeySecret: undefined })
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+  } finally {
+    process.env.MCA_SMS_ELIGIBILITY_REFERENCE = eligibility
+    await saveProvider(owner.workspaceId, p)
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved' WHERE workspace_id=?").run(owner.workspaceId)
+  }
 })
 test("employee removal, zero budget and missing Advanced Opt-Out all block managed sending", async () => {
   const n = await getDatabase()
@@ -483,11 +518,16 @@ test("managed send uses stored credentials, enforces legacy mutation isolation, 
  const result=await deliverClosingSms(actor,{dealId,recipient,body,senderAccountId:n!.id,idempotencyKey:"managed-send",correlationId:"managed-correlation",payloadHash:createHash("sha256").update(body).digest("hex"),deliveryMode:"never_attempted"},{send:async request=>{sends++;assert.equal(request.senderIdentity,n!.phone);assert.equal(request.messagingServiceSid,p.serviceSid);assert.equal(request.apiKeySid,p.apiKeySid);return {state:"accepted",externalId:messageSid}}})
  assert.equal(result.state,"accepted");assert.equal(sends,1)
  await getDatabase().prepare("UPDATE sms_companies SET suspended=1 WHERE workspace_id=?").run(owner.workspaceId)
+ await assert.rejects(deliverClosingSms(actor,{dealId,recipient,body,senderAccountId:n!.id,idempotencyKey:"managed-suspended",correlationId:"managed-suspended",payloadHash:createHash("sha256").update(body).digest("hex"),deliveryMode:"never_attempted"},{send:async()=>{sends++;throw new Error("unexpected send")}}),{code:"sms_setup_incomplete"})
+ assert.equal(sends,1)
  const url=`https://crm.example.test/api/mca/sms/webhooks/twilio/${n!.id}/status?messageId=${result.messageId}`
  const params=new URLSearchParams({AccountSid:p.accountSid,MessageSid:messageSid,MessageStatus:"delivered",From:n!.phone,To:recipient})
  const signature=createHmac("sha1",p.authToken).update(url+[...params.keys()].sort().map(k=>k+params.get(k)).join("")).digest("base64")
  assert.equal((await processTwilioStatus(n!.id,params,signature,url)).providerStatus,"delivered")
  await getDatabase().prepare("UPDATE sms_companies SET suspended=0 WHERE workspace_id=?").run(owner.workspaceId)
+ await persistInbound(owner.workspaceId,n!.id,new URLSearchParams({From:recipient,To:n!.phone,Body:"STOP",OptOutType:"STOP",MessageSid:`SM${"6".repeat(32)}`}),"phone_number",n!.phone)
+ await assert.rejects(deliverClosingSms(actor,{dealId,recipient,body,senderAccountId:n!.id,idempotencyKey:"managed-after-stop",correlationId:"managed-after-stop",payloadHash:createHash("sha256").update(body).digest("hex"),deliveryMode:"never_attempted"},{send:async()=>{sends++;throw new Error("unexpected send")}}),{code:"sms_recipient_opted_out"})
+ assert.equal(sends,1)
 })
 test("replayed START cannot undo a newer STOP",async()=>{
  const from="+12125558888",to="+12125552222",make=(digit:string,type:string)=>new URLSearchParams({From:from,To:to,Body:type,OptOutType:type,MessageSid:`SM${digit.repeat(32)}`})

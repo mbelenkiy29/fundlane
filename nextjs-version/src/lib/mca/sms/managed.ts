@@ -39,6 +39,7 @@ export async function managedReady(
   accountId: string
 ): Promise<boolean> {
   const c = await company(workspaceId)
+  const p = c ? provider(c) : undefined
   if (
     !c ||
     !c.email_verified_at ||
@@ -46,7 +47,14 @@ export async function managedReady(
     c.registration_state !== "approved" ||
     c.suspended ||
     !c.opt_out_ready ||
-    !platformReady()
+    !platformReady() ||
+    !p?.accountSid ||
+    !p.authToken ||
+    !p.apiKeySid ||
+    !p.apiKeySecret ||
+    !p.serviceSid ||
+    !p.brandSid ||
+    !p.campaignSid
   )
     return false
   return !!(await getDatabase()
