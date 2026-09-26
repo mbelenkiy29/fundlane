@@ -16,6 +16,7 @@ export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "
 const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
+export const stripeTrialLifecycleEnabled = () => process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED === "true"
 // Historical Clerk migration scripts retain their original role mapping.
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
@@ -423,7 +424,7 @@ export const BILLING_WEBHOOK_EVENTS = new Set([
 export async function processStripeBillingEvent(event: Stripe.Event, providedClient?: StripeBillingClient) {
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
   if (!BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
-  const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null }
+  const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null; trial_end?:number|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
   if (!customerId && object.charge) {
     // Refund/dispute events may need a provider lookup; skip it for a known receipt.
@@ -445,6 +446,18 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
     } else if (object.id && event.type === "invoice.payment_failed") {
       await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:payment-failed:${object.id}`,"payment_failed",{invoiceId:object.id,receivedAt:nowIso()})
     }
+    if (stripeTrialLifecycleEnabled() && object.id && event.type === "customer.subscription.trial_will_end" && object.trial_end && Number.isSafeInteger(object.trial_end) && object.trial_end < 8640000000000) {
+      let preview: { amount: number; currency: string; quantity: number } | null = null
+      try {
+        const invoice = await (providedClient ?? getStripeClient()).invoices.createPreview({ customer: customerId, subscription: object.id })
+        const quantity = invoice.lines.data.reduce((sum, line) => sum + (Number.isSafeInteger(line.quantity) && line.quantity! > 0 ? line.quantity! : 0), 0)
+        if (invoice.livemode === event.livemode && (typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id) === customerId && Number.isSafeInteger(invoice.total) && invoice.total >= 0 && invoice.currency === "usd" && quantity > 0)
+          preview = { amount: invoice.total, currency: invoice.currency, quantity }
+      } catch { /* A preview outage must not suppress the trial reminder. */ }
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-ending:${object.id}:${object.trial_end}`,"trial_ending",{stripeTrial:true,subscriptionId:object.id,trialEndsAt:new Date(object.trial_end*1000).toISOString(),...preview})
+    }
+    if (stripeTrialLifecycleEnabled() && object.id && event.type === "customer.subscription.paused")
+      await enqueueBillingNotification(db,mapping.workspace_id,`billing:${mapping.workspace_id}:stripe-trial-paused:${object.id}`,"trial_paused",{subscriptionId:object.id})
     const jobId = newId()
     await db.prepare(`INSERT INTO mca_background_jobs
       (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)

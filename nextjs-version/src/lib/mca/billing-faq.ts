@@ -13,7 +13,7 @@ export function pricingFaqCopy(cardRequiredTrial: boolean, trialDays: number): P
       return {
         ...item,
         answer: cardRequiredTrial
-          ? `Yes. Enter a card at Stripe Checkout to start a ${trialDays}-day trial. Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.`
+          ? `Yes. Enter a card at Stripe Checkout to start a ${trialDays}-day trial. The plan and post-trial price shown at Checkout determine what Stripe automatically charges for your licensed seats when the trial ends, unless you cancel before then in Plans & Billing or the Stripe billing portal.`
           : item.answer,
       }
     }

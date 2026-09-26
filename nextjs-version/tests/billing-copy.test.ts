@@ -80,13 +80,13 @@ test("customer billing copy does not claim PayPal or bank transfer support", () 
   }
 })
 
-test("trial-ending and trial-ended emails keep the no-card wording in both modes", () => {
+test("trial-ending and trial-ended emails avoid obsolete no-card claims in both modes", () => {
   for (const configured of [false, true]) {
     withStripeMode(configured, () => {
       assert.equal(isStripeCheckoutTrialConfigured(), configured)
       const emails = renderTrialEmails()
-      assert.match(emails.trial_ending.text, /Your no-card trial is ending soon/)
-      assert.match(emails.trial_ending.html, /Your no-card trial is ending soon/)
+      assert.match(emails.trial_ending.text, /Your trial is ending soon/)
+      assert.match(emails.trial_ending.html, /Your trial is ending soon/)
       assert.match(emails.trial_ended.text, /Your data remains available for recovery/)
       assert.match(emails.trial_ended.html, /Your data remains available for recovery/)
       for (const email of Object.values(emails)) {
@@ -130,7 +130,8 @@ test("configured Stripe Checkout discloses the card-required trial on onboarding
     assert.match(onboarding, /Enter a card at Stripe Checkout to start a \$\{account\.trialDays\}-day trial/)
     assert.match(onboarding, /automatically charges/)
     assert.match(onboarding, /licensed seats/)
-    assert.match(onboarding, /cancel before then/)
+    assert.match(onboarding, /Cancel before then/)
+    assert.match(onboarding, /post-trial price shown at Checkout/)
     const panel = readFileSync(join(sourceRoot, "components/mca/billing-panel.tsx"), "utf8")
     assert.ok(panel.includes(configuredCheckout))
     assert.doesNotMatch(panel, /14-day trial/)

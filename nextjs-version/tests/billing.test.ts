@@ -18,7 +18,7 @@ import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, tri
 import type { DbExecutor } from "../src/lib/mca/db"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -27,6 +27,7 @@ before(async () => {
   delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
   delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM
   delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
+  delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
 })
 after(async () => {
   for (const key of envKeys) { if (initialEnv[key] === undefined) delete process.env[key]; else process.env[key] = initialEnv[key] }
@@ -1686,6 +1687,92 @@ test("switching mode refuses historical test customer reuse without deleting dat
   finally { process.env.MCA_STRIPE_MODE="test" }
   assert.equal((await getDatabase().prepare("SELECT stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id=?").get(f.workspaceId))?.stripe_customer_id,f.customerId)
 })
+test("Stripe trial webhooks dedupe owner reminders, pause access, and recover after payment",async()=>{
+  const f=await fixture()
+  const sub=f.state.subscriptions[0]
+  const trialEnd=Math.floor(Date.now()/1000)+3*86400
+  sub.status="trialing";sub.trial_start=trialEnd-11*86400;sub.trial_end=trialEnd
+  sub.items.data.forEach(item=>{item.current_period_end=trialEnd})
+  Object.assign(f.state.invoices[0],{amount_due:0,amount_paid:0,amount_remaining:0})
+  await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,trial_ends_at,updated_at) VALUES (?,0,?,?)").run(f.workspaceId,new Date(trialEnd*1000).toISOString(),nowIso())
+  await getDatabase().prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET membership_id=EXCLUDED.membership_id").run(f.workspaceId,f.membershipId,nowIso())
+  await syncWorkspaceBilling(f.workspaceId,f.client)
+  const event=(type:string)=>({id:`evt_${randomUUID()}`,type,livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:trialEnd}}} as Stripe.Event)
+  const previewCalls:Array<Record<string,string>>=[]
+  const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:Record<string,string>)=>{previewCalls.push(params);return{livemode:false,customer:f.customerId,total:71500,currency:"usd",lines:{data:[{quantity:1},{quantity:4}]}}}}} as unknown as StripeBillingClient
+  try {
+    const disabled=event("customer.subscription.trial_will_end")
+    await processStripeBillingEvent(disabled,client)
+    assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").get(f.workspaceId))?.n,0)
+    process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+    const reminder=event("customer.subscription.trial_will_end")
+    for(let i=0;i<3;i++) await processStripeBillingEvent(i===1?event("customer.subscription.trial_will_end"):reminder,client)
+    assert.deepEqual(previewCalls,[{customer:f.customerId,subscription:sub.id},{customer:f.customerId,subscription:sub.id}])
+    const rows=await getDatabase().prepare<{id:string;data:string}>("SELECT id,data FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").all(f.workspaceId)
+    assert.equal(rows.length,1)
+    assert.deepEqual(JSON.parse(rows[0].data),{stripeTrial:true,subscriptionId:sub.id,trialEndsAt:new Date(trialEnd*1000).toISOString(),amount:71500,currency:"usd",quantity:5})
+    const sent:Array<{headers:Record<string,string|string[]|undefined>;body:Record<string,unknown>}> = []
+    const server=createServer((request,response)=>{let body="";request.on("data",chunk=>body+=chunk);request.on("end",()=>{sent.push({headers:request.headers,body:JSON.parse(body)});response.writeHead(200);response.end()})})
+    await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+    const address=server.address();assert.ok(address&&typeof address!=="string")
+    process.env.MCA_EMAIL_WEBHOOK_URL=`http://127.0.0.1:${address.port}`
+    try {
+      await getDatabase().prepare("UPDATE company_billing_notifications SET available_at='1900-01-01' WHERE id=?").run(rows[0].id)
+      await deliverBillingNotifications(1)
+      assert.equal(sent.length,1)
+      assert.equal(sent[0].body.recipient,(await getDatabase().prepare<{email:string}>("SELECT email FROM users WHERE id=?").get(f.userId))?.email)
+      assert.match(String(sent[0].body.actionUrl),/\/settings\/billing\?billingAction=portal$/)
+      assert.match(String((sent[0].body.content as {text:string}).text),/\$715\.00 for 5 seats/)
+      assert.match(String((sent[0].body.content as {text:string}).text),new RegExp(new Date(trialEnd*1000).toISOString()))
+      await processStripeBillingEvent(event("customer.subscription.paused"),client)
+      sub.status="paused"
+      await syncWorkspaceBilling(f.workspaceId,f.client)
+      assert.equal((await getCompanyAccess(f.workspaceId)).reason,"add_payment_method")
+      await assert.rejects(assertCompanyOperational(f.workspaceId),{code:"company_paused"})
+      await processStripeBillingEvent(event("customer.subscription.paused"),client)
+      const paused=await getDatabase().prepare<{id:string}>("SELECT id FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_paused'").all(f.workspaceId)
+      assert.equal(paused.length,1)
+      await getDatabase().prepare("UPDATE company_billing_notifications SET available_at='1901-01-01' WHERE id=?").run(paused[0].id)
+      await deliverBillingNotifications(1)
+      assert.equal(sent.length,2)
+      assert.match(String((sent[1].body.content as {text:string}).text),/Add a payment method/)
+      assert.match(String(sent[1].body.actionUrl),/billingAction=portal$/)
+      sub.status="active"
+      Object.assign(f.state.invoices[0],{billing_reason:"subscription_cycle",amount_due:71500,amount_paid:71500,amount_remaining:0})
+      await processStripeBillingEvent(event("customer.subscription.resumed"),client)
+      await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"invoice.paid",livemode:false,data:{object:{id:f.state.invoices[0].id,customer:f.customerId}}} as Stripe.Event,client)
+      await syncWorkspaceBilling(f.workspaceId,f.client)
+      assert.equal((await getCompanyAccess(f.workspaceId)).allowed,true)
+    } finally { delete process.env.MCA_EMAIL_WEBHOOK_URL;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve())) }
+  } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
+})
+
+test("trial reminder omits amount when Stripe preview fails",async()=>{
+  const f=await fixture()
+  const sub=f.state.subscriptions[0],trialEnd=Math.floor(Date.now()/1000)+3*86400
+  process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
+  try {
+    const client={...f.client,invoices:{...f.client.invoices,createPreview:async()=>{throw new Error("preview unavailable")}}} as unknown as StripeBillingClient
+    await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"customer.subscription.trial_will_end",livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:trialEnd}}} as Stripe.Event,client)
+    const row=await getDatabase().prepare<{data:string}>("SELECT data FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").get(f.workspaceId)
+    assert.ok(row)
+    assert.equal(JSON.parse(row.data).amount,undefined)
+  } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
+})
+
+test("canceling during trial schedules its end without a charge",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0],trialEnd=Math.floor(Date.now()/1000)+14*86400
+  sub.status="trialing";sub.trial_start=Math.floor(Date.now()/1000);sub.trial_end=trialEnd
+  sub.items.data.forEach(item=>{item.current_period_end=trialEnd})
+  const writes:Record<string,unknown>[]=[]
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:Record<string,unknown>)=>{writes.push(params);sub.cancel_at_period_end=true;sub.cancel_at=trialEnd;return sub}}} as unknown as StripeBillingClient
+  const result=await cancelBillingSubscription(f.workspaceId,f.userId,client)
+  assert.equal(result.cancelAt,new Date(trialEnd*1000).toISOString())
+  assert.deepEqual(writes,[{cancel_at_period_end:true,proration_behavior:"none"}])
+  assert.equal(f.state.invoiceUpdates.length,0)
+  assert.equal(f.state.finalizations.length,0)
+})
+
 test("billing UseSend fallback sends the documented API payload with a stable idempotency key",async()=>{
   const original=globalThis.fetch
   const requests:Array<{url:string;headers:Headers;body:string}>=[]

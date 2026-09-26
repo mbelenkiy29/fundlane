@@ -40,7 +40,7 @@ export async function deliverBillingNotifications(limit = 50) {
         const origin = process.env.MCA_APP_ORIGIN
         if (!origin) throw new Error("MCA_APP_ORIGIN is required")
         if (!process.env.MCA_EMAIL_WEBHOOK_URL && !(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())) throw new Error("Configure the billing email webhook or UseSend API key and From address")
-        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${row.kind==="payment_failed"?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...JSON.parse(row.data),kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
+        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${["payment_failed","trial_paused"].includes(row.kind)||(row.kind==="trial_ending"&&JSON.parse(row.data).stripeTrial)?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...JSON.parse(row.data),kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:process.env.MCA_USESEND_FROM!.trim(),retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
         payload.content=renderBillingEmailContent(payload)
         const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
         if (!frozen.changes) continue
@@ -83,9 +83,10 @@ async function reconcileQueuedBillingEvents(client?: StripeBillingClient) {
 
 export async function runBillingMaintenance(client?: StripeBillingClient) {
   const queued=await reconcileQueuedBillingEvents(client)
-  const companies = await getDatabase().prepare<{ workspace_id: string; trial_ends_at: string | null; stripe_customer_id: string | null }>(`SELECT w.id workspace_id,s.trial_ends_at,c.stripe_customer_id FROM workspaces w
+  const companies = await getDatabase().prepare<{ workspace_id: string; trial_ends_at: string | null; stripe_customer_id: string | null; stripe_subscription_id: string | null }>(`SELECT w.id workspace_id,s.trial_ends_at,c.stripe_customer_id,e.stripe_subscription_id FROM workspaces w
     LEFT JOIN company_subscription_state s ON s.workspace_id=w.id
     LEFT JOIN workspace_stripe_customers c ON c.workspace_id=w.id
+    LEFT JOIN workspace_billing_entitlements e ON e.workspace_id=w.id
     WHERE s.workspace_id IS NOT NULL OR c.workspace_id IS NOT NULL ORDER BY s.updated_at NULLS FIRST,w.id LIMIT 100`).all()
   const errors: Array<{ workspaceId: string; error: string }> = [...queued.errors]
   let reconciled = queued.reconciled
@@ -101,10 +102,10 @@ export async function runBillingMaintenance(client?: StripeBillingClient) {
         await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(company.workspace_id)
         await captureCompanyPauseBoundary(company.workspace_id,db)
       })
-      if (company.trial_ends_at && access.reason === "trial_expired") {
+      if (company.trial_ends_at && !company.stripe_subscription_id && access.reason === "trial_expired") {
         await enqueueBillingNotification(getDatabase(), company.workspace_id, `billing:${company.workspace_id}:trial-ended`, "trial_ended", { trialEndsAt: company.trial_ends_at })
       }
-      if (company.trial_ends_at && access.status === "trial" && Date.parse(company.trial_ends_at) - Date.now() <= 3 * 86400000) await enqueueBillingNotification(getDatabase(), company.workspace_id, `billing:${company.workspace_id}:trial-ending`, "trial_ending", { trialEndsAt: company.trial_ends_at })
+      if (company.trial_ends_at && !company.stripe_subscription_id && access.status === "trial" && Date.parse(company.trial_ends_at) - Date.now() <= 3 * 86400000) await enqueueBillingNotification(getDatabase(), company.workspace_id, `billing:${company.workspace_id}:trial-ending`, "trial_ending", { trialEndsAt: company.trial_ends_at })
     } catch (error) { errors.push({ workspaceId: company.workspace_id, error: error instanceof Error ? error.message : "Reconciliation failed" });await recordOperationalError("billing","reconciliation_failed") }
     // Fair rotation even for a provider failure; the next cron revisits after others.
     await getDatabase().prepare("UPDATE company_subscription_state SET updated_at=? WHERE workspace_id=?").run(nowIso(), company.workspace_id)
