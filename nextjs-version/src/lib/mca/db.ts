@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
-import { assertExecutionActive, executionFence } from "./jobs/execution";
+import { assertExecutionActive, executionFence, executionRemainingMs } from "./jobs/execution";
 import { postgresConnection } from "./db-connection";
 import { assertHostedSupabaseConfig } from "./hosted-config";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
@@ -26,7 +26,7 @@ export interface DbExecutor {
 }
 
 interface Queryable {
-  query<Row extends QueryResultRow = QueryResultRow>(sql: string, values?: readonly unknown[]): Promise<{ rows: Row[]; rowCount: number | null }>;
+  query<Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }): Promise<{ rows: Row[]; rowCount: number | null }>;
 }
 
 interface TransactionOptions { onRollback?: () => Promise<void> }
@@ -138,15 +138,34 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
         // Hold the control/lease locks through the statement's transaction so a
         // generation revocation cannot race a checked write. Use the raw client
         // here to avoid recursively fencing the fence check itself.
-        const active = await queryable.query(`SELECT e.token
+        const active = await queryable.query({ text: `SELECT e.token
           FROM mca_private.worker_executions e
           JOIN mca_private.worker_controls c ON c.subsystem=e.subsystem
           WHERE e.token=$1 AND e.subsystem=$2 AND e.generation=$3
             AND c.generation=e.generation AND c.enabled AND e.expires_at>clock_timestamp()
-          FOR SHARE OF c, e`, [fence.token, fence.subsystem, fence.generation]);
+          FOR SHARE OF c, e`, values: [fence.token, fence.subsystem, fence.generation], query_timeout: executionRemainingMs() });
         if (!active.rows.length) throw new AppError(503, "worker_execution_fenced", "The worker execution generation is no longer active.");
       }
-      return queryable.query<Row>(postgresPlaceholders(sql), values);
+      // A transaction may execute several statements. Refresh the server-side
+      // limit before each one so later statements cannot use its original budget.
+      const remaining = executionRemainingMs();
+      if (serialize && remaining !== undefined) {
+        await queryable.query({ text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`], query_timeout: remaining });
+        assertExecutionActive();
+      }
+      try {
+        const result = await queryable.query<Row>({ text: postgresPlaceholders(sql), values: [...values], query_timeout: executionRemainingMs() });
+        assertExecutionActive();
+        return result;
+      } catch (error) {
+        // pg's query_timeout rejects an awaited statement, including one blocked
+        // on a database lock. Treat it as an expired attempt, never export_failed.
+        if (executionRemainingMs() !== undefined && error instanceof Error && (error.message === "Query read timeout" || (error as Error & { code?: string }).code === "57014")) {
+          throw new AppError(503, "execution_expired", "The worker execution expired; remaining work will be retried.");
+        }
+        assertExecutionActive();
+        throw error;
+      }
     };
     if (!serialize) return invoke();
     const pending = queryTail.then(invoke, invoke);
@@ -174,10 +193,10 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
 }
 
 const poolExecutor = createExecutor({
-  query: <Row extends QueryResultRow = QueryResultRow>(sql: string, values?: readonly unknown[]) =>
-    executionFence()
-      ? withTransaction(database => database.query<Row>(sql, values))
-      : getPool().query<Row>(sql, values as unknown[] | undefined),
+  query: <Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }) =>
+    executionRemainingMs() !== undefined
+      ? withTransaction(database => database.query<Row>(config.text, config.values))
+      : getPool().query<Row>(config),
 });
 
 export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
@@ -215,7 +234,13 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
     const executor = createExecutor(client, true);
     try {
       await client.query("BEGIN");
+      const remaining = executionRemainingMs();
+      if (remaining !== undefined) {
+        assertExecutionActive();
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [`${remaining}ms`]);
+      }
       const result = await transactionContext.run({ executor, rollbackCallbacks }, () => operation(executor));
+      assertExecutionActive();
       await client.query("COMMIT");
       return result;
     } catch (error) {

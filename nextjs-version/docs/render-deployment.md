@@ -1,5 +1,7 @@
 # Render dependencies after the Supabase cutover
 
+Historical audit only. Render is not an active target in the current architecture. Its service states and recovery instructions below describe the September 2026 audit, not a current production deployment plan. Use [the background job cutover map](background-job-runtime.md) for current ownership and activation gates.
+
 Audited 2026-09-14 using Render's live service/deploy/log inventory and read-only Supabase queries. Workspace: Michael's workspace (`tea-da86hgegekts73ccou40`). Blueprint: `exs-dahc2u9t0dsc73ff9l70`. The public `https://fundlane.io` returned HTTP 200 with `server: Vercel`. Supabase project `drubsfvhlggmtyiigwxy` is healthy.
 
 ## Live inventory

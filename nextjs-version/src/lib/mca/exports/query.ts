@@ -8,6 +8,7 @@ import { DEAL_STATUS_LABELS, type DealActor, type DealFilters, type DealOwner, t
 import { listOffers } from "../offers/repository"
 import type { ExportKind, ExportSnapshot } from "./contracts"
 import { OWNER_SLOT_COUNT, manifestFor } from "./manifests"
+import { assertExecutionActive } from "../jobs/execution"
 
 type Cell = string | number | null
 type Row = Record<string, Cell>
@@ -73,6 +74,7 @@ function isoInRange(value: string, from?: string, to?: string): boolean {
 }
 
 function pick(manifestKind: ExportKind, row: Row): Row {
+  assertExecutionActive()
   const allowed = new Set(manifestFor(manifestKind).fields.map((field) => field.key))
   const next: Row = {}
   for (const [key, value] of Object.entries(row)) {
@@ -116,6 +118,7 @@ async function snapshotOffers(actor: DealActor, filters: DealFilters): Promise<{
   const rows: Row[] = []
   const rowKeys: string[] = []
   for (const offer of offers) {
+    assertExecutionActive()
     const deal = byId.get(offer.dealId)
     if (!deal) continue
     const revision = offer.revisions.find((item) => item.id === offer.currentRevisionId) ?? offer.revisions.at(-1)
@@ -195,6 +198,7 @@ async function snapshotFundedDeals(actor: DealActor, filters: DealFilters): Prom
   const rowKeys: string[] = []
   const rows: Row[] = []
   for (const event of events) {
+    assertExecutionActive()
     if (!isoInRange(event.funded_at, filters.createdFrom, filters.createdTo)) continue
     const deal = byId.get(event.deal_id)
     if (!deal) continue
@@ -220,9 +224,11 @@ async function snapshotFundedDeals(actor: DealActor, filters: DealFilters): Prom
 }
 
 export async function captureExportSnapshot(actor: DealActor, kind: ExportKind, filters: DealFilters, capturedAt: string): Promise<ExportSnapshot> {
+  assertExecutionActive()
   const captured = kind === "offers" ? await snapshotOffers(actor, filters)
     : kind === "all_deals_owners" ? await snapshotAllDealsOwners(actor, filters)
       : kind === "funded_deals" ? await snapshotFundedDeals(actor, filters)
         : await snapshotDeals(actor, filters)
+  assertExecutionActive()
   return { version: 1, filters, capturedAt, rowKeys: captured.rowKeys, rows: captured.rows }
 }

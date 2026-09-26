@@ -11,7 +11,7 @@ Scan outcomes:
 
 `ready` remains a historical processing state accepted by `isDocumentReady` (`ready` or `clean`). New uploads write `clean`, not `ready`. Application drafts before deal creation retain their separate scanning flow.
 
-On Vercel (or when `MCA_BACKGROUND_JOBS=enabled`), HTTP uploads enqueue a `document_scan` job and return `pending_scan` without scanning in-request. The Render worker runs the scan. Direct uploads inside the background worker still scan inline.
+On Vercel (or when `MCA_BACKGROUND_JOBS=enabled`), HTTP uploads enqueue a `document_scan` job and return `pending_scan` without scanning in-request. The retained worker code can run the scan, but Render is historical and no current production document consumer is verified. See [background job runtime](background-job-runtime.md) for the non-Render cutover and fail-closed acceptance gate. Direct uploads inside the background worker still scan inline.
 
 Incomplete uploads use `pending_upload` or `upload_failed`. Retry with the same file and upload key after an interrupted request. Existing rows offer **Retry malware scan**, which calls `retryDocumentScan` and actually scans; it does not mark a document ready or `clean` without a `clean` scanner result. Quarantined files are never released by this operation. Missing or corrupt files require a replacement version; transient storage errors can be retried.
 

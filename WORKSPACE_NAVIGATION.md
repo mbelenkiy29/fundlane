@@ -2,7 +2,7 @@
 
 ## Start here
 
-The active application is `nextjs-version/` (Next.js 16, React 19, TypeScript) hosted on Vercel. Supabase owns Postgres, Auth, and private Storage. Render runs native workers only (document scanning and the Python ChatKit service). `vite-version/` and the root `docs/` are the original template/reference, not the MCA implementation. Prefer `nextjs-version/README.md` and its package scripts over legacy template instructions in the root README. Clerk and Neon are not part of the runtime.
+The active application is `nextjs-version/` (Next.js 16, React 19, TypeScript) hosted on Vercel. Supabase owns Postgres, Auth, and private Storage. Render is historical only; worker ownership and acceptance are mapped in `nextjs-version/docs/background-job-runtime.md`. `vite-version/` and the root `docs/` are the original template/reference, not the MCA implementation. Prefer `nextjs-version/README.md` and its package scripts over legacy template instructions in the root README. Clerk and Neon are not part of the runtime.
 
 Linear project: [MCA](https://linear.app/michael-belenkiy/project/mca-1e94b0617388), ID `b223a780-3987-440c-8e04-41516a97e69b`. Current team: Michael Belenkiy (`MIC`), ID `bfc9ec70-5c0f-4515-a13b-a8d2f3ef3f9a`. Historical documents can use `SEN-*` identifiers; resolve tickets through Linear before relying on an old identifier or status.
 
@@ -41,7 +41,7 @@ All paths below are relative to `nextjs-version/`.
 | Company SMS onboarding, provisioning and inbox | `src/lib/mca/sms/onboarding.ts`, `provisioning.ts`, `inbox.ts`, `src/lib/mca/db/sms-onboarding.ts`, `docs/sms/company-onboarding.md` |
 | Vercel frontend | Next.js App Router on Vercel; runtime pool defaults to two connections when `VERCEL` is set |
 | Supabase Auth, Postgres and private Storage | `src/lib/supabase/`, `src/lib/mca/supabase-auth.ts`, `supabase-ca.ts`, `docs/supabase-auth.md`, `docs/supabase-billing.md` |
-| Render workers | `../render.yaml`, `Dockerfile`, `Dockerfile.worker`, `docs/render-deployment.md` — ClamAV processing and Python ChatKit only, not the public web host |
+| Background jobs | `src/lib/mca/jobs/`, `/api/cron/jobs`, `docs/background-job-runtime.md`; `../render.yaml`, `Dockerfile.worker`, and `docs/render-deployment.md` are historical deployment references |
 | Previous Railway / Render web hosting | `Dockerfile`, `railway.json`, `scripts/railway/`, `../DEPLOYMENT.md`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
 | Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts`, `tests/supabase-auth.test.ts` |

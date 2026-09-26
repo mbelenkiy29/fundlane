@@ -1,6 +1,6 @@
 # Fundlane
 
-Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, Stripe test billing, and retained Render document/messaging workers. The old Render web and ChatKit services are suspended; both workers have failed initial builds. See the [deployment audit](docs/render-deployment.md) for recovery steps.
+Fundlane uses Next.js 16 / React 19 on Vercel, Supabase Postgres/Auth/private Storage, and Stripe test billing. Render is historical only; the old workers have no verified successful deployment. See the [background job cutover map](docs/background-job-runtime.md) and [historical deployment audit](docs/render-deployment.md).
 
 ## Local setup
 
@@ -18,7 +18,7 @@ Preserve `MCA_DATA_ENCRYPTION_KEY` and all immutable workspace IDs when transfer
 
 Deal documents become ready after upload validation and private storage completion; malware scanning is not required. Existing clean documents remain usable. See [Deal document uploads](docs/deal-document-uploads.md) for pending-upload recovery and rollout. Application drafts retain their separate scanning flow. Filesystem storage remains available for isolated local tests and source-file transfer only.
 
-Run the document worker with `node --conditions=react-server --import tsx scripts/workers/run.ts`, and assistant maintenance with `pnpm assistant:worker`. See `Dockerfile.worker` and root `render.yaml`. The Python service receives signed HTTPS requests from Vercel and calls back through the existing live permission checks. Preserve each provider's activation state until verified.
+The document and assistant worker entrypoints remain in source for local proof and migration. Their hosted replacements require the acceptance steps in the [background job cutover map](docs/background-job-runtime.md). Preserve each provider's activation state until verified.
 
 ## Billing and integrations
 

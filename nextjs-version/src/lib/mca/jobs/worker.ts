@@ -15,7 +15,7 @@ import { processJobDelivery } from "../submissions/outbox"
 import { createExportJob, processExportJob } from "../exports/service"
 import type { CreateExportInput } from "../exports/contracts"
 import { commitCsvUpdate, commitSpreadsheetImport } from "../imports/service"
-import { claimBackgroundJob, completeBackgroundJob, currentJobActor, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob } from "./queue"
+import { claimBackgroundJob, completeBackgroundJob, currentJobActor, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob, type BackgroundJobKind } from "./queue"
 import { processMultipartTask } from "./multipart"
 import { quarantineBucket, storageClient, validateStorageKey } from "../documents/storage"
 import { documentScanner } from "../documents/scanner"
@@ -25,6 +25,7 @@ import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-servi
 import { assertCompanyOperational, getCompanyAccess } from "../company-access"
 import { assertOutboundFresh } from "../outbound-freshness"
 import { withOutboundApproval } from "../outbound-approval"
+import { executionSignal, outsideExecutionScope, withExecutionDeadline } from "./execution"
 
 async function dispatch(job: BackgroundJob): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
@@ -105,8 +106,8 @@ export async function touchDocumentWorkerHeartbeat(): Promise<void> {
   await getDatabase().prepare("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=? WHERE id").run(nowIso())
 }
 
-export async function runNextBackgroundJob(): Promise<boolean> {
-  const job = await claimBackgroundJob()
+export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<boolean> {
+  const job = await claimBackgroundJob(kinds)
   if (!job) return false
   const heartbeat = setInterval(() => { void heartbeatBackgroundJob(job).catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
@@ -115,7 +116,12 @@ export async function runNextBackgroundJob(): Promise<boolean> {
     await completeBackgroundJob(job, result)
     console.info(JSON.stringify({ event: "worker_job_completed", jobId: job.id, kind: job.kind }))
   } catch (error) {
-    await failBackgroundJob(job, error)
+    // Give lease cleanup its own short deadline after the work deadline expires.
+    // The original scope would reject every cleanup write once it is aborted.
+    const boundedCleanup = Boolean(executionSignal())
+    await outsideExecutionScope(() => boundedCleanup
+      ? withExecutionDeadline(() => failBackgroundJob(job, error), undefined, 10_000)
+      : failBackgroundJob(job, error))
     console.error(JSON.stringify({ event: "worker_job_failed", jobId: job.id, kind: job.kind, code: error instanceof AppError ? error.code : "processing_failed" }))
   } finally { clearInterval(heartbeat) }
   return true

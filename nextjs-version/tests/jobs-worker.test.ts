@@ -1,5 +1,6 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
+import { Client } from "pg"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
@@ -8,8 +9,11 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
+import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
+import { GET as runCron } from "../src/app/api/cron/jobs/route"
+import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
+import { createExportJob } from "../src/lib/mca/exports/service"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { persistNewDestination } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
@@ -19,6 +23,7 @@ delete process.env.MCA_DOCUMENT_SCANNER
 delete process.env.MCA_EMAIL_WEBHOOK_URL
 const previousJobs = process.env.MCA_BACKGROUND_JOBS
 const previousVercel = process.env.VERCEL
+const previousPoolMax = process.env.MCA_DB_POOL_MAX
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
 const actor = (): DealActor => ({
@@ -63,6 +68,7 @@ before(async () => {
   delete process.env.VERCEL
   testDatabase = await createPostgresTestDatabase("jobs_worker")
   process.env.DATABASE_URL = testDatabase.databaseUrl
+  process.env.MCA_DB_POOL_MAX = "2"
   setDocumentStorageForTests(storage)
   setSubmissionCompletenessForTests(true)
   await addWorkspace("workspace-jobs")
@@ -74,6 +80,8 @@ after(async () => {
   else process.env.MCA_BACKGROUND_JOBS = previousJobs
   if (previousVercel === undefined) delete process.env.VERCEL
   else process.env.VERCEL = previousVercel
+  if (previousPoolMax === undefined) delete process.env.MCA_DB_POOL_MAX
+  else process.env.MCA_DB_POOL_MAX = previousPoolMax
 })
 
 test("Vercel/jobs-enabled deal uploads enqueue document_scan and do not promote until the worker runs", async () => {
@@ -303,4 +311,133 @@ test("document_scan enqueue uses a durable system actor so expired user sessions
   assert.equal(await runNextBackgroundJob(), true)
   assert.equal(scanner.count(), 1)
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
+})
+
+test("cron is off by default and requires the exact bearer credential when enabled", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  try {
+    delete process.env.MCA_JOB_RUNTIME
+    delete process.env.CRON_SECRET
+    assert.deepEqual(await (await runCron(new Request("http://localhost/api/cron/jobs"))).json(), { enabled: false })
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    assert.equal((await runCron(new Request("http://localhost/api/cron/jobs"))).status, 503)
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    assert.equal((await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer wrong" } }))).status, 401)
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 0)
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME
+    else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET
+    else process.env.CRON_SECRET = oldSecret
+  }
+})
+
+test("enabled cron completes only its eligible private export", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  try {
+    const scanner = countingScanner()
+    const document = await storeDocument(actor(), { dealId, idempotencyKey: "cron-excludes-native", filename: "native.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    const exported = await createExportJob(actor(), { kind: "deals", correlationId: "cron-private-export", async: true })
+    const queued = await enqueueBackgroundJob({ actor: actor(), kind: "export", resourceId: exported.job.id, idempotencyKey: "cron-private-export" })
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 1)
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(queued.id))?.state, "complete")
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(document.id))?.state, "queued")
+    assert.equal(scanner.count(), 0)
+    assert.equal(await runNextBackgroundJob(["document_scan"]), true)
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME
+    else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET
+    else process.env.CRON_SECRET = oldSecret
+  }
+})
+
+test("a claimed export blocked in PostgreSQL stops at the request deadline and retries", async () => {
+  const exported = await createExportJob(actor(), { kind: "deals", correlationId: "cron-expired-export", async: true })
+  const queued = await enqueueBackgroundJob({ actor: actor(), kind: "export", resourceId: exported.job.id, idempotencyKey: "cron-expired-export" })
+  const blocker = new Client({ connectionString: testDatabase.databaseUrl })
+  await blocker.connect()
+  try {
+    await blocker.query("BEGIN")
+    await blocker.query("SELECT id FROM mca_export_jobs WHERE id=$1 FOR UPDATE", [exported.job.id])
+    const started = performance.now()
+    await assert.rejects(
+      withExecutionDeadline(() => runNextBackgroundJob(["export"]), undefined, 2_000),
+      /expired/,
+    )
+    assert.ok(performance.now() - started < 5_000, "the blocked export must return before the platform limit")
+  } finally {
+    await blocker.query("ROLLBACK")
+    await blocker.end()
+  }
+  const job = await getDatabase().prepare<{ state: string; error_code: string; attempts: number }>("SELECT state,error_code,attempts FROM mca_background_jobs WHERE id=?").get(queued.id)
+  assert.equal(job?.state, "queued")
+  assert.equal(job?.error_code, "execution_expired")
+  assert.equal(job?.attempts, 1)
+  assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_export_jobs WHERE id=?").get(exported.job.id))?.state, "queued")
+})
+
+test("expired claim retains identity, fences stale completion, and retries with backoff", async () => {
+  const id = "synthetic-killed-export"
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_background_jobs
+    (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,attempts,available_at,created_at,updated_at)
+    VALUES (?,?, 'export', ?, ?, ?, '{}', ?, 'queued',0,?,?,?)`)
+    .run(id, actor().workspaceId, id, id, JSON.stringify(actor()), id, now, now, now)
+  const claims = await Promise.all([claimBackgroundJob(["export"]), claimBackgroundJob(["export"])])
+  assert.equal(claims.filter(Boolean).length, 1)
+  const first = claims.find(Boolean)
+  assert.equal(first?.id, id)
+  assert.equal(first?.attempts, 1)
+  const duplicate = await getDatabase().prepare(`INSERT INTO mca_background_jobs
+    (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,attempts,available_at,created_at,updated_at)
+    VALUES ('synthetic-duplicate-export',?,'export',?,?,?,?,?,'queued',0,?,?,?) ON CONFLICT (workspace_id,kind,idempotency_key) DO NOTHING`)
+    .run(actor().workspaceId, id, id, JSON.stringify(actor()), "{}", id, now, now, now)
+  assert.equal(duplicate.changes, 0)
+  assert.equal(await claimBackgroundJob(["export"]), undefined)
+  await getDatabase().prepare("UPDATE mca_background_jobs SET lease_expires_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", id)
+  const second = await claimBackgroundJob(["export"])
+  assert.equal(second?.id, id)
+  assert.equal(second?.attempts, 2)
+  assert.notEqual(second?.lease_token, first?.lease_token)
+  await assert.rejects(completeBackgroundJob(first!, { stale: true }), /background_job_lease_lost/)
+  await failBackgroundJob(first!, new Error("stale execution"))
+  assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(id))?.state, "running")
+  await failBackgroundJob(second!, new Error("synthetic retry"))
+  const waiting = await getDatabase().prepare<{ state: string; attempts: number; available_at: string }>("SELECT state,attempts,available_at FROM mca_background_jobs WHERE id=?").get(id)
+  assert.equal(waiting?.state, "queued")
+  assert.equal(waiting?.attempts, 2)
+  assert.ok(Date.parse(waiting!.available_at) > Date.now())
+  await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", id)
+  const third = await claimBackgroundJob(["export"])
+  assert.equal(third?.id, id)
+  assert.equal(third?.attempts, 3)
+  await failBackgroundJob(third!, new Error("synthetic terminal failure"))
+})
+
+test("maximum-size synthetic private document retries after a killed claim", async (t) => {
+  const started = performance.now()
+  const scanner = countingScanner()
+  const bytes = new Uint8Array(25 * 1024 * 1024)
+  bytes.set(minimalPdf)
+  const stored = await storeDocument(actor(), { dealId, idempotencyKey: "max-private-retry", filename: "max.pdf", mimeType: "application/pdf", bytes, category: "statement", source: "test" })
+  const first = await claimBackgroundJob(["document_scan"])
+  assert.equal(first?.resource_id, stored.id)
+  assert.equal(scanner.count(), 0)
+  assert.ok([...memory.values()].some(value => value.byteLength === bytes.byteLength))
+  await getDatabase().prepare("UPDATE mca_background_jobs SET lease_expires_at=? WHERE id=?").run("2000-01-01T00:00:00.000Z", first!.id)
+  assert.equal(await runNextBackgroundJob(["document_scan"]), true)
+  assert.equal(scanner.count(), 1)
+  assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
+  const final = await getDatabase().prepare<{ id: string; attempts: number; state: string }>("SELECT id,attempts,state FROM mca_background_jobs WHERE id=?").get(first!.id)
+  assert.deepEqual(final, { id: first!.id, attempts: 2, state: "complete" })
+  t.diagnostic(JSON.stringify({ bytes: bytes.byteLength, durationMs: Math.round(performance.now() - started), firstJobId: first!.id, retryJobId: final.id, privateStorage: true, externalSends: 0 }))
 })
