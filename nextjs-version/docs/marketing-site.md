@@ -20,11 +20,12 @@ retaining the existing webhook route until the migration is released. The privac
 URL remains a publication gate in both delivery modes. When enabled, the page
 checks database availability before enabling the form. A successful API response
 means the row was stored; email notification is best effort. Repeated request IDs
-with identical normalized fields are accepted without creating another row or
-resending email. Contact details, including team size and message, are encrypted
+with identical normalized fields are accepted without creating another row. With
+`MCA_DEMO_VISIBILITY_ENABLED=true`, newly tracked unsent notifications may be retried using
+the same provider idempotency key. Contact details, including team size and message, are encrypted
 as one payload with the existing `MCA_DATA_ENCRYPTION_KEY` and bound to the opaque
 request ID. Plaintext columns contain only that ID, a keyed retry digest, and
-creation time; no raw IP address is stored. Preserve the encryption key when
+creation time, and delivery metadata; no raw IP address is stored. Preserve the encryption key when
 retaining or moving these rows.
 
 Set `MCA_DEMO_NOTIFY_EMAIL` to the monitored sales inbox. Notifications use
@@ -32,8 +33,33 @@ the existing `MCA_USESEND_API_KEY` and `MCA_USESEND_FROM` settings. Missing
 configuration or provider failure emits a `marketing_demo_notification_skipped`
 or `marketing_demo_notification_failed` metric and does not reject a stored lead.
 Monitor notification delivery and verify it with a synthetic submission before
-relying on the inbox. The private table holds encrypted contact details and has
-no admin list view; database access alone shows only ciphertext and metadata.
+relying on the inbox. The private table holds encrypted contact details;
+database access alone shows only ciphertext and metadata.
+The platform-admin-only `/platform/demo-requests` list and private
+`scripts/marketing/inbox.ts list` command read stored submissions even before
+migration `0064_demo_notification_status.sql`. `show <request-id>` decrypts a
+request in a private deployment shell. Platform access requires MFA. The list
+shows a warning whenever any submission has unknown or unsent notification
+history, including requests outside the newest 100 shown. Before 0064, fresh
+submissions retain the original best-effort email send and emit structured
+warnings on missing configuration or failure. The migration leaves older rows
+marked `unknown` because their delivery history cannot be reconstructed.
+Only requests inserted after 0064 receive tracked notification status and can
+be retried. The status column stores only `not_configured` or
+`delivery_failed`, never provider errors or contact details.
+
+`MCA_DEMO_VISIBILITY_ENABLED=true` enables email retries for duplicate requests
+and the private `scripts/marketing/inbox.ts retry` command. It defaults to
+`false`; read-only visibility, warnings, and initial notification delivery are
+always active. The retry command sends at most ten tracked unsent requests per
+run. The database lease and stable provider idempotency key prevent concurrent
+retry sends. No hosted cron schedule is required. Review unknown historical
+rows manually before deciding whether another email is appropriate. Keep
+`MCA_DATA_ENCRYPTION_KEY` identical to the key used for existing rows. Verify
+notification delivery with a synthetic request and a platform-admin login after
+applying the reviewed migration to the intended host. No provider callback URL
+or cron schedule is needed.
+
 `MCA_SUPPORT_EMAIL`, already used by the help center,
 provides the `/demo` mailto fallback when storage is unavailable. If it is
 unset, the page shows a neutral unavailable message without an invented address.
@@ -43,7 +69,7 @@ honeypot, and shared rate-limit checks. The new table has RLS enabled and no
 grants to `anon` or `authenticated`; only the server role has table access.
 Apply the migration to the intended deployment through the reviewed release
 process. Verify hosted database access and a synthetic notification before
-enabling the flag in production. No hosted migration or provider send is part of
+enabling retries in production. No hosted migration or provider send is part of
 the local test suite.
 
 The legacy webhook path remains available when the flag is unset:
