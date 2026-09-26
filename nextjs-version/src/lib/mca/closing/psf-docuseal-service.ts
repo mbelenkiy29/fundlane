@@ -9,6 +9,7 @@ import type { DealActor } from "../deals/schema"
 import type { DocumentSummary } from "../documents/contracts"
 import { listDocumentRecords } from "../documents/repository"
 import { storeDocument } from "../documents/service"
+import { verifiedClosingFlowEnabled } from "./verified-flow"
 import {
   fetchDocuSealArtifact,
   getVerifiedDocuSealCompletedSubmission,
@@ -132,6 +133,7 @@ export async function selectPsfDeliveryProvider(workspaceId: string, requestId: 
   const database = options.database ?? getDatabase()
   const rows = await database.prepare<{ kind: string }>("SELECT DISTINCT kind FROM mca_closing_deliveries WHERE workspace_id=? AND record_id=? AND kind IN ('psf_docuseal','psf_request')").all(workspaceId, requestId)
   if (rows.length > 1) throw new AppError(409, "psf_provider_conflict", "This PSF request has delivery history for more than one provider.")
+  if (verifiedClosingFlowEnabled() && rows[0]?.kind === "psf_request") throw new AppError(409, "psf_signature_provider_unavailable", "This PSF request is pinned to a generic webhook and cannot be sent in verified mode.")
   if (rows[0]?.kind === "psf_docuseal") {
     getDocuSealPsfConnection(workspaceId, options.connectionJson)
     return "docuseal"

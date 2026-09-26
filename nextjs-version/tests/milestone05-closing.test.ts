@@ -5,7 +5,7 @@ import { createHmac } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
+import { closeDatabaseForTests, getDatabase, withImmediateTransaction } from "../src/lib/mca/db"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import { createFunder } from "../src/lib/mca/funders/directory"
@@ -26,7 +26,7 @@ import { runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 import { GET as snapshotGet } from "../src/app/api/mca/closing/[dealId]/route"
 import { POST as stipulationPost } from "../src/app/api/mca/closing/stipulations/route"
-import { confirmOfferFunding } from "../src/lib/mca/funding/service"
+import { confirmOfferFunding, reverseFundingEvent } from "../src/lib/mca/funding/service"
 import { runRenewalEligibility, saveRenewalPolicy } from "../src/lib/mca/renewals/service"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -227,12 +227,78 @@ test("verified closing flow keeps unsigned callbacks unavailable and reconciles 
   } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED; setClosingTransportForTests() }
 })
 
+test("verified closing requires final review for a live correction on another revision", async () => {
+  const correctionDeal = (await createDeal(actor(), { idempotencyKey: "correction-gate-deal", legalName: "Synthetic Correction Shop" })).deal
+  const first = await createOffer(actor(), { dealId: correctionDeal.id, funderName: "Original Funder", terms: { amountCents: 4000000, factorRate: 1.25, paymentAmountCents: 250000, paymentFrequency: "weekly" } })
+  await selectOfferRevision(actor(), { dealId: correctionDeal.id, offerId: first.id, revisionId: first.currentRevisionId, selected: true })
+  const original = await confirmOfferFunding(actor(), { dealId: correctionDeal.id, offerId: first.id, offerRevisionId: first.currentRevisionId, idempotencyKey: "correction-original", fundedAt: "2026-09-26" })
+  await reverseFundingEvent(actor(), { fundingEventId: original.fundingEventId, reason: "Synthetic correction", reversedAt: "2026-09-26" })
+  await selectOfferRevision(actor(), { dealId: correctionDeal.id, offerId: first.id, revisionId: first.currentRevisionId, selected: false })
+  const replacement = await createOffer(actor(), { dealId: correctionDeal.id, funderName: "Replacement Funder", terms: { amountCents: 4000000, factorRate: 1.25, paymentAmountCents: 250000, paymentFrequency: "weekly" } })
+  await selectOfferRevision(actor(), { dealId: correctionDeal.id, offerId: replacement.id, revisionId: replacement.currentRevisionId, selected: true })
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  try {
+    await assert.rejects(() => confirmOfferFunding(actor(), { dealId: correctionDeal.id, offerId: replacement.id, offerRevisionId: replacement.currentRevisionId, idempotencyKey: "correction-bypass", correctionOfEventId: original.fundingEventId, fundedAt: "2026-09-26" }), (error: { code?: string }) => error.code === "closing_final_review_required")
+    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int count FROM mca_funding_events WHERE workspace_id=? AND idempotency_key='correction-bypass'").get(ids.workspace))?.count, 0)
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_funding_events WHERE id=?").get(original.fundingEventId))?.state, "reversed")
+  } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED }
+})
+
+test("verified preview cannot replace a signature committed while its update waits", async () => {
+  const workflow = await acceptOfferForClosing(actor(), { dealId, revisionId: selectedRevisionId, idempotencyKey: "preview-race-workflow" })
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  let locked!: () => void, release!: () => void
+  const lockReady = new Promise<void>((resolve) => { locked = resolve })
+  const releaseLock = new Promise<void>((resolve) => { release = resolve })
+  const signing = withImmediateTransaction(async (database) => {
+    await database.prepare("UPDATE mca_contract_workflows SET state='signed' WHERE workspace_id=? AND id=?").run(ids.workspace, workflow.id)
+    locked()
+    await releaseLock
+  })
+  try {
+    await lockReady
+    const preview = previewContractAction(actor(), { workflowId: workflow.id, action: "request_contract", senderId: "submission-sender", recipient: "contracts@northstar.example", exceptions: { driver_license: "Funder approved", voided_check: "Funder approved" }, idempotencyKey: "preview-race" }).then(() => null, (error: { code?: string }) => error)
+    let waiting = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const activity = await getDatabase().prepare<{ count: number }>("SELECT count(*)::int count FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'UPDATE mca_contract_workflows SET state=%' AND wait_event_type='Lock'").get()
+      if (activity?.count) { waiting = true; break }
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    release()
+    await signing
+    assert.equal(waiting, true, "preview reached the workflow update while signature held the row lock")
+    assert.equal((await preview)?.code, "contract_already_signed")
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_contract_workflows WHERE id=?").get(workflow.id))?.state, "signed")
+  } finally { release(); await signing; delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED }
+})
+
 test("verified closing flow rejects a generic signed PSF callback before state changes", async () => {
   process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
   try {
     await assert.rejects(() => recordPsfWebhook(ids.workspace, JSON.stringify({ status: "signed", externalRequestId: "mock" }), "mock"), (error: { code?: string }) => error.code === "psf_signature_provider_unavailable")
     assert.equal((await getClosingSnapshot(actor(), dealId)).productionGates.psfDelivery.includes("unavailable"), true)
   } finally { delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED }
+})
+
+test("verified PSF delivery does not send bank details to a previously selected generic webhook", async () => {
+  await updatePsfConfiguration(actor(), { enabled: true, visibleToReps: true, destination: "https://example.com/psf", signingSecret: "psf-signing-secret-at-least-32-characters" })
+  const input = { dealId, offerId: selectedOfferId, revisionId: selectedRevisionId, amountCents: 4000000, bankName: "Synthetic Bank", routingNumber: "021000021", accountNumber: "1234567890", businessName: "Synthetic Bakery LLC", contactName: "Mira", contactEmail: "mira@example.test", idempotencyKey: "verified-legacy-psf" }
+  const saved = await confirmPsfRequest(actor(), input)
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_closing_deliveries
+    (id,workspace_id,deal_id,kind,record_id,attempt_key,channel,state,recipient_cipher,payload_hash,correlation_id,external_id,error_code,error_message,created_at,updated_at)
+    VALUES ('verified-legacy-delivery',?,?,'psf_request',?,'legacy-attempt','webhook','failed',NULL,?,'legacy-correlation',NULL,'synthetic_failure',NULL,?,?)`).run(ids.workspace, dealId, saved.request.id, "a".repeat(64), now, now)
+  process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON = JSON.stringify([{ workspaceId: ids.workspace, apiBaseUrl: "https://sign.example.test/api", apiToken: "synthetic-token", webhookSecret: "synthetic-webhook-secret-with-at-least-32-characters", templateId: 42, signerRole: "Merchant", fieldBindings: { amount: { name: "Amount", type: "number" }, bankName: { name: "Bank", type: "text" }, routingNumber: { name: "Routing", type: "text", mask: true }, accountNumber: { name: "Account", type: "text", mask: true }, businessName: { name: "Business", type: "text" }, contactName: { name: "Contact", type: "text" }, contactEmail: { name: "Email", type: "text" } }, sendEmail: false, requireEmail2fa: true, artifactAllowedHosts: ["files.example.test"] }])
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  const originalFetch = globalThis.fetch
+  let sends = 0
+  globalThis.fetch = async () => { sends++; throw new Error("A verified PSF must not be sent through the legacy provider") }
+  setClosingTransportForTests({ async deliver(request) { sends++; return { state: "sent", correlationId: request.correlationId, externalId: "should-not-send" } } })
+  try {
+    await assert.rejects(() => confirmPsfRequest(actor(), { ...input, deliver: true, attemptKey: "verified-retry" }), (error: { code?: string }) => error.code === "psf_signature_provider_unavailable")
+    assert.equal(sends, 0)
+    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int count FROM mca_closing_deliveries WHERE workspace_id=? AND record_id=?").get(ids.workspace, saved.request.id))?.count, 1)
+  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED; delete process.env.MCA_DOCUSEAL_PSF_CONNECTIONS_JSON; setClosingTransportForTests() }
 })
 
 test("verified closing flow fences an interrupted webhook send for operator reconciliation", async () => {
@@ -255,6 +321,11 @@ test("verified closing flow fences an interrupted webhook send for operator reco
     const unverified = await sendMerchantOfferPreview(actor(), noIdentity.id, "ack-without-identity-send")
     assert.equal(unverified.delivery.state, "blocked")
     assert.equal(unverified.pitched, false)
+    const malformedIdentity = await previewMerchantOffers(actor(), { dealId, selectionMode: "selected", channel: "email", senderId: "merchant-sender", idempotencyKey: "object-identity-preview" })
+    globalThis.fetch = async () => new Response(JSON.stringify({ id: { unexpected: true } }), { status: 200, headers: { "content-type": "application/json" } })
+    const malformed = await sendMerchantOfferPreview(actor(), malformedIdentity.id, "object-identity-send")
+    assert.equal(malformed.delivery.state, "blocked")
+    assert.equal(malformed.pitched, false)
   } finally {
     globalThis.fetch = originalFetch
     delete process.env.MCA_MERCHANT_EMAIL_WEBHOOK_URL
