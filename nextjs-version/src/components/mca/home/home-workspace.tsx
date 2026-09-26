@@ -9,11 +9,13 @@ export function HomeWorkspace({
   canCreateDeal,
   initialKpis,
   initialSetup = null,
+  readinessEnabled = false,
 }: {
   firstName: string
   canCreateDeal: boolean
   initialKpis: HomeKpis | null
   initialSetup?: WorkspaceSetup | null
+  readinessEnabled?: boolean
 }) {
   return (
     <Dashboard2Shell
@@ -21,6 +23,7 @@ export function HomeWorkspace({
       canCreateDeal={canCreateDeal}
       initialKpis={initialKpis}
       initialSetup={initialSetup}
+      readinessEnabled={readinessEnabled}
     />
   )
 }

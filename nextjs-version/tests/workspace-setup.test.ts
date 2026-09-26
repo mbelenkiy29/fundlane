@@ -6,8 +6,11 @@ import { pipelineHasFilters } from "../src/lib/mca/deals/pipeline"
 import { closeDatabaseForTests, getDatabase, nowIso } from "../src/lib/mca/db"
 import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { buildWorkspaceSetup } from "../src/lib/mca/setup/contracts"
-import { dismissWorkspaceSetup, getWorkspaceSetup } from "../src/lib/mca/setup/service"
+import { dismissWorkspaceSetup, getReadinessFacts, getWorkspaceSetup } from "../src/lib/mca/setup/service"
+import { deriveReadiness } from "../src/lib/mca/setup/readiness"
+import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../src/lib/mca/sandbox/labels"
 import { GET, POST } from "../src/app/api/mca/setup/route"
+import { GET as GET_DIAGNOSTICS } from "../src/app/api/mca/setup/diagnostics/route"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 const now = "2026-09-25T12:00:00.000Z"
@@ -27,6 +30,8 @@ const ids = {
   dismissMember: "member-setup-dismiss",
   inviteUser: "user-setup-invite",
   inviteMember: "member-setup-invite",
+  repUser: "user-setup-rep",
+  repMember: "member-setup-rep",
 }
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -61,10 +66,13 @@ before(async () => {
   await insertUser(ids.emptyUser, ids.emptyMember, "setup-empty@example.test", ids.empty)
   await insertUser(ids.dismissUser, ids.dismissMember, "setup-dismiss@example.test", ids.dismiss)
   await insertUser(ids.inviteUser, ids.inviteMember, "setup-invite@example.test", ids.workspace, "rep", "pending")
+  await insertUser(ids.repUser, ids.repMember, "setup-rep@example.test", ids.workspace, "rep")
   await getDatabase().prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
     VALUES (?, ?, ?, ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run("setup-admin-session", ids.adminUser, ids.adminMember, hashOpaqueToken("setup-admin-token"), now, now)
   await getDatabase().prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
     VALUES (?, ?, ?, ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run("setup-empty-session", ids.emptyUser, ids.emptyMember, hashOpaqueToken("setup-empty-token"), now, now)
+  await getDatabase().prepare(`INSERT INTO sessions (id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at)
+    VALUES (?, ?, ?, ?, '2099-01-01T00:00:00.000Z', ?, ?)`).run("setup-rep-session", ids.repUser, ids.repMember, hashOpaqueToken("setup-rep-token"), now, now)
   await getDatabase().prepare(`INSERT INTO mca_funders (id, workspace_id, idempotency_key, legal_name, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?)`).run("funder-setup", ids.workspace, "funder-setup", "North Capital", now, now)
   await getDatabase().prepare(`INSERT INTO deals
@@ -161,6 +169,141 @@ test("getWorkspaceSetup reads only existing workspace, funder, deal, team, and c
   assert.equal(ready.allComplete, true)
   assert.equal(ready.dismissed, false)
   assert.equal(ready.steps.find((step) => step.id === "integrations")?.complete, true)
+})
+
+test("flagged readiness reads scoped rows and diagnostics require an admin session", async () => {
+  const previous = process.env.MCA_SETUP_READINESS_ENABLED
+  process.env.MCA_SETUP_READINESS_ENABLED = "true"
+  try {
+    const admin = await getWorkspaceSetup(ids.workspace, "admin")
+    const empty = await getWorkspaceSetup(ids.empty, "admin")
+    const rep = await getWorkspaceSetup(ids.workspace, "rep")
+    assert.equal(admin.readiness?.find((item) => item.id === "sender")?.phase, "configured")
+    assert.equal(empty.readiness?.find((item) => item.id === "sender")?.phase, "needs_setup")
+    assert.deepEqual(rep.readiness?.map((item) => item.id), ["form_intake", "documents", "synthetic_deal"])
+    assert.equal(rep.canDownloadDiagnostics, false)
+    const repResponse = await GET(cookieRequest("/api/mca/setup", "setup-rep-token"))
+    assert.equal(repResponse.status, 200)
+    const repBody = await repResponse.json() as { readiness: Array<{ id: string }>; canDownloadDiagnostics: boolean }
+    assert.deepEqual(repBody.readiness.map((item) => item.id), ["form_intake", "documents", "synthetic_deal"])
+    assert.equal(repBody.canDownloadDiagnostics, false)
+
+    const unauth = await GET_DIAGNOSTICS(new Request("http://localhost/api/mca/setup/diagnostics"))
+    assert.equal(unauth.status, 401)
+    const forbidden = await GET_DIAGNOSTICS(cookieRequest("/api/mca/setup/diagnostics", "setup-rep-token"))
+    assert.equal(forbidden.status, 403)
+    await getDatabase().prepare(`INSERT INTO intake_events
+      (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,source_reference,state,created_at,updated_at)
+      VALUES (?,?,'native',?,'checksum','secret-document-and-bank-content','bank-account-123','error',?,?)`)
+      .run("intake-setup-diagnostic", ids.workspace, "external-request-123", now, now)
+    const response = await GET_DIAGNOSTICS(cookieRequest("/api/mca/setup/diagnostics", "setup-admin-token"))
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    const body = await response.json() as { workspaceId: string; readiness: unknown[]; requests: unknown[] }
+    assert.equal(body.workspaceId, ids.workspace)
+    assert.equal(body.readiness.length, 7)
+    assert.deepEqual(body.requests, [{ kind: "intake", requestId: "intake-setup-diagnostic", state: "error" }])
+    assert.doesNotMatch(JSON.stringify(body), /secret-document|bank-account|external-request/)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_SETUP_READINESS_ENABLED
+    else process.env.MCA_SETUP_READINESS_ENABLED = previous
+  }
+})
+
+test("readiness requires a usable approved form for configuration and document processing", async () => {
+  const workspaceId = "ws-setup-form-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Form State Brokerage")
+  await db.prepare(`INSERT INTO intake_integrations
+    (id,workspace_id,provider,display_name,enabled,approval_state,automatic_processing,credential_expires_at,created_at,updated_at)
+    VALUES (?,?,'native','Test form',1,'pending_customer_contract',1,NULL,?,?)`).run("form-setup-state", workspaceId, now, now)
+
+  const phases = async () => deriveReadiness(await getReadinessFacts(workspaceId), "admin")
+  let items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+  assert.match(items.find((item) => item.id === "form_intake")?.detail ?? "", /reapproval/)
+
+  await db.prepare("UPDATE intake_integrations SET approval_state='approved', credential_expires_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", "form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=NULL WHERE id=?").run("form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "configured")
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "configured")
+
+  await db.prepare(`INSERT INTO deals
+    (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
+    VALUES (?,?,?,?,'lead',1,'partial','[]','{}',1,?,?)`).run("deal-setup-form-state", workspaceId, "MCA-FORM-STATE", "[SYNTHETIC] Test Merchant", now, now)
+  await db.prepare(`INSERT INTO mca_documents
+    (id,workspace_id,deal_id,idempotency_key,original_filename,display_filename,mime_type,byte_length,checksum,category,version,storage_key,source,processing_state,created_at,updated_at)
+    VALUES (?,?,?,'setup-form-document','statement.pdf','statement.pdf','application/pdf',1,'synthetic-checksum','bank_statement',1,'setup-form-document','upload','ready',?,?)`)
+    .run("document-setup-form-state", workspaceId, "deal-setup-form-state", now, now)
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "tested")
+  await db.prepare(`INSERT INTO intake_events
+    (id,workspace_id,provider,provider_event_id,payload_checksum,application_cipher,state,deal_id,created_at,updated_at)
+    VALUES (?,?,'native',?,'checksum','synthetic','created',?,?,?)`).run("intake-setup-form-state", workspaceId, "form-state-event", "deal-setup-form-state", now, now)
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "tested")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", "form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "form_intake")?.phase, "needs_setup")
+  assert.equal(items.find((item) => item.id === "form_intake")?.href, "/settings/connections")
+  assert.equal((await getReadinessFacts(workspaceId)).readyDocuments, 1)
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE intake_integrations SET credential_expires_at=NULL, automatic_processing=0 WHERE id=?").run("form-setup-state")
+  items = await phases()
+  assert.equal(items.find((item) => item.id === "documents")?.phase, "needs_setup")
+})
+
+test("billing readiness follows entitlement expiry and manual suspension", async () => {
+  const workspaceId = "ws-setup-billing-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Billing State Brokerage")
+  await db.prepare("INSERT INTO company_subscription_state (workspace_id,legacy_exempt,selected_seats,updated_at) VALUES (?,0,8,?)").run(workspaceId, now)
+  await db.prepare(`INSERT INTO workspace_billing_entitlements
+    (workspace_id,plan_slug,plan_name,status,period_start,period_end,seat_limit,source,synced_at)
+    VALUES (?,'test','Test','active',?, ?,8,'free',?)`).run(workspaceId, now, "2099-01-01T00:00:00.000Z", now)
+  const billing = async () => deriveReadiness(await getReadinessFacts(workspaceId), "admin").find((item) => item.id === "billing")
+  assert.equal((await billing())?.phase, "live_ready")
+
+  await db.prepare("UPDATE workspace_billing_entitlements SET period_end=? WHERE workspace_id=?").run("2020-01-01T00:00:00.000Z", workspaceId)
+  assert.equal((await billing())?.phase, "needs_setup")
+
+  await db.prepare("UPDATE workspace_billing_entitlements SET period_end=? WHERE workspace_id=?").run("2099-01-01T00:00:00.000Z", workspaceId)
+  await db.prepare("UPDATE company_subscription_state SET manual_paused=1 WHERE workspace_id=?").run(workspaceId)
+  assert.equal((await billing())?.phase, "needs_setup")
+})
+
+test("a sandbox send counts as a synthetic test only for a synthetic deal in the same workspace", async () => {
+  const workspaceId = "ws-setup-sandbox-state"
+  const db = getDatabase()
+  await insertWorkspace(workspaceId, "Sandbox State Brokerage")
+  await db.prepare(`INSERT INTO mca_funders (id,workspace_id,idempotency_key,legal_name,active,created_at,updated_at)
+    VALUES (?,?,?,?,1,?,?)`).run("funder-setup-sandbox", workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY, "Sandbox", now, now)
+  await db.prepare(`INSERT INTO deals
+    (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
+    VALUES (?,?,?,?,'lead',1,'partial','[]','{}',1,?,?)`).run("deal-setup-sandbox", workspaceId, "MCA-SANDBOX-STATE", "Real Merchant LLC", now, now)
+  await db.prepare(`INSERT INTO mca_submission_jobs
+    (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_at,updated_at)
+    VALUES (?,?,?,?,'Sandbox','api','{}','sent','setup-sandbox-confirm','setup-sandbox-attempt',1,'{}','{}','[]',?,?)`).run(
+    "job-setup-sandbox", workspaceId, "deal-setup-sandbox", "funder-setup-sandbox", now, now,
+  )
+
+  let facts = await getReadinessFacts(workspaceId)
+  assert.equal(facts.sandboxSentJobs, 0)
+  assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "needs_setup")
+
+  await db.prepare("UPDATE deals SET legal_name='[SYNTHETIC] Test Merchant' WHERE id=?").run("deal-setup-sandbox")
+  facts = await getReadinessFacts(workspaceId)
+  assert.equal(facts.sandboxSentJobs, 1)
+  assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "tested")
+  assert.equal((await getReadinessFacts(ids.empty)).sandboxSentJobs, 0)
 })
 
 test("dismissWorkspaceSetup is idempotent and hides later reads", async () => {

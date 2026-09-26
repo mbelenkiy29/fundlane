@@ -25,6 +25,8 @@ export interface WorkspaceSetup {
   allComplete: boolean
   nextStep: SetupStep | null
   steps: SetupStep[]
+  readiness?: import("./readiness").ReadinessItem[]
+  canDownloadDiagnostics?: boolean
 }
 
 export interface SetupStateInput {
