@@ -37,7 +37,9 @@ Event IDs derive from connection, activity and restoration generation. Baselines
 
 Calendar connections are durable reconciliation jobs: `next_sync_at`, status, failures and last sync survive process restarts. New local activity, settings changes, and authenticated Google push messages bring reconciliation forward. A five-minute poll catches missed notifications. PostgreSQL transaction advisory locks serialize each connection across workers, settings changes and disconnects. Network calls have timeouts; transaction rollback and deterministic provider IDs support recovery after crashes. Calendar activity writes and worker reconciliation serialize through connection rows so incoming Google edits cannot overwrite a concurrent local save.
 
-Start a separate worker using the same runtime database and encryption settings as the app:
+The selected runtime is a dedicated Vercel Node cron endpoint, `GET /api/cron/calendar`. It requires both `MCA_CALENDAR_GOOGLE_ENABLED=true` and `MCA_CALENDAR_RUNTIME=vercel_cron`; unset values preserve the current disabled behavior. `CRON_SECRET` authenticates an exact bearer token. Each request holds one PostgreSQL transaction advisory lock on a separate connection across instances, processes at most three due connections, and stops before a 230-second work deadline within a 300-second function limit. This works with the runtime transaction pooler while connection reconciliation retains its own transaction and conflict lock. A five-minute schedule provides missed-notification polling and watch renewal; concurrent ticks return `busy: true`. Do not schedule the historical worker at the same time.
+
+The standalone worker remains a historical/local verification entry point:
 
 ```sh
 pnpm calendar:worker
@@ -48,23 +50,27 @@ node scripts/calendar/build.mjs
 node .next/calendar-worker.cjs --once
 ```
 
-`Dockerfile.calendar` packages the independent worker. The web application is hosted on Vercel and uses Supabase Postgres, Auth, and private Storage. Run the optional container on the existing background-worker host, using repository root directory `nextjs-version`, Dockerfile `./Dockerfile.calendar`, and no public port. It is independent of document-processing and messaging workers. No hosting service is provisioned by this change.
+`Dockerfile.calendar` is historical deployment packaging. Render is historical and is not the scheduler for this integration. The web application and cron route run on Vercel with Supabase Postgres, Auth, and private Storage. No hosted schedule is provisioned by this code change.
 
-Required environment on both web and worker:
+Required environment on the Vercel app and cron route:
 
 - `DATABASE_URL`: existing restricted runtime connection.
 - `MCA_DATA_ENCRYPTION_KEY`: existing workspace encryption key.
 - `MCA_APP_ORIGIN`: canonical HTTPS app origin.
 - `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`.
 - `MCA_CALENDAR_GOOGLE_ENABLED=true` after staging acceptance. Default is disabled.
+- `MCA_CALENDAR_RUNTIME=vercel_cron` after staging acceptance. Default is unset/disabled.
+- `CRON_SECRET`: existing Vercel cron bearer secret.
 
-Enable Google Calendar API in the Google Cloud project; configure the consent screen and test users. Register `${MCA_APP_ORIGIN}/api/mca/calendar/google/callback` as an exact authorized redirect URI. Configure the public application's consent verification as required for its requested scopes. The webhook `${MCA_APP_ORIGIN}/api/mca/calendar/google/webhook` must accept public HTTPS POSTs; it authenticates channel ID, hashed channel token, resource ID and channel expiry. Expiring watches are renewed a day early. Local HTTP development uses polling.
+In an approved nonproduction Google Cloud project, enable Google Calendar API, create a Web application OAuth client, configure the OAuth consent screen with the scopes above, and add the staging Google accounts as test users. Register `${MCA_APP_ORIGIN}/api/mca/calendar/google/callback` as an exact authorized redirect URI. Configure the public application's consent verification as required for its requested scopes. The webhook `${MCA_APP_ORIGIN}/api/mca/calendar/google/webhook` must accept public HTTPS POSTs; Google Calendar watch registration uses that URL and authenticates channel ID, hashed channel token, resource ID and channel expiry. Expiring watches are renewed a day early. Local HTTP development uses polling.
 
-Apply the additive migration using the existing guarded migration command, then run `db:secure` against the same verified destination. The table manifest discovers the new tables from the migration journal. Browser roles have no direct calendar-table access; the restricted server role receives access through the established grants/RLS setup. Builds do not apply migrations.
+The existing additive `0034_pipeline_calendar.sql` migration and its restricted-role grants must be present on the target. If absent on an approved nonproduction target, apply it using the existing guarded migration command, then run `db:secure` against that same verified destination. This cron change adds no migration. Browser roles have no direct calendar-table access; the restricted server role receives access through the established grants/RLS setup. Builds do not apply migrations.
 
-Deploy in this order: database migration/grants, web application, worker with Google disabled, Google staging verification, then enable both processes. The pipeline calendar works without a Google account. To pause external syncing, disable the Google flag on web and worker; local scheduling continues. Disconnect stops watches when access allows, deletes credentials, mappings and cached personal events, and retains local activities and existing Google calendar entries. Expired access never prevents local disconnection. Deactivated membership or removed Deals-page access purges the connection on reconciliation.
+Deploy in this order: verify existing calendar migration/grants, deploy the web application with both flags off, complete Google staging verification, install exactly one Vercel cron schedule for `GET /api/cron/calendar` every five minutes (`*/5 * * * *`) with `CRON_SECRET`, then enable both flags. Do not add a second scheduler or reuse the standalone worker. The pipeline calendar works without a Google account. Disconnect stops watches when access allows, deletes credentials, mappings and cached personal events, and retains local activities and existing Google calendar entries. Expired access never prevents local disconnection. Deactivated membership or removed Deals-page access purges the connection on reconciliation.
 
-Monitor structured `calendar_sync_failed` and `calendar_worker_failed` logs and connection `status`, `failures`, `next_sync_at`, and `last_sync_at`. No credentials or event bodies are logged. Network/provider failures retry after five minutes; authorization failures show Reconnect. Alert operationally when active connections remain unsynced beyond ten minutes or fail repeatedly. The UI exposes last sync, retry, reconnect, conflicts and disconnection.
+Monitor cron `processed`, `busy`, and `durationMs`, structured `calendar_sync_failed` logs, and the owner-only `/admin/status` Google Calendar panel. It counts stale connections (last sync older than ten minutes), failed connections, reconnect-needed connections, and selected watches absent or expiring within 24 hours. A `processed: 0` response alone does not prove provider health. No credentials or event bodies appear in status or logs. Network/provider failures retry after five minutes; authorization failures show Reconnect. Alert operationally on nonzero stale/failure/watch counts after verifying the schedule and Google account state. The user UI exposes last sync, retry, reconnect, conflicts and disconnection.
+
+To disable, unset `MCA_CALENDAR_RUNTIME` first and remove the Vercel schedule; unset `MCA_CALENDAR_GOOGLE_ENABLED` to hide Google connect/sync from users if provider access must also stop. Leave local activities and encrypted connection records intact. For recovery, inspect the owner status counts and sanitized runtime logs, verify Google OAuth configuration and webhook reachability, reconnect revoked accounts through the user UI, restore the single schedule, and enable both flags only after a staging tick shows a fresh `last_sync_at`, renewed watch, and resolved or explicitly surfaced conflicts. Do not replay provider writes blindly or clear sync tokens in bulk.
 
 ## Interfaces
 

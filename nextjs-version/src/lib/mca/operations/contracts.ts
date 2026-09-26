@@ -86,6 +86,7 @@ export type Status = {
     lastCompletedAt: string | null
     lastStartedAt: string | null
   } | null
+  calendar?: { connections: number; stale: number; failures: number; reconnect: number; expiringWatches: number } | null
 }
 export function parseWindow(value: string | null): Window {
   if (value === null) return "24h"

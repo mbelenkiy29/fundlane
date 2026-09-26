@@ -361,6 +361,21 @@ export function StatusDashboard({ preview }: { preview?: Status }) {
           </dl>
         </Panel>
       </div>
+      {data?.calendar && (
+        <Panel title="Google Calendar sync" subtitle="Current connections · owner-only aggregate">
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+            {[
+              ["Connections", data.calendar.connections],
+              ["Stale over 10 min", data.calendar.stale],
+              ["Failures", data.calendar.failures],
+              ["Reconnect needed", data.calendar.reconnect],
+              ["Watches due within 24h", data.calendar.expiringWatches],
+            ].map(([label, value]) => (
+              <div key={label}><dt className="text-sm text-muted-foreground">{label}</dt><dd className="mt-1 text-xl font-semibold">{number(value as number)}</dd></div>
+            ))}
+          </dl>
+        </Panel>
+      )}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Metric
           title="Companies"

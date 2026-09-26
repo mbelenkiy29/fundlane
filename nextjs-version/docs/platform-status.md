@@ -1,5 +1,7 @@
 # Platform status
 
+When both `MCA_CALENDAR_GOOGLE_ENABLED=true` and `MCA_CALENDAR_RUNTIME=vercel_cron`, the owner status API and dashboard include aggregate Google Calendar connection health: stale syncs over ten minutes, connections with failures, reconnect-needed connections, and selected push watches missing or expiring within 24 hours. These are current database counts; the response excludes credentials, event content and user identifiers. See [calendar deployment and recovery](pipeline-calendar.md).
+
 `/admin/status` is a separate owner console. Its API validates the live Supabase session and compares the immutable user ID to `MCA_PLATFORM_OWNER_USER_ID`. Company roles cannot grant access. The ordinary app header shows a link only for the configured owner; the link is not an authorization mechanism.
 
 ## Metrics

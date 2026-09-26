@@ -230,11 +230,16 @@ export async function syncConnection(id:string):Promise<void> {
     console.error(JSON.stringify({event:"calendar_sync_failed",connectionId:id,code:error instanceof GoogleCalendarError?error.status:"internal"}))
   }
 }
-export async function runCalendarWorkerOnce():Promise<number> {
+export async function runCalendarWorkerOnce(limit=20, deadline=Number.POSITIVE_INFINITY):Promise<number> {
   if(!googleEnabled()) return 0
-  const connections=await getDatabase().prepare<{id:string}>("SELECT id FROM mca_calendar_connections WHERE next_sync_at<=? AND status<>'reconnect' ORDER BY next_sync_at LIMIT 20").all(nowIso())
-  for(const c of connections) await syncConnection(c.id)
-  return connections.length
+  const connections=await getDatabase().prepare<{id:string}>("SELECT id FROM mca_calendar_connections WHERE next_sync_at<=? AND status<>'reconnect' ORDER BY next_sync_at,id LIMIT ?").all(nowIso(),limit)
+  let processed=0
+  for(const c of connections) {
+    if(Date.now()>=deadline) break
+    await syncConnection(c.id)
+    processed++
+  }
+  return processed
 }
 export async function resolveCalendarConflict(actor:DealActor,activityId:string,input:{choice:"local"|"google";version:number;etag:string}) {
   await withTransaction(async db=>{

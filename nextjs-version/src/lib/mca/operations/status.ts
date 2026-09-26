@@ -1,5 +1,5 @@
 import "server-only"
-import { withTransaction } from "../db"
+import { withTransaction, type DbExecutor } from "../db"
 import type { ErrorEvent, Health, Status, Window } from "./contracts"
 import { sinceFor } from "./contracts"
 export async function platformStatus(window: Window): Promise<Status> {
@@ -77,6 +77,9 @@ export async function platformStatus(window: Window): Promise<Status> {
           (SELECT last_completed_at::text FROM mca_email_runtime_lease WHERE id=1) "lastCompletedAt",
           (SELECT last_started_at::text FROM mca_email_runtime_lease WHERE id=1) "lastStartedAt"`)
       : null
+    const calendar = process.env.MCA_CALENDAR_GOOGLE_ENABLED === "true" && process.env.MCA_CALENDAR_RUNTIME === "vercel_cron"
+      ? await calendarHealth(db)
+      : null
     return {
       asOf,
       startedAt: control.started_at,
@@ -98,8 +101,17 @@ export async function platformStatus(window: Window): Promise<Status> {
       usage: daily,
       incidents,
       emailRuntime,
+      calendar: calendar ?? null,
     }
   })
+}
+export async function calendarHealth(db: DbExecutor) {
+  return db.queryOne<{ connections: number; stale: number; failures: number; reconnect: number; expiringWatches: number }>(`SELECT
+    (SELECT count(*)::int FROM mca_calendar_connections) connections,
+    (SELECT count(*)::int FROM mca_calendar_connections WHERE status<>'reconnect' AND COALESCE(last_sync_at,created_at)::timestamptz < now()-interval '10 minutes') stale,
+    (SELECT count(*)::int FROM mca_calendar_connections WHERE failures>0 OR status='error') failures,
+    (SELECT count(*)::int FROM mca_calendar_connections WHERE status='reconnect') reconnect,
+    (SELECT count(*)::int FROM mca_calendar_sources WHERE selected=1 AND (channel_expires_at IS NULL OR channel_expires_at::timestamptz < now()+interval '24 hours')) "expiringWatches"`)
 }
 export async function platformErrors(
   since: string,
