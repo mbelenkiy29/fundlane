@@ -73,15 +73,6 @@ export function ApplicationsWorkspace() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not queue the email. Try again.") }
     finally { setBusy(null) }
   }
-  async function reconcile(row: ApplicationInvitation, deliveryId: string, outcome: "accepted" | "not_sent", evidence: string) {
-    setBusy(row.id); setError(""); setNotice("")
-    try {
-      await requestJson(`/api/mca/applications/${row.id}/reconcile`, { method: "POST", body: JSON.stringify({ deliveryId, outcome, evidence }) })
-      setNotice(outcome === "accepted" ? "Provider acceptance recorded. No email was sent again." : "Provider absence recorded. The same delivery was queued for retry.")
-      await refresh()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not reconcile the delivery.") }
-    finally { setBusy(null) }
-  }
   async function saveBranding(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const fields = new FormData(event.currentTarget)
@@ -134,7 +125,7 @@ export function ApplicationsWorkspace() {
       <section aria-labelledby="invitation-list-title">
         <div className="mb-4 flex items-baseline justify-between gap-3"><h2 id="invitation-list-title" className="text-lg font-semibold">Client invitations</h2><span className="text-sm tabular-nums text-muted-foreground">{data.invitations.length} total</span></div>
         {!data.invitationEmailEnabled && <p role="status" className="mb-4 rounded-lg border bg-muted/40 p-3 text-sm">Application emails are not enabled yet. Copy the link to share with your client.</p>}
-        {!data.invitations.length ? <div className="rounded-xl border border-dashed px-6 py-12 text-center"><Mail className="mx-auto mb-3 size-7 text-muted-foreground" /><p className="font-medium">Your next application starts here</p><p className="mt-1 text-sm text-muted-foreground">Create an invitation above, then {data.invitationEmailEnabled ? "send your client their personal link." : "copy the link for your client."}</p></div> : <InvitationsTable invitations={data.invitations} canCreate={data.canCreate} canReconcile={data.canManageForm === true && data.canCreate} invitationEmailEnabled={data.invitationEmailEnabled} busy={busy} onCopy={row => void copy(row)} onSend={row => void send(row)} onReconcile={(row, deliveryId, outcome, evidence) => void reconcile(row, deliveryId, outcome, evidence)} manualLink={manualLink} />}
+        {!data.invitations.length ? <div className="rounded-xl border border-dashed px-6 py-12 text-center"><Mail className="mx-auto mb-3 size-7 text-muted-foreground" /><p className="font-medium">Your next application starts here</p><p className="mt-1 text-sm text-muted-foreground">Create an invitation above, then {data.invitationEmailEnabled ? "send your client their personal link." : "copy the link for your client."}</p></div> : <InvitationsTable invitations={data.invitations} canCreate={data.canCreate} invitationEmailEnabled={data.invitationEmailEnabled} busy={busy} onCopy={row => void copy(row)} onSend={row => void send(row)} manualLink={manualLink} />}
         <p className="mt-4 max-w-3xl text-xs leading-relaxed text-muted-foreground">Opens are observed visits and may include automated link scanners. Started means the client clicked “Start application”; it does not measure completed fields. Copied links do not count as emails sent. Incomplete applications keep their progress{data.invitationEmailEnabled ? " and receive reminder emails." : "."}</p>
       </section>
       {data.canManageForm && branding && <section className="rounded-xl border bg-card p-5" aria-labelledby="form-branding-title">

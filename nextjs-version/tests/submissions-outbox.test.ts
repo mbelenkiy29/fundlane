@@ -212,10 +212,15 @@ test("processJobDelivery reconciles a sending attempt without repeating an ambig
   const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
   deliveries = 0
   const priorRuntime = process.env.MCA_JOB_RUNTIME
+  const priorKinds = process.env.MCA_JOB_RUNTIME_KINDS
   process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  process.env.MCA_JOB_RUNTIME_KINDS = "submission_delivery"
   let saved: typeof sending
   try { saved = await processJobDelivery(sending) }
-  finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
+  finally {
+    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
+    if (priorKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = priorKinds
+  }
 
   assert.equal(saved.state, "failed")
   assert.equal(await attemptCount(saved.id), 1)
@@ -225,6 +230,27 @@ test("processJobDelivery reconciles a sending attempt without repeating an ambig
   assert.equal(attempt?.state, "failed")
   assert.ok(await outboxProcessedAt(saved.id))
   assert.equal(deliveries, 0)
+})
+
+test("unset kind list preserves legacy submission retry behavior", async () => {
+  const { deal, document } = await seedDeal()
+  const queued = await persistQueuedJob(deal.id, document, "outbox-legacy-retry")
+  await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey,
+    transport: queued.routeKind, state: "sending", correlationId: newId() })
+  const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  const priorKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  deliveries = 0
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  delete process.env.MCA_JOB_RUNTIME_KINDS
+  let saved: typeof sending
+  try { saved = await processJobDelivery(sending) }
+  finally {
+    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
+    if (priorKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = priorKinds
+  }
+  assert.equal(saved.state, "sent")
+  assert.equal(deliveries, 1)
 })
 
 test("gated API recovery leaves an interrupted send uncertain without submitting twice", async () => {

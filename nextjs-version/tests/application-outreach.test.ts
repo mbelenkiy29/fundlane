@@ -12,15 +12,12 @@ import type { MembershipContext } from "../src/lib/mca/types"
 import { getDeal } from "../src/lib/mca/deals/service"
 import { configureIntegration, createJotformRepLink } from "../src/lib/mca/intake/configuration"
 import { ingestProviderDelivery } from "../src/lib/mca/intake/ingress"
-import { createApplicationInvitation, copyApplicationLink, invitationEmailEnabled, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, reconcileInvitationDelivery, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
+import { createApplicationInvitation, copyApplicationLink, invitationEmailEnabled, listApplicationInvitations, ownedInvitation, processInvitationEmail, queueInvitationEmail, resolveApplicationInvitation, trackApplicationInvitation } from "../src/lib/mca/applications/service"
 import { getApplicationOutreachReport } from "../src/lib/mca/applications/report"
 import { OUTREACH_METRICS } from "../src/lib/mca/applications/contracts"
-import { invitationStatus } from "../src/components/mca/applications/invitation-status"
-import { processInvitationReminder, scheduleDueInvitationReminders } from "../src/lib/mca/applications/reminders"
-import { claimBackgroundJob, completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
+import { completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
 import { GET as listRoute, POST as createRoute } from "../src/app/api/mca/applications/route"
 import { POST as sendRoute } from "../src/app/api/mca/applications/[invitationId]/send/route"
-import { POST as reconcileRoute } from "../src/app/api/mca/applications/[invitationId]/reconcile/route"
 import { POST as linkRoute } from "../src/app/api/mca/applications/[invitationId]/link/route"
 import { POST as trackRoute } from "../src/app/api/applications/track/route"
 import { GET as reportRoute } from "../src/app/api/mca/reports/application-outreach/route"
@@ -32,7 +29,6 @@ const originalFetch = globalThis.fetch
 process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
 process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
 const originalEmailUrl = process.env.MCA_EMAIL_WEBHOOK_URL
-const originalRuntimeKinds = process.env.MCA_JOB_RUNTIME_KINDS
 const origin = "https://fundlane.example.test"
 const workspace = "outreach-workspace", otherWorkspace = "outreach-other"
 const actions = { createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: true, viewCompanyFinancials: true }
@@ -43,7 +39,6 @@ const code = (expected: string) => (error: unknown) => (error as { code?: string
 
 before(async () => {
   delete process.env.MCA_EMAIL_WEBHOOK_URL
-  process.env.MCA_JOB_RUNTIME_KINDS = "application_invitation_email,application_invitation_reminder"
   fixture = await createPostgresTestDatabase("outreach")
   Object.assign(process.env, fixture.env())
   const db = getDatabase(), at = nowIso()
@@ -61,7 +56,6 @@ before(async () => {
 after(async () => {
   globalThis.fetch = originalFetch
   if (originalEmailUrl === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL; else process.env.MCA_EMAIL_WEBHOOK_URL = originalEmailUrl
-  if (originalRuntimeKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = originalRuntimeKinds
   await closeDatabaseForTests(); await fixture?.close()
 })
 async function invite(a = ada, name = `Client ${randomUUID()}`) {
@@ -205,8 +199,6 @@ test("email previews do not count; retry and resend delivery preserve identities
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
   const keys: string[] = [], messages: Record<string, unknown>[] = []
   let simulateFailure = true
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
   globalThis.fetch = async (_url, init) => {
     keys.push(new Headers(init?.headers).get("idempotency-key")!)
     messages.push(JSON.parse(String(init?.body)))
@@ -220,259 +212,30 @@ test("email previews do not count; retry and resend delivery preserve identities
     assert.ok(failure)
     await failBackgroundJob({ ...failedJob, attempts: 3 }, failure)
     assert.equal((await ownedInvitation(ada, invitation.id)).sent_at, null)
-    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), { code: "delivery_uncertain" })
-    const listed = (await listApplicationInvitations(ada)).find(row => row.id === invitation.id)!
-    assert.equal(listed.deliveries[0].requiresReconciliation, true)
-    assert.equal(invitationStatus(listed), "Email needs reconciliation")
-    assert.equal(invitationStatus({ ...listed, sentAt: nowIso() }), "Email needs reconciliation")
-    const reconciliationPath = `/api/mca/applications/${invitation.id}/reconcile`
-    const reconciliation = { deliveryId: listed.deliveries[0].id, outcome: "accepted", evidence: "provider-receipt-accepted-123" }
-    assert.equal((await reconcileRoute(request(reconciliationPath, ada, "POST", reconciliation), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 403)
-    assert.equal((await reconcileRoute(request(reconciliationPath, other, "POST", reconciliation), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 404)
-    assert.equal((await reconcileRoute(request(reconciliationPath, admin, "POST", { ...reconciliation, evidence: "short" }), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 400)
+    const retry = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+    assert.equal(retry.jobId, queued.jobId)
     simulateFailure = false
-    const retryJob = await runningJob(queued.jobId)
-    await assert.rejects(processInvitationEmail(ada, retryJob), { code: "delivery_uncertain" })
-    assert.equal(keys.length, 1)
-    assert.equal(messages[0].template, "application_invitation")
-    assert.equal(messages[0].actionUrl, invitation.url)
-    assert.equal((await ownedInvitation(ada, invitation.id)).sent_at, null)
-    await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed' WHERE id=?").run(queued.jobId)
-    assert.equal((await reconcileRoute(request(reconciliationPath, admin, "POST", reconciliation), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 200)
-    assert.equal((await reconcileRoute(request(reconciliationPath, admin, "POST", reconciliation), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 409)
-    assert.equal(keys.length, 1)
+    const retryJob = await runningJob(retry.jobId)
+    const accepted = await processInvitationEmail(ada, retryJob)
+    await completeBackgroundJob(retryJob, accepted)
+    assert.equal(accepted.delivery, "sent")
+    assert.equal(keys[0], keys[1])
+    assert.equal(messages[1].template, "application_invitation")
+    assert.equal(messages[1].actionUrl, invitation.url)
     assert.ok((await ownedInvitation(ada, invitation.id)).sent_at)
-    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(queued.jobId))?.state, "complete")
-    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
-    const audit = await getDatabase().prepare<{ metadata: string }>("SELECT metadata FROM audit_events WHERE resource_id=? AND action='application_invitation_delivery_reconciled'").get(reconciliation.deliveryId)
-    assert.equal(JSON.parse(audit!.metadata).evidence, reconciliation.evidence)
-  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL; if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
-})
-
-test("provider-confirmed absence requeues the same invitation identity once", async () => {
-  const invitation = await invite()
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
-  const keys: string[] = []
-  let fail = true
-  globalThis.fetch = async (_url, init) => {
-    keys.push(new Headers(init?.headers).get("idempotency-key")!)
-    return new Response("", { status: fail ? 503 : 200 })
-  }
-  try {
-    const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    const first = await runningJob(queued.jobId)
-    await assert.rejects(processInvitationEmail(ada, first))
-    await failBackgroundJob({ ...first, attempts: 3 }, new Error("provider unavailable"))
-    delete process.env.MCA_JOB_RUNTIME
-    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
-    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
-    process.env.MCA_JOB_RUNTIME = "vercel_cron"
-    const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
-    assert.equal(delivery.requiresReconciliation, true)
-    const path = `/api/mca/applications/${invitation.id}/reconcile`
-    const input = { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-456" }
-    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 200)
-    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 409)
-    const requeued = await getDatabase().prepare<{ state: string; attempts: number; actor_json: string }>("SELECT state,attempts,actor_json FROM mca_background_jobs WHERE id=?").get(queued.jobId)
-    assert.equal(requeued?.state, "queued")
-    assert.equal(requeued?.attempts, 0)
-    assert.equal(JSON.parse(requeued!.actor_json).userId, admin.userId)
-    fail = false
-    const retried = await runningJob(queued.jobId)
-    assert.equal((await processInvitationEmail(admin, retried)).delivery, "sent")
-    await completeBackgroundJob(retried, { delivery: "sent" })
-    assert.deepEqual(keys, [delivery.id, delivery.id])
-    assert.ok((await ownedInvitation(ada, invitation.id)).sent_at)
-  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL; if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
-})
-
-test("accepted reminder reconciliation records the reminder event once", async () => {
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  try {
-  const invitation = await invite()
-  const past = new Date(Date.now() - 3 * 3600_000).toISOString()
-  await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, invitation.id)
-  await scheduleDueInvitationReminders(origin, new Date())
-  const delivery = await getDatabase().prepare<{ id: string; job_id: string }>(
-    "SELECT id,job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND purpose='reminder'",
-  ).get(invitation.id)
-  assert.ok(delivery)
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain',result_json=? WHERE id=?").run(JSON.stringify({ deliveryRuntime: "vercel_cron" }), delivery.job_id)
-  const input = { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-reminder-receipt-123" }
-
-  await reconcileInvitationDelivery(admin, invitation.id, input)
-
-  const row = await ownedInvitation(admin, invitation.id)
-  assert.equal(row.reminder_count, 1)
-  assert.ok(row.reminded_at)
-  const events = await getDatabase().prepare<{ count: number }>(
-    "SELECT count(*)::int count FROM mca_application_invitation_events WHERE invitation_id=? AND kind='reminded'",
-  ).get(invitation.id)
-  assert.equal(events?.count, 1)
-  await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, input), code("reconciliation_unavailable"))
-  } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
-})
-
-test("reconciliation rejects an unset runtime and a legacy failed delivery without changing either job", async () => {
-  const invitation = await invite()
-  const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-  const delivery = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_application_invitation_deliveries WHERE job_id=?").get(queued.jobId)
-  assert.ok(delivery)
-  await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',attempts=1,error_code='delivery_uncertain' WHERE id=?").run(queued.jobId)
-  const path = `/api/mca/applications/${invitation.id}/reconcile`
-  const input = { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-receipt-legacy-123" }
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  try {
-    delete process.env.MCA_JOB_RUNTIME
-    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 404)
-    await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, input), code("reconciliation_unavailable"))
-    process.env.MCA_JOB_RUNTIME = "vercel_cron"
-    assert.equal((await reconcileRoute(request(path, admin, "POST", input), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 409)
-    assert.equal((await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
-    const job = await getDatabase().prepare<{ state: string; result_json: string | null }>("SELECT state,result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId)
-    assert.equal(job?.state, "failed")
-    assert.equal(job?.result_json, null)
-    assert.equal((await getDatabase().prepare<{ delivery: string | null }>("SELECT delivery FROM mca_application_invitation_deliveries WHERE id=?").get(delivery.id))?.delivery, null)
-  } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
-})
-
-test("a failed pre-provider claim remains visible and can be reconciled for invitations and reminders", async () => {
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
-  let sends = 0
-  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
-  try {
-    const invitation = await invite()
-    const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    const first = await runningJob(queued.jobId)
-    await failBackgroundJob(first, new Error("killed before provider marker"))
-    const second = await runningJob(queued.jobId)
-    let invitationFailure: unknown
-    try { await processInvitationEmail(ada, second) } catch (error) { invitationFailure = error }
-    assert.ok(code("delivery_uncertain")(invitationFailure))
-    await failBackgroundJob(second, invitationFailure)
-    const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
-    assert.equal(delivery.requiresReconciliation, true)
-    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))?.result_json, null)
-    assert.equal(sends, 0)
-    delete process.env.MCA_JOB_RUNTIME_KINDS
-    try { await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain")) }
-    finally { process.env.MCA_JOB_RUNTIME_KINDS = "application_invitation_email,application_invitation_reminder" }
-    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
-    await reconcileInvitationDelivery(admin, invitation.id, { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-preflight" })
-    const retried = await runningJob(queued.jobId)
-    assert.equal((await processInvitationEmail(admin, retried)).delivery, "sent")
-    await completeBackgroundJob(retried, { delivery: "sent" })
-    assert.equal(sends, 1)
-
-    const reminderInvitation = await invite()
-    const past = new Date(Date.now() - 3 * 3600_000).toISOString()
-    await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, reminderInvitation.id)
-    await scheduleDueInvitationReminders(origin)
-    const reminder = (await getDatabase().prepare<{ id: string; job_id: string }>("SELECT id,job_id FROM mca_application_invitation_deliveries WHERE invitation_id=? AND purpose='reminder'").get(reminderInvitation.id))!
-    const firstReminder = await runningJob(reminder.job_id)
-    await failBackgroundJob(firstReminder, new Error("killed before provider marker"))
-    const secondReminder = await runningJob(reminder.job_id)
-    let failure: unknown
-    try { await processInvitationReminder(secondReminder) } catch (error) { failure = error }
-    assert.ok(code("delivery_uncertain")(failure))
-    await failBackgroundJob(secondReminder, failure)
-    const listed = (await listApplicationInvitations(admin)).find(row => row.id === reminderInvitation.id)!.deliveries[0]
-    assert.equal(listed.requiresReconciliation, true)
-    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(reminder.job_id))?.result_json, null)
-    assert.equal(sends, 1)
-    await reconcileInvitationDelivery(admin, reminderInvitation.id, { deliveryId: reminder.id, outcome: "accepted", evidence: "provider-receipt-reminder-preflight" })
-    assert.equal((await ownedInvitation(admin, reminderInvitation.id)).reminder_count, 1)
-  } finally {
-    globalThis.fetch = originalFetch
-    delete process.env.MCA_EMAIL_WEBHOOK_URL
-    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
-  }
-})
-
-test("unset invitation kinds preserve the existing private email retry behavior", async () => {
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  const priorKinds = process.env.MCA_JOB_RUNTIME_KINDS
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  delete process.env.MCA_JOB_RUNTIME_KINDS
-  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
-  let sends = 0
-  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
-  try {
-    const invitation = await invite()
-    const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
-    assert.equal((await reconcileRoute(request(`/api/mca/applications/${invitation.id}/reconcile`, admin, "POST", { deliveryId: delivery.id, outcome: "accepted", evidence: "provider-receipt-disabled-123" }), { params: Promise.resolve({ invitationId: invitation.id }) })).status, 404)
-    const first = await runningJob(queued.jobId)
-    await failBackgroundJob(first, new Error("before provider"))
-    const retried = await runningJob(queued.jobId)
-    assert.equal((await processInvitationEmail(ada, retried)).delivery, "sent")
-    assert.equal(sends, 1)
-    assert.equal((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))?.result_json, null)
-  } finally {
-    globalThis.fetch = originalFetch
-    delete process.env.MCA_EMAIL_WEBHOOK_URL
-    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
-    if (priorKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = priorKinds
-  }
-})
-
-test("a paused invitation with no send attempt can be approved again after recovery", async () => {
-  const invitation = await invite()
-  const firstKey = randomUUID()
-  const first = await queueInvitationEmail(ada, invitation.id, firstKey, origin)
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
-  let sends = 0
-  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
-  try {
-    const pausedAt = nowIso()
-    await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,last_paused_at,updated_at) VALUES (?,1,1,?,?) ON CONFLICT(workspace_id) DO UPDATE SET manual_paused=1,last_paused_at=EXCLUDED.last_paused_at").run(workspace, pausedAt, nowIso())
-    assert.equal(await claimBackgroundJob(["application_invitation_email"]), undefined)
-    const failed = (await getDatabase().prepare<BackgroundJob>("SELECT * FROM mca_background_jobs WHERE id=?").get(first.jobId))!
-    assert.equal(failed.state, "failed")
-    assert.equal(failed.error_code, "company_paused")
-    assert.equal(failed.attempts, 0)
-    assert.equal(sends, 0)
-
-    await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=0 WHERE workspace_id=?").run(workspace)
-    assert.equal((await queueInvitationEmail(ada, invitation.id, firstKey, origin)).jobId, first.jobId)
-    const renewed = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    assert.notEqual(renewed.jobId, first.jobId)
-    const job = await runningJob(renewed.jobId)
-    assert.equal((await processInvitationEmail(ada, job)).delivery, "sent")
-    await completeBackgroundJob(job, { delivery: "sent" })
-    assert.equal(sends, 1)
-    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(first.jobId))?.state, "failed")
-    assert.ok((await ownedInvitation(ada, invitation.id)).sent_at)
-  } finally {
-    await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(workspace)
-    globalThis.fetch = originalFetch
-    delete process.env.MCA_EMAIL_WEBHOOK_URL
-    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
-  }
-})
-
-test("a pause after an earlier invitation send attempt still requires reconciliation", async () => {
-  const invitation = await invite()
-  const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-  const priorRuntime = process.env.MCA_JOB_RUNTIME
-  process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  try {
-    await getDatabase().prepare("UPDATE mca_background_jobs SET attempts=1 WHERE id=?").run(queued.jobId)
-    await getDatabase().prepare("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,manual_paused,updated_at) VALUES (?,1,1,?) ON CONFLICT(workspace_id) DO UPDATE SET manual_paused=1").run(workspace, nowIso())
-    assert.equal(await claimBackgroundJob(["application_invitation_email"]), undefined)
-    await getDatabase().prepare("UPDATE company_subscription_state SET manual_paused=0 WHERE workspace_id=?").run(workspace)
-    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
-  } finally {
-    await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=?").run(workspace)
-    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
-  }
+    await processInvitationEmail(ada, retryJob)
+    assert.equal(keys.length, 2)
+    // A crash after durable acceptance but before worker completion must not turn a sent email into a failure in the UI.
+    await getDatabase().prepare("UPDATE mca_background_jobs SET state='failed',error_code='retry_limit' WHERE id=?").run(retryJob.id)
+    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)?.deliveries[0].state, "complete")
+    const resend = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+    assert.notEqual(resend.jobId, retry.jobId)
+    const resendJob = await runningJob(resend.jobId)
+    await completeBackgroundJob(resendJob, await processInvitationEmail(ada, resendJob))
+    assert.notEqual(keys[1], keys[2])
+    assert.equal(messages[2].actionUrl, invitation.url)
+    assert.equal((await listApplicationInvitations(ada)).find(row => row.id === invitation.id)?.deliveries.length, 3)
+  } finally { globalThis.fetch = originalFetch; delete process.env.MCA_EMAIL_WEBHOOK_URL }
 })
 
 test("outreach cohort report reconciles to drilldowns and keeps funded credit with the original sender", async () => {

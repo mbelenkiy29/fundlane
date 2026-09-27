@@ -4,7 +4,6 @@ import { AppError } from "../errors"
 // Only jobs that can run without the native document scanner/PDF host belong here.
 export const RUNTIME_KINDS = [
   "export_create", "export", "auto_submit", "submission_delivery",
-  "application_invitation_email", "application_invitation_reminder",
   "multipart_task", "import_commit", "import_update_commit",
   "drive_preview", "drive_apply", "email_intake", "intake_replay",
 ] as const satisfies readonly BackgroundJobKind[]

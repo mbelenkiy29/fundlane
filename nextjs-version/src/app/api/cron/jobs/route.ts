@@ -4,7 +4,6 @@ import { apiError, AppError } from "@/lib/mca/errors"
 import { recoverSubmissionOutbox, runNextBackgroundJob } from "@/lib/mca/jobs/worker"
 import { withExecutionDeadline } from "@/lib/mca/jobs/execution"
 import { runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
-import { scheduleDueInvitationReminders } from "@/lib/mca/applications/reminders"
 import { cleanupWorkerStorage } from "@/lib/mca/jobs/cleanup"
 import { releaseExpiredReservations } from "@/lib/mca/assistant/credits"
 import { maintainAssistantExperience } from "@/lib/mca/assistant/maintenance"
@@ -30,7 +29,6 @@ export async function GET(request: Request) {
     await withExecutionDeadline(async () => {
       if (process.env.MCA_JOB_RUNTIME_MAINTENANCE === "true") {
         await recoverSubmissionOutbox()
-        await scheduleDueInvitationReminders(process.env.MCA_APP_ORIGIN ?? "")
         await cleanupWorkerStorage()
         await releaseExpiredReservations()
         await maintainAssistantExperience(3)

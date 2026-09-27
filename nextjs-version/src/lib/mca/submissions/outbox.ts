@@ -79,6 +79,11 @@ async function finishCompletedAttempt(job: SubmissionJob, attempt: SubmissionAtt
   return current ?? job
 }
 
+function submissionCronEnabled(): boolean {
+  return process.env.MCA_JOB_RUNTIME === "vercel_cron" &&
+    (process.env.MCA_JOB_RUNTIME_KINDS ?? "").split(",").some(kind => kind.trim() === "submission_delivery")
+}
+
 export async function processJobDelivery(job: SubmissionJob, options: { observeGuardedAttemptOnly?: boolean } = {}): Promise<SubmissionJob> {
   if (options.observeGuardedAttemptOnly) {
     // A provider request has already begun. Observation must never initiate another send,
@@ -99,7 +104,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
   const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
   if (existing?.state === "sending" && (
     (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) ||
-    (!guardUnknownSend && (job.autoSubmitDecisionId || process.env.MCA_JOB_RUNTIME === "vercel_cron"))
+    (!guardUnknownSend && (job.autoSubmitDecisionId || submissionCronEnabled()))
   )) {
     return settleUncertainDelivery(job)
   }
@@ -131,7 +136,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       state: "sending",
       correlationId: newId(),
     })
-    if (!reserved.created && (process.env.MCA_JOB_RUNTIME === "vercel_cron" || job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
+    if (!reserved.created && (submissionCronEnabled() || job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
       if (isCompletedAttempt(reserved.attempt.state)) return finishCompletedAttempt(job, reserved.attempt)
       return await findJobById(job.workspaceId, job.id) ?? job
     }
