@@ -9,7 +9,7 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
+import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { GET as runCron } from "../src/app/api/cron/jobs/route"
 import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
@@ -50,7 +50,8 @@ const minimalPdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>
 async function addWorkspace(id: string) {
   const now = new Date().toISOString()
   await getDatabase().prepare(`INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
-    VALUES (?, ?, 'America/New_York', 5, ?, ?, ?, ?, ?)`).run(id, id, JSON.stringify({ reports: true, payments: true, integrations: true }), JSON.stringify({ dashboard: true, deals: true, users: true, reports: true, payments: true, workspace: true, integrations: true }), JSON.stringify({ createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: true, viewCompanyFinancials: true }), now, now)
+    VALUES (?, ?, 'America/New_York', 5, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING`).run(id, id, JSON.stringify({ reports: true, payments: true, integrations: true }), JSON.stringify({ dashboard: true, deals: true, users: true, reports: true, payments: true, workspace: true, integrations: true }), JSON.stringify({ createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: true, viewCompanyFinancials: true }), now, now)
 }
 
 function countingScanner() {
@@ -445,6 +446,74 @@ test("cron is off by default and requires the exact bearer credential when enabl
     else process.env.MCA_JOB_RUNTIME = oldRuntime
     if (oldSecret === undefined) delete process.env.CRON_SECRET
     else process.env.CRON_SECRET = oldSecret
+  }
+})
+
+test("cron rejects unregistered kinds before claiming any job", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  const oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  try {
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_KINDS = "document_scan"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 503)
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
+  }
+})
+
+test("enabled cron runs business maintenance before its bounded queue claim", async () => {
+  const oldRuntime = process.env.MCA_JOB_RUNTIME
+  const oldSecret = process.env.CRON_SECRET
+  const oldMaintenance = process.env.MCA_JOB_RUNTIME_MAINTENANCE
+  const oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  const oldAssistant = process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED
+  try {
+    const past = new Date(Date.now() - 3_600_000).toISOString()
+    await getDatabase().prepare("INSERT INTO mca_assistant_conversations(id,workspace_id,user_id,deal_id,created_at) VALUES (?,?,?,?,?)")
+      .run("cron-maintenance-conversation", actor().workspaceId, "synthetic-maintenance-user", dealId, past)
+    await getDatabase().prepare("INSERT INTO mca_assistant_runs(id,conversation_id,request_id,status,created_at,expires_at) VALUES (?,?,?,'running',?,?)")
+      .run("cron-maintenance-run", "cron-maintenance-conversation", "cron-maintenance-request", past, past)
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_MAINTENANCE = "true"
+    process.env.MCA_JOB_RUNTIME_KINDS = "export"
+    process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = "true"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).enabled, true)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM mca_assistant_runs WHERE id=?").get("cron-maintenance-run"))?.status, "failed")
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldMaintenance === undefined) delete process.env.MCA_JOB_RUNTIME_MAINTENANCE; else process.env.MCA_JOB_RUNTIME_MAINTENANCE = oldMaintenance
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
+    if (oldAssistant === undefined) delete process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED; else process.env.MCA_ASSISTANT_EXPERIENCE_ENABLED = oldAssistant
+  }
+})
+
+test("explicit business kind fails a revoked API key and keeps job results company scoped", async () => {
+  await addWorkspace("workspace-jobs-other")
+  const revoked: DealActor = { ...actor(), workspaceId: "workspace-jobs-other", source: "api_key", apiKeyId: "revoked-key", scopes: ["intake:write"] }
+  const queued = await enqueueBackgroundJob({ actor: revoked, kind: "email_intake", resourceId: "synthetic-intake", idempotencyKey: "revoked-intake" })
+  await assert.rejects(getBackgroundJob(actor(), queued.id), { code: "job_not_found" })
+  const oldRuntime = process.env.MCA_JOB_RUNTIME, oldSecret = process.env.CRON_SECRET, oldKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  try {
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    process.env.MCA_JOB_RUNTIME_KINDS = "email_intake"
+    const response = await runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).processed, 1)
+    assert.deepEqual(await getDatabase().prepare("SELECT state,error_code FROM mca_background_jobs WHERE id=?").get(queued.id), { state: "failed", error_code: "job_permission_revoked" })
+  } finally {
+    if (oldRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = oldRuntime
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret
+    if (oldKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = oldKinds
   }
 })
 

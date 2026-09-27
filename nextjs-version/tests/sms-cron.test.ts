@@ -136,9 +136,13 @@ test("bounded refresh rotates after failed calls without changing the review que
   assert.equal(failedCompany?.updated_at, "2020-01-03T00:00:00.000Z")
   assert.ok(failedCompany?.refresh_attempted_at)
   failRefresh = false
-  const third = await runScheduledSmsJobs(api)
-  assert.equal(third.companies, 2)
-  assert.deepEqual(third.failedWorkspaces, [])
+  // Ticks can share a millisecond cursor. Rotation must eventually revisit
+  // the failed company, regardless of which tied row is selected first.
+  for (let tick = 0; tick < 3 && refreshed.length < 2; tick++) {
+    const next = await runScheduledSmsJobs(api)
+    assert.equal(next.companies, 2)
+    assert.deepEqual(next.failedWorkspaces, [])
+  }
   assert.deepEqual(refreshed, [`AC${"3".repeat(32)}`, `AC${"3".repeat(32)}`])
   const unchangedCompany = await getDatabase().prepare<{ updated_at: string }>("SELECT updated_at FROM sms_companies WHERE workspace_id=?").get("sms-cron-third")
   assert.equal(unchangedCompany?.updated_at, "2020-01-03T00:00:00.000Z")

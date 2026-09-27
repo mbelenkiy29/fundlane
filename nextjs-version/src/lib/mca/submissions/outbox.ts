@@ -5,7 +5,7 @@ import { getOutgoingDocumentBytes } from "./compress"
 import { newId } from "../db"
 import { AppError } from "../errors"
 import { assertCompanyOperational } from "../company-access"
-import type { AttemptState, DeliverResult, JobState, SubmissionJob } from "./contracts"
+import type { AttemptState, DeliverResult, JobState, SubmissionAttempt, SubmissionJob } from "./contracts"
 import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
@@ -60,6 +60,30 @@ async function settleUncertainDelivery(job: SubmissionJob): Promise<SubmissionJo
   return saved
 }
 
+async function recoverCompletedAttempt(job: SubmissionJob, attempt: SubmissionAttempt): Promise<SubmissionJob> {
+  if (!isCompletedAttempt(attempt.state)) throw new Error("Submission attempt is not complete")
+  const reason = attempt.errorMessage ?? (attempt.state === "sent" ? null : job.reason ?? (attempt.state === "skipped" ? "Delivery skipped." : "Delivery failed."))
+  const saved = await updateJobRecord(job.workspaceId, job.id, { state: attempt.state, reason })
+  if (attempt.state === "skipped" && attempt.errorCode === "auto_submit_cancelled") {
+    await recordAutoDeliveryCancellation(job, reason ?? "Automatic delivery was cancelled.")
+  }
+  await refreshCache(saved)
+  await markOutboxProcessed(job.id)
+  return saved
+}
+
+async function finishCompletedAttempt(job: SubmissionJob, attempt: SubmissionAttempt): Promise<SubmissionJob> {
+  if (process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED === "true") return recoverCompletedAttempt(job, attempt)
+  const current = await findJobById(job.workspaceId, job.id)
+  await markOutboxProcessed(job.id)
+  return current ?? job
+}
+
+function submissionCronEnabled(): boolean {
+  return process.env.MCA_JOB_RUNTIME === "vercel_cron" &&
+    (process.env.MCA_JOB_RUNTIME_KINDS ?? "").split(",").some(kind => kind.trim() === "submission_delivery")
+}
+
 export async function processJobDelivery(job: SubmissionJob, options: { observeGuardedAttemptOnly?: boolean } = {}): Promise<SubmissionJob> {
   if (options.observeGuardedAttemptOnly) {
     // A provider request has already begun. Observation must never initiate another send,
@@ -78,16 +102,18 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
 
   const existing = await findAttempt(job.id, job.attemptKey)
   const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
-  if (existing?.state === "sending" && ((job.autoSubmitDecisionId && !guardUnknownSend) || (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000))) {
+  if (existing?.state === "sending" && (
+    (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) ||
+    (!guardUnknownSend && (job.autoSubmitDecisionId || submissionCronEnabled()))
+  )) {
     return settleUncertainDelivery(job)
   }
   if (existing && job.approvedPackage && existing.state === "sending" && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) {
     return settleUncertainDelivery(job)
   }
   if (existing && (job.approvedPackage || isCompletedAttempt(existing.state))) {
-    const current = await findJobById(job.workspaceId, job.id)
-    if (isCompletedAttempt(existing.state)) await markOutboxProcessed(job.id)
-    return current ?? job
+    if (isCompletedAttempt(existing.state)) return finishCompletedAttempt(job, existing)
+    return await findJobById(job.workspaceId, job.id) ?? job
   }
   if (existing?.state === "sending" && guardUnknownSend) return await findJobById(job.workspaceId, job.id) ?? job
 
@@ -110,10 +136,9 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       state: "sending",
       correlationId: newId(),
     })
-    if (!reserved.created && (job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
-      const current = await findJobById(job.workspaceId, job.id)
-      if (isCompletedAttempt(reserved.attempt.state)) await markOutboxProcessed(job.id)
-      return current ?? job
+    if (!reserved.created && (submissionCronEnabled() || job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
+      if (isCompletedAttempt(reserved.attempt.state)) return finishCompletedAttempt(job, reserved.attempt)
+      return await findJobById(job.workspaceId, job.id) ?? job
     }
     await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
   }
