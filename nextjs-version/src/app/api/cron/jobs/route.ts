@@ -8,12 +8,19 @@ import { cleanupWorkerStorage } from "@/lib/mca/jobs/cleanup"
 import { releaseExpiredReservations } from "@/lib/mca/assistant/credits"
 import { maintainAssistantExperience } from "@/lib/mca/assistant/maintenance"
 import { maintainCreditAlerts } from "@/lib/mca/assistant/alerts"
+import type { BackgroundJobKind } from "@/lib/mca/jobs/queue"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
 const BUDGET_MS = 240_000
 const MAX_JOBS = 3
+
+export function jobRuntimeKinds(): readonly BackgroundJobKind[] {
+  const invitations: readonly BackgroundJobKind[] = process.env.MCA_INVITATION_JOB_RUNTIME === "vercel_cron"
+    ? ["application_invitation_email", "application_invitation_reminder"] : []
+  return [...runtimeKinds(), ...invitations]
+}
 
 export async function GET(request: Request) {
   try {
@@ -24,7 +31,7 @@ export async function GET(request: Request) {
     const expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     const started = Date.now()
-    const kinds = runtimeKinds()
+    const kinds = jobRuntimeKinds()
     let processed = 0
     await withExecutionDeadline(async () => {
       if (process.env.MCA_JOB_RUNTIME_MAINTENANCE === "true") {

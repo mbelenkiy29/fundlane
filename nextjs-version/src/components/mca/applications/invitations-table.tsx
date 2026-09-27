@@ -8,37 +8,25 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import type { ApplicationInvitation } from "@/lib/mca/applications/contracts"
+import { invitationStatus } from "./invitation-status"
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
 const stamp = (value: string | null) => value ? new Date(value).toLocaleString() : "—"
 const day = (value: string | null) => value ? new Date(value).toLocaleDateString() : "—"
 
-export function invitationStatus(row: ApplicationInvitation): string {
-  if (row.submittedAt) return "Completed"
-  if (!row.active) return "Link inactive"
-  if (!row.openedAt && !row.sentAt) {
-    if (row.deliveries[0]?.state === "queued") return "Email queued"
-    if (row.deliveries[0]?.state === "running") return "Sending email"
-    if (row.deliveries[0]?.state === "failed") return "Email needs attention"
-  }
-  if (row.startedAt) return "Started"
-  if (row.openedAt) return "Opened"
-  if (row.sentAt) return "Sent"
-  if (row.copiedAt) return "Link copied"
-  return "Ready to send"
-}
-
 type SortKey = "businessName" | "requestedAmountCents" | "sentAt" | "openedAt" | "startedAt" | "submittedAt" | "createdAt"
 
 export function InvitationsTable({
-  invitations, canCreate, invitationEmailEnabled = true, busy, onCopy, onSend, manualLink,
+  invitations, canCreate, canReconcile = false, invitationEmailEnabled = true, busy, onCopy, onSend, onReconcile, manualLink,
 }: {
   invitations: ApplicationInvitation[]
   canCreate: boolean
+  canReconcile?: boolean
   invitationEmailEnabled?: boolean
   busy: string | null
   onCopy: (row: ApplicationInvitation) => void
   onSend: (row: ApplicationInvitation) => void
+  onReconcile: (row: ApplicationInvitation, deliveryId: string, outcome: "accepted" | "not_sent", evidence: string) => void
   manualLink: { id: string; url: string } | null
 }) {
   const [query, setQuery] = React.useState("")
@@ -46,6 +34,9 @@ export function InvitationsTable({
   const [sort, setSort] = React.useState<SortKey>("createdAt")
   const [desc, setDesc] = React.useState(true)
   const [open, setOpen] = React.useState<ApplicationInvitation | null>(null)
+  const [evidence, setEvidence] = React.useState("")
+  const [outcome, setOutcome] = React.useState<"accepted" | "not_sent">("accepted")
+  const selected = open ? invitations.find(row => row.id === open.id) ?? open : null
   const rows = invitations.filter(row => {
     const hay = `${row.businessName} ${row.clientName} ${row.email} ${row.employeeName}`.toLowerCase()
     if (query && !hay.includes(query.toLowerCase())) return false
@@ -93,6 +84,7 @@ export function InvitationsTable({
           {rows.map(row => {
             const latest = row.deliveries[0]
             const pending = latest?.state === "queued" || latest?.state === "running"
+            const reconcile = latest?.requiresReconciliation === true
             return <tr key={row.id} className="cursor-pointer border-t hover:bg-muted/40" onClick={() => setOpen(row)}>
               <td className="px-3 py-3 font-medium">{row.businessName}</td>
               <td className="max-w-[14rem] truncate px-3 py-3 text-muted-foreground">{row.email}</td>
@@ -106,7 +98,7 @@ export function InvitationsTable({
               <td className="px-3 py-3 text-right" onClick={event => event.stopPropagation()}>
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="outline" disabled={busy !== null || !row.active || !canCreate} onClick={() => onCopy(row)}><Copy className="size-3.5" />Copy</Button>
-                  <Button size="sm" disabled={busy !== null || pending || !row.active || !canCreate || !invitationEmailEnabled} title={!invitationEmailEnabled ? "Application emails are not enabled yet. Copy the link instead." : undefined} onClick={() => onSend(row)}><Send className="size-3.5" />{pending ? "Sending…" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
+                  <Button size="sm" disabled={busy !== null || (!reconcile && (pending || !row.active || !canCreate || !invitationEmailEnabled))} title={!reconcile && !invitationEmailEnabled ? "Application emails are not enabled yet. Copy the link instead." : undefined} onClick={() => reconcile ? setOpen(row) : onSend(row)}><Send className="size-3.5" />{reconcile ? "Review delivery" : pending ? "Sending…" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
                 </div>
               </td>
             </tr>
@@ -114,29 +106,40 @@ export function InvitationsTable({
         </tbody>
       </table>
     </div>}
-    <Sheet open={Boolean(open)} onOpenChange={value => { if (!value) setOpen(null) }}>
+    <Sheet open={Boolean(open)} onOpenChange={value => { if (!value) { setOpen(null); setEvidence(""); setOutcome("accepted") } }}>
       <SheetContent className="sm:max-w-md" side="right">
-        {open && <div className="flex h-full flex-col">
-          <SheetHeader><SheetTitle>{open.businessName}</SheetTitle></SheetHeader>
+        {selected && <div className="flex h-full flex-col">
+          <SheetHeader><SheetTitle>{selected.businessName}</SheetTitle></SheetHeader>
           <div className="space-y-4 overflow-auto px-4 pb-6 text-sm">
-            <p className="break-all text-muted-foreground">{open.email}</p>
-            <p>{open.employeeName} · {open.formName}</p>
-            <Badge variant={open.submittedAt ? "default" : "secondary"}>{invitationStatus(open)}</Badge>
-            {manualLink?.id === open.id && <Input aria-label={`Application link for ${open.clientName}`} value={manualLink.url} readOnly onFocus={event => event.target.select()} />}
-            {open.intakeError && <p role="alert" className="text-destructive">Application needs review: {open.intakeError}</p>}
+            <p className="break-all text-muted-foreground">{selected.email}</p>
+            <p>{selected.employeeName} · {selected.formName}</p>
+            <Badge variant={selected.submittedAt ? "default" : "secondary"}>{invitationStatus(selected)}</Badge>
+            {manualLink?.id === selected.id && <Input aria-label={`Application link for ${selected.clientName}`} value={manualLink.url} readOnly onFocus={event => event.target.select()} />}
+            {selected.intakeError && <p role="alert" className="text-destructive">Application needs review: {selected.intakeError}</p>}
+            {selected.deliveries[0]?.requiresReconciliation && <div className="space-y-3 rounded-md border p-3">
+              <p>Delivery outcome is unknown. Check the email provider using correlation ID <code className="break-all">{selected.deliveries[0].id}</code> before another send.</p>
+              {!canReconcile ? <p>Ask a company administrator with invitation access to reconcile this delivery.</p> : <>
+                <select className="h-9 w-full rounded-md border bg-background px-3" aria-label="Provider outcome" value={outcome} onChange={event => setOutcome(event.target.value as "accepted" | "not_sent")}>
+                  <option value="accepted">Provider accepted the email</option>
+                  <option value="not_sent">Provider confirms no email was sent</option>
+                </select>
+                <Input aria-label="Provider receipt or lookup reference" placeholder="Provider receipt or lookup reference" maxLength={500} value={evidence} onChange={event => setEvidence(event.target.value)} />
+                <Button disabled={busy !== null || evidence.trim().length < 10 || (outcome === "not_sent" && !selected.active)} onClick={() => onReconcile(selected, selected.deliveries[0].id, outcome, evidence.trim())}>Record provider outcome</Button>
+              </>}
+            </div>}
             <dl className="grid grid-cols-2 gap-3 text-xs">
-              {[["Created", open.createdAt], ["Email accepted", open.sentAt], ["Opened", open.openedAt], ["Started", open.startedAt], ["Completed", open.submittedAt], ["Expires", open.expiresAt]].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 tabular-nums">{stamp(value)}</dd></div>)}
-              <div><dt className="text-muted-foreground">Requested</dt><dd className="mt-1 tabular-nums">{open.requestedAmountCents == null ? "—" : money.format(open.requestedAmountCents / 100)}</dd></div>
+              {[["Created", selected.createdAt], ["Email accepted", selected.sentAt], ["Opened", selected.openedAt], ["Started", selected.startedAt], ["Completed", selected.submittedAt], ["Expires", selected.expiresAt]].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 tabular-nums">{stamp(value)}</dd></div>)}
+              <div><dt className="text-muted-foreground">Requested</dt><dd className="mt-1 tabular-nums">{selected.requestedAmountCents == null ? "—" : money.format(selected.requestedAmountCents / 100)}</dd></div>
             </dl>
             <ul className="space-y-1 text-xs text-muted-foreground">
-              <li>Created {stamp(open.createdAt)}</li>
-              {open.copiedAt && <li>Link copied {stamp(open.copiedAt)}</li>}
-              {open.deliveries.map(delivery => <li key={delivery.id}>{stamp(delivery.createdAt)} — {delivery.delivery === "sent" ? "Email accepted" : delivery.delivery === "preview" ? "Preview; not sent" : delivery.state === "failed" ? "Email failed; retry available" : "Email queued / sending"}</li>)}
-              {open.openedAt && <li>First observed visit {stamp(open.openedAt)}</li>}
-              {open.startedAt && <li>Start application clicked {stamp(open.startedAt)}</li>}
-              {open.submittedAt && <li>Application received {stamp(open.submittedAt)}</li>}
+              <li>Created {stamp(selected.createdAt)}</li>
+              {selected.copiedAt && <li>Link copied {stamp(selected.copiedAt)}</li>}
+              {selected.deliveries.map(delivery => <li key={delivery.id}>{stamp(delivery.createdAt)} — {delivery.delivery === "sent" ? "Email accepted" : delivery.delivery === "preview" ? "Preview; not sent" : delivery.requiresReconciliation ? "Email outcome unknown; provider reconciliation required" : delivery.state === "failed" ? "Email failed; retry available" : "Email queued / sending"}</li>)}
+              {selected.openedAt && <li>First observed visit {stamp(selected.openedAt)}</li>}
+              {selected.startedAt && <li>Start application clicked {stamp(selected.startedAt)}</li>}
+              {selected.submittedAt && <li>Application received {stamp(selected.submittedAt)}</li>}
             </ul>
-            {open.dealId && <Link className="font-medium text-primary underline-offset-4 hover:underline" href={`/deals?deal=${encodeURIComponent(open.dealId)}`}>View deal</Link>}
+            {selected.dealId && <Link className="font-medium text-primary underline-offset-4 hover:underline" href={`/deals?deal=${encodeURIComponent(selected.dealId)}`}>View deal</Link>}
           </div>
         </div>}
       </SheetContent>

@@ -137,6 +137,9 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
     if (["document_upload", "document_scan", "draft_scan", "draft_extract", "assistant_scan", "intake_process"].includes(job.kind)) await touchDocumentWorkerHeartbeat()
   })().catch(() => { console.error(JSON.stringify({ event: "worker_heartbeat_failed", jobId: job.id })) }) }, 30_000)
   try {
+    if (job.kind === "application_invitation_email" || job.kind === "application_invitation_reminder") {
+      job.result_json = await (await import("../applications/service")).markVercelInvitationClaim(job)
+    }
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     const observeOnly = Boolean(await guardedSendingAttempt(job))
     const result = await runAsBackgroundWorker(() => outbound && !observeOnly ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job, observeOnly))
