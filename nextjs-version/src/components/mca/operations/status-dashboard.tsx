@@ -238,10 +238,10 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           detail="Selected window · server and workers"
         />
       </div>
-      {Boolean(data?.jobKinds?.length) && <Panel title="Jobs by kind" subtitle="Current queue and delivery outcomes · UTC">
+      {Boolean(data?.jobKinds?.length) && <Panel title="Jobs by kind" subtitle="Background job states · a completed job may still contain a failed submission delivery · UTC">
         <div className="overflow-x-auto">
           <Table><TableHeader><TableRow>
-            <TableHead>Kind</TableHead><TableHead>Queued</TableHead><TableHead>Running</TableHead><TableHead>Failures</TableHead><TableHead>Queue age</TableHead><TableHead>Oldest pending</TableHead><TableHead>Last success</TableHead>
+            <TableHead>Kind</TableHead><TableHead>Queued</TableHead><TableHead>Running</TableHead><TableHead>Failed jobs</TableHead><TableHead>Queue age</TableHead><TableHead>Oldest pending</TableHead><TableHead>Last job completed</TableHead>
           </TableRow></TableHeader><TableBody>
             {(data?.jobKinds ?? []).map((job) => <TableRow key={job.kind}>
               <TableCell>{job.kind}</TableCell><TableCell>{job.queued}</TableCell><TableCell>{job.running}</TableCell><TableCell>{job.failures}</TableCell>

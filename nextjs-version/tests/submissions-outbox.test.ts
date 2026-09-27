@@ -141,6 +141,17 @@ async function outboxProcessedAt(jobId: string) {
   return row?.processed_at ?? null
 }
 
+async function withCompletedAttemptRecovery<T>(enabled: boolean, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED
+  if (enabled) process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED = "true"
+  else delete process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED
+  try { return await run() }
+  finally {
+    if (previous === undefined) delete process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED
+    else process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED = previous
+  }
+}
+
 before(async () => {
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://email.example.test/send"
   testDatabase = await createPostgresTestDatabase("submissions_outbox")
@@ -321,7 +332,25 @@ test("gated concurrent API requests leave a live send intact and dispatch only o
   }
 })
 
-test("processJobDelivery marks sent, failed, or skipped attempts processed without a second row", async () => {
+test("completed attempt leaves job and cache unchanged with recovery unset", async () => {
+  const { deal, document } = await seedDeal()
+  const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-default")
+  await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey, transport: queued.routeKind, state: "sent", correlationId: newId() })
+  const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
+  deliveries = 0
+
+  const saved = await withCompletedAttemptRecovery(false, () => processJobDelivery(sending))
+
+  assert.equal(saved.state, "sending")
+  assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "sending")
+  const cache = await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE workspace_id = ? AND job_id = ?").get(queued.workspaceId, queued.id)
+  assert.equal(cache?.status, "queued")
+  assert.ok(await outboxProcessedAt(queued.id))
+  assert.equal(await attemptCount(queued.id), 1)
+  assert.equal(deliveries, 0)
+})
+
+test("completed attempt recovery restores sent job without a second delivery", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-sent")
   await insertAttempt({
@@ -335,7 +364,7 @@ test("processJobDelivery marks sent, failed, or skipped attempts processed witho
   const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
   deliveries = 0
 
-  const saved = await processJobDelivery(sending)
+  const saved = await withCompletedAttemptRecovery(true, () => processJobDelivery(sending))
 
   assert.equal(saved.state, "sent")
   assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "sent")
@@ -366,7 +395,7 @@ test("processJobDelivery restores a saved failed attempt without sending again",
   const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
   deliveries = 0
 
-  const saved = await processJobDelivery(sending)
+  const saved = await withCompletedAttemptRecovery(true, () => processJobDelivery(sending))
 
   assert.equal(saved.state, "failed")
   assert.equal(saved.reason, "Provider rejected the delivery.")

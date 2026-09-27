@@ -72,6 +72,13 @@ async function recoverCompletedAttempt(job: SubmissionJob, attempt: SubmissionAt
   return saved
 }
 
+async function finishCompletedAttempt(job: SubmissionJob, attempt: SubmissionAttempt): Promise<SubmissionJob> {
+  if (process.env.MCA_SUBMISSION_COMPLETED_ATTEMPT_RECOVERY_ENABLED === "true") return recoverCompletedAttempt(job, attempt)
+  const current = await findJobById(job.workspaceId, job.id)
+  await markOutboxProcessed(job.id)
+  return current ?? job
+}
+
 export async function processJobDelivery(job: SubmissionJob, options: { observeGuardedAttemptOnly?: boolean } = {}): Promise<SubmissionJob> {
   if (options.observeGuardedAttemptOnly) {
     // A provider request has already begun. Observation must never initiate another send,
@@ -100,7 +107,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
     return settleUncertainDelivery(job)
   }
   if (existing && (job.approvedPackage || isCompletedAttempt(existing.state))) {
-    if (isCompletedAttempt(existing.state)) return recoverCompletedAttempt(job, existing)
+    if (isCompletedAttempt(existing.state)) return finishCompletedAttempt(job, existing)
     return await findJobById(job.workspaceId, job.id) ?? job
   }
   if (existing?.state === "sending" && guardUnknownSend) return await findJobById(job.workspaceId, job.id) ?? job
@@ -125,7 +132,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       correlationId: newId(),
     })
     if (!reserved.created && (process.env.MCA_JOB_RUNTIME === "vercel_cron" || job.approvedPackage || isCompletedAttempt(reserved.attempt.state) || guardUnknownSend)) {
-      if (isCompletedAttempt(reserved.attempt.state)) return recoverCompletedAttempt(job, reserved.attempt)
+      if (isCompletedAttempt(reserved.attempt.state)) return finishCompletedAttempt(job, reserved.attempt)
       return await findJobById(job.workspaceId, job.id) ?? job
     }
     await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
