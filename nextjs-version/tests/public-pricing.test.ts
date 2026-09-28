@@ -95,7 +95,11 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   assert.match(result.pricing, new RegExp(`${TRIAL_DAYS}-day free trial`))
   assert.match(result.pricing, /A card is required to start\. Cancel anytime\./)
   assert.match(result.pricing, /Sales tax is added where applicable/)
-  assert.match(result.pricing, /Adding users: prorated and invoiced immediately; access after payment\. Removing users: takes effect at the next renewal, with no mid-cycle credit\. No charge for seat changes during the free trial\./)
+  assert.match(result.pricing, /You choose how many seats to buy/)
+  assert.match(result.pricing, /Removing a user frees their seat/)
+  assert.match(result.pricing, /AI credits: coming soon\./)
+  assert.match(result.pricing, /Onboarding: set up on your own with our guides/)
+  assert.match(result.pricing, /href="mailto:help@example.com">email us<\/a>/)
   assert.match(result.pricing, /Users 2–10|Users 2<!-- -->–10/)
   assert.match(result.pricing, /help@example.com/)
   assert.match(result.shell, /href="\/pricing"[^>]*>Pricing/)
@@ -107,4 +111,10 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   assert.doesNotMatch(invite.pricing, /href="\/sign-up"[^>]*>Start free trial/)
   assert.doesNotMatch(invite.shell, /href="\/sign-up"[^>]*>Start free trial/)
   assert.doesNotMatch(invite.mobile, /href="\/sign-up"[^>]*>Start free trial/)
+})
+
+test("pricing hides onboarding email link when support address is absent", () => {
+  const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_SUPPORT_EMAIL: undefined })
+  assert.match(result.pricing, /Onboarding: set up on your own with our guides\./)
+  assert.doesNotMatch(result.pricing, /email us/)
 })
