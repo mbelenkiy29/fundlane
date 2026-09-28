@@ -44,7 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatRole, RequestError, requestJson } from "@/lib/mca/client"
 import { normalizeTeamInvitationInput, validateTeamInvitation } from "@/lib/mca/invitations-validation"
 import { formatBillingMoney } from "@/lib/mca/billing-display"
-import { inviteSeatIncreaseTarget } from "@/lib/mca/team-seat-preview"
+import { inviteSeatIncreaseTarget, inviteSeatDescription } from "@/lib/mca/team-seat-preview"
 import { OwnershipTransfer } from "@/components/mca/ownership-transfer"
 import {
   assignableRoles,
@@ -72,7 +72,7 @@ type Draft = {
   managerMembershipId: string
   senderAssociation: string
 }
-type TeamBilling = { seatSyncEnabled: boolean; seatsCountPendingInvites: boolean; activeSeats: number; pendingInvitationSeats: number; billing: null | { subscriptionId: string | null; status: string; seatLimit: number } }
+type TeamBilling = { seatSyncEnabled: boolean; seatsCountPendingInvites: boolean; activeSeats: number; pendingInvitationSeats: number; billing: null | { subscriptionId: string | null; status: string; seatLimit: number }; state?:null|{pending_seats:number|null} }
 const emptyInvite: Draft = {
   name: "",
   email: "",
@@ -581,6 +581,7 @@ export default function TeamSettingsPage() {
         <MemberSheet
           key={selected.id}
           member={members.find((m) => m.id === selected.id) ?? selected}
+          billing={billing}
           members={members}
           actor={actor}
           self={session.membership?.id}
@@ -916,9 +917,7 @@ function InviteDialog({
           <DialogHeader>
             <DialogTitle>Invite an employee</DialogTitle>
             <DialogDescription>
-              {billing?.seatSyncEnabled && !billing.seatsCountPendingInvites
-                ? "Send an invitation to join your company. A licensed seat is added when they accept."
-                : "Send an invitation to join your company. One seat is reserved until they join."}
+              {billing?.seatSyncEnabled ? inviteSeatDescription(billing) : "Send an invitation to join your company. One seat is reserved until they join."}
             </DialogDescription>
           </DialogHeader>
           <fieldset disabled={busy} className="my-5 space-y-4">
@@ -1026,6 +1025,7 @@ function InviteDialog({
 
 function MemberSheet({
   member,
+  billing,
   members,
   actor,
   self,
@@ -1035,6 +1035,7 @@ function MemberSheet({
   restoreFocus,
 }: {
   member: MembershipSummary
+  billing: TeamBilling | null
   members: MembershipSummary[]
   actor?: Role
   self?: string
@@ -1304,6 +1305,7 @@ function MemberSheet({
               Their access will be removed immediately. Historical deal
               attribution stays intact. Unsaved profile changes will not be
               applied.
+              {billing?.seatSyncEnabled && <> Their seat stays on your plan and can be given to someone else. To pay for fewer seats, reduce your seat count in Plans & Billing; it takes effect at your next renewal.</>}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

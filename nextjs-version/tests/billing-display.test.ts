@@ -36,7 +36,7 @@ test("application cancellation control is available without an access gate and e
   assert.match(result.stdout,/including when a seat reduction is scheduled/)
   assert.match(result.stdout,/Outstanding invoices and administrative suspensions remain in effect/)
 })
-test("proration policy copy appears only with seat sync enabled",()=>{
+test("purchased-seat policy copy appears only with a billing preview capability",()=>{
   const result=spawnSync(process.execPath,["--import","tsx","-e",`
     const React=require('react');const {renderToStaticMarkup}=require('react-dom/server');
     const {BillingProrationPolicy}=require('./src/components/mca/billing-panel.tsx');
@@ -45,7 +45,7 @@ test("proration policy copy appears only with seat sync enabled",()=>{
   assert.equal(result.status,0,result.stderr)
   const [disabled,enabled]=JSON.parse(result.stdout.trim()) as string[]
   assert.equal(disabled,"")
-  assert.match(enabled,/Paid seat increases are prorated/)
+  assert.match(enabled,/You choose how many seats to buy/)
   assert.match(enabled,/no mid-cycle credit/)
 })
 

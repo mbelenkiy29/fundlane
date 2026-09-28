@@ -20,8 +20,9 @@ const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { en
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
 export { stripeTrialLifecycleEnabled } from "./billing-flags"
 export const billingSeatSyncEnabled = () => process.env.MCA_BILLING_SEAT_SYNC_ENABLED === "true" && billingEnabled()
+export const billingManualSeatPreviewEnabled = () => process.env.MCA_BILLING_MANUAL_SEAT_PREVIEW_ENABLED === "true" && billingEnabled()
 export const seatsCountPendingInvites = () => process.env.MCA_BILLING_SEATS_COUNT_PENDING_INVITES === "true"
-/** The sole licensed-count definition for automatic synchronization. */
+/** Licensed use for capacity checks; purchased seats may exceed this count. */
 export async function licensedSeatCount(workspaceId: string, db: DbExecutor = getDatabase()) {
   const row = await db.prepare<{count:number}>(`SELECT count(*)::int count FROM memberships WHERE workspace_id=? AND (status='active' OR (status='pending' AND ?::boolean))`).get(workspaceId,seatsCountPendingInvites())
   return Math.max(1,row?.count ?? 0)
@@ -630,12 +631,10 @@ export async function ensureSyncedSeatCapacity(workspaceId:string, actorUserId:s
     if (!plan.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.")
     const count=await licensedSeatCount(workspaceId,db)
     const target=count+additional
+    const pending=await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+    if (pending?.pending_seats && target>pending.pending_seats) throw new AppError(409,"billing_scheduled_reduction_pending","Change or cancel the scheduled seat reduction in Plans & Billing before adding a member.")
     if (current?.subscriptionId && target<=current.seatLimit) {
-      const pending=await db.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-      if (pending?.pending_seats && pending.pending_seats!==target) {
-        await changeBillingSeats(workspaceId,target,actorUserId,client,true)
-        return
-      }
+      return
     }
     if (target<=plan.seatLimit) return
     if (!mapping) throw new AppError(409,"seat_limit_reached","Your company has used its trial seats.")
@@ -644,11 +643,6 @@ export async function ensureSyncedSeatCapacity(workspaceId:string, actorUserId:s
     const refreshed=await getCompanyAccess(workspaceId)
     if (target>refreshed.seatLimit) throw new AppError(402,"billing_seat_payment_required","The additional seat requires payment. Complete payment in Plans & Billing, then retry.")
   })
-}
-
-/** Called after a deactivation commits; reconciliation takes the workspace lock. */
-export async function syncSeatsAfterRemoval(workspaceId:string, actorUserId:string, client?:StripeBillingClient) {
-  await reconcileLicensedSeats(workspaceId,client,actorUserId)
 }
 
 function scheduledRenewalSeats(schedule: Stripe.SubscriptionSchedule): number | null {
@@ -662,7 +656,7 @@ function scheduledRenewalSeats(schedule: Stripe.SubscriptionSchedule): number | 
   return 1 + (additional[0]?.quantity ?? 0)
 }
 
-/** Repair provider quantity drift during periodic billing maintenance. */
+/** Raise insufficient capacity and repair only an administrator-selected reduction. */
 export async function reconcileLicensedSeats(workspaceId:string, client?:StripeBillingClient, actorUserId:string|null=null) {
   if (!billingSeatSyncEnabled()) return
   await withImmediateTransaction(async db=>{
@@ -679,8 +673,7 @@ export async function reconcileLicensedSeats(workspaceId:string, client?:StripeB
       const sub=await stripe.subscriptions.retrieve(current.subscriptionId)
       const attached=typeof sub.schedule==="string"?sub.schedule:sub.schedule?.id
       if (!attached) {
-        await db.prepare("UPDATE company_subscription_state SET pending_seats=NULL,pending_seats_at=NULL,stripe_schedule_id=NULL,updated_at=? WHERE workspace_id=?").run(nowIso(),workspaceId)
-        pending.pending_seats=null
+        throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
       } else if (attached!==pending.stripe_schedule_id) throw new AppError(409,"billing_change_pending","An unexpected subscription schedule requires review.")
       else {
         const schedule = await stripe.subscriptionSchedules.retrieve(attached)
@@ -688,7 +681,7 @@ export async function reconcileLicensedSeats(workspaceId:string, client?:StripeB
           (typeof schedule.subscription === "string" ? schedule.subscription : schedule.subscription?.id) !== sub.id ||
           schedule.metadata?.workspace_id !== workspaceId) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
         const renewalSeats = scheduledRenewalSeats(schedule)
-        if (renewalSeats === null) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
+        if (renewalSeats === null || (typeof schedule.customer === "string" ? schedule.customer : schedule.customer?.id) !== (typeof sub.customer === "string" ? sub.customer : sub.customer.id)) throw new AppError(409,"billing_change_pending","The scheduled reduction requires review.")
         repairReduction = renewalSeats !== pending.pending_seats || schedule.metadata.selected_seats !== String(pending.pending_seats)
       }
     } else if (current.status === "active") {
@@ -703,7 +696,7 @@ export async function reconcileLicensedSeats(workspaceId:string, client?:StripeB
           throw new AppError(409,"billing_change_pending","An existing subscription schedule requires review.")
         const renewal = schedule.phases[1]
         if (renewal && schedule.current_phase?.start_date === renewal.start_date &&
-          scheduledRenewalSeats(schedule) === current.seatLimit && count === current.seatLimit) return
+          scheduledRenewalSeats(schedule) === current.seatLimit) return
         // A schedule created before an outer transaction rolled back has no local
         // pending row. Replay the original creation key to prove it is ours.
         const prior = (await db.prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='renewal'").get(workspaceId))?.count ?? 0
@@ -717,10 +710,8 @@ export async function reconcileLicensedSeats(workspaceId:string, client?:StripeB
         await stripe.subscriptionSchedules.release(attached,{preserve_cancel_date:true},{idempotencyKey:`fundlane-release-orphan-reduction-${attached}`})
       }
     }
+    if (repairReduction && pending?.pending_seats) await changeBillingSeats(workspaceId,pending.pending_seats,actorUserId,client,true,true)
     if (count>current.seatLimit) await ensureSyncedSeatCapacity(workspaceId,actorUserId,0,client)
-    else if (pending?.pending_seats===count && !repairReduction) return
-    else if (count===current.seatLimit && !pending?.pending_seats) return
-    else await changeBillingSeats(workspaceId,count,actorUserId,client,true,repairReduction)
   })
 }
 
@@ -833,7 +824,7 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
     }
     if (!current.subscriptionId || current.status !== "active" || current.paymentPastDue) throw new AppError(409, "billing_payment_required", "An active paid subscription is required to change purchased seats.")
     const state = await db.prepare<{ pending_seats: number | null; stripe_schedule_id: string | null }>("SELECT pending_seats,stripe_schedule_id FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
-    const reviseReduction = !!state?.pending_seats && (automatic || billingSeatSyncEnabled()) && (selectedSeats !== state.pending_seats || repairReduction) && (automatic ? selectedSeats <= current.seatLimit : selectedSeats < current.seatLimit)
+    const reviseReduction = !!state?.pending_seats && (repairReduction || (!automatic && billingSeatSyncEnabled() && selectedSeats !== state.pending_seats && selectedSeats < current.seatLimit))
     const cancelReduction = !!state?.pending_seats && !automatic && billingSeatSyncEnabled() && selectedSeats >= current.seatLimit
     if (automatic && state?.pending_seats && selectedSeats > current.seatLimit) throw new AppError(409,"billing_scheduled_reduction_pending","Cancel the scheduled seat reduction in Plans & Billing before adding a paid seat.")
     if (state?.pending_seats && !reviseReduction && !cancelReduction) {
@@ -920,7 +911,7 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
   }) } catch (error) {
     if (releasedSchedule) {
       // Stripe release survives a failed paid update. Remove stale local pending state
-      // so the next reconciliation can restore the reduction for the licensed count.
+      // so an administrator can reselect the reduction after review.
       try { await withImmediateTransaction(async db => {
         await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(workspaceId)
         const current = await client.subscriptions.list({customer:(await db.prepare<{stripe_customer_id:string}>("SELECT stripe_customer_id FROM workspace_stripe_customers WHERE workspace_id=?").get(workspaceId))!.stripe_customer_id,status:"all",limit:100})

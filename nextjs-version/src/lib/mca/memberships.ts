@@ -1,6 +1,6 @@
 import "server-only";
 import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
-import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, licensedSeatCount, syncWorkspaceBilling, syncSeatsAfterRemoval, type StripeBillingClient } from "./billing";
+import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, licensedSeatCount, syncWorkspaceBilling, type StripeBillingClient } from "./billing";
 
 import { createOpaqueToken, hashOpaqueToken, hashPassword } from "./crypto";
 import { hashSupabaseInvitationToken } from "./invitation-token";
@@ -192,7 +192,7 @@ export async function inviteMember(
       if (!access.allowed) throw new AppError(402,"company_paused","Recover company access in Plans & Billing before inviting users.");
       const reduction = await database.prepare<{pending_seats:number|null}>("SELECT pending_seats FROM company_subscription_state WHERE workspace_id=?").get(context.workspaceId);
       const target = await licensedSeatCount(context.workspaceId,database) + (seatsCountPendingInvites() ? 1 : 0);
-      needsSync = target > access.seatLimit || !!reduction?.pending_seats || !!(current?.subscriptionId && target > current.seatLimit);
+      needsSync = target > access.seatLimit || !!(reduction?.pending_seats && target > reduction.pending_seats) || !!(current?.subscriptionId && target > current.seatLimit);
     }
     const membershipId = prior?.id ?? newId();
     if (prior) {
@@ -361,9 +361,10 @@ export async function updateMembership(
   return getMembership(context.workspaceId, membershipId);
 }
 
-export async function deactivateMembership(context: MembershipContext, membershipId: string, billingClient?: StripeBillingClient): Promise<void> {
+export async function deactivateMembership(context: MembershipContext, membershipId: string, _billingClient?: StripeBillingClient): Promise<void> {
+  void _billingClient;
   if (membershipId === context.membershipId) throw new AppError(409, "cannot_deactivate_self", "Ask another administrator to deactivate your account.");
-  const billingJobId = await withImmediateTransaction(async (database) => {
+  await withImmediateTransaction(async (database) => {
     await database.prepare("SELECT id FROM workspaces WHERE id = ? FOR UPDATE").get(context.workspaceId);
     if (await database.prepare("SELECT workspace_id FROM workspace_owners WHERE workspace_id=? AND membership_id=?").get(context.workspaceId, membershipId)) {
       throw new AppError(409, "owner_protected", "Transfer company ownership before deactivating the owner.");
@@ -383,26 +384,9 @@ export async function deactivateMembership(context: MembershipContext, membershi
     await database.prepare("DELETE FROM sessions WHERE membership_id = ?").run(membershipId);
     await database.prepare("UPDATE invitations SET status = 'superseded', updated_at = ? WHERE membership_id = ? AND status = 'pending'")
       .run(timestamp, membershipId);
-    // Commit revocation and a durable retry together. Provider availability must not
-    // determine whether this member keeps access.
-    if (member.status === "deactivated" || !billingSeatSyncEnabled()) return null;
-    const jobId = newId();
-    await database.prepare(`INSERT INTO mca_background_jobs
-      (id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,available_at,created_at,updated_at)
-      VALUES (?,?,'billing_reconcile',?,?,'{}','{}','billing_reconcile','queued',?,?,?)`)
-      .run(jobId,context.workspaceId,membershipId,jobId,timestamp,timestamp,timestamp);
-    return jobId;
   });
   await syncSupabaseMember(context.workspaceId, membershipId);
   await recordAuditEvent({ context, action: "membership.deactivated", resourceType: "membership", resourceId: membershipId });
-  if (billingJobId) {
-    try {
-      await syncSeatsAfterRemoval(context.workspaceId,context.userId,billingClient);
-      await getDatabase().prepare("UPDATE mca_background_jobs SET state='complete',updated_at=? WHERE id=? AND state='queued'").run(nowIso(),billingJobId);
-    } catch {
-      // Billing maintenance retries the committed job; access is already revoked.
-    }
-  }
 }
 
 export async function requestPasswordRecovery(email: string, appOrigin: string): Promise<{ previewUrl?: string }> {
