@@ -19,7 +19,8 @@ import { invitationStatus } from "../src/components/mca/applications/invitation-
 import { processInvitationReminder, scheduleDueInvitationReminders } from "../src/lib/mca/applications/reminders"
 import { claimBackgroundJob, completeBackgroundJob, failBackgroundJob, type BackgroundJob } from "../src/lib/mca/jobs/queue"
 import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
-import { jobRuntimeKinds } from "../src/app/api/cron/jobs/route"
+import { GET as jobsCron, jobRuntimeKinds } from "../src/app/api/cron/jobs/route"
+import { GET as privateEmailCron } from "../src/app/api/cron/private-email/route"
 import { GET as listRoute, POST as createRoute } from "../src/app/api/mca/applications/route"
 import { POST as sendRoute } from "../src/app/api/mca/applications/[invitationId]/send/route"
 import { POST as reconcileRoute } from "../src/app/api/mca/applications/[invitationId]/reconcile/route"
@@ -688,4 +689,43 @@ test("calendar and credit UI stay honest when sync and purchases are unavailable
   assert.match(credits, /Buy a credit pack/)
   const buyPackBranch = credits.match(/purchasesAvailable[\s\S]{0,200}Buy a credit pack|Buy a credit pack[\s\S]{0,200}purchasesAvailable/)
   assert.ok(buyPackBranch, "Buy a credit pack must be gated on purchasesAvailable")
+})
+
+test("invitation runtime hands claims from private-email to jobs and unset restores private-email", async () => {
+  const names = ["MCA_INVITATION_JOB_RUNTIME", "MCA_JOB_RUNTIME", "MCA_JOB_RUNTIME_KINDS", "MCA_PRIVATE_EMAIL_CRON_ENABLED", "MCA_PRIVATE_EMAIL_DELIVERY_ENABLED", "CRON_SECRET"] as const
+  const prior = names.map(name => process.env[name])
+  const db = getDatabase()
+  const cronRequest = (path: string) => new Request(`${origin}${path}`, { headers: { authorization: "Bearer synthetic-cron-secret" } })
+  try {
+    process.env.MCA_INVITATION_JOB_RUNTIME = "vercel_cron"
+    process.env.MCA_JOB_RUNTIME = "vercel_cron"
+    process.env.MCA_JOB_RUNTIME_KINDS = "application_invitation_email,application_invitation_reminder"
+    process.env.MCA_PRIVATE_EMAIL_CRON_ENABLED = "true"
+    delete process.env.MCA_PRIVATE_EMAIL_DELIVERY_ENABLED
+    process.env.CRON_SECRET = "synthetic-cron-secret"
+    await db.prepare("UPDATE mca_background_jobs SET state='complete' WHERE state='queued' AND kind IN ('application_invitation_email','application_invitation_reminder')").run()
+
+    const handedOff = await invite()
+    const first = await queueInvitationEmail(ada, handedOff.id, randomUUID(), origin)
+    const privateResponse = await privateEmailCron(cronRequest("/api/cron/private-email"))
+    assert.equal(privateResponse.status, 200)
+    assert.deepEqual(await privateResponse.json().then((body: { jobs: number; receipts: number }) => [body.jobs, body.receipts]), [0, 0])
+    assert.equal((await db.prepare<{ state: string }>("SELECT state FROM mca_background_jobs WHERE id=?").get(first.jobId))?.state, "queued")
+    const jobsResponse = await jobsCron(cronRequest("/api/cron/jobs"))
+    assert.equal(jobsResponse.status, 200)
+    assert.equal((await jobsResponse.json()).processed, 1)
+    assert.equal((await db.prepare<{ attempts: number }>("SELECT attempts FROM mca_background_jobs WHERE id=?").get(first.jobId))?.attempts, 1)
+
+    delete process.env.MCA_INVITATION_JOB_RUNTIME
+    delete process.env.MCA_JOB_RUNTIME_KINDS
+    const privateOwned = await invite()
+    const second = await queueInvitationEmail(ada, privateOwned.id, randomUUID(), origin)
+    assert.equal(jobRuntimeKinds().includes("application_invitation_email"), false)
+    const restoredResponse = await privateEmailCron(cronRequest("/api/cron/private-email"))
+    assert.equal(restoredResponse.status, 200)
+    assert.equal((await restoredResponse.json()).jobs, 1)
+    assert.equal((await db.prepare<{ attempts: number }>("SELECT attempts FROM mca_background_jobs WHERE id=?").get(second.jobId))?.attempts, 1)
+  } finally {
+    names.forEach((name, index) => { if (prior[index] === undefined) delete process.env[name]; else process.env[name] = prior[index] })
+  }
 })

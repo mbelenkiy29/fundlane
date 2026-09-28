@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { apiError, AppError } from "@/lib/mca/errors"
 import { recoverSubmissionOutbox, runNextBackgroundJob } from "@/lib/mca/jobs/worker"
 import { withExecutionDeadline } from "@/lib/mca/jobs/execution"
-import { runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
+import { INVITATION_JOB_KINDS, invitationJobsOwnedByGeneralCron, runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
 import { cleanupWorkerStorage } from "@/lib/mca/jobs/cleanup"
 import { releaseExpiredReservations } from "@/lib/mca/assistant/credits"
 import { maintainAssistantExperience } from "@/lib/mca/assistant/maintenance"
@@ -19,8 +19,7 @@ const MAX_JOBS = 3
 export function jobRuntimeKinds(): readonly BackgroundJobKind[] {
   const kinds = runtimeKinds()
   if (process.env.MCA_JOB_RUNTIME_KINDS) return kinds
-  const invitations: readonly BackgroundJobKind[] = process.env.MCA_INVITATION_JOB_RUNTIME === "vercel_cron"
-    ? ["application_invitation_email", "application_invitation_reminder"] : []
+  const invitations: readonly BackgroundJobKind[] = invitationJobsOwnedByGeneralCron() ? INVITATION_JOB_KINDS : []
   return [...kinds, ...invitations]
 }
 
