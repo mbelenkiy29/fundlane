@@ -35,7 +35,9 @@ test("invitation job claims require their own explicit runtime opt-in", () => {
     process.env.MCA_INVITATION_JOB_RUNTIME = "vercel_cron"
     assert.deepEqual(jobRuntimeKinds(), ["export_create", "export", "auto_submit", "application_invitation_email", "application_invitation_reminder"])
     process.env.MCA_JOB_RUNTIME_KINDS = "submission_delivery"
-    assert.deepEqual(jobRuntimeKinds(), ["submission_delivery", "application_invitation_email", "application_invitation_reminder"])
+    assert.deepEqual(jobRuntimeKinds(), ["submission_delivery"])
+    process.env.MCA_JOB_RUNTIME_KINDS = "submission_delivery,application_invitation_email"
+    assert.deepEqual(jobRuntimeKinds(), ["submission_delivery", "application_invitation_email"])
   } finally {
     if (previous === undefined) delete process.env.MCA_INVITATION_JOB_RUNTIME; else process.env.MCA_INVITATION_JOB_RUNTIME = previous
     if (previousAutoSubmit === undefined) delete process.env.MCA_AUTO_SUBMIT_ENABLED; else process.env.MCA_AUTO_SUBMIT_ENABLED = previousAutoSubmit

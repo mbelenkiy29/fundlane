@@ -92,6 +92,7 @@ export async function listApplicationInvitations(actor: DealActor): Promise<Appl
     intakeId: row.intake_id, intakeError: row.intake_error, dealId: row.deal_id,
     deliveries: deliveries.filter(d => d.invitation_id === row.id).map(d => ({ id: d.id, createdAt: d.created_at, acceptedAt: d.accepted_at, delivery: d.delivery, state: d.delivery ? "complete" : d.state, errorCode: d.delivery ? null : d.error_code,
       requiresReconciliation: requiresDeliveryReconciliation(d),
+      failedNotSent: d.state === "failed" && !d.delivery && isVercelClaim(d.result_json) && !isVercelDeliveryAttempt(d.result_json),
     })),
   }))
 }
@@ -177,7 +178,7 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
     if (prior?.state === "failed" && !prior.delivery) {
       if (isVercelDeliveryAttempt(prior.result_json) || prior.error_code === "delivery_uncertain" && isVercelClaim(prior.result_json)) {
         throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
-      } else if (isVercelClaim(prior.result_json) || prior.error_code === "outbound_review_required" || invitationRuntimeEnabled() && prior.error_code === "company_paused" && prior.attempts === 0) {
+      } else if (isVercelClaim(prior.result_json) || invitationRuntimeEnabled() && (prior.error_code === "outbound_review_required" || prior.error_code === "company_paused" && prior.attempts === 0)) {
         // A claimed Vercel job with no provider-attempt marker never reached the
         // provider. The freshness error is also raised before dispatch. A new job
         // carries fresh approval and a fresh 24-hour window.

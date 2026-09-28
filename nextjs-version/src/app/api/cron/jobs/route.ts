@@ -17,9 +17,11 @@ const BUDGET_MS = 240_000
 const MAX_JOBS = 3
 
 export function jobRuntimeKinds(): readonly BackgroundJobKind[] {
+  const kinds = runtimeKinds()
+  if (process.env.MCA_JOB_RUNTIME_KINDS) return kinds
   const invitations: readonly BackgroundJobKind[] = process.env.MCA_INVITATION_JOB_RUNTIME === "vercel_cron"
     ? ["application_invitation_email", "application_invitation_reminder"] : []
-  return [...runtimeKinds(), ...invitations]
+  return [...kinds, ...invitations]
 }
 
 export async function GET(request: Request) {

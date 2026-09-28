@@ -98,7 +98,7 @@ export function InvitationsTable({
               <td className="px-3 py-3 text-right" onClick={event => event.stopPropagation()}>
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="outline" disabled={busy !== null || !row.active || !canCreate} onClick={() => onCopy(row)}><Copy className="size-3.5" />Copy</Button>
-                  <Button size="sm" disabled={busy !== null || (!reconcile && (pending || !row.active || !canCreate || !invitationEmailEnabled))} title={!reconcile && !invitationEmailEnabled ? "Application emails are not enabled yet. Copy the link instead." : undefined} onClick={() => reconcile ? setOpen(row) : onSend(row)}><Send className="size-3.5" />{reconcile ? "Review delivery" : pending ? "Sending…" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
+                  <Button size="sm" disabled={busy !== null || (!reconcile && (pending || !row.active || !canCreate || !invitationEmailEnabled))} title={!reconcile && !invitationEmailEnabled ? "Application emails are not enabled yet. Copy the link instead." : undefined} onClick={() => reconcile ? setOpen(row) : onSend(row)}><Send className="size-3.5" />{reconcile ? "Review delivery" : pending ? "Sending…" : latest?.failedNotSent ? "Resend" : latest?.state === "failed" ? "Retry" : row.sentAt ? "Resend" : "Send"}</Button>
                 </div>
               </td>
             </tr>
@@ -134,7 +134,7 @@ export function InvitationsTable({
             <ul className="space-y-1 text-xs text-muted-foreground">
               <li>Created {stamp(selected.createdAt)}</li>
               {selected.copiedAt && <li>Link copied {stamp(selected.copiedAt)}</li>}
-              {selected.deliveries.map(delivery => <li key={delivery.id}>{stamp(delivery.createdAt)} — {delivery.delivery === "sent" ? "Email accepted" : delivery.delivery === "preview" ? "Preview; not sent" : delivery.requiresReconciliation ? "Email outcome unknown; provider reconciliation required" : delivery.state === "failed" ? "Email failed; retry available" : "Email queued / sending"}</li>)}
+              {selected.deliveries.map(delivery => <li key={delivery.id}>{stamp(delivery.createdAt)} — {delivery.delivery === "sent" ? "Email accepted" : delivery.delivery === "preview" ? "Preview; not sent" : delivery.requiresReconciliation ? "Email outcome unknown; provider reconciliation required" : delivery.failedNotSent ? "Email not sent; resend available" : delivery.state === "failed" ? "Email failed; retry available" : "Email queued / sending"}</li>)}
               {selected.openedAt && <li>First observed visit {stamp(selected.openedAt)}</li>}
               {selected.startedAt && <li>Start application clicked {stamp(selected.startedAt)}</li>}
               {selected.submittedAt && <li>Application received {stamp(selected.submittedAt)}</li>}

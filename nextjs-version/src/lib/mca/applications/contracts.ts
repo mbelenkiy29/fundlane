@@ -44,6 +44,7 @@ export interface InvitationDelivery {
   state: "queued" | "running" | "complete" | "failed"
   errorCode: string | null
   requiresReconciliation: boolean
+  failedNotSent: boolean
 }
 export interface ApplicationInvitation {
   id: string
