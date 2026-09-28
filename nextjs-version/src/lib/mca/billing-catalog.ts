@@ -1,4 +1,4 @@
-/** Current catalog amounts, pending owner approval in #79. Quantities include the owner and reserved invitations. */
+/** Michael approved these monthly USD amounts on Sep 28, 2026 (#79, #114). Quantities include the owner and reserved invitations. */
 export const BILLING_CATALOG = {
   currency: "usd",
   interval: "month",

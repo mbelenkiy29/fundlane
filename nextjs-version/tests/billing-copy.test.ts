@@ -11,7 +11,6 @@ const copyPaths = [
   "app/(auth)/onboarding/page.tsx",
   "app/(dashboard)/pricing",
   "components/mca/billing-panel.tsx",
-  "components/pricing-plans.tsx",
   "lib/mca/email.ts",
   "lib/mca/billing-faq.ts",
 ]
