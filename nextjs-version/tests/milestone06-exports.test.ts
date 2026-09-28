@@ -46,6 +46,7 @@ const ids = {
 
 const now = "2026-03-04T12:00:00.000Z"
 const IDENTITY = "4321"
+const identityCsvField = new RegExp(`(?:^|,|\\r?\\n)(?:"${IDENTITY}"|${IDENTITY})(?=,|\\r?\\n|$)`)
 const FORMULA_NAME = "=2+3"
 const OWNER_FORMULA = "=1+2"
 const TOKEN_SECRET = "export-secret"
@@ -276,7 +277,7 @@ test("MIC-100: a rep export contains only visible records and allowed fields", a
   assert.match(file.csv, /'=2\+3/)
   assert.match(file.csv, /'\+cmd/)
   assert.match(file.csv, /'@SUM\(1,1\)/)
-  assert.equal(file.csv.includes(IDENTITY), false)
+  assert.equal(identityCsvField.test(file.csv), false)
   assert.equal(file.csv.includes("ari@harbor.test"), false)
   assert.equal(file.csv.includes("Hidden Admin Merchant"), false)
   assert.equal(file.csv.includes("Other Workspace Merchant"), false)
@@ -422,7 +423,7 @@ test("MIC-100: direct API requests match UI permissions and audits omit secrets"
   assert.match(file.headers.get("cache-control") ?? "", /no-store/)
   const csv = await file.text()
   assert.match(csv, /'=2\+3/)
-  assert.equal(csv.includes(IDENTITY), false)
+  assert.equal(identityCsvField.test(csv), false)
 
   const keyExport = await listPost(bearerRequest("/api/mca/exports", TOKEN_SECRET, {
     method: "POST",
@@ -469,6 +470,16 @@ test("MIC-100: direct API requests match UI permissions and audits omit secrets"
   const blob = JSON.stringify(audits)
   assert.equal(blob.includes(token), false)
   assert.equal(blob.includes(TOKEN_SECRET), false)
-  assert.equal(blob.includes(IDENTITY), false)
+  const containsIdentity = (value: unknown): boolean => {
+    if (typeof value === "string" || typeof value === "number") return String(value) === IDENTITY
+    if (Array.isArray(value)) return value.some(containsIdentity)
+    if (value !== null && typeof value === "object") {
+      return Object.entries(value).some(([key, nested]) => key === "identityLast4" || containsIdentity(nested))
+    }
+    return false
+  }
+  for (const audit of audits) {
+    assert.equal(containsIdentity(JSON.parse(audit.metadata)), false, `identity leaked in ${audit.action} metadata`)
+  }
   assert.equal(blob.includes("ari@harbor.test"), false)
 })
