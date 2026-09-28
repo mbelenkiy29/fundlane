@@ -56,16 +56,12 @@ test("application and Stripe scripts keep catalog price literals in one module",
   const catalogPath = join(root, "src/lib/mca/billing-catalog.ts")
   const priceLiteral = /\b(?:39900|7900|6900|5900)\b|\$(?:399|79|69|59)\b|\bmonthlyUsd\s*:\s*399\b|\busd-399\b/g
   const matches: string[] = []
-  const unusedFixtures = /^src\/app\/\(dashboard\)\/settings\/billing\/data\/(?:billing-history|current-plan)\.json$/
   async function scan(dir: string) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name)
       if (entry.isDirectory()) await scan(path)
       else if (path !== catalogPath && /\.(?:ts|tsx|js|jsx|mjs|cjs|json)$/.test(entry.name)) {
-        // Unimported dashboard template fixtures are never rendered by the billing page.
-        if (unusedFixtures.test(relative(root, path))) continue
         const content = await readFile(path, "utf8")
-        if (relative(root, path).startsWith("src/")) assert.doesNotMatch(content, /(?:billing-history|current-plan)\.json/, `${relative(root, path)} renders a skipped demo fixture`)
         if (priceLiteral.test(content)) matches.push(relative(root, path))
         priceLiteral.lastIndex = 0
       }
