@@ -14,6 +14,7 @@ import {
 } from "../src/lib/marketing/metadata"
 import { helpArticles } from "../src/lib/marketing/help"
 import { companyLegalName, marketingPolishEnabled } from "../src/lib/marketing/polish"
+import { publicRoadmapEnabled } from "../src/lib/marketing/launch-switches"
 
 test("marketing metadata uses Fundlane chrome and page-specific demo copy", () => {
   const home = marketingMetadata("MCA brokerage software, from application to renewal", "/")
@@ -153,4 +154,53 @@ test("robots allows each public marketing URL listed in the sitemap", () => {
   assert.ok(allow.includes("/changelog$"))
   assert.ok(allow.includes("/demo$"))
   assert.ok(allow.includes("/help"))
+})
+
+test("public roadmap discovery requires the exact flag", () => {
+  const previous = process.env.MCA_PUBLIC_ROADMAP_ENABLED
+  try {
+    for (const value of [undefined, "false", "TRUE", "1"]) {
+      if (value === undefined) delete process.env.MCA_PUBLIC_ROADMAP_ENABLED
+      else process.env.MCA_PUBLIC_ROADMAP_ENABLED = value
+      assert.equal(publicRoadmapEnabled(), false)
+      assert.ok(!sitemap().some(entry => entry.url.endsWith("/roadmap")))
+      assert.ok(!(robots().rules as { allow: string[] }).allow.includes("/roadmap$"))
+    }
+    process.env.MCA_PUBLIC_ROADMAP_ENABLED = "true"
+    assert.equal(publicRoadmapEnabled(), true)
+    const entry = sitemap().find(row => row.url.endsWith("/roadmap"))
+    assert.deepEqual(entry?.lastModified, new Date("2026-09-28"))
+    assert.ok((robots().rules as { allow: string[] }).allow.includes("/roadmap$"))
+  } finally {
+    if (previous === undefined) delete process.env.MCA_PUBLIC_ROADMAP_ENABLED
+    else process.env.MCA_PUBLIC_ROADMAP_ENABLED = previous
+  }
+})
+
+test("marketing shell and mobile navigation prefer internal roadmap only when enabled", () => {
+  const script = `
+    const React = require("react");
+    const { mock } = require("node:test");
+    const { renderToStaticMarkup } = require("react-dom/server");
+    require.extensions[".css"] = () => {};
+    mock.module("server-only", { exports: {} });
+    mock.module("./src/lib/marketing/fonts.ts", { namedExports: { marketingFontClasses: async () => "" } });
+    const { MarketingShell } = require("./src/components/marketing/shell.tsx");
+    (async () => {
+      process.env.NEXT_PUBLIC_ROADMAP_URL = "https://roadmap.example.test/";
+      delete process.env.MCA_PUBLIC_ROADMAP_ENABLED;
+      const off = renderToStaticMarkup(await MarketingShell({ children: null }));
+      process.env.MCA_PUBLIC_ROADMAP_ENABLED = "true";
+      const on = renderToStaticMarkup(await MarketingShell({ children: null }));
+      console.log(JSON.stringify({ off, on }));
+    })().catch(error => { console.error(error); process.exitCode = 1 });
+  `
+  const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], { encoding: "utf8", cwd: resolve(import.meta.dirname, "..") })
+  assert.equal(result.status, 0, result.stderr)
+  const { off, on } = JSON.parse(result.stdout) as { off: string; on: string }
+  assert.match(off, /href="https:\/\/roadmap\.example\.test\/"/)
+  assert.doesNotMatch(off, /href="\/roadmap"/)
+  assert.match(on, /href="\/roadmap"/)
+  assert.doesNotMatch(on, /href="https:\/\/roadmap\.example\.test\/"/)
+  assert.match(on, /Mobile navigation[\s\S]*href="\/roadmap"/)
 })

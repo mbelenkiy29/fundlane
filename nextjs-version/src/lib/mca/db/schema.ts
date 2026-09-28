@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigint, bigserial, boolean, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey, timestamp } from "drizzle-orm/pg-core"
+import { pgTable, uuid, text, integer, bigint, bigserial, boolean, index, unique, check, foreignKey, uniqueIndex, doublePrecision, primaryKey, timestamp, jsonb } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -1404,6 +1404,29 @@ export const mca_analysis_settings = pgTable("mca_analysis_settings", {
 	updated_at: text().notNull(),
 	updated_by_user_id: text(),
 });
+
+export const roadmap_items = pgTable("roadmap_items", {
+  id: text().primaryKey(), title: text().notNull(), summary: text().notNull(), status: text().notNull(),
+  sort_order: integer().notNull().default(0), published: boolean().notNull().default(false),
+  created_at: timestamp({ withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  updated_at: timestamp({ withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  updated_by_user_id: text().references(() => users.id),
+}, table => [
+  index("roadmap_items_published_order_idx").on(table.status, table.sort_order, table.id).where(sql`published = true`),
+  check("roadmap_items_title_check", sql`char_length(title) BETWEEN 1 AND 120 AND title = btrim(title)`),
+  check("roadmap_items_summary_check", sql`char_length(summary) BETWEEN 1 AND 500 AND summary = btrim(summary)`),
+  check("roadmap_items_status_check", sql`status IN ('planned', 'in_progress', 'shipped')`),
+  check("roadmap_items_sort_order_check", sql`sort_order >= 0`),
+]);
+
+export const roadmap_item_audit = pgTable("roadmap_item_audit", {
+  id: text().primaryKey(), item_id: text().notNull(), actor_user_id: text().notNull().references(() => users.id),
+  action: text().notNull(), before_value: jsonb(), after_value: jsonb(),
+  created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  index("roadmap_item_audit_item_idx").on(table.item_id, table.created_at),
+  check("roadmap_item_audit_action_check", sql`action IN ('created', 'updated', 'published', 'unpublished', 'deleted')`),
+]);
 
 export const mca_auto_submit_settings = pgTable("mca_auto_submit_settings", {
 	workspace_id: text().primaryKey().notNull(),

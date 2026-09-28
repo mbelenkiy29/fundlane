@@ -6,7 +6,7 @@ import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
-import { marketingTrialCtaEnabled, publicPricingEnabled } from "@/lib/marketing/launch-switches"
+import { marketingTrialCtaEnabled, publicPricingEnabled, publicRoadmapEnabled } from "@/lib/marketing/launch-switches"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
@@ -62,6 +62,7 @@ export async function MarketingShell({
   const { statusUrl, roadmapUrl, supportEmail } = getSupportConfig()
   const legalName = polished ? companyLegalName() : null
   const showPricing = publicPricingEnabled()
+  const showRoadmap = publicRoadmapEnabled()
   const showTrialCta = marketingTrialCtaEnabled()
   return (
     <div className={`fundlane ${fontClasses}${polished ? " fl-polished" : ""}${immersive ? " fl-immersive" : ""}`}>
@@ -76,6 +77,7 @@ export async function MarketingShell({
             <Link href="/features">Features</Link>
             {showPricing && <Link href="/pricing">Pricing</Link>}
             <Link href="/changelog">Changelog</Link>
+            {showRoadmap && <Link href="/roadmap">Roadmap</Link>}
             <Link href="/help">Help</Link>
             <Link href="/#workflow">How it works</Link>
             <Link href="/#faq">FAQ</Link>
@@ -87,7 +89,7 @@ export async function MarketingShell({
             <DemoLink />
             {showTrialCta && <Link className="fl-button fl-button-secondary" href="/sign-up">Start free trial</Link>}
           </div>
-          <MobileNav polished={polished} showPricing={showPricing} showTrialCta={showTrialCta} />
+          <MobileNav polished={polished} showPricing={showPricing} showRoadmap={showRoadmap} showTrialCta={showTrialCta} />
         </div>
       </header>
       {children}
@@ -107,7 +109,7 @@ export async function MarketingShell({
               <Link href="/demo">Book a demo</Link>
               <Link href="/sign-in">Sign in</Link>
               {statusUrl && <a href={statusUrl}>System status</a>}
-              {roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
+              {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
               {privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>

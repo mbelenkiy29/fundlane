@@ -4,6 +4,14 @@
 
 Set `MCA_PUBLIC_PRICING_ENABLED=true` to publish `/pricing`, its marketing navigation link, sitemap entry, and robots allowance. Unset or any value other than exactly `true` keeps the existing authenticated `/pricing` redirect to Plans & Billing. The page reads amounts and trial length from `src/lib/mca/billing-catalog.ts`. Approve its copy before enabling it. Enable `MCA_TRIAL_REQUIRES_CARD=true` and verify the configured Stripe Checkout trial before publishing the card-required claim. Review the tax activation requirements in `docs/supabase-billing.md` before publishing the tax-exclusive claim; `MCA_STRIPE_TAX_ENABLED` currently defaults to false.
 
+## Public roadmap
+
+`MCA_PUBLIC_ROADMAP_ENABLED` defaults to off; only the exact value `true` publishes `/roadmap` and its internal navigation, Help, sitemap, and robots entries, and opens `/platform/roadmap` to MFA-verified platform administrators. When off, `/roadmap` and the editor/API return 404, and existing validated `NEXT_PUBLIC_ROADMAP_URL` links remain in the footer and Help page. When on, internal links take precedence.
+
+Apply reviewed migration `0066_public_roadmap` before enabling the switch. It adds two global tables for items and independent audit history; it does not seed content or change customer records. In the platform editor, create an unpublished item, edit its title, summary, status, and sort order, then publish it. The editor shows publication state and confirms deletion. Every change writes an audit row in the same transaction; stale edits require a reload. Keep titles and summaries free of customer data and do not promise dates. The public page shows only published text, ordered Planned, In progress, Shipped. Its published query is cached for 60 seconds; tag invalidation after an edit can briefly show the previous state during refresh.
+
+Release acceptance: review the page and operator copy with Michael, apply the migration to the approved nonproduction database, enable the flag in a preview backed by synthetic records, and verify creation, editing, publication, unpublication, deletion, audit history, and link precedence. Confirm a public browser sees only published rows and cannot reach operator endpoints. Review and apply the migration before production activation. Help-center and status-page work remain separate.
+
 Set `MCA_MARKETING_TRIAL_CTA_ENABLED=true` with `MCA_SIGNUP_MODE=open` to show “Start free trial” in the marketing navigation. Unset or any value other than exactly `true` keeps the current CTAs. Set `MCA_SHOW_MIGRATED_ACCOUNT_NOTICE=false` to hide the sign-in migration message.
 
 Set `MCA_SUPPORT_EMAIL=mike@sentineltechsolutions.io` for the launch contact. The existing validated support setting shows the address in the marketing footer, on pricing when published, and in the signed-in footer. Unset or invalid email shows no address. Confirm the mailbox is monitored before launch.
