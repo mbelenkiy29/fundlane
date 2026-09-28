@@ -341,7 +341,7 @@ test("reconciliation rejects legacy failures without a Vercel claim under unset 
   } finally { if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime }
 })
 
-test("a failed pre-provider claim remains visible and can be reconciled for invitations and reminders", async () => {
+test("pre-provider invitation failures remain resendable after retries are exhausted", async () => {
   const priorRuntime = process.env.MCA_JOB_RUNTIME
   process.env.MCA_JOB_RUNTIME = "vercel_cron"
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
@@ -350,29 +350,38 @@ test("a failed pre-provider claim remains visible and can be reconciled for invi
   try {
     const invitation = await invite()
     const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
-    const first = await runningJob(queued.jobId)
-    await failBackgroundJob(first, new Error("killed before provider marker"))
-    const second = await runningJob(queued.jobId)
-    let invitationFailure: unknown
-    try { await processInvitationEmail(ada, second) } catch (error) { invitationFailure = error }
-    assert.ok(code("delivery_uncertain")(invitationFailure))
-    await failBackgroundJob(second, invitationFailure)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const job = await runningJob(queued.jobId)
+      assert.equal(job.attempts, attempt)
+      await failBackgroundJob(job, new Error("killed before provider marker"))
+    }
     const delivery = (await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0]
-    assert.equal(delivery.requiresReconciliation, true)
+    assert.equal(delivery.state, "failed")
+    assert.equal(delivery.requiresReconciliation, false)
+    assert.equal(delivery.failedNotSent, true)
     assert.deepEqual(JSON.parse((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))!.result_json!), { deliveryRuntime: "vercel_cron", providerAttempt: false })
     assert.equal(sends, 0)
-    delete process.env.MCA_INVITATION_JOB_RUNTIME
-    try {
-      assert.equal((await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, true)
-      await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
-    } finally { process.env.MCA_INVITATION_JOB_RUNTIME = "vercel_cron" }
-    await assert.rejects(queueInvitationEmail(ada, invitation.id, randomUUID(), origin), code("delivery_uncertain"))
-    await reconcileInvitationDelivery(admin, invitation.id, { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-preflight" })
-    const retried = await runningJob(queued.jobId)
-    assert.equal((await processInvitationEmail(admin, retried)).delivery, "sent")
+    await assert.rejects(reconcileInvitationDelivery(admin, invitation.id, { deliveryId: delivery.id, outcome: "not_sent", evidence: "provider-lookup-empty-preflight" }), code("reconciliation_unavailable"))
+    const resend = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+    assert.notEqual(resend.jobId, queued.jobId)
+    const retried = await runningJob(resend.jobId)
+    assert.equal((await processInvitationEmail(ada, retried)).delivery, "sent")
     await completeBackgroundJob(retried, { delivery: "sent" })
     assert.equal(sends, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+    if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
+  }
+})
 
+test("a reminder retries normally after a pre-provider failure", async () => {
+  const priorRuntime = process.env.MCA_JOB_RUNTIME
+  process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+  let sends = 0
+  globalThis.fetch = async () => { sends++; return new Response("", { status: 200 }) }
+  try {
     const reminderInvitation = await invite()
     const past = new Date(Date.now() - 3 * 3600_000).toISOString()
     await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(past, past, reminderInvitation.id)
@@ -381,15 +390,12 @@ test("a failed pre-provider claim remains visible and can be reconciled for invi
     const firstReminder = await runningJob(reminder.job_id)
     await failBackgroundJob(firstReminder, new Error("killed before provider marker"))
     const secondReminder = await runningJob(reminder.job_id)
-    let failure: unknown
-    try { await processInvitationReminder(secondReminder) } catch (error) { failure = error }
-    assert.ok(code("delivery_uncertain")(failure))
-    await failBackgroundJob(secondReminder, failure)
+    assert.equal((await processInvitationReminder(secondReminder)).delivery, "sent")
+    await completeBackgroundJob(secondReminder, { delivery: "sent" })
     const listed = (await listApplicationInvitations(admin)).find(row => row.id === reminderInvitation.id)!.deliveries[0]
-    assert.equal(listed.requiresReconciliation, true)
-    assert.deepEqual(JSON.parse((await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE id=?").get(reminder.job_id))!.result_json!), { deliveryRuntime: "vercel_cron", providerAttempt: false })
+    assert.equal(listed.requiresReconciliation, false)
+    assert.equal(listed.delivery, "sent")
     assert.equal(sends, 1)
-    await reconcileInvitationDelivery(admin, reminderInvitation.id, { deliveryId: reminder.id, outcome: "accepted", evidence: "provider-receipt-reminder-preflight" })
     assert.equal((await ownedInvitation(admin, reminderInvitation.id)).reminder_count, 1)
   } finally {
     globalThis.fetch = originalFetch

@@ -36,8 +36,7 @@ export function invitationRuntimeEnabled(): boolean {
   return process.env.MCA_JOB_RUNTIME === "vercel_cron" && process.env.MCA_INVITATION_JOB_RUNTIME === "vercel_cron"
 }
 function requiresDeliveryReconciliation(delivery: { state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }): boolean {
-  return delivery.state === "failed" && !delivery.delivery &&
-    (isVercelDeliveryAttempt(delivery.result_json) || isVercelClaim(delivery.result_json) && delivery.error_code === "delivery_uncertain")
+  return delivery.state === "failed" && !delivery.delivery && isVercelDeliveryAttempt(delivery.result_json)
 }
 function invalidLink(): AppError { return new AppError(410, "invitation_inactive", "This application link is expired, completed, or no longer active. Ask your representative for a new link.") }
 
@@ -176,7 +175,7 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      if (isVercelDeliveryAttempt(prior.result_json) || prior.error_code === "delivery_uncertain" && isVercelClaim(prior.result_json)) {
+      if (isVercelDeliveryAttempt(prior.result_json)) {
         throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
       } else if (isVercelClaim(prior.result_json) || invitationRuntimeEnabled() && (prior.error_code === "outbound_review_required" || prior.error_code === "company_paused" && prior.attempts === 0)) {
         // A claimed Vercel job with no provider-attempt marker never reached the
@@ -260,7 +259,7 @@ export async function processInvitationEmail(actor: DealActor, job: BackgroundJo
   const attempt = await getDatabase().prepare<{ invitation_id: string; delivery: "sent" | "preview" | null }>("SELECT invitation_id,delivery FROM mca_application_invitation_deliveries WHERE workspace_id=? AND id=? AND job_id=?").get(actor.workspaceId, job.resource_id, job.id)
   if (!attempt) throw new AppError(404, "delivery_not_found", "Invitation delivery not found.")
   if (attempt.delivery) return { delivery: attempt.delivery }
-  if (isVercelClaim(job.result_json) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
+  if (isVercelDeliveryAttempt(job.result_json) && job.attempts > 1) throw new AppError(409, "delivery_uncertain", "The previous invitation send may have reached the provider. Reconcile its correlation ID before retrying.")
   const row = await ownedInvitation(actor, attempt.invitation_id)
   if (!invitationActive(row)) throw invalidLink()
   assertInvitationEmailEnabled()
