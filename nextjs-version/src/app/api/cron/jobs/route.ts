@@ -3,17 +3,25 @@ import { NextResponse } from "next/server"
 import { apiError, AppError } from "@/lib/mca/errors"
 import { recoverSubmissionOutbox, runNextBackgroundJob } from "@/lib/mca/jobs/worker"
 import { withExecutionDeadline } from "@/lib/mca/jobs/execution"
-import { runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
+import { INVITATION_JOB_KINDS, invitationJobsOwnedByGeneralCron, runtimeKinds } from "@/lib/mca/jobs/runtime-kinds"
 import { cleanupWorkerStorage } from "@/lib/mca/jobs/cleanup"
 import { releaseExpiredReservations } from "@/lib/mca/assistant/credits"
 import { maintainAssistantExperience } from "@/lib/mca/assistant/maintenance"
 import { maintainCreditAlerts } from "@/lib/mca/assistant/alerts"
+import type { BackgroundJobKind } from "@/lib/mca/jobs/queue"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
 const BUDGET_MS = 240_000
 const MAX_JOBS = 3
+
+export function jobRuntimeKinds(): readonly BackgroundJobKind[] {
+  const kinds = runtimeKinds()
+  if (process.env.MCA_JOB_RUNTIME_KINDS) return kinds
+  const invitations: readonly BackgroundJobKind[] = invitationJobsOwnedByGeneralCron() ? INVITATION_JOB_KINDS : []
+  return [...kinds, ...invitations]
+}
 
 export async function GET(request: Request) {
   try {
@@ -24,7 +32,7 @@ export async function GET(request: Request) {
     const expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     const started = Date.now()
-    const kinds = runtimeKinds()
+    const kinds = jobRuntimeKinds()
     let processed = 0
     await withExecutionDeadline(async () => {
       if (process.env.MCA_JOB_RUNTIME_MAINTENANCE === "true") {

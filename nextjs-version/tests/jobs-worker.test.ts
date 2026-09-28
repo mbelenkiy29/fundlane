@@ -11,7 +11,7 @@ import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/do
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
-import { GET as runCron } from "../src/app/api/cron/jobs/route"
+import { GET as runCron, jobRuntimeKinds } from "../src/app/api/cron/jobs/route"
 import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
@@ -20,6 +20,30 @@ import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { insertAttempt, persistNewDestination, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
+
+test("invitation job claims require their own explicit runtime opt-in", () => {
+  const previous = process.env.MCA_INVITATION_JOB_RUNTIME
+  const previousAutoSubmit = process.env.MCA_AUTO_SUBMIT_ENABLED
+  const previousKinds = process.env.MCA_JOB_RUNTIME_KINDS
+  try {
+    delete process.env.MCA_INVITATION_JOB_RUNTIME
+    delete process.env.MCA_AUTO_SUBMIT_ENABLED
+    delete process.env.MCA_JOB_RUNTIME_KINDS
+    assert.deepEqual(jobRuntimeKinds(), ["export_create", "export"])
+    process.env.MCA_AUTO_SUBMIT_ENABLED = "true"
+    assert.deepEqual(jobRuntimeKinds(), ["export_create", "export", "auto_submit"])
+    process.env.MCA_INVITATION_JOB_RUNTIME = "vercel_cron"
+    assert.deepEqual(jobRuntimeKinds(), ["export_create", "export", "auto_submit", "application_invitation_email", "application_invitation_reminder"])
+    process.env.MCA_JOB_RUNTIME_KINDS = "submission_delivery"
+    assert.deepEqual(jobRuntimeKinds(), ["submission_delivery"])
+    process.env.MCA_JOB_RUNTIME_KINDS = "submission_delivery,application_invitation_email"
+    assert.deepEqual(jobRuntimeKinds(), ["submission_delivery", "application_invitation_email"])
+  } finally {
+    if (previous === undefined) delete process.env.MCA_INVITATION_JOB_RUNTIME; else process.env.MCA_INVITATION_JOB_RUNTIME = previous
+    if (previousAutoSubmit === undefined) delete process.env.MCA_AUTO_SUBMIT_ENABLED; else process.env.MCA_AUTO_SUBMIT_ENABLED = previousAutoSubmit
+    if (previousKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = previousKinds
+  }
+})
 
 delete process.env.MCA_DOCUMENT_SCANNER
 delete process.env.MCA_EMAIL_WEBHOOK_URL

@@ -9,6 +9,11 @@ export const invitationInput = z.object({
   requestKey: z.uuid(),
 }).strict()
 export const sendInput = z.object({ requestKey: z.uuid() }).strict()
+export const reconcileDeliveryInput = z.object({
+  deliveryId: z.uuid(),
+  outcome: z.enum(["accepted", "not_sent"]),
+  evidence: z.string().trim().min(10).max(500),
+}).strict()
 export const trackingInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), kind: z.enum(["opened", "started"]) }).strict()
 export const sessionTokenInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict()
 export const draftInput = z.object({
@@ -38,6 +43,8 @@ export interface InvitationDelivery {
   delivery: "sent" | "preview" | null
   state: "queued" | "running" | "complete" | "failed"
   errorCode: string | null
+  requiresReconciliation: boolean
+  failedNotSent: boolean
 }
 export interface ApplicationInvitation {
   id: string

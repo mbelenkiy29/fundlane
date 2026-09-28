@@ -6,6 +6,7 @@ import { runNextBackgroundJob } from "@/lib/mca/jobs/worker"
 import { deliverPendingReceipts } from "@/lib/mca/intake/email"
 import { privateEmailDeliveryEnabled } from "@/lib/mca/intake/email-readiness"
 import { invitationEmailEnabled } from "@/lib/mca/applications/service"
+import { INVITATION_JOB_KINDS, invitationJobsOwnedByGeneralCron } from "@/lib/mca/jobs/runtime-kinds"
 
 export const runtime = "nodejs"
 export const maxDuration = 120
@@ -21,9 +22,9 @@ export async function GET(request: Request) {
     const started = Date.now()
     let jobs = 0, receipts = 0
     await withExecutionDeadline(async () => {
-      if (invitationEmailEnabled()) {
+      if (invitationEmailEnabled() && !invitationJobsOwnedByGeneralCron()) {
         while (jobs < 3 && Date.now() - started < 90_000) {
-          if (!(await runNextBackgroundJob(["application_invitation_email", "application_invitation_reminder"]))) break
+          if (!(await runNextBackgroundJob(INVITATION_JOB_KINDS))) break
           jobs++
         }
       }
