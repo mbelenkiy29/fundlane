@@ -7,6 +7,7 @@ import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
 import { marketingTrialCtaEnabled, publicPricingEnabled, publicRoadmapEnabled } from "@/lib/marketing/launch-switches"
+import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
@@ -111,7 +112,9 @@ export async function MarketingShell({
               {statusUrl && <a href={statusUrl}>System status</a>}
               {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
-              {privacyUrl && <a href={privacyUrl}>Privacy</a>}
+              {legalDraftPagesEnabled()
+                ? <><Link href="/terms">Terms of Service (draft)</Link><Link href="/privacy">Privacy Policy (draft)</Link></>
+                : privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>
           </div>
           {(legalName || supportEmail) && <address className="fl-footer-contact">

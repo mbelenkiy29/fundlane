@@ -3,6 +3,7 @@ import { Logo } from "@/components/logo"
 import Link from "next/link"
 import { signupMode } from "@/lib/mca/signup-mode"
 import { marketingPolishEnabled } from "@/lib/marketing/polish"
+import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 
 export default function SignUpPage() {
   return (
@@ -18,7 +19,7 @@ export default function SignUpPage() {
           <h1 className="text-xl font-semibold">Fundlane is invite-only</h1>
           <p className="mt-2 text-muted-foreground">Book a demo to get started, or use your invitation link to join your team.</p>
           <Link href="/demo" className="mt-4 inline-block underline">Book a demo</Link>
-        </div> : <SignupForm1 headingAsH1={marketingPolishEnabled()} />}
+        </div> : <SignupForm1 headingAsH1={marketingPolishEnabled()} legalDraftsEnabled={legalDraftPagesEnabled()} />}
       </div>
     </div>
   )

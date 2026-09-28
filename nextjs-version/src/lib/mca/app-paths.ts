@@ -1,4 +1,5 @@
 import { publicPricingEnabled } from "@/lib/marketing/launch-switches"
+import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 
 /** Shared page title for the `/deals` nav item and funded-book heading. */
 export const DEALS_PAGE_TITLE = "Deals"
@@ -80,6 +81,7 @@ export function isPublicPagePath(pathname: string): boolean {
   const path = normalizePathname(pathname)
   if (path === "/") return true
   if (path === "/pricing" && publicPricingEnabled()) return true
+  if (matchesPrefix(path, "/terms")) return legalDraftPagesEnabled()
   return PUBLIC_PAGE_PREFIXES.some((prefix) => matchesPrefix(path, prefix))
 }
 

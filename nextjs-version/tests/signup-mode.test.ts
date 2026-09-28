@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import test from "node:test"
 import { migratedAccountNoticeEnabled, signupMode } from "../src/lib/mca/signup-mode"
 
-function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false, polish = false) {
+function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false, polish = false, legalDrafts = false) {
   const script = `
     const React = require("react");
     const { renderToStaticMarkup } = require("react-dom/server");
@@ -18,6 +18,7 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
   else env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE = showNotice
   env.MCA_MAGIC_LINK_ENABLED = String(magicLink)
   env.MCA_MARKETING_POLISH_ENABLED = String(polish)
+  env.MCA_LEGAL_DRAFT_PAGES_ENABLED = String(legalDrafts)
   const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", env })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout) as { signup: string; signin: string }
@@ -42,6 +43,19 @@ test("invite-only page offers a demo and sign-in hides the creation link", () =>
   assert.doesNotMatch(markup.signup, /Create your company workspace/)
   assert.match(markup.signin, /New team members join through an invitation/)
   assert.doesNotMatch(markup.signin, /Create a company workspace/)
+})
+
+test("draft legal links appear only in open sign-up with the draft flag", () => {
+  const open = renderAuth("open", undefined, false, false, true).signup
+  assert.match(open, /href="\/terms"[^>]*>Terms of Service \(draft\)/)
+  assert.match(open, /href="\/privacy"[^>]*>Privacy Policy \(draft\)/)
+
+  const defaultOpen = renderAuth("open", undefined).signup
+  assert.doesNotMatch(defaultOpen, /href="\/(terms|privacy)"/)
+
+  const inviteOnly = renderAuth("invite_only", undefined, false, false, true).signup
+  assert.match(inviteOnly, /Fundlane is invite-only/)
+  assert.doesNotMatch(inviteOnly, /href="\/(terms|privacy)"|Create your company workspace/)
 })
 
 test("migrated-account helper defaults to shown and can be hidden", () => {

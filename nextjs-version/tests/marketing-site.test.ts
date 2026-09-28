@@ -154,6 +154,8 @@ test("robots allows each public marketing URL listed in the sitemap", () => {
   assert.ok(allow.includes("/changelog$"))
   assert.ok(allow.includes("/demo$"))
   assert.ok(allow.includes("/help"))
+  assert.ok(!allow.includes("/terms$"))
+  assert.ok(!allow.includes("/privacy$"))
 })
 
 test("public roadmap discovery requires the exact flag", () => {
