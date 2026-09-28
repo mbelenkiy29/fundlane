@@ -1,4 +1,5 @@
 import "server-only"
+import { publicRoadmapEnabled } from "./launch-switches"
 
 function httpsUrl(value: string | undefined): string | null {
   if (!value) return null
@@ -27,6 +28,7 @@ export function getConfiguredSupportRows(config: ReturnType<typeof getSupportCon
   const rows: { label: string; href: string; linkText: string }[] = []
   if (config.supportEmail) rows.push({ label: "Support", href: `mailto:${config.supportEmail}`, linkText: config.supportEmail })
   if (config.statusUrl) rows.push({ label: "System status", href: config.statusUrl, linkText: "View status page" })
-  if (config.roadmapUrl) rows.push({ label: "Roadmap", href: config.roadmapUrl, linkText: "View roadmap" })
+  if (publicRoadmapEnabled()) rows.push({ label: "Roadmap", href: "/roadmap", linkText: "Roadmap" })
+  else if (config.roadmapUrl) rows.push({ label: "Roadmap", href: config.roadmapUrl, linkText: "View roadmap" })
   return rows
 }

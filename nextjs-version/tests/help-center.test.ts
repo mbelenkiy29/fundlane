@@ -15,11 +15,13 @@ test("help articles have unique routes and actionable steps", () => {
 
 test("support resources remain unpublished until configured", () => {
   const previous = {
+    enabled: process.env.MCA_PUBLIC_ROADMAP_ENABLED,
     status: process.env.NEXT_PUBLIC_STATUS_PAGE_URL,
     roadmap: process.env.NEXT_PUBLIC_ROADMAP_URL,
     email: process.env.MCA_SUPPORT_EMAIL,
   }
   try {
+    delete process.env.MCA_PUBLIC_ROADMAP_ENABLED
     delete process.env.NEXT_PUBLIC_STATUS_PAGE_URL
     delete process.env.NEXT_PUBLIC_ROADMAP_URL
     delete process.env.MCA_SUPPORT_EMAIL
@@ -50,11 +52,14 @@ test("support resources remain unpublished until configured", () => {
       { label: "System status", href: "https://status.example.com/", linkText: "View status page" },
       { label: "Roadmap", href: "https://roadmap.example.com/", linkText: "View roadmap" },
     ])
+    process.env.MCA_PUBLIC_ROADMAP_ENABLED = "true"
+    assert.deepEqual(getConfiguredSupportRows(getSupportConfig()).at(-1), { label: "Roadmap", href: "/roadmap", linkText: "Roadmap" })
   } finally {
     for (const [name, value] of Object.entries({
       NEXT_PUBLIC_STATUS_PAGE_URL: previous.status,
       NEXT_PUBLIC_ROADMAP_URL: previous.roadmap,
       MCA_SUPPORT_EMAIL: previous.email,
+      MCA_PUBLIC_ROADMAP_ENABLED: previous.enabled,
     })) {
       if (value === undefined) delete process.env[name]
       else process.env[name] = value
