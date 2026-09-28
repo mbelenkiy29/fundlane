@@ -95,6 +95,7 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   assert.match(result.pricing, new RegExp(`${TRIAL_DAYS}-day free trial`))
   assert.match(result.pricing, /A card is required to start\. Cancel anytime\./)
   assert.match(result.pricing, /Sales tax is added where applicable/)
+  assert.match(result.pricing, /Adding users: prorated and invoiced immediately; access after payment\. Removing users: takes effect at the next renewal, with no mid-cycle credit\. No charge for seat changes during the free trial\./)
   assert.match(result.pricing, /Users 2–10|Users 2<!-- -->–10/)
   assert.match(result.pricing, /help@example.com/)
   assert.match(result.shell, /href="\/pricing"[^>]*>Pricing/)
