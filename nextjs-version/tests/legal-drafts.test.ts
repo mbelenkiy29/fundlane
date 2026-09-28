@@ -111,36 +111,37 @@ test("rendered disabled routes preserve redirect and approved notice", () => {
     assert.deepEqual(approved.termsMetadata, {})
     assert.match(approved.privacy, /Website and demo privacy notice/)
     assert.match(approved.privacy, /ben@sentineltechsolutions\.io/)
-    assert.doesNotMatch(approved.privacy, /Draft, not reviewed by an attorney/)
+    assert.doesNotMatch(approved.privacy, /prepared without attorney review/)
     assert.equal(approved.privacyMetadata.description, "How Sentinel Tech Solutions LLC handles Fundlane website and demo request information.")
   }
   const unavailable = renderRoutes({ MCA_LEGAL_DRAFT_PAGES_ENABLED: undefined, MCA_MARKETING_PRIVACY_URL: undefined })
   assert.equal(unavailable.privacy, "NOT_FOUND")
 })
 
-test("rendered enabled routes include every section and draft qualifications", () => {
+test("rendered enabled routes include every section and the publication notice", () => {
   const result = renderRoutes({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true" })
   for (const [html, sections] of [[result.terms, termsSections], [result.privacy, privacySections]] as const) {
-    assert.match(html, /DRAFT — Draft, not reviewed by an attorney\. Not yet in effect\./)
+    assert.match(html, /These terms were prepared without attorney review and will be updated after legal review\./)
+    assert.doesNotMatch(html, /DRAFT|\(draft\)|\[ZIP\]|\[Effective date\]|\[Attorney review|\[Proposed for review|[Nn]ot yet in effect|not reviewed by an attorney/)
     assert.match(html, /Sentinel Tech Solutions LLC/)
-    assert.match(html, /7 Holly Hill Road, Marlboro, NJ \[ZIP\]/)
+    assert.match(html, /7 Holly Hill Road, Marlboro, NJ/)
     assert.match(html, /mike@sentineltechsolutions\.io/)
-    assert.match(html, /Effective date: \[Effective date\]/)
+    assert.match(html, /Effective date: September 28, 2026/)
     for (const section of sections) assert.equal(html.split(`<h2>${section.heading}</h2>`).length - 1, 1, section.heading)
   }
-  for (const phrase of ["New Jersey", "Monmouth County", "pre-purchased seat model", "prorated and invoiced immediately", "take effect at renewal", "no-card trial", "card-backed Stripe trial", "TCPA", "automatic seat assignment"]) assert.ok(result.terms.includes(phrase), phrase)
-  for (const phrase of ["OpenAI", "Gmail", "Microsoft", "Twilio", "Cloudmersive", "Verisys", "sidebar_state", "Local storage", "retention periods by data category", "deployed providers"]) assert.ok(result.privacy.includes(phrase), phrase)
-  assert.equal(result.termsMetadata.description, "Draft Terms of Service for Fundlane. Draft, not reviewed by an attorney. Not yet in effect.")
-  assert.equal(result.privacyMetadata.description, "Draft Privacy Policy for Fundlane. Draft, not reviewed by an attorney. Not yet in effect.")
+  for (const phrase of ["New Jersey", "Monmouth County", "pre-purchased seat model", "prorated and invoiced immediately", "take effect at renewal", "no-card trial", "card-backed Stripe trial", "TCPA", "automatic seat assignment", "fees the customer paid for the Service in the 12 months before the event giving rise to the claim"]) assert.ok(result.terms.includes(phrase), phrase)
+  for (const phrase of ["OpenAI", "Gmail", "Microsoft", "Twilio", "Cloudmersive", "Verisys", "sidebar_state", "Local storage", "Information is retained according to its purpose", "not all Fundlane subprocessors"]) assert.ok(result.privacy.includes(phrase), phrase)
+  assert.equal(result.termsMetadata.description, "Fundlane Terms of Service from Sentinel Tech Solutions LLC, effective September 28, 2026.")
+  assert.equal(result.privacyMetadata.description, "How Sentinel Tech Solutions LLC handles information in Fundlane, effective September 28, 2026.")
 })
 
 test("enabled drafts cannot authorize demo collection at /privacy", () => {
   withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true" }, () => {
     assert.equal(legalDraftPagesEnabled(), true)
     assert.equal(legalPlaceholders.company, "Sentinel Tech Solutions LLC")
-    assert.equal(legalPlaceholders.address, "7 Holly Hill Road, Marlboro, NJ [ZIP]")
+    assert.equal(legalPlaceholders.address, "7 Holly Hill Road, Marlboro, NJ")
     assert.equal(legalPlaceholders.contact, "mike@sentineltechsolutions.io")
-    assert.equal(legalPlaceholders.effectiveDate, "[Effective date]")
+    assert.equal(legalPlaceholders.effectiveDate, "September 28, 2026")
     for (const [path, sections] of [["/terms", termsSections], ["/privacy", privacySections]] as const) {
       assert.deepEqual(unauthenticatedPageGate(path), { action: "allow", status: 200 })
       assert.ok(sections.length > 0)
@@ -157,8 +158,9 @@ test("enabled drafts cannot authorize demo collection at /privacy", () => {
       assert.ok(rules.allow.includes("/privacy$"))
     }
     const agreement = JSON.stringify(SignupLegalAgreement({ legalDraftsEnabled: true }))
-    assert.match(agreement, /Terms of Service \(draft\)/)
-    assert.match(agreement, /Privacy Policy \(draft\)/)
+    assert.match(agreement, /Terms of Service/)
+    assert.doesNotMatch(agreement, /\(draft\)/)
+    assert.match(agreement, /Privacy Policy/)
     assert.match(agreement, /"href":"\/terms"/)
     assert.match(agreement, /"href":"\/privacy"/)
   })

@@ -45,10 +45,10 @@ test("invite-only page offers a demo and sign-in hides the creation link", () =>
   assert.doesNotMatch(markup.signin, /Create a company workspace/)
 })
 
-test("draft legal links appear only in open sign-up with the draft flag", () => {
+test("legal links appear only in open sign-up with the legal pages flag", () => {
   const open = renderAuth("open", undefined, false, false, true).signup
-  assert.match(open, /href="\/terms"[^>]*>Terms of Service \(draft\)/)
-  assert.match(open, /href="\/privacy"[^>]*>Privacy Policy \(draft\)/)
+  assert.match(open, /href="\/terms"[^>]*>Terms of Service</)
+  assert.match(open, /href="\/privacy"[^>]*>Privacy Policy</)
 
   const defaultOpen = renderAuth("open", undefined).signup
   assert.doesNotMatch(defaultOpen, /href="\/(terms|privacy)"/)

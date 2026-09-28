@@ -7,13 +7,13 @@ import { privacySections } from "@/lib/marketing/legal-drafts"
 import { privacyNotice } from "@/lib/marketing/privacy-notice"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 
-const description = "Draft Privacy Policy for Fundlane. Draft, not reviewed by an attorney. Not yet in effect."
+const description = "How Sentinel Tech Solutions LLC handles information in Fundlane, effective September 28, 2026."
 const approvedDescription = "How Sentinel Tech Solutions LLC handles Fundlane website and demo request information."
 export const dynamic = "force-dynamic"
 
 export function generateMetadata() {
   return legalDraftPagesEnabled()
-    ? marketingMetadata("Privacy Policy (Draft)", "/privacy", description)
+    ? marketingMetadata("Privacy Policy", "/privacy", description)
     : { ...marketingMetadata("Website and demo privacy notice", "/privacy"), description: approvedDescription }
 }
 
@@ -30,7 +30,7 @@ export default function PrivacyPage() {
       </main>
     </MarketingShell>
   }
-  return <MarketingShell jsonLd={{ title: "Privacy Policy (Draft)", path: "/privacy", description }}>
+  return <MarketingShell jsonLd={{ title: "Privacy Policy", path: "/privacy", description }}>
     <LegalDraft title="Privacy Policy" sections={privacySections} />
   </MarketingShell>
 }

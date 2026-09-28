@@ -113,7 +113,7 @@ export async function MarketingShell({
               {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
               {legalDraftPagesEnabled()
-                ? <><Link href="/terms">Terms of Service (draft)</Link><Link href="/privacy">Privacy Policy (draft)</Link></>
+                ? <><Link href="/terms">Terms of Service</Link><Link href="/privacy">Privacy Policy</Link></>
                 : privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>
           </div>
