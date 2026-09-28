@@ -1,5 +1,13 @@
 # Fundlane marketing site
 
+## Launch pricing and support
+
+Set `MCA_PUBLIC_PRICING_ENABLED=true` to publish `/pricing`, its marketing navigation link, sitemap entry, and robots allowance. Unset or any value other than exactly `true` keeps the existing authenticated `/pricing` redirect to Plans & Billing. The page reads amounts and trial length from `src/lib/mca/billing-catalog.ts`. Approve its copy before enabling it. Enable `MCA_TRIAL_REQUIRES_CARD=true` and verify the configured Stripe Checkout trial before publishing the card-required claim. Review the tax activation requirements in `docs/supabase-billing.md` before publishing the tax-exclusive claim; `MCA_STRIPE_TAX_ENABLED` currently defaults to false.
+
+Set `MCA_MARKETING_TRIAL_CTA_ENABLED=true` with `MCA_SIGNUP_MODE=open` to show “Start free trial” in the marketing navigation. Unset or any value other than exactly `true` keeps the current CTAs. Set `MCA_SHOW_MIGRATED_ACCOUNT_NOTICE=false` to hide the sign-in migration message.
+
+Set `MCA_SUPPORT_EMAIL=mike@sentineltechsolutions.io` for the launch contact. The existing validated support setting shows the address in the marketing footer, on pricing when published, and in the signed-in footer. Unset or invalid email shows no address. Confirm the mailbox is monitored before launch.
+
 ## Marketing polish rollout
 
 Set `MCA_MARKETING_POLISH_ENABLED=true` in the Vercel environment and redeploy to enable the footer contact block, FAQ structured data, reduced marketing fonts, internal demo links without external-link arrows, and the visible sign-up heading. Unset or any other value preserves the current presentation, including the root layout's preloads for all three marketing fonts. The root layout retains Inter for application and authentication screens. With polish enabled, the root layout skips those marketing fonts; marketing loads only Geist Mono without a preload and uses Inter for headings and metrics. Redeploy after changing the flag so static pages use the selected presentation.

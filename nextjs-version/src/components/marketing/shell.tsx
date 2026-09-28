@@ -6,6 +6,7 @@ import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
+import { marketingTrialCtaEnabled, publicPricingEnabled } from "@/lib/marketing/launch-switches"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
@@ -60,6 +61,8 @@ export async function MarketingShell({
   const { privacyUrl } = getDemoConfiguration()
   const { statusUrl, roadmapUrl, supportEmail } = getSupportConfig()
   const legalName = polished ? companyLegalName() : null
+  const showPricing = publicPricingEnabled()
+  const showTrialCta = marketingTrialCtaEnabled()
   return (
     <div className={`fundlane ${fontClasses}${polished ? " fl-polished" : ""}${immersive ? " fl-immersive" : ""}`}>
       {jsonLd && <MarketingJsonLd {...jsonLd} />}
@@ -71,6 +74,7 @@ export async function MarketingShell({
           <Brand />
           <nav className="fl-desktop-nav" aria-label="Main navigation">
             <Link href="/features">Features</Link>
+            {showPricing && <Link href="/pricing">Pricing</Link>}
             <Link href="/changelog">Changelog</Link>
             <Link href="/help">Help</Link>
             <Link href="/#workflow">How it works</Link>
@@ -81,8 +85,9 @@ export async function MarketingShell({
               Sign in
             </Link>
             <DemoLink />
+            {showTrialCta && <Link className="fl-button fl-button-secondary" href="/sign-up">Start free trial</Link>}
           </div>
-          <MobileNav polished={polished} />
+          <MobileNav polished={polished} showPricing={showPricing} showTrialCta={showTrialCta} />
         </div>
       </header>
       {children}
@@ -95,6 +100,7 @@ export async function MarketingShell({
             </div>
             <nav aria-label="Footer navigation">
               <Link href="/features">Features</Link>
+              {showPricing && <Link href="/pricing">Pricing</Link>}
               <Link href="/changelog">Changelog</Link>
               <Link href="/help">Help center</Link>
               <Link href="/#workflow">How it works</Link>
@@ -106,7 +112,7 @@ export async function MarketingShell({
               {privacyUrl && <a href={privacyUrl}>Privacy</a>}
             </nav>
           </div>
-          {polished && (legalName || supportEmail) && <address className="fl-footer-contact">
+          {(legalName || supportEmail) && <address className="fl-footer-contact">
             {legalName && <span>{legalName}</span>}
             {supportEmail && <a href={`mailto:${supportEmail}`}>{supportEmail}</a>}
           </address>}

@@ -12,6 +12,8 @@ import { getCompanyAccess } from "@/lib/mca/company-access"
 import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
 import { CompanyPaused } from "@/components/mca/company-paused"
 import { unauthenticatedPageGate } from "@/lib/mca/app-paths"
+import { publicPricingEnabled } from "@/lib/marketing/launch-switches"
+import { getSupportConfig } from "@/lib/marketing/support-config"
 
 function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/dashboard" || pathname === "/dashboard-2" || pathname.startsWith("/dashboard-2/")) return "dashboard"
@@ -28,6 +30,7 @@ function pageForPath(pathname: string): PageKey | null {
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const headerStore = await headers()
   const pathname = headerStore.get("x-mca-pathname") ?? "/dashboard"
+  if (pathname === "/pricing" && publicPricingEnabled()) return children
   const context = await authenticateSupabaseSession()
   if (!context && await supabaseIdentity({ allowPasswordSetup: true })) redirect("/onboarding")
   if (!context) {
@@ -49,5 +52,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <><NewDealProvider><DashboardChrome session={session} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={["supabase", "vercel_node"].includes(process.env.MCA_ASSISTANT_RUNTIME ?? "") ? "supabase" : "chatkit"}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
+  return <><NewDealProvider><DashboardChrome session={session} supportEmail={getSupportConfig().supportEmail} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={["supabase", "vercel_node"].includes(process.env.MCA_ASSISTANT_RUNTIME ?? "") ? "supabase" : "chatkit"}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
 }

@@ -165,6 +165,11 @@
 .fl-help h1 { font-size: clamp(40px, 5vw, 64px); margin: 12px 0 18px; }
 .fl-help h2 { font-size: clamp(28px, 3vw, 38px); margin-bottom: 22px; }
 .fl-help > p { max-width: 720px; font-size: 18px; }
+.fl-pricing > p { margin-bottom: 22px; }
+.fl-pricing strong { color: var(--fl-ink); font-weight: 600; }
+.fl-pricing ul { display: grid; gap: 12px; max-width: 720px; margin: 24px 0 32px; padding: 0; list-style: none; }
+.fl-pricing li { border: 1px solid var(--fl-line); background: #111; padding: 14px 18px; }
+.fl-pricing .fl-button { margin: 8px 0 24px; }
 .fl-help section { margin-top: 64px; }
 .fl-help-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .fl-help-card { display: block; padding: 26px; border: 1px solid var(--fl-line); background: #111; }
