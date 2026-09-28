@@ -2,7 +2,7 @@ import "server-only"
 
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { listChecks } from "../datamerch/repository"
-import { newId, recordAuditEvent, withTransaction } from "../db"
+import { getDatabase, newId, recordAuditEvent, withTransaction } from "../db"
 import type { DealActor } from "../deals/schema"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
@@ -203,6 +203,13 @@ async function queueDestination(input: {
   if (input.expectedAutoApiRoute && (!funder.active || preflight.route.kind !== "api"
     || JSON.stringify(preflight.route) !== JSON.stringify(input.expectedAutoApiRoute))) {
     return { jobId: newId(), funderId: input.funderId, state: "preflight_failed", reason: "The approved API route changed before automatic submission." }
+  }
+  if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true" && preflight.route.kind === "email") {
+    const uncertain = await getDatabase().prepare<{ state: string }>(`SELECT a.state FROM mca_submission_jobs j
+      JOIN mca_submission_attempts a ON a.job_id = j.id
+      WHERE j.workspace_id = ? AND j.deal_id = ? AND j.funder_id = ? AND j.route_kind = 'email'
+        AND (a.error_code = 'delivery_uncertain' OR a.state = 'sending') LIMIT 1`).get(input.actor.workspaceId, input.dealId, funder.id)
+    if (uncertain) throw new AppError(409, "delivery_uncertain", "Wait for or reconcile the earlier email submission before sending to this destination again.")
   }
 
   const merchantIdentityKey = submissionMerchantIdentityKey({

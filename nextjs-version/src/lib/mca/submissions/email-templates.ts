@@ -156,7 +156,7 @@ export interface EmailAttemptRef {
   threadId: string
   inReplyTo: string | null
   references: string[]
-  delivery: "sent" | "preview"
+  delivery: "sent" | "preview" | "uncertain"
   snapshot: EmailAttemptSnapshot
 }
 
@@ -382,7 +382,7 @@ export function parseEmailAttemptRef(value: string | null | undefined): EmailAtt
       threadId: typeof parsed.threadId === "string" ? parsed.threadId : parsed.messageId,
       inReplyTo: typeof parsed.inReplyTo === "string" ? parsed.inReplyTo : null,
       references: Array.isArray(parsed.references) ? parsed.references.filter((item): item is string => typeof item === "string") : [parsed.messageId],
-      delivery: parsed.delivery === "sent" ? "sent" : "preview",
+      delivery: parsed.delivery === "sent" || parsed.delivery === "uncertain" ? parsed.delivery : "preview",
       snapshot: {
         to: Array.isArray(parsed.snapshot.to) ? parsed.snapshot.to.filter((item): item is string => typeof item === "string") : [],
         cc: Array.isArray(parsed.snapshot.cc) ? parsed.snapshot.cc.filter((item): item is string => typeof item === "string") : [],
@@ -435,6 +435,13 @@ function snapshotOf(rendered: RenderedSubmissionEmail): EmailAttemptSnapshot {
     templateId: rendered.templateId,
     senderId: rendered.senderId,
   }
+}
+
+export function approvedEmailAttemptRef(job: SubmissionJob, correlationId: string): EmailAttemptRef | undefined {
+  const approved = job.approvedPackage?.email
+  if (!approved) return undefined
+  const messageId = messageIdFor(correlationId)
+  return { messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(approved) }
 }
 
 function redactedPayload(rendered: RenderedSubmissionEmail, correlationId: string, messageId: string, job?: SubmissionJob) {
@@ -668,6 +675,11 @@ function failed(correlationId: string, errorCode: string, errorMessage: string):
   return { ok: false, state: "failed", correlationId, errorCode, errorMessage }
 }
 
+function uncertain(correlationId: string, messageId: string, rendered: RenderedSubmissionEmail): DeliverResult {
+  return { ...failed(correlationId, "delivery_uncertain", "Email delivery outcome is uncertain. Reconcile the provider receipt before another send."),
+    externalRef: encodeExternalRef({ messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(rendered) }) }
+}
+
 async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
   if (job) await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
   if (job) await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
@@ -700,6 +712,9 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) {
+      if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true" && (response.status === 408 || response.status >= 500)) {
+        return uncertain(correlationId, messageId, rendered)
+      }
       return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
     }
     const ref: EmailAttemptRef = {
@@ -713,12 +728,19 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
     return { ok: true, state: "sent", correlationId, externalRef: encodeExternalRef(ref) }
   } catch (error) {
     if (error instanceof AppError) return failed(correlationId, error.code, error.message)
+    if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
+      return uncertain(correlationId, messageId, rendered)
+    }
     return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
   }
 }
 
 export async function sendSubmissionEmail(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
-  const correlationId = newId()
+  const reserved = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+    ? await db().prepare<{ correlation_id: string }>(`SELECT correlation_id FROM mca_submission_attempts
+        WHERE workspace_id = ? AND job_id = ? AND attempt_key = ? AND state = 'sending'`).get(job.workspaceId, job.id, job.attemptKey)
+    : undefined
+  const correlationId = reserved?.correlation_id ?? newId()
   if (job.routeKind !== "email") {
     return failed(correlationId, "provider_unavailable", `Email transport for ${job.funderId} is not configured yet.`)
   }

@@ -59,7 +59,7 @@ type CandidateJob = {
 type QueuePayload = {
   dealId?: string
   intervalMs: number
-  mailbox: { mode: "fixture" | "unconfigured"; liveOAuth: false }
+  mailbox: { mode: "fixture" | "unconfigured" | "live"; liveOAuth: boolean }
   senders: SenderHealth[]
   replies: FunderReply[]
   candidateJobs: CandidateJob[]
@@ -333,7 +333,7 @@ export function ReplyQueue({ dealId }: { dealId: string }) {
             <p className="text-sm font-medium">Mailbox</p>
             <p className="text-sm text-muted-foreground">
               {payload.mailbox.liveOAuth
-                ? "Live mailbox OAuth is connected."
+                ? "Live mailbox ingest is enabled. Check sender health below before running it."
                 : payload.mailbox.mode === "fixture"
                   ? "Fixture mailbox injected. Live Google/Microsoft read OAuth remains a gate."
                   : "Live mailbox OAuth is not configured. Opt in a sender, then run the worker when a mailbox is available."}
