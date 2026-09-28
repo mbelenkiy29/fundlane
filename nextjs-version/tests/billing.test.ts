@@ -2343,7 +2343,7 @@ test("failed rollback reconciliation leaves a durable billing retry",async()=>{
   } finally {delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED}
 })
 
-test("trial reminder omits amount when Stripe preview fails",async()=>{
+test("trial reminder retries a failed preview and sends only verified amount and quantity",async()=>{
   const f=await fixture()
   const sub=f.state.subscriptions[0],trialEnd=Math.floor(Date.now()/1000)+3*86400
   sub.status="trialing";sub.trial_end=trialEnd
@@ -2351,8 +2351,16 @@ test("trial reminder omits amount when Stripe preview fails",async()=>{
   try {
     const client={...f.client,invoices:{...f.client.invoices,createPreview:async()=>{throw new Error("preview unavailable")}}} as unknown as StripeBillingClient
     await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"customer.subscription.trial_will_end",livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:trialEnd}}} as Stripe.Event,client)
-    const payload=await deliverQueuedTrial(f.workspaceId,f.membershipId,client,new Date(trialEnd*1000).toISOString())
-    assert.equal(payload.data.amount,undefined)
+    await assert.rejects(deliverQueuedTrial(f.workspaceId,f.membershipId,client,new Date(trialEnd*1000).toISOString()),/preview unavailable/)
+    const queued=await getDatabase().prepare<{delivery_payload:string|null;delivered_at:string|null;last_error:string|null}>("SELECT delivery_payload,delivered_at,last_error FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending'").get(f.workspaceId)
+    assert.equal(queued?.delivery_payload,null)
+    assert.equal(queued?.delivered_at,null)
+    assert.match(queued?.last_error??"",/preview unavailable/)
+    const lines=sub.items.data.map(item=>({quantity:item.quantity,parent:{type:"subscription_item_details",subscription_item_details:{subscription:sub.id,subscription_item:item.id,proration:false}},pricing:{price_details:{price:item.price.id}}}))
+    const recovered={...f.client,invoices:{...f.client.invoices,createPreview:async()=>({livemode:false,customer:f.customerId,total:71500,currency:"usd",lines:{has_more:false,data:lines}})}} as unknown as StripeBillingClient
+    const payload=await deliverQueuedTrial(f.workspaceId,f.membershipId,recovered,new Date(trialEnd*1000).toISOString())
+    assert.equal(payload.data.amount,71500)
+    assert.equal(payload.data.quantity,5)
   } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
 })
 
@@ -2377,7 +2385,7 @@ test("trial notices reject another subscription on the mapped customer",async()=
   } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
 })
 
-test("trial preview omits unverified or paginated seat quantities",async()=>{
+test("trial reminder retries unverified or paginated Stripe invoice previews",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   sub.status="trialing";sub.trial_end=Math.floor(Date.now()/1000)+3*86400
   process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED="true"
@@ -2388,8 +2396,10 @@ test("trial preview omits unverified or paginated seat quantities",async()=>{
       if(!hasMore) lines[0].pricing.price_details.price="price_other"
       const client={...f.client,invoices:{...f.client.invoices,createPreview:async()=>({livemode:false,customer:f.customerId,total:71500,currency:"usd",lines:{has_more:hasMore,data:lines}})}} as unknown as StripeBillingClient
       await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"customer.subscription.trial_will_end",livemode:false,data:{object:{id:sub.id,customer:f.customerId,trial_end:sub.trial_end}}} as Stripe.Event,client)
-      const payload=await deliverQueuedTrial(f.workspaceId,f.membershipId,client,new Date(sub.trial_end!*1000).toISOString())
-      assert.ok(payload,index.toString());assert.equal(payload.data.quantity,undefined)
+      await assert.rejects(deliverQueuedTrial(f.workspaceId,f.membershipId,client,new Date(sub.trial_end!*1000).toISOString()),/could not verify the amount and quantity/)
+      const row=await getDatabase().prepare<{delivery_payload:string|null;delivered_at:string|null}>("SELECT delivery_payload,delivered_at FROM company_billing_notifications WHERE workspace_id=? AND kind='trial_ending' AND data::jsonb->>'trialEndsAt'=?").get(f.workspaceId,new Date(sub.trial_end!*1000).toISOString())
+      assert.equal(row?.delivery_payload,null,index.toString())
+      assert.equal(row?.delivered_at,null,index.toString())
     }
   } finally { delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED }
 })

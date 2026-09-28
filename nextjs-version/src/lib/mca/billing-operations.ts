@@ -65,10 +65,9 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
           continue
         }
         if (row.kind === "trial_ending" && !row.delivery_payload) {
-          try {
-            const invoice = await (client ?? getStripeClient()).invoices.createPreview({customer:mapping.stripe_customer_id,subscription:subscription.id})
-            preview = trialInvoicePreview(invoice,subscription,mapping.stripe_customer_id)
-          } catch { /* A preview outage must not suppress the trial reminder. */ }
+          const invoice = await (client ?? getStripeClient()).invoices.createPreview({customer:mapping.stripe_customer_id,subscription:subscription.id})
+          preview = trialInvoicePreview(invoice,subscription,mapping.stripe_customer_id)
+          if (!preview) throw new Error("Stripe trial invoice preview could not verify the amount and quantity")
         }
       }
       let payload:BillingEmailMessage
