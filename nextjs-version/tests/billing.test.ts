@@ -137,6 +137,9 @@ test("trial grants limit repeat owners, keep public domains exempt, and flag fin
   const second = await createWorkspaceWithAdmin({workspaceName:"Second company",adminName:"Owner",adminEmail:owner.email.toUpperCase(),password:"Unused fixture password 99!"})
   await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(second.workspaceId,second.membershipId,nowIso())
   process.env.MCA_TRIAL_ABUSE_LIMITS_ENABLED = "true"
+  process.env.MCA_TRIAL_LIMIT_PER_USER = "1"
+  process.env.MCA_TRIAL_LIMIT_PER_EMAIL = "1"
+  delete process.env.MCA_TRIAL_LIMIT_PER_DOMAIN
   try {
     assert.equal(await trialAllowedForOwner(first.workspaceId,db),true)
     await createBillingCheckout(first.workspaceId,1,false,first.client)
@@ -147,6 +150,11 @@ test("trial grants limit repeat owners, keep public domains exempt, and flag fin
     assert.equal(first.state.checkouts,1,"the same workspace reuses its open trial Checkout")
     assert.equal((await db.prepare<{checkout_session_id:string}>("SELECT checkout_session_id FROM company_trial_reservations WHERE workspace_id=?").get(first.workspaceId))?.checkout_session_id,reserved.checkout_session_id)
     assert.equal(await trialAllowedForOwner(second.workspaceId,db),false,"another workspace cannot claim the open trial")
+    const otherOwner = await fixture(false)
+    await db.prepare("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES (?,?,?)").run(otherOwner.workspaceId,otherOwner.membershipId,nowIso())
+    assert.equal(await trialAllowedForOwner(otherOwner.workspaceId,db),true,"another login and email on the same domain can claim a trial")
+    await createBillingCheckout(otherOwner.workspaceId,1,false,otherOwner.client)
+    assert.equal((otherOwner.state.checkoutParams.subscription_data as Record<string,unknown>).trial_period_days,14)
     const checkoutClient = await fixture(false)
     const checkout = await createBillingCheckout(second.workspaceId,1,false,checkoutClient.client)
     assert.ok(checkout.url)
