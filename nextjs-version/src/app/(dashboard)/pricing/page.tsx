@@ -31,6 +31,7 @@ export default function PricingPage() {
         })}
       </ul>
       <p>Prices are in USD, billed monthly. Sales tax is added where applicable.</p>
+      <p>Adding users: prorated and invoiced immediately; access after payment. Removing users: takes effect at the next renewal, with no mid-cycle credit. No charge for seat changes during the free trial.</p>
       <p>Start with a {TRIAL_DAYS}-day free trial. A card is required to start. Cancel anytime.</p>
       {marketingTrialCtaEnabled() && <Link className="fl-button" href="/sign-up">Start free trial</Link>}
       {supportEmail && <p>Questions? Email <a className="fl-inline-link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.</p>}
