@@ -22,13 +22,13 @@ import { createSession } from "../src/lib/mca/sessions"
 import { acceptSupabaseInvitation, deliverSupabaseInvitation } from "../src/lib/mca/supabase-team"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_BILLING_SEAT_SYNC_ENABLED", "MCA_BILLING_SEATS_COUNT_PENDING_INVITES", "MCA_BILLING_MAX_PENDING_INVITATIONS", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
+const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_BILLING_SEAT_SYNC_ENABLED", "MCA_BILLING_SEATS_COUNT_PENDING_INVITES", "MCA_BILLING_MAX_PENDING_INVITATIONS", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_PROMOTION_CODES_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
   process.env.DATABASE_URL = database.databaseUrl
   Object.assign(process.env, { MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", MCA_APP_ORIGIN: "http://localhost:3000" })
-  delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
+  delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
   delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM
   delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
   delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
@@ -61,7 +61,7 @@ async function fixture(mapped = true) {
     invoices:{list:async()=>{state.invoiceReads++;return{data:structuredClone(state.invoices),has_more:false}},finalizeInvoice:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.finalizations.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params,{status:"open",hosted_invoice_url:`https://invoice.stripe.com/i/${id}`,status_transitions:{finalized_at:Math.floor(Date.now()/1000),paid_at:null}});return structuredClone(target)},update:async(id:string,params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.invoiceUpdates.push({id,params,key:options?.idempotencyKey});const target=state.invoices.find(i=>i.id===id)!;Object.assign(target,params);return structuredClone(target)}},
     invoicePayments:{list:async(params:{invoice?:string;payment?:{payment_intent?:string}})=>({data:state.processing?state.invoices.filter(i=>i.amount_remaining>0 && (!params.invoice || params.invoice===i.id) && (!params.payment?.payment_intent || params.payment.payment_intent===`pi_${i.id}`)).map(i=>({id:`ip_${i.id}`,invoice:i.id,livemode:false,status:"open",amount_requested:i.amount_remaining,amount_paid:null,currency:"usd",payment:{type:"payment_intent",payment_intent:`pi_${i.id}`}})):[],has_more:false})},
     paymentIntents:{retrieve:async(id:string)=>({id,customer:customerId,livemode:false,currency:"usd",amount:71500,amount_received:0,status:"processing"})},
-    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:state.checkoutStatus,subscription:state.checkoutSubscription,url:"https://checkout.stripe.com/test"}),expire:async()=>{state.expires++;state.checkoutStatus="expired";return{}}}},
+    checkout:{sessions:{create:async(params:Record<string,unknown>,options?:{idempotencyKey?:string})=>{state.checkouts++;state.checkoutStatus="open";state.checkoutParams=params;state.checkoutKey=options?.idempotencyKey;return{id:`cs_${suffix}`,livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:`cs_${suffix}`,status:state.checkoutStatus,subscription:state.checkoutSubscription,url:"https://checkout.stripe.com/test",allow_promotion_codes:state.checkoutParams.allow_promotion_codes===true}),expire:async()=>{state.expires++;state.checkoutStatus="expired";return{}}}},
     subscriptionSchedules:{create:async(params:Record<string,unknown>)=>{assert.deepEqual(params,{from_subscription:sub.id});return{id:`sched_${suffix}`,customer:customerId,subscription:sub.id,livemode:false,status:"active",metadata:{},phases:[{start_date:sub.items.data[0].current_period_start,end_date:sub.items.data[0].current_period_end}]}},update:async()=>({})},
   } as unknown as StripeBillingClient
   return {...local,customerId,state,client}
@@ -1055,6 +1055,69 @@ test("tax flag off preserves the complete Checkout request",async()=>{
     success_url:"http://localhost:3000/settings/billing",cancel_url:"http://localhost:3000/settings/billing",
     expires_at:(Number(f.state.checkoutKey?.split("-").at(-1))+2)*1800,
   })
+})
+test("promotion-code flag unset omits the Checkout parameter",async()=>{
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  await createBillingCheckout(f.workspaceId,5,false,f.client)
+  assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
+  assert.equal(f.state.checkoutParams.payment_method_collection,"always")
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
+})
+test("promotion-code flag enables code entry while retaining card collection",async()=>{
+  process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED="true"
+  try {
+    const f=await fixture(false)
+    await initializeCompanyTrial(f.workspaceId,5)
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkoutParams.allow_promotion_codes,true)
+    assert.equal(f.state.checkoutParams.payment_method_collection,"always")
+    assert.equal("discounts" in f.state.checkoutParams,false)
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-promo-\\d+$`))
+  } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
+})
+test("enabling promotion codes expires an open session without them",async()=>{
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  await createBillingCheckout(f.workspaceId,5,false,f.client)
+  process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED="true"
+  try {
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+    assert.equal(f.state.checkoutParams.allow_promotion_codes,true)
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-promo-\\d+$`))
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+  } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
+})
+test("disabling promotion codes expires an open enabled session",async()=>{
+  process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED="true"
+  try {
+    const f=await fixture(false)
+    await initializeCompanyTrial(f.workspaceId,5)
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+    assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-\\d+$`))
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal(f.state.checkouts,2)
+    assert.equal(f.state.expires,1)
+  } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
+})
+test("promotion-code flag requires exact true",async()=>{
+  process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED="TRUE"
+  try {
+    const f=await fixture(false)
+    await initializeCompanyTrial(f.workspaceId,5)
+    await createBillingCheckout(f.workspaceId,5,false,f.client)
+    assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
+  } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
 })
 test("turning tax off expires an open tax-enabled Checkout and creates an untaxed session",async()=>{
   const f=await fixture(false)
