@@ -1,11 +1,11 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { MarketingShell } from "@/components/marketing/shell"
-import { helpArticle, helpArticles } from "@/lib/marketing/help"
+import { helpArticle, getHelpArticles } from "@/lib/marketing/help"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 
 export function generateStaticParams() {
-  return helpArticles.map(({ slug }) => ({ slug }))
+  return getHelpArticles().map(({ slug }) => ({ slug }))
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {

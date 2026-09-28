@@ -1,3 +1,5 @@
+import { expandedHelpCenterEnabled } from "./launch-switches"
+
 export type HelpArticle = {
   slug: string
   title: string
@@ -49,6 +51,31 @@ export const helpArticles: readonly HelpArticle[] = [
   },
 ]
 
+const expandedArticles: readonly HelpArticle[] = [
+  {
+    slug: "invite-teammates-and-manage-seats",
+    title: "Invite teammates and manage seats",
+    summary: "Invite teammates and review your company’s seat capacity.",
+    steps: [
+      "Open Settings → Team to invite a teammate and choose their role and manager.",
+      "You choose how many seats to buy. Removing a user frees their seat for someone else but doesn't lower your bill. Adding seats beyond what you've bought is prorated and charged right away; the new seat is ready after payment. Reducing your seat count takes effect at your next renewal, with no mid-cycle credit. Seat changes during the free trial are free.",
+    ],
+  },
+  {
+    slug: "review-billing",
+    title: "Review billing",
+    summary: "Find your company’s billing status and seat settings.",
+    steps: [
+      "Open Settings → Plans & Billing to review the billing status and seats that apply to your company.",
+      "You choose how many seats to buy. Removing a user frees their seat for someone else but doesn't lower your bill. Adding seats beyond what you've bought is prorated and charged right away; the new seat is ready after payment. Reducing your seat count takes effect at your next renewal, with no mid-cycle credit. Seat changes during the free trial are free.",
+    ],
+  },
+]
+
+export function getHelpArticles(): readonly HelpArticle[] {
+  return expandedHelpCenterEnabled() ? [...helpArticles, ...expandedArticles] : helpArticles
+}
+
 export function helpArticle(slug: string): HelpArticle | undefined {
-  return helpArticles.find((article) => article.slug === slug)
+  return getHelpArticles().find((article) => article.slug === slug)
 }

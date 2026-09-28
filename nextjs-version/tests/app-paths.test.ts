@@ -99,6 +99,20 @@ test("unknown paths 404 instead of redirecting to sign-in", () => {
   }
 })
 
+test("only the exact status page becomes public when enabled", () => {
+  const previous = process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+  try {
+    delete process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+    assert.equal(anonymousRequestDisposition("/status"), "not-found")
+    process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = "true"
+    assert.equal(anonymousRequestDisposition("/status"), "public")
+    assert.equal(anonymousRequestDisposition("/status/incident"), "not-found")
+  } finally {
+    if (previous === undefined) delete process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+    else process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = previous
+  }
+})
+
 test("anonymous gate returns sign-in status and destination only for real app routes", () => {
   assert.deepEqual(unauthenticatedPageGate("/deals", "/deals?q=acme"), {
     action: "sign-in",
