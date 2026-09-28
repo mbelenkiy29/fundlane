@@ -6,7 +6,7 @@ import { SignupLegalAgreement } from "../src/app/(auth)/sign-up/components/signu
 import { LegalDraft } from "../src/components/marketing/legal-draft"
 import { getDemoConfiguration } from "../src/lib/marketing/config"
 import { legalDraftPagesEnabled } from "../src/lib/marketing/legal-draft-flag"
-import { privacySections, termsSections } from "../src/lib/marketing/legal-drafts"
+import { legalPlaceholders, privacySections, termsSections } from "../src/lib/marketing/legal-drafts"
 import { unauthenticatedPageGate } from "../src/lib/mca/app-paths"
 import robots from "../src/app/robots"
 import sitemap from "../src/app/sitemap"
@@ -71,13 +71,20 @@ test("unset and non-true flag preserve original legal and demo behavior", () => 
 test("enabled drafts are visible but cannot authorize demo collection at /privacy", () => {
   withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true" }, () => {
     assert.equal(legalDraftPagesEnabled(), true)
+    assert.equal(legalPlaceholders.company, "Sentinel Tech Solutions LLC")
+    assert.equal(legalPlaceholders.address, "7 Holly Hill Road, Marlboro, NJ")
+    assert.equal(legalPlaceholders.contact, "mike@sentineltechsolutions.io")
+    assert.equal(legalPlaceholders.updated, "[date pending legal review]")
     for (const [path, sections] of [["/terms", termsSections], ["/privacy", privacySections]] as const) {
       assert.deepEqual(unauthenticatedPageGate(path), { action: "allow", status: 200 })
       const main = LegalDraft({ title: path === "/terms" ? "Terms of Service" : "Privacy Policy", sections })
       const copy = JSON.stringify(main)
       assert.match(copy, /DRAFT — pending legal review\. Not yet in effect\./)
       assert.match(copy, /\[date pending legal review\]/)
-      assert.match(copy, /\[Company legal name\]/)
+      assert.match(copy, /Sentinel Tech Solutions LLC/)
+      assert.match(copy, /7 Holly Hill Road, Marlboro, NJ/)
+      assert.match(copy, /mike@sentineltechsolutions\.io/)
+      assert.doesNotMatch(copy, /\[(?:Company legal name|Company mailing address|contact email)\]/)
     }
     assert.equal(getDemoConfiguration().enabled, false)
     assert.equal(getDemoConfiguration().privacyUrl, null)

@@ -1,8 +1,8 @@
-/** Editable draft copy. Legal review must replace the placeholders before either notice takes effect. */
+/** Editable draft copy. Legal review must approve the copy and replace the pending date before either notice takes effect. */
 export const legalPlaceholders = {
-  company: "[Company legal name]",
-  address: "[Company mailing address]",
-  contact: "[contact email]",
+  company: "Sentinel Tech Solutions LLC",
+  address: "7 Holly Hill Road, Marlboro, NJ",
+  contact: "mike@sentineltechsolutions.io",
   updated: "[date pending legal review]",
 } as const
 
