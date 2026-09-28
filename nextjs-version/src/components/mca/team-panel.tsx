@@ -43,6 +43,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatRole, RequestError, requestJson } from "@/lib/mca/client"
 import { normalizeTeamInvitationInput, validateTeamInvitation } from "@/lib/mca/invitations-validation"
+import { formatBillingMoney } from "@/lib/mca/billing-display"
+import { inviteSeatIncreaseTarget } from "@/lib/mca/team-seat-preview"
 import { OwnershipTransfer } from "@/components/mca/ownership-transfer"
 import {
   assignableRoles,
@@ -70,6 +72,7 @@ type Draft = {
   managerMembershipId: string
   senderAssociation: string
 }
+type TeamBilling = { seatSyncEnabled: boolean; seatsCountPendingInvites: boolean; activeSeats: number; pendingInvitationSeats: number; billing: null | { subscriptionId: string | null; status: string; seatLimit: number } }
 const emptyInvite: Draft = {
   name: "",
   email: "",
@@ -95,6 +98,7 @@ export default function TeamSettingsPage() {
     null
   )
   const [session, setSession] = React.useState<SessionResponse | null>(null)
+  const [billing, setBilling] = React.useState<TeamBilling | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState("")
@@ -118,17 +122,19 @@ export default function TeamSettingsPage() {
   const load = React.useCallback(async () => {
     setRefreshing(true)
     try {
-      const [data, settings, current] = await Promise.all([
+      const [data, settings, current, currentBilling] = await Promise.all([
         requestJson<MembershipSummary[] | { memberships: MembershipSummary[] }>(
           "/api/memberships"
         ),
         requestJson<WorkspaceSettings>("/api/workspace"),
         requestJson<SessionResponse>("/api/auth/session"),
+        requestJson<TeamBilling>("/api/billing").catch(() => null),
       ])
       const list = Array.isArray(data) ? data : data.memberships
       setMembers(list)
       setWorkspace(settings)
       setSession(current)
+      setBilling(currentBilling)
       setError("")
       return list
     } catch (caught) {
@@ -212,7 +218,7 @@ export default function TeamSettingsPage() {
               focusTarget.current = document.activeElement as HTMLElement
               setInviteOpen(true)
             }}
-            disabled={occupied >= limit}
+            disabled={billing?.seatSyncEnabled ? false : occupied >= limit}
           >
             <MailPlus className="size-4" />
             Invite employee
@@ -258,7 +264,7 @@ export default function TeamSettingsPage() {
             }}
           />
         </div>
-        {occupied >= limit && (
+        {occupied >= limit && !billing?.seatSyncEnabled && (
           <p className="mt-3 text-sm text-muted-foreground">
             {occupied > limit
               ? "Your team is above its plan limit. Existing members keep access."
@@ -415,7 +421,7 @@ export default function TeamSettingsPage() {
                       Reset filters
                     </Button>
                   ) : canInvite &&
-                    occupied < limit &&
+                    (billing?.seatSyncEnabled || occupied < limit) &&
                     view !== "deactivated" ? (
                     <Button onClick={() => setInviteOpen(true)}>
                       Invite employee
@@ -562,6 +568,7 @@ export default function TeamSettingsPage() {
         open={inviteOpen}
         close={() => setInviteOpen(false)}
         members={members}
+        billing={billing}
         actor={actor}
         onRefresh={load}
         onReserved={() => {
@@ -797,6 +804,7 @@ function InviteDialog({
   open,
   close,
   members,
+  billing,
   actor,
   onRefresh,
   onReserved,
@@ -805,6 +813,7 @@ function InviteDialog({
   open: boolean
   close: () => void
   members: MembershipSummary[]
+  billing: TeamBilling | null
   actor?: Role
   onRefresh: () => Promise<MembershipSummary[] | null>
   onReserved: () => void
@@ -816,13 +825,16 @@ function InviteDialog({
   const [error, setError] = React.useState("")
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>({})
   const [reserved, setReserved] = React.useState(false)
+  const [quote, setQuote] = React.useState<{ key: string; selectedSeats: number; amount: number; currency: string } | null>(null)
   const dirty = JSON.stringify(draft) !== JSON.stringify(emptyInvite)
+  const draftKey = JSON.stringify(normalizeTeamInvitationInput(draft))
   function dismiss() {
     if (!busy && (!dirty || window.confirm("Discard this invitation draft?"))) {
       setDraft(emptyInvite)
       setError("")
       setFieldErrors({})
       setReserved(false)
+      setQuote(null)
       close()
     }
   }
@@ -842,6 +854,18 @@ function InviteDialog({
     setReserved(false)
     const payload = normalizeTeamInvitationInput(draft)
     try {
+      if (billing?.seatSyncEnabled) {
+        const current = await requestJson<TeamBilling>("/api/billing")
+        const selectedSeats = inviteSeatIncreaseTarget(current)
+        if (selectedSeats !== null && (quote?.key !== draftKey || quote.selectedSeats !== selectedSeats)) {
+          const preview = await requestJson<{ selectedSeats: number; prorationAmount: number | null; currency: string }>("/api/billing/seats/preview", {
+            method: "POST", body: JSON.stringify({ selectedSeats }),
+          })
+          if (preview.selectedSeats !== selectedSeats || !Number.isSafeInteger(preview.prorationAmount) || preview.prorationAmount! < 0) throw new Error("Seat proration could not be verified. Retry the preview before inviting.")
+          setQuote({ key: draftKey, selectedSeats, amount: preview.prorationAmount!, currency: preview.currency })
+          return
+        }
+      }
       const result = await requestJson<InvitationResult>("/api/invitations", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -852,6 +876,7 @@ function InviteDialog({
           : "Invitation sent"
       )
       setDraft(emptyInvite)
+      setQuote(null)
       close()
       onReserved()
       await onRefresh()
@@ -891,8 +916,9 @@ function InviteDialog({
           <DialogHeader>
             <DialogTitle>Invite an employee</DialogTitle>
             <DialogDescription>
-              Send an invitation to join your company. One seat is reserved
-              until they join.
+              {billing?.seatSyncEnabled && !billing.seatsCountPendingInvites
+                ? "Send an invitation to join your company. A licensed seat is added when they accept."
+                : "Send an invitation to join your company. One seat is reserved until they join."}
             </DialogDescription>
           </DialogHeader>
           <fieldset disabled={busy} className="my-5 space-y-4">
@@ -961,6 +987,7 @@ function InviteDialog({
               {error}
             </p>
           )}
+          {quote?.key === draftKey && <p role="status" className="mb-4 text-sm">Estimated proration for {quote.selectedSeats} total licensed seats: {formatBillingMoney(quote.amount, quote.currency)} {quote.currency.toUpperCase()}. {billing?.seatsCountPendingInvites ? "A new seat is charged when this invitation is sent." : "A new seat may be charged when this or another pending invitation is accepted."} The final invoice may differ because of taxes or account changes. Confirm to send the invitation.</p>}
           <DialogFooter>
             <Button
               type="button"
@@ -987,7 +1014,7 @@ function InviteDialog({
                 ) : (
                   <MailPlus className="size-4" />
                 )}
-                Send invitation
+                {quote?.key === draftKey ? "Confirm and send invitation" : "Send invitation"}
               </Button>
             )}
           </DialogFooter>
