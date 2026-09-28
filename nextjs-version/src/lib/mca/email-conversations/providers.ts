@@ -17,6 +17,7 @@ export interface RemoteEmail {
   from: string
   to: string[]
   body: string
+  subject?: string
   occurredAt: string
   localId?: string
 }
@@ -129,6 +130,7 @@ function gmailMessage(m: GmailMessage): RemoteEmail {
     from: address(h("from")),
     to: h("to").split(",").map(address),
     body: plainText(m.payload),
+    subject: h("subject"),
     occurredAt: new Date(Number(m.internalDate) || Date.now()).toISOString(),
     localId: h("x-fundlane-message-id") || undefined,
   }
@@ -141,6 +143,7 @@ type GraphMessage = {
   from?: { emailAddress?: { address?: string } }
   toRecipients?: { emailAddress?: { address?: string } }[]
   body?: { content?: string; contentType?: string }
+  subject?: string
   sentDateTime?: string
   receivedDateTime?: string
   isDraft?: boolean
@@ -165,6 +168,7 @@ function graphMessage(m: GraphMessage): RemoteEmail {
           .replace(/<[^>]*>/g, " ")
       : (m.body?.content ?? "")
     ).slice(0, 100000),
+    subject: m.subject,
     occurredAt: m.receivedDateTime ?? m.sentDateTime ?? nowIso(),
     localId: h("x-fundlane-message-id") || undefined,
   }
@@ -392,5 +396,42 @@ export class Mailbox {
     }
     if (url) throw new EmailProviderError(429, 60)
     return messages
+  }
+  /** Read-only inbox scan with a polling-interval overlap; consumers deduplicate by provider ID. */
+  async listInboxSince(cursor?: string): Promise<{ messages: RemoteEmail[]; nextCursor: string }> {
+    const since = cursor && Number.isFinite(Date.parse(cursor)) ? Date.parse(cursor) - 15 * 60_000 : Date.now() - 7 * 24 * 60 * 60_000
+    const messages: RemoteEmail[] = []
+    if (this.sender.provider === "google") {
+      let pageToken: string | undefined
+      for (let page = 0; page < 100; page++) {
+        const query = new URLSearchParams({ q: `in:inbox after:${Math.floor(since / 1000)}`, maxResults: "100" })
+        if (pageToken) query.set("pageToken", pageToken)
+        const result = await this.request<{ messages?: { id: string }[]; nextPageToken?: string }>(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?${query}`
+        )
+        for (const row of result.messages ?? []) {
+          messages.push(gmailMessage(await this.request<GmailMessage>(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(row.id)}?format=full`
+          )))
+        }
+        pageToken = result.nextPageToken
+        if (!pageToken) break
+      }
+      if (pageToken) throw new EmailProviderError(429, 60)
+    } else {
+      const query = new URLSearchParams({
+        $filter: `receivedDateTime ge ${new Date(since).toISOString()}`,
+        $select: "id,conversationId,internetMessageId,internetMessageHeaders,from,toRecipients,body,subject,receivedDateTime,isDraft",
+        $top: "100",
+      })
+      let url: string | undefined = `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?${query}`
+      for (let page = 0; url && page < 100; page++) {
+        const result: { value: GraphMessage[]; "@odata.nextLink"?: string } = await this.request(url)
+        messages.push(...(result.value ?? []).filter(row => !row.isDraft).map(graphMessage))
+        url = result["@odata.nextLink"]
+      }
+      if (url) throw new EmailProviderError(429, 60)
+    }
+    return { messages, nextCursor: new Date(Math.max(Date.now(), ...messages.map(message => Date.parse(message.occurredAt) || 0))).toISOString() }
   }
 }

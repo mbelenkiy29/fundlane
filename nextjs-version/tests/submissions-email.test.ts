@@ -667,3 +667,36 @@ test("production missing webhook or preview delivery fails the job", async () =>
     else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
   }
 })
+
+test("ambiguous relay responses are uncertain only with the unknown-send guard enabled", async () => {
+  const priorWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
+  const priorGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://controlled.example.test/send"
+  try {
+    for (const [guard, response, expected] of [
+      ["true", "timeout", "delivery_uncertain"],
+      ["true", "http500", "delivery_uncertain"],
+      ["true", "http400", "email_delivery_failed"],
+      ["false", "timeout", "email_delivery_failed"],
+    ] as const) {
+      process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = guard
+      setEmailDeliveryFetchForTests(async () => {
+        if (response === "timeout") throw new DOMException("timed out", "TimeoutError")
+        return new Response("fixture", { status: response === "http500" ? 500 : 400 })
+      })
+      const { deal } = await seedDeal()
+      const queued = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [alphaFunderId], confirmationKey: `email-ambiguous-${dealCounter}` })
+      assert.equal(queued.jobs[0]?.state, "failed")
+      assert.equal((await attemptRow(queued.jobs[0]!.jobId))?.error_code, expected)
+    }
+  } finally {
+    if (priorGuard === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = priorGuard
+    if (priorWebhook === undefined) delete process.env.MCA_EMAIL_WEBHOOK_URL
+    else process.env.MCA_EMAIL_WEBHOOK_URL = priorWebhook
+    setEmailDeliveryFetchForTests(async (_input, init) => {
+      captured.push({ body: typeof init?.body === "string" ? init.body : "", correlationId: new Headers(init?.headers).get("x-correlation-id") ?? undefined })
+      return new Response("accepted", { status: 202 })
+    })
+  }
+})

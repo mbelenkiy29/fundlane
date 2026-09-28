@@ -1,5 +1,15 @@
 # Milestone 5 integration verification
 
+## Controlled email pilot for #40 and #41
+
+No funder relationship has been approved. The first pilot uses a Michael-controlled destination and synthetic application. Record the reviewed application, criteria, private document checks, preflight, explicit approval, relay acceptance, reply, reviewed outcome, and deal activity. A controlled reply is not a funder offer or funding authorization.
+
+Submission email uses `MCA_EMAIL_WEBHOOK_URL` and `MCA_EMAIL_WEBHOOK_TOKEN`, not the connected sender's Gmail/Microsoft send API. The receiver must authenticate, durably deduplicate the supplied attempt correlation ID, and give the operator evidence of acceptance or definitive non-delivery. With `MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED=true`, timeout, network loss, HTTP 408, and HTTP 5xx produce `delivery_uncertain`; an admin must use `POST /api/mca/submissions/email/reconcile` with `jobId`, `outcome` (`accepted` or `not_sent`), and sanitized `evidence` before another same-deal, same-funder email is permitted. Never infer non-delivery from a timeout. Unset retains the existing failure behavior. An interrupted sending attempt is also guarded when enabled.
+
+For replies, reconnect a verified submission sender using Google Gmail read/send or Microsoft Mail.Read/Mail.Send OAuth scopes, opt in that sender in the reply queue, then set `MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED=true`. The existing callback is `${MCA_APP_ORIGIN}/api/mca/senders/oauth/callback`. The ingest reads inbox messages since its checkpoint with a 15-minute overlap, deduplicates provider message IDs, and does not modify mailbox flags or send mail. Initial scan covers seven days. Unset keeps fixture-only behavior and the production `mailbox_oauth_not_configured` response. The reply run endpoint remains manually triggered; no new schedule is installed.
+
+Publish a per-provider matrix labeled **live verified**, **sandbox verified**, **access blocked**, or **untested**. Until hosted proof, the controlled email route is untested and direct funder APIs are access blocked. Retain sanitized workspace/deal/job IDs, attempt correlation ID, receiver receipt reference, mailbox provider message ID, checkpoint time, reviewed outcome, and deal activity reference. Local fixtures do not establish live acceptance. Hosted pilot, receiver contract, and provider access remain pending Michael's approval.
+
 Execution uses the three GPT-5.6 Sol/high lanes in `execution-plan.md`. The lane acceptance files contain ticket-level implementation and verification evidence.
 
 ## Database

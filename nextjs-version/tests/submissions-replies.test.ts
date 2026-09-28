@@ -12,6 +12,8 @@ import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { encryptSenderCredential } from "../src/lib/mca/senders/repository"
+import { setEmailProviderFetchForTests } from "../src/lib/mca/email-conversations/providers"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
@@ -23,6 +25,7 @@ import {
 import { GET as repliesGet } from "../src/app/api/mca/submissions/replies/route"
 import { POST as repliesRun } from "../src/app/api/mca/submissions/replies/run/route"
 import { GET as replyGet, PATCH as replyPatch } from "../src/app/api/mca/submissions/replies/[id]/route"
+import { POST as reconcileEmail } from "../src/app/api/mca/submissions/email/reconcile/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
@@ -177,6 +180,7 @@ before(async () => {
 
 after(async () => {
   setReplyMailboxForTests()
+  setEmailProviderFetchForTests()
   setSubmissionCompletenessForTests()
   setDocumentStorageForTests()
   setDocumentScannerForTests()
@@ -379,6 +383,81 @@ test("MIC-149: separate-thread reply is linked with evidence, replay is idempote
   assert.equal(spy.list, 2)
   assert.deepEqual(spy.mutations, [])
   assert.equal(sent.ref.threadId !== spy.messages[0]?.threadId, true)
+})
+
+test("flagged Google and Microsoft inbox reads ingest replies without mailbox writes", async () => {
+  const priorFlag = process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED
+  const row = await getDatabase().prepare<{ provider: string; credential_cipher: string }>("SELECT provider, credential_cipher FROM mca_email_senders WHERE id = ?").get(senderId)
+  assert.ok(row)
+  const deal = await seedDeal("OAuth Reply Merchant LLC")
+  const sent = await sendTo(deal.id, alphaFunderId)
+  const calls: Array<{ url: string; method: string }> = []
+  setReplyMailboxForTests()
+  process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = "true"
+  try {
+    for (const provider of ["google", "microsoft"] as const) {
+      const scope = provider === "google"
+        ? "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
+        : "Mail.Read Mail.Send"
+      await getDatabase().prepare("UPDATE mca_email_senders SET provider = ?, credential_cipher = ? WHERE id = ?").run(
+        provider, encryptSenderCredential(ids.workspace, { kind: "oauth", accessToken: "synthetic-token", refreshToken: "synthetic-refresh", expiresAt: "2099-01-01T00:00:00.000Z", scope, email: "broker@example.test" }), senderId)
+      const providerId = `${provider}-reply-fixture`
+      setEmailProviderFetchForTests(async (input, init) => {
+        const url = String(input)
+        calls.push({ url, method: init?.method ?? "GET" })
+        if (provider === "google") {
+          if (url.includes("format=full")) return Response.json({ id: providerId, threadId: `${provider}-thread`, internalDate: String(Date.now()), payload: { mimeType: "text/plain", headers: [
+            { name: "Message-ID", value: `<${providerId}@example.test>` }, { name: "From", value: "uw@alpha-replies.example.test" },
+            { name: "Subject", value: `Offer update ${deal.displayId}` }, { name: "In-Reply-To", value: sent.ref.messageId },
+          ], body: { data: Buffer.from("Controlled reply").toString("base64url") } } })
+          return Response.json({ messages: [{ id: providerId }] })
+        }
+        return Response.json({ value: [{ id: providerId, conversationId: `${provider}-thread`, internetMessageId: `<${providerId}@example.test>`,
+          internetMessageHeaders: [{ name: "In-Reply-To", value: sent.ref.messageId }], from: { emailAddress: { address: "uw@alpha-replies.example.test" } },
+          subject: `Offer update ${deal.displayId}`, body: { content: "Controlled reply", contentType: "text" }, receivedDateTime: new Date().toISOString() }] })
+      })
+      const response = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", { method: "POST", body: JSON.stringify({ senderId, enabled: true }) }))
+      assert.equal(response.status, 200)
+      const body = await response.json() as RunBody
+      assert.equal(body.mailbox.mode, "live")
+      assert.equal(body.createdCount, 1)
+      assert.equal(body.ingested[0]?.providerMessageId, providerId)
+      const replay = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", { method: "POST", body: JSON.stringify({ senderId }) }))
+      assert.equal((await replay.json() as RunBody).replayedCount, 1)
+    }
+    await getDatabase().prepare("UPDATE mca_email_senders SET credential_cipher = ? WHERE id = ?").run(
+      encryptSenderCredential(ids.workspace, { kind: "oauth", accessToken: "synthetic-token", refreshToken: "synthetic-refresh", expiresAt: "2099-01-01T00:00:00.000Z", scope: "Mail.Send", email: "broker@example.test" }), senderId)
+    const missingRead = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", { method: "POST", body: JSON.stringify({ senderId }) }))
+    assert.equal(missingRead.status, 409)
+    assert.equal((await missingRead.json() as { error: { code: string } }).error.code, "email_reconnect_required")
+    await getDatabase().prepare("UPDATE mca_email_senders SET state = 'expired' WHERE id = ?").run(senderId)
+    const expired = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", { method: "POST", body: JSON.stringify({ senderId }) }))
+    assert.equal(expired.status, 409)
+    assert.equal((await expired.json() as { error: { code: string } }).error.code, "sender_expired")
+    assert.equal(calls.every(call => call.method === "GET"), true)
+    assert.equal(calls.some(call => call.url.includes("/messages/send") || call.url.includes("sendMail")), false)
+  } finally {
+    await getDatabase().prepare("UPDATE mca_email_senders SET provider = ?, credential_cipher = ?, state = 'verified' WHERE id = ?").run(row.provider, row.credential_cipher, senderId)
+    setEmailProviderFetchForTests()
+    if (priorFlag === undefined) delete process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED
+    else process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = priorFlag
+  }
+})
+
+test("email reconciliation endpoint requires a workspace administrator", async () => {
+  const prior = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  try {
+    const path = "/api/mca/submissions/email/reconcile"
+    const body = JSON.stringify({ jobId: "missing-job", outcome: "accepted", evidence: "fixture receipt" })
+    const denied = await reconcileEmail(cookieRequest(path, "rep-session-token", { method: "POST", body }))
+    assert.equal(denied.status, 403)
+    const scoped = await reconcileEmail(cookieRequest(path, "admin-session-token", { method: "POST", body }))
+    assert.equal(scoped.status, 404)
+  } finally {
+    if (prior === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = prior
+  }
 })
 
 test("MIC-149: ambiguous and unrecognized replies go to pending_review, intake is 403, and secrets stay out of JSON", async () => {

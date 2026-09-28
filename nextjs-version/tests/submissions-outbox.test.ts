@@ -12,8 +12,8 @@ import { upsertAdapterCredential } from "../src/lib/mca/submissions/adapters/cre
 import { registerAdapter } from "../src/lib/mca/submissions/adapters/registry"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
-import { setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
-import { assertProductionDeliveryNotPreview, processJobDelivery } from "../src/lib/mca/submissions/outbox"
+import { parseEmailAttemptRef, setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
+import { assertProductionDeliveryNotPreview, processJobDelivery, reconcileUncertainEmailDelivery } from "../src/lib/mca/submissions/outbox"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   findJobById,
@@ -355,6 +355,88 @@ test("gated concurrent API requests leave a live send intact and dispatch only o
     releaseSend()
     if (previous === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
     else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = previous
+  }
+})
+
+test("uncertain email blocks repeat delivery and requires recorded operator reconciliation", async () => {
+  const priorGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  let sends = 0
+  let providerCorrelation = ""
+  setEmailDeliveryFetchForTests(async (_input, init) => {
+    sends += 1
+    providerCorrelation = new Headers(init?.headers).get("x-correlation-id") ?? ""
+    throw new DOMException("timeout", "TimeoutError")
+  })
+  try {
+    const { deal, document } = await seedDeal()
+    const job = await persistQueuedJob(deal.id, document, `uncertain-email-${deal.id}`)
+    const failed = await processJobDelivery(job)
+    assert.equal(failed.state, "failed")
+    assert.equal((await getDatabase().prepare<{ error_code: string }>("SELECT error_code FROM mca_submission_attempts WHERE job_id = ?").get(job.id))?.error_code, "delivery_uncertain")
+    assert.equal((await getDatabase().prepare<{ correlation_id: string }>("SELECT correlation_id FROM mca_submission_attempts WHERE job_id = ?").get(job.id))?.correlation_id, providerCorrelation)
+    const uncertainRef = await getDatabase().prepare<{ external_ref: string }>("SELECT external_ref FROM mca_submission_attempts WHERE job_id = ?").get(job.id)
+    assert.equal(parseEmailAttemptRef(uncertainRef?.external_ref)?.delivery, "uncertain")
+    await Promise.all([processJobDelivery(job), processJobDelivery(job)])
+    assert.equal(sends, 1)
+    const blocked = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [emailFunderId], confirmationKey: `repeat-email-${deal.id}` })
+    assert.equal(blocked.jobs[0]?.state, "failed")
+    assert.match(blocked.jobs[0]?.reason ?? "", /reconcile/i)
+    await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "accepted", evidence: "" }), { code: "validation_failed" })
+    const accepted = await reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "accepted", evidence: "receiver receipt fixture-1" })
+    assert.equal(accepted.state, "sent")
+    const acceptedRef = await getDatabase().prepare<{ external_ref: string }>("SELECT external_ref FROM mca_submission_attempts WHERE job_id = ?").get(job.id)
+    assert.equal(parseEmailAttemptRef(acceptedRef?.external_ref)?.delivery, "sent")
+    assert.equal(parseEmailAttemptRef(acceptedRef?.external_ref)?.messageId, parseEmailAttemptRef(uncertainRef?.external_ref)?.messageId)
+    assert.equal(sends, 1)
+    await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "not_sent", evidence: "fixture" }), { code: "delivery_not_uncertain" })
+
+    const other = await seedDeal()
+    const second = await persistQueuedJob(other.deal.id, other.document, `uncertain-email-second-${other.deal.id}`)
+    await processJobDelivery(second)
+    assert.equal(sends, 2)
+    const notSent = await reconcileUncertainEmailDelivery(actor(), second.id, { outcome: "not_sent", evidence: "receiver log confirms no acceptance" })
+    assert.equal(notSent.state, "failed")
+    assert.equal((await getDatabase().prepare<{ error_code: string }>("SELECT error_code FROM mca_submission_attempts WHERE job_id = ?").get(second.id))?.error_code, "delivery_not_sent")
+    await getDatabase().prepare("UPDATE mca_submission_jobs SET created_at = ? WHERE id = ?").run(new Date(Date.now() - 3 * 60_000).toISOString(), second.id)
+    setEmailDeliveryFetchForTests(async () => { sends += 1; return new Response("accepted", { status: 202 }) })
+    const retry = await queueSubmissions({ actor: actor(), dealId: other.deal.id, funderIds: [emailFunderId], confirmationKey: `confirmed-not-sent-${other.deal.id}` })
+    assert.equal(retry.jobs[0]?.state, "sent")
+    assert.equal(sends, 3)
+  } finally {
+    if (priorGuard === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = priorGuard
+    setEmailDeliveryFetchForTests(async () => { deliveries += 1; return new Response("accepted", { status: 202 }) })
+  }
+})
+
+test("guarded concurrent email delivery does not call the relay twice", async () => {
+  const priorGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+  process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+  let release!: () => void
+  let entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { entered = resolve })
+  let sends = 0
+  setEmailDeliveryFetchForTests(async () => { sends += 1; entered(); await held; return new Response("accepted", { status: 202 }) })
+  try {
+    const { deal, document } = await seedDeal()
+    const job = await persistQueuedJob(deal.id, document, `concurrent-email-${deal.id}`)
+    const first = processJobDelivery(job)
+    await started
+    const second = await processJobDelivery(job)
+    assert.equal(second.state, "sending")
+    const blocked = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [emailFunderId], confirmationKey: `concurrent-email-repeat-${deal.id}` })
+    assert.equal(blocked.jobs[0]?.state, "failed")
+    assert.match(blocked.jobs[0]?.reason ?? "", /reconcile/i)
+    release()
+    assert.equal((await first).state, "sent")
+    assert.equal(sends, 1)
+  } finally {
+    release()
+    if (priorGuard === undefined) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+    else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = priorGuard
+    setEmailDeliveryFetchForTests(async () => { deliveries += 1; return new Response("accepted", { status: 202 }) })
   }
 })
 

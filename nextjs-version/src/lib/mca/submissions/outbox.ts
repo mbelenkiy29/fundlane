@@ -2,11 +2,12 @@ import "server-only"
 
 import { createHash } from "node:crypto"
 import { getOutgoingDocumentBytes } from "./compress"
-import { newId } from "../db"
+import { newId, recordAuditEvent, withTransaction } from "../db"
+import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { assertCompanyOperational } from "../company-access"
 import type { AttemptState, DeliverResult, JobState, SubmissionAttempt, SubmissionJob } from "./contracts"
-import { isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
+import { approvedEmailAttemptRef, isSubmissionEmailProduction, parseEmailAttemptRef } from "./email-templates"
 import { toAttemptState } from "./jobs"
 import { deliverSubmission, prepareOutgoingPackage } from "./ports"
 import { autoDeliveryBlockReason, recordAutoDeliveryCancellation } from "./auto-delivery-gate"
@@ -89,7 +90,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
     // A provider request has already begun. Observation must never initiate another send,
     // even if the row changes between the worker's lookup and this read.
     const current = await findJobById(job.workspaceId, job.id)
-    if (!current || current.state !== "sending" || current.routeKind !== "api" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return current ?? job
+    if (!current || current.state !== "sending" || !["api", "email"].includes(current.routeKind) || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return current ?? job
     const attempt = await findAttempt(current.id, current.attemptKey)
     if (attempt?.state !== "sending") return current
     return Date.now() - Date.parse(attempt.createdAt) >= 10 * 60_000 ? settleUncertainDelivery(current) : current
@@ -101,7 +102,7 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
   }
 
   const existing = await findAttempt(job.id, job.attemptKey)
-  const guardUnknownSend = job.routeKind === "api" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+  const guardUnknownSend = (job.routeKind === "api" || job.routeKind === "email") && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
   if (existing?.state === "sending" && (
     (guardUnknownSend && Date.now() - Date.parse(existing.createdAt) >= 10 * 60_000) ||
     (!guardUnknownSend && (job.autoSubmitDecisionId || submissionCronEnabled()))
@@ -203,4 +204,35 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
     if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) throw error
     return saved
   }
+}
+
+export async function reconcileUncertainEmailDelivery(actor: DealActor, jobId: string, input: { outcome?: unknown; evidence?: unknown }): Promise<SubmissionJob> {
+  if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") throw new AppError(404, "resource_not_found", "The requested resource was not found.")
+  if (input.outcome !== "accepted" && input.outcome !== "not_sent") throw new AppError(422, "validation_failed", "Choose an accepted or not-sent outcome.")
+  if (typeof input.evidence !== "string" || !input.evidence.trim() || input.evidence.length > 500) throw new AppError(422, "validation_failed", "Record a short provider receipt or not-sent confirmation.")
+  const evidence = input.evidence.trim()
+  return withTransaction(async executor => {
+    await executor.prepare("SELECT id FROM mca_submission_jobs WHERE workspace_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, jobId)
+    const job = await findJobById(actor.workspaceId, jobId, executor)
+    if (!job || job.routeKind !== "email") throw new AppError(404, "resource_not_found", "The requested resource was not found.")
+    const attempt = await findAttempt(job.id, job.attemptKey, executor)
+    if (!attempt || attempt.errorCode !== "delivery_uncertain") throw new AppError(409, "delivery_not_uncertain", "This email submission has no uncertain delivery to reconcile.")
+    const accepted = input.outcome === "accepted"
+    const ref = parseEmailAttemptRef(attempt.externalRef) ?? approvedEmailAttemptRef(job, attempt.correlationId)
+    await updateAttempt(job.id, job.attemptKey, {
+      state: accepted ? "sent" : "failed",
+      externalRef: accepted && ref?.delivery === "uncertain" ? JSON.stringify({ ...ref, delivery: "sent" }) : attempt.externalRef,
+      errorCode: accepted ? null : "delivery_not_sent",
+      errorMessage: null,
+    }, executor)
+    const saved = await updateJobRecord(actor.workspaceId, job.id, {
+      state: accepted ? "sent" : "failed",
+      reason: accepted ? null : "Provider confirmed the email was not sent.",
+    }, executor)
+    await insertDealSubmissionCache({ workspaceId: job.workspaceId, dealId: job.dealId, funderName: job.displayFunderName,
+      status: displayCacheStatus(saved.state), funderId: job.funderId, jobId: job.id, routeKind: job.routeKind }, executor)
+    await recordAuditEvent({ context: actor, action: "submission.email_delivery_reconciled", resourceType: "submission_job", resourceId: job.id,
+      metadata: { outcome: input.outcome, evidence, correlationId: attempt.correlationId }, correlationId: actor.correlationId, executor })
+    return saved
+  })
 }

@@ -12,7 +12,8 @@ import type { FunderRecord } from "../funders/contracts"
 import { listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
 import { canManageWorkspace } from "../policy"
-import { findSenderById, listSendersByWorkspace, type StoredEmailSender } from "../senders/repository"
+import { Mailbox } from "../email-conversations/providers"
+import { findSenderById, listSendersByWorkspace, senderConversationReady, type StoredEmailSender } from "../senders/repository"
 import { REPLY_STATES, type ReplyState, type SubmissionJob } from "./contracts"
 import { parseEmailAttemptRef } from "./email-templates"
 import { findJobById, listJobsForDeal } from "./repository"
@@ -123,7 +124,7 @@ export interface ReplyCandidateJob {
 export interface ReplyQueueResult {
   dealId?: string
   intervalMs: number
-  mailbox: { mode: "fixture" | "unconfigured"; liveOAuth: false }
+  mailbox: { mode: "fixture" | "unconfigured" | "live"; liveOAuth: boolean }
   senders: ReplySenderHealth[]
   replies: FunderReply[]
   candidateJobs: ReplyCandidateJob[]
@@ -138,7 +139,7 @@ export interface RunReplyIngestInput {
 
 export interface RunReplyIngestResult {
   intervalMs: number
-  mailbox: { mode: "fixture" | "unconfigured"; liveOAuth: false; flagsUnchanged: true }
+  mailbox: { mode: "fixture" | "unconfigured" | "live"; liveOAuth: boolean; flagsUnchanged: true }
   senders: ReplySenderHealth[]
   ingested: Array<{ id: string; providerMessageId: string; state: ReplyState; created: boolean; replayed: boolean }>
   createdCount: number
@@ -227,12 +228,35 @@ export function setReplyMailboxForTests(mailbox?: ReplyMailbox): void {
   mailboxOverride = mailbox
 }
 
-export function replyMailboxMode(): "fixture" | "unconfigured" {
-  return mailboxOverride ? "fixture" : "unconfigured"
+export function replyMailboxMode(): "fixture" | "unconfigured" | "live" {
+  return mailboxOverride ? "fixture" : process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED === "true" ? "live" : "unconfigured"
 }
 
-function activeMailbox(): ReplyMailbox | undefined {
-  return mailboxOverride
+function activeMailbox(sender: StoredEmailSender): ReplyMailbox | undefined {
+  if (mailboxOverride) return mailboxOverride
+  if (replyMailboxMode() !== "live") return undefined
+  if (!senderConversationReady(sender)) throw new AppError(409, "email_reconnect_required", "Reconnect this submission sender with mailbox read access.")
+  return {
+    async listMessages(input) {
+      const mailbox = new Mailbox(sender)
+      await mailbox.connect()
+      const listed = await mailbox.listInboxSince(input.cursor)
+      return {
+        nextCursor: listed.nextCursor,
+        messages: listed.messages.map(message => ({
+          providerMessageId: message.id,
+          threadId: message.threadId,
+          rfcMessageId: message.internetId,
+          inReplyTo: message.references.at(-1),
+          references: message.references,
+          from: message.from,
+          subject: message.subject,
+          body: message.body,
+          receivedAt: message.occurredAt,
+        })),
+      }
+    },
+  }
 }
 
 function mailboxUnavailable(): never {
@@ -450,7 +474,7 @@ function healthFor(sender: StoredEmailSender, checkpoint: CheckpointRecord): Rep
   let health: ReplySenderHealth["health"] = "idle"
   if (!checkpoint.optedIn) health = "idle"
   else if (checkpoint.lastError) health = "error"
-  else if (mailbox === "unconfigured") health = "unconfigured"
+  else if (mailbox === "unconfigured" || (mailbox === "live" && !senderConversationReady(sender))) health = "unconfigured"
   else health = "ready"
   return {
     senderId: sender.id,
@@ -535,7 +559,7 @@ async function loadAnchors(actor: DealActor): Promise<SubmissionAnchor[]> {
   const anchors: SubmissionAnchor[] = []
   for (const row of rows) {
     const ref = parseEmailAttemptRef(row.external_ref)
-    if (!ref?.messageId) continue
+    if (!ref?.messageId || ref.delivery === "uncertain") continue
     let deal = deals.get(row.deal_id)
     if (!deal) {
       deal = await findDealById(actor.workspaceId, row.deal_id)
@@ -853,7 +877,7 @@ async function ingestSender(actor: DealActor, sender: StoredEmailSender, checkpo
   checkpoint: CheckpointRecord
   flagsUnchanged: true
 }> {
-  const mailbox = activeMailbox()
+  const mailbox = activeMailbox(sender)
   if (!mailbox) mailboxUnavailable()
   const listed = await mailbox.listMessages({
     workspaceId: sender.workspaceId,
@@ -946,7 +970,7 @@ export async function listReplyQueue(actor: DealActor, dealId?: string): Promise
   return {
     dealId: scopedDeal?.id,
     intervalMs: REPLY_INGEST_INTERVAL_MS,
-    mailbox: { mode: replyMailboxMode(), liveOAuth: false },
+    mailbox: { mode: replyMailboxMode(), liveOAuth: replyMailboxMode() === "live" },
     senders: await senderHealth(actor.workspaceId, senders),
     replies,
     candidateJobs: jobs.map((job) => ({
@@ -1046,7 +1070,7 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
     if (!enabled) {
       return {
         intervalMs: REPLY_INGEST_INTERVAL_MS,
-        mailbox: { mode: replyMailboxMode(), liveOAuth: false, flagsUnchanged: true },
+        mailbox: { mode: replyMailboxMode(), liveOAuth: replyMailboxMode() === "live", flagsUnchanged: true },
         senders: await senderHealth(actor.workspaceId, stored),
         ingested: [],
         createdCount: 0,
@@ -1067,7 +1091,7 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
     if (!targets.length) invalid("senderId", "Opt in a submission sender before ingesting replies.")
   }
 
-  if (!activeMailbox()) mailboxUnavailable()
+  if (replyMailboxMode() === "unconfigured") mailboxUnavailable()
 
   const ingested: RunReplyIngestResult["ingested"] = []
   for (const sender of targets) {
@@ -1095,7 +1119,7 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
 
   return {
     intervalMs: REPLY_INGEST_INTERVAL_MS,
-    mailbox: { mode: replyMailboxMode(), liveOAuth: false, flagsUnchanged: true },
+    mailbox: { mode: replyMailboxMode(), liveOAuth: replyMailboxMode() === "live", flagsUnchanged: true },
     senders: await senderHealth(actor.workspaceId, await listSendersByWorkspace(actor.workspaceId)),
     ingested,
     createdCount: ingested.filter((item) => item.created).length,
