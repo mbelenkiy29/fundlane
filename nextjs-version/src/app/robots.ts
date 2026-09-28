@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next"
 import { MARKETING_ORIGIN } from "@/lib/marketing/metadata"
 import { publicPricingEnabled, publicRoadmapEnabled } from "@/lib/marketing/launch-switches"
+import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 
 export default function robots(): MetadataRoute.Robots {
-  return { rules: { userAgent: "*", allow: ["/$", "/demo$", "/features$", ...(publicPricingEnabled() ? ["/pricing$"] : []), "/changelog$", ...(publicRoadmapEnabled() ? ["/roadmap$"] : []), "/help", "/marketing/", "/_next/"], disallow: "/" }, sitemap: `${MARKETING_ORIGIN}/sitemap.xml` }
+  return { rules: { userAgent: "*", allow: ["/$", "/demo$", "/features$", ...(publicPricingEnabled() ? ["/pricing$"] : []), "/changelog$", ...(publicRoadmapEnabled() ? ["/roadmap$"] : []), "/help", ...(legalDraftPagesEnabled() ? ["/terms$", "/privacy$"] : []), "/marketing/", "/_next/"], disallow: "/" }, sitemap: `${MARKETING_ORIGIN}/sitemap.xml` }
 }

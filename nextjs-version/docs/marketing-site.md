@@ -24,7 +24,13 @@ Set `NEXT_PUBLIC_MCA_COMPANY_LEGAL_NAME` to the verified legal entity name to sh
 
 Organization, WebSite, SoftwareApplication and WebPage structured data, the distinct demo meta description, and the dated sitemap entries are already present. The opt-in FAQPage node uses the same seven question and answer strings shown on the homepage. Update the sitemap content date only when published marketing content changes; do not use the build time as `lastmod`.
 
-The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice.
+The public homepage is `/`; `/landing` permanently redirects to it. `/demo` hosts the sales-assisted request flow. Authentication and `/dashboard` retain their existing routes. PWA registration/update prompts mount only in the authenticated dashboard layout. The global loading boundary was removed so public pages render without hydration; the dashboard retains its existing loading skeleton. Marketing pages use a scoped black palette with blue and green accents without changing the saved application theme. The homepage tells the five-stage application-to-renewal story; `/features` covers all eleven product categories with stable anchors, and `/demo` retains the existing sales-assisted form. The shared shell also styles the published privacy notice and draft legal pages when enabled.
+
+## Legal pages
+
+`MCA_LEGAL_DRAFT_PAGES_ENABLED=true` is a server-only, strict opt-in for the `/terms` and `/privacy` pages, footer and sign-up links, and robots/sitemap entries. Unset or any other value keeps the original behavior: `/terms` redirects to sign-in, `/privacy` serves the existing gated website/demo notice only when `MCA_MARKETING_PRIVACY_URL=https://fundlane.io/privacy`, and no legal links or index entries appear. Michael Belenkiy approved publication on September 28, 2026 (19:20 ET) until an attorney reviews the documents. The banner reads **These terms were prepared without attorney review and will be updated after legal review.** The effective date is September 28, 2026. The pages identify Sentinel Tech Solutions LLC, 7 Holly Hill Road, Marlboro, NJ (ZIP not yet supplied), and mike@sentineltechsolutions.io. No migration is needed. See [the evidence and attorney-review checklist](legal-drafts.md).
+
+The demo form still requires `MCA_MARKETING_PRIVACY_URL` as its separate approval gate. When the draft flag is on, the demo gate rejects any configured URL whose path is `/privacy` (on any host, including preview domains), so it cannot treat this app's draft route as the approved notice. A separately approved notice at another path may still be configured. Do not use draft content for demo activation, OAuth consent, or SMS registration until reviewed.
 
 ## Enable demo requests
 
@@ -131,7 +137,7 @@ The server has a 10-second delivery deadline and the client waits 15 seconds. Fa
 
 Structured logs contain only `marketing_demo_accepted` or `marketing_demo_delivery_failed` and the opaque request ID. Count unique accepted IDs for conversions; retries can repeat an accepted log. Alert on sustained delivery failures and verify a controlled synthetic request reaches the sales destination before launch. Do not log bodies, contact fields, or tokens. No third-party tracking/cookies were added. Compare conversion only after establishing a real traffic baseline.
 
-The approved website/demo privacy notice is published at `/privacy` for Sentinel Tech Solutions LLC, with privacy contact `ben@sentineltechsolutions.io`. The operator approved the notice on September 11, 2026. The dedicated production receiver is `/api/marketing/receiver`. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
+The draft replaces the rendered website-only Privacy content only when `MCA_LEGAL_DRAFT_PAGES_ENABLED=true`; otherwise the approved notice remains behind its existing publication gate. The dedicated production receiver is `/api/marketing/receiver`. Production billing, integration activation, and release acceptance remain separate work; this site does not advertise integration counts, pricing, customer endorsements, certifications, or guaranteed outcomes.
 
 ## Product images
 
@@ -172,7 +178,7 @@ node marketing-inbox.cjs delete <opaque-request-id>
 
 `list` displays only IDs and timestamps. `show` decrypts contact data: use it only in the private shell and do not copy its output to shared logs or tickets. `delete` removes the encrypted contact payload and preserves the retry tombstone. Operators should review new inquiries and delete contact details when no longer needed. Outbound contact requires a separate operator decision; intake itself sends nothing.
 
-Render stores `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. The Docker build explicitly accepts the non-secret privacy URL so the static homepage footer includes it; tokens are runtime-only. `/privacy` remains unpublished unless the configured privacy URL points to it.
+The demo receiver uses `MCA_DEMO_WEBHOOK_URL`, `MCA_DEMO_WEBHOOK_TOKEN`, and `MCA_MARKETING_PRIVACY_URL`. The receiver and sender share the generated token. `/privacy` serves the draft only with the draft flag; otherwise the existing approved-notice publication gate applies. The demo form remains disabled until all three values are configured and the configured notice is eligible.
 
 
 ## Luro design adaptation (September 13, 2026)
