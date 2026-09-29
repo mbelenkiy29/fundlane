@@ -323,6 +323,26 @@ test("native applications bind automation, encrypt original answers, and generat
   assert.equal((await submitNativeApply(token, body)).dealId, result.dealId)
 })
 
+test("native application invitation uses Resend when selected", async () => {
+  const { sendBrokerIntakeEmail } = await import("../src/lib/mca/intake/native-apply")
+  const keys = ["MCA_SYSTEM_EMAIL_PROVIDER", "MCA_RESEND_API_KEY", "MCA_RESEND_FROM"] as const
+  const saved = keys.map(key => process.env[key])
+  const originalFetch = globalThis.fetch
+  try {
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "resend"
+    process.env.MCA_RESEND_API_KEY = "test-resend-key"
+    process.env.MCA_RESEND_FROM = "Fundlane <sender@example.test>"
+    let url = "", body: { to: string[] } | undefined
+    globalThis.fetch = async (input, init) => { url = String(input); body = JSON.parse(String(init?.body)); return Response.json({ id: "resend-native-id" }) }
+    assert.deepEqual(await sendBrokerIntakeEmail(adminActor, "https://mca.example.test", "customer@example.test", ids.repAMember), { sent: true })
+    assert.equal(url, "https://api.resend.com/emails")
+    assert.deepEqual(body?.to, ["customer@example.test"])
+  } finally {
+    globalThis.fetch = originalFetch
+    keys.forEach((key, index) => { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index] })
+  }
+})
+
 
 test("new Fillout and DocuSeal connections automatically prepare application PDFs", async () => {
   const { createHmac } = await import("node:crypto")

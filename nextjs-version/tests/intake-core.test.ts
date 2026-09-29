@@ -654,6 +654,27 @@ test("MIC-152/MIC-184 workers claim attachments and receipts once, recover expir
   delete process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN
 })
 
+test("intake receipt delivery routes through Resend and records its message ID", async () => {
+  const names = ["MCA_SYSTEM_EMAIL_PROVIDER", "MCA_RESEND_API_KEY", "MCA_RESEND_FROM"] as const
+  const saved = names.map(name => process.env[name])
+  try {
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "resend"
+    process.env.MCA_RESEND_API_KEY = "synthetic-resend-key"
+    process.env.MCA_RESEND_FROM = "Fundlane <receipts@example.test>"
+    const intake = await ingestApplication(adminActor, { schemaVersion: 1, provider: "custom", eventId: "resend-receipt", application: { legalName: "Resend Receipt LLC" } })
+    const queued = await enqueueReceipt({ workspaceId: ids.workspace, intakeId: intake.intakeId, recipient: "broker@example.test", warnings: [] })
+    let url = "", body: { to: string[] } | undefined
+    const delivered = await deliverPendingReceipts({ workspaceId: ids.workspace, fetchImpl: async (input, init) => {
+      url = String(input); body = JSON.parse(String(init?.body)); return Response.json({ id: "resend-receipt-id" })
+    } })
+    assert.equal(url, "https://api.resend.com/emails")
+    assert.deepEqual(body?.to, ["broker@example.test"])
+    assert.equal(delivered.find(receipt => receipt.id === queued.id)?.providerMessageId, "resend-receipt-id")
+  } finally {
+    names.forEach((name, index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index] })
+  }
+})
+
 test("MIC-152 direct HTTP intake rejects unauthenticated creation", async () => {
   const response = await intakePost(new Request("http://localhost/api/mca/intake", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, provider: "custom", eventId: "unauthorized", application: { legalName: "Nope" } }) }))
   assert.equal(response.status, 401)
