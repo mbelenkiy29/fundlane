@@ -21,6 +21,35 @@ export const DOCUSEAL_PSF_FIELD_KEYS = [
 export type DocuSealPsfFieldKey = (typeof DOCUSEAL_PSF_FIELD_KEYS)[number]
 export type DocuSealPsfFieldType = "text" | "number"
 
+export const DOCUSEAL_CONTRACT_FIELD_KEYS = [
+  "merchantLegalName", "signerEmail", "signerName", "funderName", "fundedAmount",
+  "paybackAmount", "factorRate", "paymentFrequency",
+] as const
+export type DocuSealContractFieldKey = (typeof DOCUSEAL_CONTRACT_FIELD_KEYS)[number]
+
+export interface DocuSealContractProviderConfig {
+  apiBaseUrl: string
+  apiKey: string
+  templateId: number
+  signerRole: string
+  fieldMap: Record<DocuSealContractFieldKey, string>
+}
+
+export interface DocuSealContractSubmissionInput {
+  externalId: string
+  workspaceId: string
+  workflowId: string
+  offerRevisionId: string
+  merchantLegalName: string
+  signerEmail: string
+  signerName: string
+  funderName: string
+  fundedAmountCents: number
+  paybackAmountCents: number
+  factorRate: number
+  paymentFrequency: string
+}
+
 export interface DocuSealPsfFieldBinding {
   /** Exact, case-sensitive field name configured on the approved DocuSeal template. */
   name: string
@@ -390,6 +419,55 @@ async function requestJson(config: NormalizedConfig, path: string, init: Request
   }
   const bytes = await readBounded(response, MAX_JSON_BYTES, "docuseal_response_too_large")
   try { return JSON.parse(new TextDecoder().decode(bytes)) as unknown } catch { throw new AppError(502, "docuseal_response_invalid", "DocuSeal returned invalid JSON.") }
+}
+
+function contractConfig(input: DocuSealContractProviderConfig): NormalizedConfig {
+  const names = new Set<string>()
+  for (const key of DOCUSEAL_CONTRACT_FIELD_KEYS) {
+    const name = cleanRequired(input.fieldMap?.[key], `DocuSeal ${key} field name`, 180)
+    if (names.has(name)) throw new AppError(422, "docuseal_configuration_invalid", "DocuSeal contract field names must be unique.")
+    names.add(name)
+  }
+  let api: URL
+  try { api = new URL(input.apiBaseUrl) } catch { throw new AppError(422, "docuseal_configuration_invalid", "DocuSeal API root is invalid.") }
+  if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || !Number.isSafeInteger(input.templateId) || input.templateId <= 0) throw new AppError(422, "docuseal_configuration_invalid", "DocuSeal contract provider configuration is invalid.")
+  return { apiBaseUrl: api.toString().replace(/\/$/, ""), apiToken: cleanRequired(input.apiKey, "DocuSeal API key", 500), webhookSecret: "contract-send-only-placeholder-secret", templateId: input.templateId,
+    signerRole: cleanRequired(input.signerRole, "DocuSeal signer role", 180), fieldBindings: {} as DocuSealProviderConfig["fieldBindings"], sendEmail: true, requireEmail2fa: true, artifactAllowedHosts: [api.hostname] }
+}
+
+/** Creates the contract submission once. Callers must durably fence retries before invoking this. */
+export async function createDocuSealContractSubmission(configInput: DocuSealContractProviderConfig, input: DocuSealContractSubmissionInput, dependencies: DocuSealProviderDependencies = {}): Promise<DocuSealSubmissionIdentity> {
+  const config = contractConfig(configInput)
+  const signerEmail = cleanRequired(input.signerEmail, "signer email", 320).toLowerCase()
+  if (!EMAIL_PATTERN.test(signerEmail)) throw new AppError(422, "docuseal_submission_invalid", "Contract signer email must be valid.")
+  if (!Number.isSafeInteger(input.fundedAmountCents) || input.fundedAmountCents <= 0 || !Number.isSafeInteger(input.paybackAmountCents) || input.paybackAmountCents < input.fundedAmountCents || !Number.isFinite(input.factorRate) || input.factorRate <= 0) {
+    throw new AppError(422, "docuseal_submission_invalid", "Contract financial terms are invalid.")
+  }
+  const roleTemplate = object(await requestJson(config, `templates/${config.templateId}`, { method: "GET" }, dependencies))
+  if (providerId(roleTemplate.id, "template ID") !== String(config.templateId) || roleTemplate.archived_at) throw new AppError(409, "docuseal_template_binding_invalid", "The configured contract template is missing, archived, or changed.")
+  const roles = (Array.isArray(roleTemplate.submitters) ? roleTemplate.submitters : []).map(object)
+  const role = roles.filter((item) => item.name === config.signerRole)
+  if (role.length !== 1 || typeof role[0].uuid !== "string") throw new AppError(409, "docuseal_template_binding_invalid", "The configured contract signer role does not exactly match one template role.")
+  const fields = (Array.isArray(roleTemplate.fields) ? roleTemplate.fields : []).map(object)
+  for (const key of DOCUSEAL_CONTRACT_FIELD_KEYS) {
+    const matches = fields.filter((field) => field.name === configInput.fieldMap[key])
+    if (matches.length !== 1 || matches[0].submitter_uuid !== role[0].uuid) throw new AppError(409, "docuseal_template_binding_invalid", `The approved contract template no longer has the exact ${key} field binding.`)
+  }
+  const values: Record<DocuSealContractFieldKey, string> = {
+    merchantLegalName: cleanRequired(input.merchantLegalName, "merchant legal name", 220), signerEmail,
+    signerName: cleanRequired(input.signerName, "signer name", 180), funderName: cleanRequired(input.funderName, "funder name", 220),
+    fundedAmount: centsText(input.fundedAmountCents), paybackAmount: centsText(input.paybackAmountCents),
+    factorRate: String(input.factorRate), paymentFrequency: cleanRequired(input.paymentFrequency, "payment frequency", 40),
+  }
+  const payload = await requestJson(config, "submissions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+    template_id: config.templateId, send_email: true, send_sms: false, order: "preserved",
+    submitters: [{ name: values.signerName, email: signerEmail, role: config.signerRole, external_id: cleanRequired(input.externalId, "contract external ID", 200),
+      metadata: { mca_workspace_id: cleanRequired(input.workspaceId, "workspace ID", 200), mca_workflow_id: cleanRequired(input.workflowId, "workflow ID", 200), mca_offer_revision_id: cleanRequired(input.offerRevisionId, "offer revision ID", 200) },
+      require_email_2fa: true, fields: DOCUSEAL_CONTRACT_FIELD_KEYS.map((key) => ({ name: configInput.fieldMap[key], default_value: values[key], readonly: true, required: true })) }],
+  }) }, dependencies)
+  const rows = Array.isArray(payload) ? payload : Array.isArray(object(payload).submitters) ? object(payload).submitters as unknown[] : []
+  if (rows.length !== 1) throw new AppError(502, "docuseal_response_invalid", "DocuSeal returned an invalid contract submission response.")
+  return identity(rows[0], "created")
 }
 
 function status(value: unknown): DocuSealSubmitterStatus {
