@@ -2,7 +2,7 @@
 
 Prepared without attorney review. Michael Belenkiy approved publication on September 28, 2026 (19:20 ET) until a lawyer reviews them; production enables them with `MCA_LEGAL_DRAFT_PAGES_ENABLED=true`. Effective date: September 28, 2026. See [Issue #52](https://github.com/mbelenkiy29/fundlane/issues/52), [PR #175](https://github.com/mbelenkiy29/fundlane/pull/175) and superseded [PR #130](https://github.com/mbelenkiy29/fundlane/pull/130).
 
-Operator: Sentinel Tech Solutions LLC, 7 Holly Hill Road, Marlboro, NJ, mike@sentineltechsolutions.io. The ZIP code is not yet known and is omitted from the published address.
+Operator: Sentinel Tech Solutions LLC, 7 Holly Hill Road, Marlboro, NJ 07746, mike@sentineltechsolutions.io.
 
 ## Ownership and scope
 
@@ -33,7 +33,6 @@ Privacy: Scope and contact; Our role and our customers’ role; Information we c
 
 These items are not shown on the published pages; they are tracked here for counsel.
 
-- [ ] Add the mailing-address ZIP code once supplied.
 - [ ] Liability cap: published as fees paid in the 12 months before the event giving rise to the claim (common default chosen without counsel). Confirm cap amount, measurement period and carve-outs.
 - [ ] [Attorney review: processor/service-provider contract terms and data processing addendum.]
 - [ ] [Attorney review: federal jurisdiction, enforceability and mandatory-law exceptions.]
