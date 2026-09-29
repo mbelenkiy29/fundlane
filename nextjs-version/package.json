@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "release:evidence": "tsx scripts/ops/release-evidence.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
