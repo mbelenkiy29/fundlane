@@ -10,6 +10,23 @@ For replies, reconnect a verified submission sender using Google Gmail read/send
 
 Publish a per-provider matrix labeled **live verified**, **sandbox verified**, **access blocked**, or **untested**. Until hosted proof, the controlled email route is untested and direct funder APIs are access blocked. Retain sanitized workspace/deal/job IDs, attempt correlation ID, receiver receipt reference, mailbox provider message ID, checkpoint time, reviewed outcome, and deal activity reference. Local fixtures do not establish live acceptance. Hosted pilot, receiver contract, and provider access remain pending Michael's approval.
 
+### Offline pilot evidence preflight
+
+The offline preflight is disabled unless `MCA_FUNDER_PILOT_EVIDENCE_ENABLED` is exactly `true`. It does not use `DATABASE_URL`: set `MCA_FUNDER_PILOT_EVIDENCE_DATABASE_URL` and `MCA_FUNDER_PILOT_EVIDENCE_WORKSPACE_ID` explicitly, then select one synthetic submission job:
+
+```sh
+MCA_FUNDER_PILOT_EVIDENCE_ENABLED=true \
+MCA_FUNDER_PILOT_EVIDENCE_DATABASE_URL='postgresql://pilot:pilot@127.0.0.1:5432/pilot' \
+MCA_FUNDER_PILOT_EVIDENCE_WORKSPACE_ID='synthetic-workspace-id' \
+pnpm funder:pilot-evidence -- --job-id 'synthetic-job-id'
+```
+
+Use only a loopback disposable PostgreSQL database with synthetic records. A non-loopback disposable database additionally requires `MCA_FUNDER_PILOT_EVIDENCE_DATABASE_DISPOSABLE=true`; that acknowledgement does not make production or shared staging data acceptable. The command rejects the production Supabase project reference, starts a read-only transaction, performs only scoped `SELECT` queries, prints JSON to stdout, and writes neither the database nor the filesystem. It makes no submission, relay, mailbox, or provider call.
+
+The JSON allowlists opaque workspace, deal, funder, job, attempt, reply, provider-message, receipt, correlation, and activity references; ISO timestamps; stored states; checklist statuses; and fixed explanatory notes. Opaque values have control characters removed and are limited to 128 characters. It excludes merchant names, email addresses, message subject/body, document names or contents, route/package JSON, credentials, tokens, and database URLs. Missing evidence means only `missing`, never definitive non-delivery. Only the local sandbox adapter can be labeled `sandbox verified`; every other route remains `untested`, and this command can never produce `live verified`.
+
+**Offline synthetic evidence is not live provider acceptance.** The preflight does not replace the approved hosted pilot, receiver receipt, mailbox/provider console evidence, or Michael's readiness decision.
+
 Execution uses the three GPT-5.6 Sol/high lanes in `execution-plan.md`. The lane acceptance files contain ticket-level implementation and verification evidence.
 
 ## Database
