@@ -1,0 +1,11 @@
+[
+  { "path": "/api/cron/assistant", "cron": "* * * * *", "requiredFlags": ["MCA_ASSISTANT_MAINTENANCE_ENABLED=true"], "ownerIssue": "#45" },
+  { "path": "/api/cron/billing", "cron": "*/10 * * * *", "requiredFlags": [], "ownerIssue": "#35 (existing pg_cron owner; do not duplicate)" },
+  { "path": "/api/cron/calendar", "cron": "*/5 * * * *", "requiredFlags": ["MCA_CALENDAR_GOOGLE_ENABLED=true", "MCA_CALENDAR_RUNTIME=vercel_cron"], "ownerIssue": "#44" },
+  { "path": "/api/cron/comms", "cron": "*/5 * * * *", "requiredFlags": [], "ownerIssue": "#35 (verify current owner before installation)" },
+  { "path": "/api/cron/documents", "cron": "* * * * *", "requiredFlags": ["MCA_DOCUMENT_JOB_RUNTIME=vercel_cron"], "ownerIssue": "#36" },
+  { "path": "/api/cron/email-conversations", "cron": "*/5 * * * *", "requiredFlags": ["MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron"], "ownerIssue": "#38" },
+  { "path": "/api/cron/jobs", "cron": "* * * * *", "requiredFlags": ["MCA_JOB_RUNTIME=vercel_cron"], "ownerIssue": "#37" },
+  { "path": "/api/cron/private-email", "cron": "*/5 * * * *", "requiredFlags": ["MCA_PRIVATE_EMAIL_CRON_ENABLED=true"], "ownerIssue": "#39" },
+  { "path": "/api/cron/sms", "cron": "*/5 * * * *", "requiredFlags": ["MCA_SMS_CRON_ENABLED=true"], "ownerIssue": "#42" }
+]
