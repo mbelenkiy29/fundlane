@@ -51,7 +51,9 @@ creation time, and delivery metadata; no raw IP address is stored. Preserve the 
 retaining or moving these rows.
 
 Set `MCA_DEMO_NOTIFY_EMAIL` to the monitored sales inbox. Notifications use
-the existing `MCA_USESEND_API_KEY` and `MCA_USESEND_FROM` settings. Missing
+the selected system email transport: useSend with `MCA_USESEND_API_KEY` and
+`MCA_USESEND_FROM` by default, or Resend with `MCA_SYSTEM_EMAIL_PROVIDER=resend`,
+`MCA_RESEND_API_KEY`, and `MCA_RESEND_FROM` (falling back to `MCA_USESEND_FROM`). Missing
 configuration or provider failure emits a `marketing_demo_notification_skipped`
 or `marketing_demo_notification_failed` metric and does not reject a stored lead.
 Monitor notification delivery and verify it with a synthetic submission before

@@ -34,7 +34,8 @@ import {
 } from "./repository"
 import { attachIntakeDocument, ingestApplication, intakePayloadChecksum, scheduleAttachment } from "./service"
 import type { IntakeResult, NormalizedIntakeInput } from "./contracts"
-import { receiptEmailContent, sendUsesendEmail, usesendInboundEmail } from "./usesend"
+import { receiptEmailContent, usesendInboundEmail } from "./usesend"
+import { sendSystemEmail, systemEmailCredentials, resendSystemEmailEnabled } from "../system-email"
 import { emailSenderVerified, privateEmailDeliveryEnabled, privateEmailIntakeEnabled, receiptWebhookConfigured } from "./email-readiness"
 
 interface InboundAttachment {
@@ -361,6 +362,7 @@ async function processEmail(email: InboundEmail, integration: IntegrationRecord,
 }
 
 async function usesendReceiptTransport(workspaceId: string, intakeId: string): Promise<{ apiKey: string; from: string } | undefined> {
+  if (resendSystemEmailEnabled()) return systemEmailCredentials()
   const intake = await findIntake(workspaceId, intakeId)
   const integration = intake?.integrationId ? await getIntegration(workspaceId, intake.integrationId, true) : undefined
   if (integration?.emailGateway === "usesend") {
@@ -402,6 +404,7 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
         if (error instanceof AppError && error.code === "usesend_receipt_unconfigured") { unconfigured += 1; continue }
         throw error
       }
+      if (resendSystemEmailEnabled() && !usesend) { unconfigured += 1; continue }
       if (!usesend && !emailSenderVerified()) { unconfigured += 1; continue }
       if (!usesend && !receiptWebhookConfigured()) {
         unconfigured += 1
@@ -416,7 +419,7 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
         await (await import("../outbound-approval")).assertOutboundDispatch(claimed.workspaceId, claimed.createdAt)
         if (usesend) {
           const content = receiptEmailContent({ dealLink: claimed.dealLink, addDocumentLink: claimed.addDocumentLink, warnings: claimed.warnings })
-          const sent = await sendUsesendEmail({
+          const sent = await sendSystemEmail({
             apiKey: usesend.apiKey, from: usesend.from, to: claimed.recipient, subject: content.subject, text: content.text, html: content.html,
             idempotencyKey: `intake-receipt:${claimed.id}`, fetchImpl: options.fetchImpl,
           })
@@ -443,6 +446,6 @@ export async function deliverPendingReceipts(options: { workspaceId?: string; fe
       }
     }
   }
-  if (!results.length && unconfigured) throw new AppError(503, "receipt_delivery_unconfigured", "Configure useSend or both MCA_INTAKE_RECEIPT_WEBHOOK_URL and MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN before sending intake receipts.")
+  if (!results.length && unconfigured) throw new AppError(503, "receipt_delivery_unconfigured", resendSystemEmailEnabled() ? "Configure Resend before sending intake receipts." : "Configure useSend or both MCA_INTAKE_RECEIPT_WEBHOOK_URL and MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN before sending intake receipts.")
   return results
 }

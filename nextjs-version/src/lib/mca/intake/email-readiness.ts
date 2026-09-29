@@ -1,3 +1,5 @@
+import { resendSystemEmailEnabled, systemEmailCredentials } from "../system-email"
+
 export function privateEmailIntakeEnabled(): boolean {
   return process.env.MCA_PRIVATE_EMAIL_INTAKE_ENABLED === "true"
 }
@@ -30,9 +32,11 @@ export function emailIntakeReadiness(input: {
   if (!input.senderRules?.length) missing.push("Allowed sender rules are missing")
   if (["usesend", "postmark"].includes(input.emailGateway ?? "") && !input.providerEvidenceHash) missing.push("Provider setup is unverified")
   if (!privateEmailDeliveryEnabled()) missing.push("Receipt delivery flag is off")
-  if (input.emailGateway === "usesend" && (!input.fromAddress || !input.credentialConfigured)) missing.push("Verified receipt sender is missing")
-  if (input.emailGateway !== "usesend" && !emailSenderVerified()) missing.push("Outbound sender verification is unconfirmed")
-  if (input.emailGateway !== "usesend" && !process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL?.trim()) missing.push("Receipt delivery receiver is missing")
-  if (input.emailGateway !== "usesend" && !process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN?.trim()) missing.push("Receipt delivery receiver token is missing")
+  const resendReady = resendSystemEmailEnabled() && Boolean(systemEmailCredentials())
+  if (resendSystemEmailEnabled() && !resendReady) missing.push("Verified receipt sender is missing")
+  if (input.emailGateway === "usesend" && !resendSystemEmailEnabled() && (!input.fromAddress || !input.credentialConfigured)) missing.push("Verified receipt sender is missing")
+  if (input.emailGateway !== "usesend" && !resendSystemEmailEnabled() && !emailSenderVerified()) missing.push("Outbound sender verification is unconfirmed")
+  if (input.emailGateway !== "usesend" && !resendSystemEmailEnabled() && !process.env.MCA_INTAKE_RECEIPT_WEBHOOK_URL?.trim()) missing.push("Receipt delivery receiver is missing")
+  if (input.emailGateway !== "usesend" && !resendSystemEmailEnabled() && !process.env.MCA_INTAKE_RECEIPT_WEBHOOK_TOKEN?.trim()) missing.push("Receipt delivery receiver token is missing")
   return missing
 }

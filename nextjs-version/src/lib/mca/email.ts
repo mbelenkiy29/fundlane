@@ -3,7 +3,7 @@ import "server-only";
 
 import { AppError } from "./errors";
 import { newId } from "./db";
-import { sendUsesendEmail } from "./intake/usesend";
+import { sendSystemEmail, systemEmailCredentials, resendSystemEmailEnabled } from "./system-email";
 import { trialRequiresCard } from "./stripe-checkout-trial";
 
 interface EmailMessage {
@@ -53,13 +53,13 @@ export async function deliverBillingEmail(message: BillingEmailMessage, correlat
     if (result.delivery !== "sent") throw new AppError(503,"billing_email_unconfigured","Billing email requires a real delivery transport.")
     return
   }
-  const key = process.env.MCA_USESEND_API_KEY?.trim()
-  if (message.retryUntil && Date.parse(message.retryUntil) <= Date.now()) throw new AppError(503,"billing_delivery_review_required","UseSend's deduplication window has ended. Check provider delivery before reissuing this notification.")
-  const from = message.from
-  if (!key || !from) throw new AppError(503,"billing_email_unconfigured","Configure MCA_USESEND_API_KEY and MCA_USESEND_FROM for billing notifications.")
+  const key = resendSystemEmailEnabled() ? systemEmailCredentials()?.apiKey : process.env.MCA_USESEND_API_KEY?.trim()
+  if (message.retryUntil && Date.parse(message.retryUntil) <= Date.now()) throw new AppError(503,"billing_delivery_review_required",resendSystemEmailEnabled() ? "The automatic retry window has ended. Check provider delivery before reissuing this notification." : "UseSend's deduplication window has ended. Check provider delivery before reissuing this notification.")
+  const from = resendSystemEmailEnabled() ? systemEmailCredentials()?.from : message.from
+  if (!key || !from) throw new AppError(503,"billing_email_unconfigured",resendSystemEmailEnabled() ? "Configure MCA_RESEND_API_KEY and a From address for billing notifications." : "Configure MCA_USESEND_API_KEY and MCA_USESEND_FROM for billing notifications.")
   const url = new URL(message.actionUrl)
   if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["localhost","127.0.0.1"].includes(url.hostname))) throw new AppError(503,"billing_origin_invalid","Billing recovery links require HTTPS.")
-  await sendUsesendEmail({apiKey:key,from,to:message.recipient,...(message.content??renderBillingEmailContent(message)),idempotencyKey:correlationId})
+  await sendSystemEmail({apiKey:key,from,to:message.recipient,...(message.content??renderBillingEmailContent(message)),idempotencyKey:correlationId})
 }
 
 /** Freeze this output in the outbox so a deployment cannot change a retry's provider body. */

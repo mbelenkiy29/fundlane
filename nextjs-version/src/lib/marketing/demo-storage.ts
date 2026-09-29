@@ -2,7 +2,7 @@ import "server-only"
 
 import { decryptSensitive, encryptSensitive, hmacScopedToken } from "../mca/crypto"
 import { getDatabase } from "../mca/db"
-import { sendUsesendEmail } from "../mca/intake/usesend"
+import { sendSystemEmail, systemEmailCredentials } from "../mca/system-email"
 import type { DemoRequest } from "./demo-schema"
 
 type Contact = Pick<DemoRequest, "name" | "email" | "brokerage" | "teamSize" | "message">
@@ -79,8 +79,9 @@ export async function storeDemoSubmission(requestId: string, contact: Contact): 
 
 export async function notifyDemoSubmission(requestId: string, contact: Contact): Promise<boolean> {
   const to = process.env.MCA_DEMO_NOTIFY_EMAIL?.trim()
-  const apiKey = process.env.MCA_USESEND_API_KEY?.trim()
-  const from = process.env.MCA_USESEND_FROM?.trim()
+  const credentials = systemEmailCredentials()
+  const apiKey = credentials?.apiKey
+  const from = credentials?.from
   if (!to || !apiKey || !from || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return false
   const lines = [
     `Name: ${contact.name}`,
@@ -93,7 +94,7 @@ export async function notifyDemoSubmission(requestId: string, contact: Contact):
   const escape = (value: string) => value.replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[char]!)
-  await sendUsesendEmail({
+  await sendSystemEmail({
     apiKey, from, to,
     subject: "New Fundlane demo request",
     text: lines.join("\n"),

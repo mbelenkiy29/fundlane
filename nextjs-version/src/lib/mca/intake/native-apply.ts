@@ -21,7 +21,7 @@ import {
 } from "./repository"
 import { captureIntakeAnswers } from "./providers"
 import { ingestApplication } from "./service"
-import { sendUsesendEmail } from "./usesend"
+import { sendSystemEmail, systemEmailCredentials } from "../system-email"
 
 export const NATIVE_APPLY_PROVIDER = "native"
 export const NATIVE_APPLY_FORM_ID = "apply"
@@ -167,7 +167,7 @@ export async function brokerIntakeLink(
     tokenHash: hashOpaqueToken(token),
   })
   const url = `${origin.replace(/\/$/, "")}/apply/r/${encodeURIComponent(token)}`
-  const mailConfigured = Boolean(process.env.MCA_USESEND_API_KEY?.trim() && process.env.MCA_USESEND_FROM?.trim())
+  const mailConfigured = Boolean(systemEmailCredentials())
   return { url, membershipId, mailConfigured }
 }
 
@@ -180,13 +180,14 @@ export async function sendBrokerIntakeEmail(
   const email = recipient.trim().toLowerCase()
   if (!EMAIL_PATTERN.test(email)) throw new AppError(422, "invalid_email", "Enter a valid client email address.")
   const link = await brokerIntakeLink(actor, origin, membershipId)
-  const apiKey = process.env.MCA_USESEND_API_KEY?.trim()
-  const from = process.env.MCA_USESEND_FROM?.trim()
+  const credentials = systemEmailCredentials()
+  const apiKey = credentials?.apiKey
+  const from = credentials?.from
   if (!apiKey || !from) {
     throw new AppError(503, "intake_mail_unconfigured", "Connect email in Settings before sending this link.")
   }
   const member = await getMembership(actor.workspaceId, link.membershipId)
-  await sendUsesendEmail({
+  await sendSystemEmail({
     apiKey,
     from,
     to: email,
