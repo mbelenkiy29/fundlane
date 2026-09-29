@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { MarketingShell } from "@/components/marketing/shell"
-import { helpArticles } from "@/lib/marketing/help"
+import { getHelpArticles } from "@/lib/marketing/help"
+import { expandedHelpCenterEnabled } from "@/lib/marketing/launch-switches"
 import { getConfiguredSupportRows, getSupportConfig } from "@/lib/marketing/support-config"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 
@@ -8,7 +9,8 @@ export const metadata = marketingMetadata("Help center", "/help", "Guides to set
 export const dynamic = "force-dynamic"
 
 export default function HelpPage() {
-  const supportRows = getConfiguredSupportRows(getSupportConfig())
+  const supportConfig = getSupportConfig()
+  const supportRows = getConfiguredSupportRows(supportConfig)
   return <MarketingShell jsonLd={{ title: "Help center", path: "/help" }}>
     <main id="main" className="fl-container fl-help">
       <p className="fl-section-label">Fundlane help</p>
@@ -16,8 +18,9 @@ export default function HelpPage() {
       <p>Guides for the workflows available in your Fundlane workspace.</p>
       <section aria-labelledby="guides-title">
         <h2 id="guides-title">Guides</h2>
-        <div className="fl-help-grid">{helpArticles.map(article => <Link key={article.slug} href={`/help/${article.slug}`} className="fl-help-card"><h3>{article.title}</h3><p>{article.summary}</p><span>Read guide →</span></Link>)}</div>
+        <div className="fl-help-grid">{getHelpArticles().map(article => <Link key={article.slug} href={`/help/${article.slug}`} className="fl-help-card"><h3>{article.title}</h3><p>{article.summary}</p><span>Read guide →</span></Link>)}</div>
       </section>
+      {expandedHelpCenterEnabled() && supportConfig.supportEmail && <p>Onboarding: set up on your own with our guides, or <a className="fl-inline-link" href={`mailto:${supportConfig.supportEmail}`}>email us</a> for help getting your company set up.</p>}
       {supportRows.length > 0 && <section aria-labelledby="support-title" className="fl-help-resources">
         <h2 id="support-title">Support and updates</h2>
         {supportRows.map(row => <p key={row.label}>{row.label}: <a className="fl-inline-link" href={row.href}>{row.linkText}</a></p>)}

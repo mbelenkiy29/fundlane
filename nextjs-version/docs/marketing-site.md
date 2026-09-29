@@ -239,3 +239,10 @@ Targeted marketing ESLint, typecheck, production build, and all seven marketing 
 Final production-preview checks also verified the published Privacy page with its existing public URL gate, all five workflow stages by keyboard, and 720×450 CSS-pixel reflow (equivalent to 200% zoom on 1440×900). The hero grows beyond the viewport height and the page remains horizontally contained. Dashboard isolation was reviewed through marketing-only font/style scoping and absence of theme-state writes; no authenticated dashboard session was used for this redesign.
 
 Merge validation on a clean branch from main (September 15, 2026): typecheck, production build, all seven marketing demo API tests, and full-repository lint pass (16 existing warnings, zero errors). Refreshed the graph and HTML from this isolated checkout.
+# Help and public status release switches
+
+`MCA_HELP_CENTER_EXPANDED_ENABLED=true` adds the team seats and billing guides to `/help` and its sitemap. It also shows the approved onboarding email prompt when `MCA_SUPPORT_EMAIL` is a valid address. Unset or any other value preserves the four existing guides and copy.
+
+`MCA_PUBLIC_STATUS_PAGE_ENABLED=true` publishes `/status`, makes the footer and Help “System status” links point there, and adds the exact route to the anonymous page gate, sitemap, and robots allowance. Unset or any other value returns 404 for `/status`. If `NEXT_PUBLIC_STATUS_PAGE_URL` is configured, its existing footer and Help links remain as they are while the new flag is off. When the flag is on, the validated external URL appears as an optional link on `/status`.
+
+The public page says the served website page is available and checks database reachability with a bounded application-pool query. The database result and check time are cached for 60 seconds. These checks do not provide historical uptime or measure workers, Stripe, email, or complete transactions. No external status service, incident publishing, phone support, or outbound messaging is included. Flag enablement, copy approval, and hosted preview acceptance are later release decisions.

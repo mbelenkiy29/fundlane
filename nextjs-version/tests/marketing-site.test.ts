@@ -179,6 +179,24 @@ test("public roadmap discovery requires the exact flag", () => {
   }
 })
 
+test("public status discovery requires the exact flag", () => {
+  const previous = process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+  try {
+    for (const value of [undefined, "false", "TRUE", "1"]) {
+      if (value === undefined) delete process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+      else process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = value
+      assert.ok(!sitemap().some(entry => entry.url.endsWith("/status")))
+      assert.ok(!(robots().rules as { allow: string[] }).allow.includes("/status$"))
+    }
+    process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = "true"
+    assert.ok(sitemap().some(entry => entry.url.endsWith("/status")))
+    assert.ok((robots().rules as { allow: string[] }).allow.includes("/status$"))
+  } finally {
+    if (previous === undefined) delete process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED
+    else process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = previous
+  }
+})
+
 test("marketing shell and mobile navigation prefer internal roadmap only when enabled", () => {
   const script = `
     const React = require("react");
@@ -205,4 +223,30 @@ test("marketing shell and mobile navigation prefer internal roadmap only when en
   assert.match(on, /href="\/roadmap"/)
   assert.doesNotMatch(on, /href="https:\/\/roadmap\.example\.test\/"/)
   assert.match(on, /Mobile navigation[\s\S]*href="\/roadmap"/)
+})
+
+test("marketing footer preserves external status link until internal status is enabled", () => {
+  const script = `
+    const { mock } = require("node:test");
+    const { renderToStaticMarkup } = require("react-dom/server");
+    require.extensions[".css"] = () => {};
+    mock.module("server-only", { exports: {} });
+    mock.module("./src/lib/marketing/fonts.ts", { namedExports: { marketingFontClasses: async () => "" } });
+    const { MarketingShell } = require("./src/components/marketing/shell.tsx");
+    (async () => {
+      process.env.NEXT_PUBLIC_STATUS_PAGE_URL = "https://status.example.test/";
+      delete process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED;
+      const off = renderToStaticMarkup(await MarketingShell({ children: null }));
+      process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED = "true";
+      const on = renderToStaticMarkup(await MarketingShell({ children: null }));
+      console.log(JSON.stringify({ off, on }));
+    })().catch(error => { console.error(error); process.exitCode = 1 });
+  `
+  const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], { encoding: "utf8", cwd: resolve(import.meta.dirname, "..") })
+  assert.equal(result.status, 0, result.stderr)
+  const { off, on } = JSON.parse(result.stdout) as { off: string; on: string }
+  assert.match(off, /href="https:\/\/status\.example\.test\/"/)
+  assert.doesNotMatch(off, /href="\/status"/)
+  assert.match(on, /href="\/status"/)
+  assert.doesNotMatch(on, /href="https:\/\/status\.example\.test\/"/)
 })
