@@ -10,6 +10,18 @@ The existing signed `/api/mca/chatkit/internal` callback remains in source for t
 
 The runtime selector is explicit: unset or any value other than `vercel_node` preserves the previous ChatKit gateway/UI path. `MCA_ASSISTANT_ENABLED` remains exactly-`true` to expose either assistant surface; unset is off. A short-lived `MCA_ASSISTANT_VERIFICATION_SCOPE` can permit one exact synthetic user/workspace while the global flag is off. It never bypasses Supabase identity, membership or record checks, and expires within one hour. Remove it after verification. The separate `MCA_ASSISTANT_MAINTENANCE_ENABLED` flag controls scheduled credit cleanup and alerts; it defaults off and does not expose the assistant.
 
+## Offline readiness check
+
+The readiness command is inert by default. After filling an untracked local environment with synthetic or approved nonproduction values, run:
+
+```sh
+MCA_ASSISTANT_READINESS_CHECK_ENABLED=true pnpm assistant:readiness
+```
+
+An unset flag, `false`, `TRUE`, or any value other than exactly `true` prints the disabled message and exits successfully. When enabled, the command exits successfully for a complete Vercel Node configuration and nonzero for an invalid one. It reports field names and statuses but never prints secret contents, key fragments, URLs, or signing-secret lengths. The check is side-effect-free: it makes no provider, database, Supabase, Stripe, email, or storage call, and it does not activate the assistant, document AI, or maintenance processing.
+
+Model identifiers receive a local syntax-only check for empty, placeholder, whitespace/control-character, or excessively long values. A passing result does not establish provider access, model existence, Responses streaming/function-call support, or document structured-output support. The command does not replace the hosted staging checklist below: Michael must still use approved nonproduction credentials and synthetic records to confirm a controlled model request, streaming, tools, persistence, cancellation, permissions and workspace isolation, private files, document extraction, mobile behavior, usage, and failure monitoring before activation.
+
 ## Hosted setup for Michael
 
 1. In the approved nonproduction Vercel environment, configure restricted Supabase `DATABASE_URL`, Supabase Auth variables, `MCA_DATA_ENCRYPTION_KEY`, `OPENAI_API_KEY`, and a Responses-compatible `MCA_ASSISTANT_MODEL` that supports function calls. Keep model credentials server-side. Use synthetic accounts and deals. No new migration is required by this runtime change.
