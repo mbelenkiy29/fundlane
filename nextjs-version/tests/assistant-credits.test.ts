@@ -635,6 +635,7 @@ function paymentFixture() {
           creates++
           assert.ok(options.idempotencyKey)
           assert.equal("payment_method_types" in params, false)
+          assert.deepEqual(params.managed_payments, { enabled: false }, "credit Checkout must opt out of Managed Payments")
           session = {
             ...params,
             id: `cs_test_${newId()}`,

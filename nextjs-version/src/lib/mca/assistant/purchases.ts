@@ -115,6 +115,10 @@ export async function createCreditCheckout(
         mode: "payment",
         client_reference_id: purchase.id,
         integration_identifier: `mca_credit_pack_${suffix}`,
+        // Fundlane sells as the merchant. Stripe accounts can default Checkout to Managed
+        // Payments, which rejects this untaxed-code price ("product tax code is missing"),
+        // so opt out explicitly, matching company Checkout (#183).
+        managed_payments: { enabled: false },
         metadata: {
           purchase_id: purchase.id,
           workspace_id: workspaceId,
