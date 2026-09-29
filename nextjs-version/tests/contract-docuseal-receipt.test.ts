@@ -68,6 +68,22 @@ test("authenticated exact binding stores one receipt, replays, and ignores unkno
   assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_contract_workflows WHERE id=?").get(workflowId))?.state, "contract_sent")
 })
 
+test("a duplicate completion after the contract moved on is acknowledged as a replay", async () => {
+  process.env.MCA_CLOSING_VERIFIED_FLOW_ENABLED = "true"
+  process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_ENABLED = "true"
+  process.env.MCA_DOCUSEAL_CONTRACT_CONNECTIONS_JSON = JSON.stringify([{ workspaceId, webhookSecret: secret, bindings }])
+  await getDatabase().prepare("UPDATE mca_contract_workflows SET state='signed' WHERE id=?").run(workflowId)
+  try {
+    const response = await post()
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { state: "received", replayed: true })
+    assert.equal((await receipts()).length, 1)
+    assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_contract_workflows WHERE id=?").get(workflowId))?.state, "signed")
+  } finally {
+    await getDatabase().prepare("UPDATE mca_contract_workflows SET state='contract_sent' WHERE id=?").run(workflowId)
+  }
+})
+
 test("cross-workspace and conflicting bindings fail closed", async () => {
   process.env.MCA_DOCUSEAL_CONTRACT_CONNECTIONS_JSON = JSON.stringify([{ workspaceId: otherWorkspaceId, webhookSecret: secret, bindings }])
   assert.equal((await post()).status, 503)
