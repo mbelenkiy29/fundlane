@@ -9,6 +9,7 @@ test("describes Stripe errors with safe provider metadata", () => {
   assert.equal(d.errorClass, "StripeInvalidRequestError")
   assert.match(d.errorMessage, /No such price: 'price_123'/)
   assert.equal(d.errorCode, "resource_missing")
+  assert.equal(d.providerType, "invalid_request_error")
   assert.equal(d.providerStatus, 404)
   assert.equal(d.providerRequestId, "req_abc123")
   assert.equal(d.providerParam, "price")

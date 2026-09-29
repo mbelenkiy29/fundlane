@@ -34,12 +34,14 @@ const token = (value: unknown, max = 80) =>
 
 export function describeUnexpectedError(error: unknown): ErrorDiagnostics {
   if (!(error instanceof Error)) return { errorClass: typeof error, errorMessage: "non-error value thrown" }
-  const e = error as Error & { type?: unknown; code?: unknown; statusCode?: unknown; requestId?: unknown; param?: unknown }
-  const errorClass = token(e.constructor?.name) ?? token(e.name) ?? "Error"
+  const e = error as Error & { type?: unknown; rawType?: unknown; code?: unknown; statusCode?: unknown; requestId?: unknown; param?: unknown }
+  // Bundlers may minify constructor names; Stripe errors carry their class as a string literal in `type`.
+  const stripeClass = typeof e.type === "string" && e.type.startsWith("Stripe") ? token(e.type) : undefined
+  const errorClass = stripeClass ?? (e.name && e.name !== "Error" ? token(e.name) : undefined) ?? token(e.constructor?.name) ?? "Error"
   const out: ErrorDiagnostics = { errorClass, errorMessage: redactDiagnosticText(e.message ?? "") }
   const code = token(e.code)
   if (code) out.errorCode = code
-  const type = token(e.type)
+  const type = token(stripeClass ? e.rawType : e.type)
   if (type && type !== errorClass) out.providerType = type
   if (typeof e.statusCode === "number" && Number.isInteger(e.statusCode)) out.providerStatus = e.statusCode
   const requestId = token(e.requestId)
