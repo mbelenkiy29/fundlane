@@ -5,6 +5,7 @@ import { headers } from "next/headers"
 import { after } from "next/server"
 import { postgresConnection } from "../db-connection"
 import { safeIdentifier, safeRoute, isInteractiveApi } from "./contracts"
+import type { ErrorDiagnostics } from "../error-diagnostics"
 
 let pool: Pool | undefined
 function telemetryPool() {
@@ -71,9 +72,10 @@ export async function persistEvent(event: ReturnType<typeof operationalEvent>) {
     ]
   )
 }
-export function logApiFailure(correlationId?: string) {
+export function logApiFailure(correlationId?: string, diagnostics?: ErrorDiagnostics) {
   const event = operationalEvent("api", "internal_error", correlationId)
-  console.error(JSON.stringify({ event: "operational_error", ...event }))
+  // Diagnostics are redacted and go to native logs only; the persisted row stays minimal.
+  console.error(JSON.stringify({ event: "operational_error", ...event, ...(diagnostics ? { cause: diagnostics } : {}) }))
   let context: ReturnType<typeof headers> | undefined
   try {
     context = headers()
