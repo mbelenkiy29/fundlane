@@ -68,6 +68,7 @@ import {
 } from "../src/lib/mca/assistant/files"
 import { publicQuery } from "../src/lib/mca/assistant/hosted-tools"
 import { maintainAssistantExperience } from "../src/lib/mca/assistant/maintenance"
+import { placeRetentionHold, releaseRetentionHold } from "../src/lib/mca/retention-holds"
 import { conversationContext } from "../src/lib/mca/assistant/context"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { createDeal } from "../src/lib/mca/deals/service"
@@ -474,6 +475,13 @@ test("files are encrypted, private, validated, immutable revisions and expire du
     original.id
   )
   await assert.rejects(getFile(f.actor, original.id), /expired/)
+  process.env.MCA_RETENTION_HOLDS_ENABLED = "true"
+  const hold = await placeRetentionHold("xp-admin", { workspaceId: "xp-company", reason: "dispute", note: "Synthetic cleanup hold" })
+  await maintainAssistantExperience()
+  assert.equal((await getDatabase().prepare<{ state: string }>("SELECT state FROM mca_assistant_files WHERE id=?").get(original.id))?.state, "ready")
+  assert.ok(await readFile(join(storage, "assistant", record.storage_key)))
+  await releaseRetentionHold(hold.id, "xp-admin")
+  assert.deepEqual((await getDatabase().prepare<{ action: string }>("SELECT action FROM audit_events WHERE resource_id=? ORDER BY created_at").all(hold.id)).map(row => row.action), ["retention_hold.placed", "retention_hold.released"])
   await maintainAssistantExperience()
   await assert.rejects(readFile(join(storage, "assistant", record.storage_key)))
   assert.equal((await getFile(f.actor, original.id, true)).state, "expired")

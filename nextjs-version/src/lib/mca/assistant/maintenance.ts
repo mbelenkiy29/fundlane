@@ -3,6 +3,7 @@ import { getDatabase, newId, nowIso, withTransaction } from "../db"
 import { experienceEnabled } from "./experience-contracts"
 import { removeStoredFile } from "./files"
 import { providerClient } from "./hosted-tools"
+import { isUnderRetentionHold, retentionHoldsEnabled } from "../retention-holds"
 
 /** Durable, idempotent cleanup. Resource deletion is safe to retry after a lost reply. */
 export async function maintainAssistantExperience(maxCleanupJobs = 30) {
@@ -37,6 +38,7 @@ export async function maintainAssistantExperience(maxCleanupJobs = 30) {
     }>("SELECT id,workspace_id,run_id FROM mca_assistant_files f WHERE NOT EXISTS (SELECT 1 FROM mca_assistant_cleanup q WHERE q.resource_type='file' AND q.resource_id=f.id) AND (expires_at<? OR state IN ('deleted','failed') OR (state='processing' AND created_at<?)) AND state<>'expired' LIMIT 200")
     .all(now, new Date(Date.now() - 600_000).toISOString())
   for (const file of files)
+    if (!(await isUnderRetentionHold(file.workspace_id)))
     await db
       .prepare(
         "INSERT INTO mca_assistant_cleanup(id,resource_type,resource_id,workspace_id,run_id,next_attempt_at) VALUES (?,'file',?,?,?,?) ON CONFLICT(resource_type,resource_id) DO NOTHING"
@@ -50,8 +52,11 @@ export async function maintainAssistantExperience(maxCleanupJobs = 30) {
           id: string
           resource_type: string
           resource_id: string
+          workspace_id: string
           attempts: number
-        }>("SELECT * FROM mca_assistant_cleanup WHERE state='pending' AND attempts<8 AND next_attempt_at<=? ORDER BY next_attempt_at FOR UPDATE SKIP LOCKED LIMIT 1")
+        }>(`SELECT * FROM mca_assistant_cleanup q WHERE state='pending' AND attempts<8 AND next_attempt_at<=?
+          ${retentionHoldsEnabled() ? "AND NOT EXISTS (SELECT 1 FROM retention_holds h WHERE h.workspace_id=q.workspace_id AND h.deal_id IS NULL AND h.released_at IS NULL)" : ""}
+          ORDER BY next_attempt_at FOR UPDATE SKIP LOCKED LIMIT 1`)
         .get(nowIso())
       if (row)
         await tx
