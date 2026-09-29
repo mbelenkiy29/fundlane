@@ -58,6 +58,7 @@ WHERE s.workspace_id IS NULL;
 ```dotenv
 MCA_STRIPE_BILLING_ENABLED=true
 MCA_STRIPE_TAX_ENABLED=false
+MCA_STRIPE_TAX_READINESS_ENABLED=false
 MCA_STRIPE_TAX_BEHAVIOR=
 MCA_BILLING_TRIAL_DAYS=14
 MCA_STRIPE_MODE=test
@@ -108,13 +109,29 @@ Reviewed with Stripe CLI 1.51.1 on 2026-09-21 against installed `stripe` 22.6.0 
 
 **Sales tax decision (Michael Belenkiy, September 28, 2026; #111):** Collect sales tax at launch, exclusive of the listed prices. Set `MCA_STRIPE_TAX_ENABLED=true` and `MCA_STRIPE_TAX_BEHAVIOR=exclusive` at go-live only after a registration is confirmed. Sentinel Tech Solutions LLC is based in New Jersey; Michael and his accountant plan to add New Jersey as a Stripe Tax registration once the company's New Jersey sales-tax registration is confirmed. Keep tax off until then. Use [Stripe Tax threshold monitoring](https://docs.stripe.com/tax/monitoring) for other states and add registrations as needed. Monitoring itself does not collect tax.
 
-`MCA_STRIPE_TAX_ENABLED` activates only when exactly `true`; unset or `false` preserves the existing Checkout and seat-change requests.
+`MCA_STRIPE_TAX_ENABLED` activates only when exactly `true`; unset or `false` preserves the existing Checkout, preview, and seat-change requests. `MCA_STRIPE_TAX_READINESS_ENABLED` is a separate exact-`true` gate for read-only provider checks and never enables tax collection.
 
 Before activation, enable Stripe Tax on the live account, configure the confirmed [Stripe Tax registration](https://docs.stripe.com/tax/registering), choose the SaaS product tax code with the accountant, and set both catalog Prices' `tax_behavior` to `exclusive`. Existing prices and amounts are not changed by this code; Stripe price tax behavior may require replacement Prices and a reviewed catalog cutover. Set `MCA_STRIPE_TAX_BEHAVIOR=exclusive` to verify both configured Prices; leaving it blank preserves the existing verification. Other values fail verification. Keep `MCA_STRIPE_TAX_ENABLED=false` until registration, configuration and testing are complete.
 
 When enabled, new Checkout sessions request automatic tax, a required billing address, tax ID collection and automatic customer address/name updates. The application always supplies a customer ID, whether newly created or already mapped. An open pre-activation Checkout session is expired and replaced. New Checkout subscriptions inherit automatic tax for trial-end invoices and renewals. Seat changes and reduction schedules carry tax settings; a paid increase on an older subscription first enables automatic tax without proration, then uses the existing payment-gated proration request because Stripe pending updates do not accept tax-setting changes. **Existing subscriptions with no seat change still need a reviewed Stripe Tax activation/cutover before their next renewal; the flag alone does not migrate all subscriptions.**
 
 In the dedicated Stripe Customer Portal configuration, allow customers to update billing address and tax ID in the Stripe Dashboard; retain the existing payment-method, invoice, cancellation and subscription-update settings. This code does not modify the Portal configuration. In Stripe test mode, verify taxable and non-taxable addresses, tax IDs in Checkout and Portal, invoice tax lines at trial end and renewal, and a paid seat-increase proration. Michael must complete these provider checks before live activation; mocked local tests do not prove registration or invoice calculation.
+
+Use this activation order:
+
+1. Keep `MCA_STRIPE_TAX_ENABLED=false` and `MCA_STRIPE_TAX_READINESS_ENABLED=false` while the CPA decision and New Jersey sales-tax registration are pending.
+2. After confirmation and Michael's explicit approval, manually activate Stripe Tax, set or verify the head office, add every required active registration, assign the accountant-approved Product tax codes, and allow address and tax-ID updates in the intended Customer Portal configuration.
+3. For the currently approved exclusive branch, confirm both configured live Prices have `tax_behavior=exclusive`, then set `MCA_STRIPE_TAX_BEHAVIOR=exclusive`.
+4. Temporarily set only `MCA_STRIPE_TAX_READINESS_ENABLED=true` in the operator environment and run `pnpm stripe:tax-readiness`, optionally with `--require-registration=US-NJ,...`. Resolve every `FAIL` and review every `WARN`. The bounded command uses only Stripe retrieve/list operations; it is evidence, not activation.
+5. Complete Stripe test-mode Checkout, Portal, invoice, and seat-proration acceptance. Record evidence without customer data or secrets.
+6. Only then, with Michael's approval, set `MCA_STRIPE_TAX_ENABLED=true` and redeploy. Repeat smoke and hosted acceptance. Neither the readiness command nor deployment migrates every old subscription.
+
+**Inclusive branch:** Stripe does not permit changing an existing Price's `tax_behavior` after creation, and the current live Prices are exclusive. If the CPA chooses inclusive treatment, Michael must explicitly approve manually creating new inclusive Prices with the same catalog economics and Product tax codes. Then perform a reviewed `STRIPE_BASE_PRICE_ID` / `STRIPE_ADDITIONAL_SEAT_PRICE_ID` catalog cutover and existing-subscription migration/review. Neither application code nor the readiness command creates or changes Products, Prices, registrations, Tax settings, Portal configurations, or subscriptions.
+
+Inclusive treatment also requires legal review of these attorney-reviewed statements; this procedure does not edit or approve them:
+
+- `src/lib/marketing/legal-drafts.ts:46`: `Listed prices exclude applicable taxes. Applicable taxes will be added where required.`
+- `src/lib/marketing/legal-drafts.ts:98`: reconfirm the disclosure that Stripe Checkout may request billing address and tax ID, even though it is not itself an exclusive-price claim.
 
 Restricted keys require customers read/write; subscriptions read/write; subscription schedules read/write; prices read; Checkout read/write; portal configurations read and sessions write; invoices read/write (collection controls and missed-month finalization), invoice payments, payment intents, and payment methods read. InvoicePayment reads must support both invoice and payment-intent allocation filters. Catalog provisioning separately needs product/price and Portal configuration writes.
 

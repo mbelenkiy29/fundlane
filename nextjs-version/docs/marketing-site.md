@@ -2,7 +2,9 @@
 
 ## Launch pricing and support
 
-Set `MCA_PUBLIC_PRICING_ENABLED=true` to publish `/pricing`, its marketing navigation link, sitemap entry, and robots allowance. Unset or any value other than exactly `true` keeps the existing authenticated `/pricing` redirect to Plans & Billing. The page reads amounts and trial length from `src/lib/mca/billing-catalog.ts`. Approve its copy before enabling it. Enable `MCA_TRIAL_REQUIRES_CARD=true` and verify the configured Stripe Checkout trial before publishing the card-required claim. Review the tax activation requirements in `docs/supabase-billing.md` before publishing the tax-exclusive claim; `MCA_STRIPE_TAX_ENABLED` currently defaults to false.
+Set `MCA_PUBLIC_PRICING_ENABLED=true` to publish `/pricing`, its marketing navigation link, sitemap entry, and robots allowance. Unset or any value other than exactly `true` keeps the existing authenticated `/pricing` redirect to Plans & Billing. The page reads amounts and trial length from `src/lib/mca/billing-catalog.ts`. Approve its copy before enabling it. Enable `MCA_TRIAL_REQUIRES_CARD=true` and verify the configured Stripe Checkout trial before publishing the card-required claim.
+
+Publication review must confirm that pricing copy matches `MCA_STRIPE_TAX_BEHAVIOR`. Blank or unset deliberately preserves today's `Sales tax is added where applicable.` sentence; `exclusive` displays the same sentence, and `inclusive` displays `Prices include applicable sales tax.` only after the approved Price/catalog cutover. An invalid nonblank value omits the tax sentence without taking the public page down; billing Price verification still rejects that configuration. Review the activation and inclusive-cutover requirements in `docs/supabase-billing.md`; `MCA_STRIPE_TAX_ENABLED` and the separate readiness flag both default to false.
 
 ## Public roadmap
 

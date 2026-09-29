@@ -11,12 +11,14 @@ import { recordOperationalError } from "./operations/telemetry"
 import { cardRequiredTrial, isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern, trialRequiresCard } from "./stripe-checkout-trial"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
 import { stripeTrialLifecycleEnabled } from "./billing-flags"
+import { stripeTaxBehavior } from "./billing-tax"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
 export const billingEnabled = () => process.env.MCA_STRIPE_BILLING_ENABLED === "true"
 const stripeTaxEnabled = () => process.env.MCA_STRIPE_TAX_ENABLED === "true"
 const promotionCodesEnabled = () => process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED === "true"
 const automaticTaxWhenEnabled = () => stripeTaxEnabled() ? { automatic_tax: { enabled: true } as const } : {}
+const isCustomerTaxLocationInvalid = (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "customer_tax_location_invalid"
 export const missingBillingStateFailsClosed = () => process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED === "true"
 export { stripeTrialLifecycleEnabled } from "./billing-flags"
 export const billingSeatSyncEnabled = () => process.env.MCA_BILLING_SEAT_SYNC_ENABLED === "true" && billingEnabled()
@@ -59,8 +61,7 @@ export function priceIds() {
 
 export async function verifyBillingPrices(client: StripeBillingClient) {
   const ids = priceIds()
-  const taxBehavior = process.env.MCA_STRIPE_TAX_BEHAVIOR
-  if (taxBehavior && taxBehavior !== "exclusive" && taxBehavior !== "inclusive") throw new AppError(503, "billing_tax_behavior_invalid", "Stripe tax behavior must be exclusive or inclusive.")
+  const taxBehavior = stripeTaxBehavior()
   const [base, seats] = await Promise.all([client.prices.retrieve(ids.base), client.prices.retrieve(ids.seats, { expand: ["tiers"] })])
   const common = (p: Stripe.Price) => p.livemode === stripeLiveMode() && p.active && p.currency === BILLING_CATALOG.currency && p.recurring?.interval === BILLING_CATALOG.interval && p.recurring.interval_count === 1 && p.recurring.usage_type === BILLING_CATALOG.usageType && !p.transform_quantity
   const tiers = seats.tiers ?? []
@@ -876,13 +877,23 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       if (sub.schedule && !cancelReduction) throw new AppError(409,"billing_change_pending","A subscription schedule must finish before increasing seats.")
       // Stripe pending updates do not accept automatic_tax. Enable it separately
       // before invoicing the proration when the feature is activated on an older subscription.
-      if (stripeTaxEnabled() && !sub.automatic_tax?.enabled) await client.subscriptions.update(sub.id,
-        { automatic_tax: { enabled: true }, proration_behavior: "none" },
-        { idempotencyKey: `fundlane-tax-${sub.id}` })
-      await client.subscriptions.update(sub.id, {
-        payment_behavior: "pending_if_incomplete", proration_behavior: "always_invoice",
-        items: [{ ...(additional ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }],
-      }, { idempotencyKey: `fundlane-seats-${sub.id}-${current.periodStart}-${current.seatLimit}-${selectedSeats}` })
+      const applyIncrease = async () => {
+        if (stripeTaxEnabled() && !sub.automatic_tax?.enabled) await client.subscriptions.update(sub.id,
+          { automatic_tax: { enabled: true }, proration_behavior: "none" },
+          { idempotencyKey: `fundlane-tax-${sub.id}` })
+        await client.subscriptions.update(sub.id, {
+          payment_behavior: "pending_if_incomplete", proration_behavior: "always_invoice",
+          items: [{ ...(additional ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }],
+        }, { idempotencyKey: `fundlane-seats-${sub.id}-${current.periodStart}-${current.seatLimit}-${selectedSeats}` })
+      }
+      if (stripeTaxEnabled()) {
+        try { await applyIncrease() }
+        catch (error) {
+          if (isCustomerTaxLocationInvalid(error))
+            throw new AppError(409, "billing_tax_location_required", "Update the company billing address in the billing portal, then retry the seat increase.")
+          throw error
+        }
+      } else await applyIncrease()
     } else {
       // Stripe forbids metadata (and every other parameter) with from_subscription.
       // Replay the exact creation request to prove ownership after create succeeded
@@ -949,7 +960,7 @@ export async function previewBillingSeatIncrease(workspaceId:string, selectedSea
   if (selectedSeats<=current.seatLimit || sub.pending_update || sub.schedule || sub.cancel_at || sub.cancel_at_period_end) throw new AppError(409,"billing_change_pending","Choose an increase on an unchanged subscription.")
   const ids=priceIds(),additional=sub.items.data.find(i=>i.price.id===ids.seats)
   const prorationDate=Math.floor(Date.now()/1000)
-  const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",proration_date:prorationDate,items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
+  const preview=await client.invoices.createPreview({customer:mapping.stripe_customer_id,subscription:sub.id,...automaticTaxWhenEnabled(),subscription_details:{proration_behavior:"always_invoice",proration_date:prorationDate,items:[{...(additional?.id?{id:additional.id}:{price:ids.seats}),quantity:selectedSeats-1}]}})
   if (preview.livemode!==stripeLiveMode() || preview.currency!==BILLING_CATALOG.currency) throw new AppError(503,"billing_preview_unavailable","Seat price preview is unavailable. Retry before confirming.")
   if (preview.lines.has_more) throw new AppError(503,"billing_preview_unavailable","Seat price preview is incomplete. Retry before confirming.")
   // A preview can include older prorations and changes to other subscription items.

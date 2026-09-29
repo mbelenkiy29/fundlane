@@ -8,6 +8,7 @@ import { marketingTrialCtaEnabled, publicPricingEnabled } from "../src/lib/marke
 import { MARKETING_ORIGIN } from "../src/lib/marketing/metadata"
 import sitemap from "../src/app/sitemap"
 import robots from "../src/app/robots"
+import { billingTaxCopy, stripeTaxBehavior } from "../src/lib/mca/billing-tax"
 
 function withEnv(values: Record<string, string | undefined>, run: () => void) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]))
@@ -56,7 +57,7 @@ function renderLaunch(env: Record<string, string | undefined>) {
     const { renderToStaticMarkup } = require("react-dom/server");
     require.extensions[".css"] = () => {};
     mock.module("server-only", { exports: {} });
-    mock.module("next/navigation", { exports: { redirect: location => { throw new Error("REDIRECT:" + location) } } });
+    mock.module("next/navigation", { namedExports: { redirect: location => { throw new Error("REDIRECT:" + location) } } });
     mock.module("./src/lib/marketing/fonts.ts", { namedExports: { marketingFontClasses: async () => "" } });
     const { MarketingShell } = require("./src/components/marketing/shell.tsx");
     const { MobileNav } = require("./src/components/marketing/mobile-nav.tsx");
@@ -88,7 +89,7 @@ test("disabled launch flags keep pricing private and marketing links absent", ()
 })
 
 test("enabled pricing uses catalog values and configured support, with gated CTA", () => {
-  const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_MARKETING_TRIAL_CTA_ENABLED: "true", MCA_SIGNUP_MODE: "open", MCA_SUPPORT_EMAIL: "help@example.com" })
+  const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_MARKETING_TRIAL_CTA_ENABLED: "true", MCA_SIGNUP_MODE: "open", MCA_SUPPORT_EMAIL: "help@example.com", MCA_STRIPE_TAX_BEHAVIOR: undefined })
   for (const amount of [BILLING_CATALOG.base.unitAmountCents, ...BILLING_CATALOG.additionalSeats.tiers.map(tier => tier.unitAmountCents)]) {
     assert.match(result.pricing, new RegExp(`\\$${amount / 100}`))
   }
@@ -111,6 +112,29 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   assert.doesNotMatch(invite.pricing, /href="\/sign-up"[^>]*>Start free trial/)
   assert.doesNotMatch(invite.shell, /href="\/sign-up"[^>]*>Start free trial/)
   assert.doesNotMatch(invite.mobile, /href="\/sign-up"[^>]*>Start free trial/)
+})
+
+test("billing tax copy defaults to the exact current exclusive sentence", () => {
+  assert.equal(billingTaxCopy({}), "Sales tax is added where applicable.")
+  assert.equal(billingTaxCopy({ MCA_STRIPE_TAX_BEHAVIOR: "  " }), "Sales tax is added where applicable.")
+  assert.equal(stripeTaxBehavior({}), undefined)
+})
+
+test("billing tax copy supports exclusive and inclusive behavior", () => {
+  assert.equal(billingTaxCopy({ MCA_STRIPE_TAX_BEHAVIOR: "exclusive" }), "Sales tax is added where applicable.")
+  assert.equal(billingTaxCopy({ MCA_STRIPE_TAX_BEHAVIOR: "inclusive" }), "Prices include applicable sales tax.")
+  const exclusive = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_STRIPE_TAX_BEHAVIOR: "exclusive" })
+  const inclusive = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_STRIPE_TAX_BEHAVIOR: "inclusive" })
+  assert.match(exclusive.pricing, /Sales tax is added where applicable/)
+  assert.match(inclusive.pricing, /Prices include applicable sales tax/)
+})
+
+test("billing tax copy rejects invalid configured behavior", () => {
+  assert.throws(() => stripeTaxBehavior({ MCA_STRIPE_TAX_BEHAVIOR: "invalid" }), { status: 503, code: "billing_tax_behavior_invalid" })
+  assert.equal(billingTaxCopy({ MCA_STRIPE_TAX_BEHAVIOR: "invalid" }), null)
+  const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: "true", MCA_STRIPE_TAX_BEHAVIOR: "invalid" })
+  assert.match(result.pricing, /Prices are in USD, billed monthly/)
+  assert.doesNotMatch(result.pricing, /Sales tax is added|Prices include applicable sales tax/)
 })
 
 test("pricing hides onboarding email link when support address is absent", () => {

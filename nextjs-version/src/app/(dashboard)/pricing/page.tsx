@@ -5,6 +5,7 @@ import { BILLING_CATALOG, TRIAL_DAYS } from "@/lib/mca/billing-catalog"
 import { marketingTrialCtaEnabled, publicPricingEnabled } from "@/lib/marketing/launch-switches"
 import { getSupportConfig } from "@/lib/marketing/support-config"
 import { marketingMetadata } from "@/lib/marketing/metadata"
+import { billingTaxCopy } from "@/lib/mca/billing-tax"
 
 export const metadata = marketingMetadata("Pricing", "/pricing", "Monthly Fundlane pricing and trial terms.")
 export const dynamic = "force-dynamic"
@@ -17,6 +18,7 @@ export default function PricingPage() {
   if (!publicPricingEnabled()) redirect("/settings/billing")
   const tiers = BILLING_CATALOG.additionalSeats.tiers
   const { supportEmail } = getSupportConfig()
+  const taxCopy = billingTaxCopy()
   return <MarketingShell jsonLd={{ title: "Pricing", path: "/pricing", description: "Monthly Fundlane pricing and trial terms." }}>
     <main id="main" className="fl-container fl-help fl-pricing">
       <p className="fl-section-label">Simple monthly pricing</p>
@@ -30,7 +32,7 @@ export default function PricingPage() {
           return <li key={firstUser}>Users {firstUser}{lastUser === null ? "+" : `–${lastUser}`}: {dollars(tier.unitAmountCents)} per user per month</li>
         })}
       </ul>
-      <p>Prices are in USD, billed monthly. Sales tax is added where applicable.</p>
+      <p>Prices are in USD, billed monthly.{taxCopy && <> {taxCopy}</>}</p>
       <p>You choose how many seats to buy. Removing a user frees their seat for someone else but doesn&apos;t lower your bill. Adding seats beyond what you&apos;ve bought is prorated and charged right away; the new seat is ready after payment. Reducing your seat count takes effect at your next renewal, with no mid-cycle credit. Seat changes during the free trial are free.</p>
       <p>AI credits: coming soon.</p>
       <p>Onboarding: set up on your own with our guides{supportEmail && <>, or <a className="fl-inline-link" href={`mailto:${supportEmail}`}>email us</a> for help getting your company set up</>}.</p>

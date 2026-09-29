@@ -6,13 +6,13 @@ export function stripeSecretKeyPattern(live: boolean) {
   return live ? /^(sk|rk)_live_/ : /^(sk|rk)_test_/
 }
 
-export function readStripeSecretKey() {
-  return process.env.STRIPE_SECRET_KEY?.trim() ?? ""
+export function readStripeSecretKey(env: Readonly<Record<string, string | undefined>> = process.env) {
+  return env.STRIPE_SECRET_KEY?.trim() ?? ""
 }
 
-export function readPriceIds(): { base: string; seats: string } | null {
-  const base = process.env.STRIPE_BASE_PRICE_ID?.trim() ?? ""
-  const seats = process.env.STRIPE_ADDITIONAL_SEAT_PRICE_ID?.trim() ?? ""
+export function readPriceIds(env: Readonly<Record<string, string | undefined>> = process.env): { base: string; seats: string } | null {
+  const base = env.STRIPE_BASE_PRICE_ID?.trim() ?? ""
+  const seats = env.STRIPE_ADDITIONAL_SEAT_PRICE_ID?.trim() ?? ""
   if (!base || !seats || base === seats || !PRICE_ID_PATTERN.test(base) || !PRICE_ID_PATTERN.test(seats)) return null
   return { base, seats }
 }
