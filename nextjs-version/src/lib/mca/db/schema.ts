@@ -1994,3 +1994,21 @@ export const intake_submission_previews = pgTable("intake_submission_previews", 
   expires_at: text().notNull(),
   confirmed_at: text(),
 }, table => [index("intake_submission_previews_intake_idx").on(table.workspace_id, table.intake_id, table.created_at)]);
+
+export const retention_holds = pgTable("retention_holds", {
+  id: text().primaryKey().notNull(),
+  workspace_id: text().notNull().references(() => workspaces.id),
+  deal_id: text().references(() => deals.id),
+  reason: text().notNull(),
+  note: text().notNull(),
+  placed_by: text().notNull().references(() => users.id),
+  placed_at: timestamp({ withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  released_by: text().references(() => users.id),
+  released_at: timestamp({ withTimezone: true, precision: 3 }),
+}, table => [
+  index("retention_holds_active_workspace_idx").on(table.workspace_id).where(sql`${table.released_at} IS NULL`),
+  index("retention_holds_active_deal_idx").on(table.workspace_id, table.deal_id).where(sql`${table.released_at} IS NULL AND ${table.deal_id} IS NOT NULL`),
+  check("retention_holds_reason_check", sql`${table.reason} IN ('dispute', 'chargeback', 'subpoena', 'regulator_request')`),
+  check("retention_holds_note_check", sql`char_length(${table.note}) BETWEEN 1 AND 2000 AND ${table.note} = btrim(${table.note})`),
+  check("retention_holds_release_check", sql`(${table.released_at} IS NULL) = (${table.released_by} IS NULL)`),
+]);
