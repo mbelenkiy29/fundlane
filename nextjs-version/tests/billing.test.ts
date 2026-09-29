@@ -13,7 +13,7 @@ import { createWorkspaceWithAdmin } from "../src/lib/mca/workspaces"
 import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catalog"
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
 import { deliverBillingEmail } from "../src/lib/mca/email"
-import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, runImmediateBillingReconcile, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, billingSeatSyncEnabled, billingManualSeatPreviewEnabled, seatsCountPendingInvites, licensedSeatCount, ensureSyncedSeatCapacity, reconcileLicensedSeats, previewBillingSeatIncrease, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
+import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, runImmediateBillingReconcile, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, checkoutIdempotencyKey, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, billingSeatSyncEnabled, billingManualSeatPreviewEnabled, seatsCountPendingInvites, licensedSeatCount, ensureSyncedSeatCapacity, reconcileLicensedSeats, previewBillingSeatIncrease, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail, runBillingMaintenance, localTrialNoticeEligible } from "../src/lib/mca/billing-operations"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAllowedForOwner, trialFingerprintAction } from "../src/lib/mca/trial-abuse"
 import type { DbExecutor } from "../src/lib/mca/db"
@@ -980,7 +980,7 @@ test("checkout reuses customer and open session and includes base plus additiona
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   assert.equal(f.state.createdCustomers,1);assert.equal(f.state.checkouts,1);assert.equal(f.state.expires,0)
-  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-mp0-\\d+$`))
   assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:4}])
   assert.deepEqual(f.state.checkoutParams.subscription_data,{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"}})
   assert.match(String(f.state.checkoutParams.integration_identifier),/^fundlane_company_subscription_[a-z]{8}$/)
@@ -992,7 +992,7 @@ test("tax flag off preserves the complete Checkout request",async()=>{
   await initializeCompanyTrial(f.workspaceId,5)
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   assert.deepEqual(f.state.checkoutParams,{
-    mode:"subscription",customer:f.customerId,integration_identifier:"fundlane_company_subscription_ndmotxpw",
+    mode:"subscription",customer:f.customerId,integration_identifier:"fundlane_company_subscription_ndmotxpw",managed_payments:{enabled:false},
     client_reference_id:f.workspaceId,metadata:{workspace_id:f.workspaceId},payment_method_collection:"always",
     subscription_data:{metadata:{workspace_id:f.workspaceId},billing_mode:{type:"flexible"}},
     line_items:[{price:"price_base",quantity:1},{price:"price_seats",quantity:4}],
@@ -1006,7 +1006,7 @@ test("promotion-code flag unset omits the Checkout parameter",async()=>{
   await createBillingCheckout(f.workspaceId,5,false,f.client)
   assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
   assert.equal(f.state.checkoutParams.payment_method_collection,"always")
-  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-mp0-\\d+$`))
 })
 test("promotion-code flag enables code entry while retaining card collection",async()=>{
   process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED="true"
@@ -1017,7 +1017,7 @@ test("promotion-code flag enables code entry while retaining card collection",as
     assert.equal(f.state.checkoutParams.allow_promotion_codes,true)
     assert.equal(f.state.checkoutParams.payment_method_collection,"always")
     assert.equal("discounts" in f.state.checkoutParams,false)
-    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-promo-\\d+$`))
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-promo-mp0-\\d+$`))
   } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
 })
 test("enabling promotion codes expires an open session without them",async()=>{
@@ -1030,7 +1030,7 @@ test("enabling promotion codes expires an open session without them",async()=>{
     assert.equal(f.state.checkouts,2)
     assert.equal(f.state.expires,1)
     assert.equal(f.state.checkoutParams.allow_promotion_codes,true)
-    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-promo-\\d+$`))
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-promo-mp0-\\d+$`))
     await createBillingCheckout(f.workspaceId,5,false,f.client)
     assert.equal(f.state.checkouts,2)
     assert.equal(f.state.expires,1)
@@ -1047,7 +1047,7 @@ test("disabling promotion codes expires an open enabled session",async()=>{
     assert.equal(f.state.checkouts,2)
     assert.equal(f.state.expires,1)
     assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
-    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-\\d+$`))
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-cs_[-\\w]+-mp0-\\d+$`))
     await createBillingCheckout(f.workspaceId,5,false,f.client)
     assert.equal(f.state.checkouts,2)
     assert.equal(f.state.expires,1)
@@ -1060,8 +1060,32 @@ test("promotion-code flag requires exact true",async()=>{
     await initializeCompanyTrial(f.workspaceId,5)
     await createBillingCheckout(f.workspaceId,5,false,f.client)
     assert.equal("allow_promotion_codes" in f.state.checkoutParams,false)
-    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-\\d+$`))
+    assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:5-initial-mp0-\\d+$`))
   } finally {delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED}
+})
+test("Checkout opts out of account-default Managed Payments and never reuses a Managed Payments session",async()=>{
+  const f=await fixture(false)
+  await initializeCompanyTrial(f.workspaceId,5)
+  await createBillingCheckout(f.workspaceId,5,false,f.client)
+  assert.deepEqual(f.state.checkoutParams.managed_payments,{enabled:false})
+  const client={...f.client,checkout:{sessions:{
+    ...f.client.checkout.sessions,
+    retrieve:async(id:string)=>({id,status:"open",url:"https://checkout.stripe.com/managed",managed_payments:{enabled:true}}),
+  }}} as StripeBillingClient
+  const result=await createBillingCheckout(f.workspaceId,5,false,client)
+  assert.equal(result.url,"https://checkout.stripe.com/test")
+  assert.equal(f.state.checkouts,2)
+  assert.equal(f.state.expires,1)
+  assert.deepEqual(f.state.checkoutParams.managed_payments,{enabled:false})
+})
+test("onboarding and settings Checkout requests never share an idempotency key",()=>{
+  const settings=checkoutIdempotencyKey("w1","fundlane:1",null,true,false,7)
+  const onboarding=checkoutIdempotencyKey("w1","fundlane:1",null,true,true,7)
+  assert.notEqual(settings,onboarding)
+  assert.equal(settings,"fundlane-checkout-w1-fundlane:1-initial-promo-mp0-7")
+  assert.equal(onboarding,"fundlane-checkout-w1-fundlane:1-initial-promo-onboarding-mp0-7")
+  // Keys issued before the Managed Payments opt-out carried different parameters.
+  assert.notEqual(settings,"fundlane-checkout-w1-fundlane:1-initial-promo-7")
 })
 test("turning tax off expires an open tax-enabled Checkout and creates an untaxed session",async()=>{
   const f=await fixture(false)
@@ -1150,7 +1174,7 @@ test("changing checkout seats expires the open session and creates a new one",as
   await createBillingCheckout(f.workspaceId,2,true,f.client)
   assert.equal(f.state.checkouts,2);assert.equal(f.state.expires,1)
   assert.deepEqual(f.state.checkoutParams.line_items,[{price:"price_base",quantity:1},{price:"price_seats",quantity:1}])
-  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:2-cs_[-\\w]+-\\d+$`))
+  assert.match(String(f.state.checkoutKey),new RegExp(`^fundlane-checkout-${f.workspaceId}-fundlane:2-cs_[-\\w]+-mp0-\\d+$`))
 })
 test("Stripe status access table and trial quantity use provider state",()=>{
   const end=new Date(Date.now()+86400000).toISOString()
