@@ -10,6 +10,16 @@ Platform operators use `/settings/sms-review`. Operator authorization is an exac
 
 ## Deployment prerequisites
 
+Before hosted acceptance, an operator can opt in to the offline, read-only configuration report from `nextjs-version/`:
+
+```sh
+MCA_SMS_READINESS_TOOL_ENABLED=true pnpm sms:readiness -- --env-file .env.local --workspace-id '<workspace-id>' --account-id '<account-id>'
+```
+
+`MCA_SMS_READINESS_TOOL_ENABLED` is `false` by default and only the exact value `true` enables validation. The environment file is read locally and explicit process environment variables take precedence. The optional identifiers produce URL-encoded console values for the inbound/Advanced Opt-Out callback and Event Streams number-registration callback. The report intentionally does not emit a static delivery-status URL because the application generates that callback per message; Twilio supplies the signed `bodySHA256` query parameter for Event Streams, so the report does not append it.
+
+The command writes deterministic JSON containing the enabled/ready state, fixed redacted check codes and messages, and callback URL results. It never prints auth tokens or API-key secrets. Exit code `0` means either that the tool is disabled or that the enabled structural checks passed; an enabled invalid report exits nonzero. A passing report proves configuration shape only. It does **not** prove Twilio or carrier approval, deployed secrets or routes, signature acceptance, Advanced Opt-Out state, schedule ownership, or live delivery. Those items still require the controlled hosted acceptance below. No database migration or hosted mutation is performed by this command.
+
 1. Apply the checked Drizzle migrations through the controlled Supabase release process. Migration `0065_sms_refresh_cursor` adds a company refresh cursor, leaving the operator review timestamp unchanged by routine refresh attempts.
 2. Configure `MCA_APP_ORIGIN` / `MCA_SMS_PUBLIC_BASE_URL` as a clean public HTTPS origin and the existing workspace encryption key. Configure the email delivery webhook to accept `company_email_verification`. A development email preview is not evidence of delivery; use an email capture webhook during development.
 3. Configure `MCA_PLATFORM_OPERATOR_USER_IDS` with trusted user IDs, not email addresses or workspace roles.
