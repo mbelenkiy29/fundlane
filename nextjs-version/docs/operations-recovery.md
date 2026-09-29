@@ -31,6 +31,36 @@ For an external send, kill the worker immediately after claim, then separately a
 
 ## Staging backup and restore drill
 
+### Manual database archive and local rehearsal
+
+These scripts are operator commands, never scheduled by the app. Install PostgreSQL client tools (`pg_dump`, `pg_restore`, `psql`), Node 24/tsx, and `age` for encrypted archives. Use compatible PostgreSQL client versions, a private local directory with mode `0700`, an age recipient and separately held age identity. The source URL belongs only in `MCA_OPS_SOURCE_DATABASE_URL`; the disposable target URL belongs only in `MCA_OPS_TARGET_DATABASE_URL`. Neither script reads the application's `DATABASE_URL`. Both switches require the exact value `true` plus `--confirm`; unset and `false` refuse. The target must be a new, empty loopback database. A non-loopback source requires age encryption. Unencrypted archives require a synthetic loopback fixture and explicit `--synthetic`.
+
+For a synthetic local source, or in Michael's separately approved operator environment, run a manual backup:
+
+```sh
+export MCA_OPS_BACKUP_ENABLED=true
+export MCA_OPS_SOURCE_DATABASE_URL='postgresql://operator:PLACEHOLDER@127.0.0.1:5432/synthetic_source'
+mkdir -m 700 -p /private/path/fundlane-backups
+pnpm exec tsx scripts/ops/backup-database.ts --confirm --kind weekly --directory /private/path/fundlane-backups --recipient 'age1PLACEHOLDER'
+# Use --kind pre-migration immediately before a reviewed migration.
+```
+
+The command prints the completed archive path, SHA-256 and dump completion time. Save the hash in the private evidence record. It prunes only matching regular archives in that directory after success, leaving the newest four weekly and three pre-migration names. It does not upload or schedule backups. Verify the hash again before restore; the restore command checks it before running any database tool. Copy encrypted archives to Michael's private “Fundlane backups” location using a separately reviewed process. The script cannot establish that the local directory or later copy is an approved private location.
+
+Restore locally with a disposable, empty database prepared by the operator:
+
+```sh
+export MCA_OPS_RESTORE_DRILL_ENABLED=true
+export MCA_OPS_TARGET_DATABASE_URL='postgresql://operator:PLACEHOLDER@127.0.0.1:5432/disposable_restore'
+pnpm exec tsx scripts/ops/restore-drill.ts --confirm --archive /private/path/fundlane-backups/mca-weekly-YYYYMMDDTHHMMSSmmmZ.dump.age --sha256 EXPECTED_64_HEX_DIGITS --identity /private/path/age-identity.txt
+```
+
+The restore refuses hosted targets, the production project reference and source-equal targets. It uses `pg_restore` without `--clean` or `--create`, then `verify-restore.sql` with stop-on-error. The SQL reports only table and orphan counts and fails if an orphan is found. Compare a linked deal ID, document ID and stored checksum against the pre-backup manifest privately. SQL can compare stored document checksums but cannot prove restored private object bytes. A database dump does not include private Storage object bytes or custody of `MCA_DATA_ENCRYPTION_KEY`. `pg_dump` does not include global roles; export and verify them separately in the hosted procedure. Restore and verify private Storage and Auth separately in an approved hosted drill. A full Supabase dump can include managed schemas or extensions that ordinary local PostgreSQL cannot restore; record those gaps rather than claiming full hosted recovery. Local restore timing is rehearsal evidence, not proof of production RTO or RPO.
+
+Private evidence template: operator; backup and drill dates; source snapshot/dump completion time; chosen recovery point and source data cutoff; disposable target; sanitized counts and orphan counts; linked deal/document IDs and stored checksum comparison; private object byte checksum and access result; membership/owner links; invoice/payment and credit ledger references; RTO measured from restore start through verification; RPO calculated from source data cutoff to chosen recovery point; key requirements; alert receipt; worker kill outcome; gaps. Keep bank fields, credentials and document content out of the record.
+
+Michael owns the weekly encrypted backup, a monthly copy of private Storage buckets to the private backup location, the quarterly restore drill, monitoring and key custody. Keep `MCA_DATA_ENCRYPTION_KEY` separately in a password manager. Upgrade to Supabase Pro when the first paying customer signs up or real customer data arrives, whichever comes first. Keep `MCA_JOB_RECOVERY_ENABLED` off until the staging kill drill. The existing alert thresholds above remain unchanged; record a delivered alert and worker kill evidence separately before closing issue #46.
+
 1. Select an approved **nonproduction** Supabase project with synthetic workspaces, deals, private documents, memberships and billing ledger references. Record a manifest of immutable IDs, table counts, foreign-key links, private object keys and SHA-256 checksums; never copy customer documents or bank fields into diagnostics. Note the project's PITR/backup entitlement and available restore point in the Supabase dashboard.
 2. Record start time. Use Supabase's dashboard backup/PITR restore procedure to create or recover into an isolated staging target. Use a staging encryption key matching the synthetic source key; preserve the key and Supabase Storage object backups separately because a Postgres restore alone does not prove private object recovery. Do not redirect production Auth callbacks, webhooks or cron to the target.
 3. Apply only the reviewed target's migration history and restricted runtime grants if the restored point predates the code revision. Recreate private Storage buckets and restore synthetic objects using the approved staging procedure. Validate Auth identities and memberships against the restored project; do not assume Postgres alone restores Auth/Storage state consistently.
