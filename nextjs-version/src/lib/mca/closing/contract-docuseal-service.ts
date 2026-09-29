@@ -6,11 +6,14 @@ import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
 import { AppError } from "../errors"
 import { assertCompanyOperational } from "../company-access"
-import { createDocuSealContractSubmission, DOCUSEAL_CONTRACT_FIELD_KEYS, verifyDocuSealCompletedWebhook, type DocuSealContractProviderConfig, type DocuSealProviderDependencies } from "./docuseal-provider"
+import { isDocumentReady, type DocumentSummary } from "../documents/contracts"
+import { storeDocument } from "../documents/service"
+import { createDocuSealContractSubmission, DOCUSEAL_CONTRACT_FIELD_KEYS, fetchDocuSealArtifact, verifyDocuSealCompletedWebhook, type DocuSealContractProviderConfig, type DocuSealProviderConfig, type DocuSealProviderDependencies } from "./docuseal-provider"
+import { recordVerifiedExternalContractSignature } from "./service"
 import { verifiedClosingFlowEnabled } from "./verified-flow"
 
 interface Binding { submissionId: string; workflowId: string; offerRevisionId?: string }
-interface Connection { workspaceId: string; webhookSecret: string; bindings: Binding[]; apiBaseUrl?: string; apiKey?: string; templateId?: number; signerRole?: string; fieldMap?: DocuSealContractProviderConfig["fieldMap"] }
+interface Connection { workspaceId: string; webhookSecret: string; bindings: Binding[]; apiBaseUrl?: string; apiKey?: string; templateId?: number; signerRole?: string; fieldMap?: DocuSealContractProviderConfig["fieldMap"]; artifactAllowedHosts?: string[] }
 
 export function contractDocuSealEnabled(): boolean {
   return verifiedClosingFlowEnabled() && process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_ENABLED === "true"
@@ -18,6 +21,10 @@ export function contractDocuSealEnabled(): boolean {
 
 export function contractDocuSealSendEnabled(): boolean {
   return contractDocuSealEnabled() && process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_SEND_ENABLED === "true"
+}
+
+export function contractDocuSealVerificationEnabled(): boolean {
+  return contractDocuSealEnabled() && process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_VERIFY_ENABLED === "true"
 }
 
 function invalid(): never {
@@ -37,29 +44,42 @@ export function parseContractDocuSealConnections(raw = process.env.MCA_DOCUSEAL_
   return parsed.map((value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return invalid()
     const entry = value as Record<string, unknown>
-    const allowed = new Set(["workspaceId", "webhookSecret", "bindings", "apiBaseUrl", "apiKey", "templateId", "signerRole", "fieldMap"])
+    const allowed = new Set(["workspaceId", "webhookSecret", "bindings", "apiBaseUrl", "apiKey", "templateId", "signerRole", "fieldMap", "artifactAllowedHosts"])
     if (Object.keys(entry).some((key) => !allowed.has(key)) || !required(entry.workspaceId) || !required(entry.webhookSecret) || entry.webhookSecret.length < 32 || entry.webhookSecret.length > 500 || !Array.isArray(entry.bindings) || workspaces.has(entry.workspaceId)) return invalid()
     workspaces.add(entry.workspaceId)
     const bindings = entry.bindings.map((item: unknown) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return invalid()
       const binding = item as Record<string, unknown>
-      if (!required(binding.submissionId) || !/^\d+$/.test(binding.submissionId) || !required(binding.workflowId) || submissions.has(binding.submissionId)) return invalid()
+      if (Object.keys(binding).some((key) => !["submissionId", "workflowId", "offerRevisionId"].includes(key)) || !required(binding.submissionId) || !/^\d+$/.test(binding.submissionId) || !required(binding.workflowId) || submissions.has(binding.submissionId)) return invalid()
       submissions.add(binding.submissionId)
       if (binding.offerRevisionId === undefined) return { submissionId: binding.submissionId, workflowId: binding.workflowId }
       if (!required(binding.offerRevisionId)) return invalid()
       return { submissionId: binding.submissionId, workflowId: binding.workflowId, offerRevisionId: binding.offerRevisionId }
     })
-    const sendValues = [entry.apiBaseUrl, entry.apiKey, entry.templateId, entry.signerRole, entry.fieldMap]
-    if (sendValues.some((item) => item !== undefined)) {
-      if (!required(entry.apiBaseUrl) || !required(entry.apiKey) || !Number.isSafeInteger(entry.templateId) || Number(entry.templateId) <= 0 || !required(entry.signerRole) || !entry.fieldMap || typeof entry.fieldMap !== "object" || Array.isArray(entry.fieldMap)) return invalid()
-      let url: URL
-      try { url = new URL(entry.apiBaseUrl) } catch { return invalid() }
-      if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return invalid()
+    const hasApi = entry.apiBaseUrl !== undefined || entry.apiKey !== undefined || entry.artifactAllowedHosts !== undefined
+      || entry.templateId !== undefined || entry.signerRole !== undefined || entry.fieldMap !== undefined
+    let apiBaseUrl: string | undefined, apiKey: string | undefined, artifactAllowedHosts: string[] | undefined
+    if (hasApi) {
+      if (!required(entry.apiBaseUrl) || !required(entry.apiKey) || entry.apiKey.length > 500) return invalid()
+      let api: URL
+      try { api = new URL(entry.apiBaseUrl) } catch { return invalid() }
+      if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || entry.apiBaseUrl.includes("?") || entry.apiBaseUrl.includes("#")) return invalid()
+      apiBaseUrl = api.toString().replace(/\/$/, "")
+      apiKey = entry.apiKey
+      if (entry.artifactAllowedHosts !== undefined) {
+        if (!Array.isArray(entry.artifactAllowedHosts) || !entry.artifactAllowedHosts.length || entry.artifactAllowedHosts.some((host) => typeof host !== "string" || !/^[a-z0-9.-]+$/.test(host) || host.startsWith(".") || host.endsWith("."))) return invalid()
+        artifactAllowedHosts = [...new Set(entry.artifactAllowedHosts)]
+      } else artifactAllowedHosts = [api.hostname]
+    }
+    const hasSend = entry.templateId !== undefined || entry.signerRole !== undefined || entry.fieldMap !== undefined
+    let send: Partial<Pick<Connection, "templateId" | "signerRole" | "fieldMap">> = {}
+    if (hasSend) {
+      if (!Number.isSafeInteger(entry.templateId) || Number(entry.templateId) <= 0 || !required(entry.signerRole) || !entry.fieldMap || typeof entry.fieldMap !== "object" || Array.isArray(entry.fieldMap)) return invalid()
       const map = entry.fieldMap as Record<string, unknown>
       if (Object.keys(map).length !== DOCUSEAL_CONTRACT_FIELD_KEYS.length || DOCUSEAL_CONTRACT_FIELD_KEYS.some((key) => !required(map[key])) || new Set(Object.values(map)).size !== DOCUSEAL_CONTRACT_FIELD_KEYS.length) return invalid()
-      return { workspaceId: entry.workspaceId, webhookSecret: entry.webhookSecret, bindings, apiBaseUrl: url.toString().replace(/\/$/, ""), apiKey: entry.apiKey, templateId: Number(entry.templateId), signerRole: entry.signerRole, fieldMap: map as unknown as DocuSealContractProviderConfig["fieldMap"] }
+      send = { templateId: Number(entry.templateId), signerRole: entry.signerRole, fieldMap: map as unknown as DocuSealContractProviderConfig["fieldMap"] }
     }
-    return { workspaceId: entry.workspaceId, webhookSecret: entry.webhookSecret, bindings }
+    return { workspaceId: entry.workspaceId, webhookSecret: entry.webhookSecret, bindings, ...(apiBaseUrl ? { apiBaseUrl, apiKey, artifactAllowedHosts } : {}), ...send }
   })
 }
 
@@ -105,15 +125,81 @@ export async function sendContractWithDocuSeal(actor: DealActor, workflowId: str
   }
 }
 
+type Submission = { id?: unknown; status?: unknown; completed_at?: unknown; submitters?: unknown; documents?: unknown; audit_log_url?: unknown }
+export interface ContractVerificationDependencies {
+  fetchImpl?: typeof fetch
+  provider?: DocuSealProviderDependencies
+  storeDocument?: (actor: DealActor, input: Parameters<typeof storeDocument>[1]) => Promise<DocumentSummary>
+  recordSignature?: typeof recordVerifiedExternalContractSignature
+  audit?: typeof recordAuditEvent
+}
+
+function systemActor(workspaceId: string, correlationId: string): DealActor {
+  return { workspaceId, userId: null, membershipId: null, role: "super_admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId }
+}
+
+async function fetchSubmission(connection: Connection, submissionId: string, fetchImpl: typeof fetch): Promise<Submission> {
+  const response = await fetchImpl(`${connection.apiBaseUrl}/submissions/${encodeURIComponent(submissionId)}`, { headers: { "X-Auth-Token": connection.apiKey! } })
+  if (!response.ok) throw new AppError(502, "docuseal_request_failed", "DocuSeal submission verification failed.")
+  return await response.json() as Submission
+}
+
+async function resolveBinding(connection: Connection, submissionId: string): Promise<Binding | undefined> {
+  const staticBinding = connection.bindings.find((item) => item.submissionId === submissionId)
+  const stored = await getDatabase().prepare<{ record_id: string; attempt_key: string }>("SELECT record_id,attempt_key FROM mca_closing_deliveries WHERE workspace_id=? AND kind='contract_docuseal' AND state='sent' AND external_id=?").get(connection.workspaceId, submissionId)
+  if (staticBinding && stored && (staticBinding.workflowId !== stored.record_id || (staticBinding.offerRevisionId && staticBinding.offerRevisionId !== stored.attempt_key))) throw new AppError(409, "docuseal_contract_binding_invalid", "Static and stored DocuSeal contract bindings conflict.")
+  return staticBinding ?? (stored ? { submissionId, workflowId: stored.record_id, offerRevisionId: stored.attempt_key } : undefined)
+}
+
+/** Bounded, idempotent completion processor; safe for a webhook or existing job consumer. */
+export async function verifyContractDocuSealCompletion(workspaceId: string, submissionId: string, dependencies: ContractVerificationDependencies = {}): Promise<{ state: "signed"; replayed: boolean; evidenceDocumentId: string }> {
+  if (!contractDocuSealVerificationEnabled()) throw new AppError(503, "contract_signature_provider_unavailable", "Verified DocuSeal contract processing is disabled.")
+  const connection = parseContractDocuSealConnections().find((item) => item.workspaceId === workspaceId)
+  if (!connection?.apiBaseUrl || !connection.apiKey || !connection.artifactAllowedHosts) throw new AppError(503, "docuseal_configuration_invalid", "DocuSeal contract API verification is not configured for this workspace.")
+  const binding = await resolveBinding(connection, submissionId)
+  if (!binding) throw new AppError(409, "docuseal_contract_binding_invalid", "DocuSeal contract binding does not match this submission.")
+  const database = getDatabase()
+  const receipt = await database.prepare<{ metadata: string }>("SELECT metadata FROM audit_events WHERE workspace_id=? AND action='contract.docuseal_completion_received' AND resource_id=? ORDER BY created_at DESC LIMIT 1").get(workspaceId, binding.workflowId)
+  if (!receipt) throw new AppError(409, "docuseal_contract_receipt_missing", "An authenticated DocuSeal completion receipt is required.")
+  let receiptSubmission: unknown
+  try { receiptSubmission = (JSON.parse(receipt.metadata) as { submissionId?: unknown }).submissionId } catch { /* rejected below */ }
+  if (receiptSubmission !== submissionId) throw new AppError(409, "docuseal_submission_binding_invalid", "The stored receipt does not match this submission.")
+  const workflow = await database.prepare<{ deal_id: string; offer_revision_id: string; state: string; signature_external_id: string | null; signature_evidence_document_id: string | null }>("SELECT deal_id,offer_revision_id,state,signature_external_id,signature_evidence_document_id FROM mca_contract_workflows WHERE workspace_id=? AND id=?").get(workspaceId, binding.workflowId)
+  if (!workflow || (binding.offerRevisionId && binding.offerRevisionId !== workflow.offer_revision_id)) throw new AppError(409, "docuseal_contract_binding_invalid", "DocuSeal contract binding does not match this workspace workflow.")
+  if (["signed", "final_review"].includes(workflow.state) && workflow.signature_external_id === submissionId && workflow.signature_evidence_document_id) return { state: "signed", replayed: true, evidenceDocumentId: workflow.signature_evidence_document_id }
+  if (workflow.state !== "contract_sent") throw new AppError(409, "contract_not_sent", "The bound contract is not awaiting a signature.")
+  const actor = systemActor(workspaceId, `docuseal-contract:${submissionId}`)
+  try {
+    const submission = await fetchSubmission(connection, submissionId, dependencies.fetchImpl ?? fetch)
+    if (String(submission.id) !== submissionId) throw new AppError(409, "docuseal_submission_binding_invalid", "DocuSeal returned a different submission.")
+    if (submission.status !== "completed" || !Array.isArray(submission.submitters) || !submission.submitters.length || submission.submitters.some((item) => !item || typeof item !== "object" || (item as { status?: unknown }).status !== "completed")) throw new AppError(409, "docuseal_submission_incomplete", "Not every DocuSeal submitter completed the contract.")
+    const documents = Array.isArray(submission.documents) ? submission.documents as Array<{ name?: unknown; url?: unknown }> : []
+    if (!documents.length || documents.some((document) => typeof document.url !== "string") || typeof submission.audit_log_url !== "string") throw new AppError(502, "docuseal_artifact_missing", "DocuSeal completed without required signed and audit evidence.")
+    const fieldBindings = Object.fromEntries(["amount", "bankName", "routingNumber", "accountNumber", "businessName", "contactName", "contactEmail"].map((key) => [key, { name: `unused_${key}`, type: "text" }])) as DocuSealProviderConfig["fieldBindings"]
+    const providerConfig = { apiBaseUrl: connection.apiBaseUrl, apiToken: connection.apiKey, webhookSecret: connection.webhookSecret, templateId: 1, signerRole: "contract", fieldBindings, sendEmail: false, requireEmail2fa: false, artifactAllowedHosts: connection.artifactAllowedHosts }
+    const save = dependencies.storeDocument ?? storeDocument
+    const persist = async (url: string, filename: string, kind: "signed" | "audit", index = 0) => {
+      const artifact = await fetchDocuSealArtifact(providerConfig, url, dependencies.provider)
+      return save(actor, { dealId: workflow.deal_id, idempotencyKey: `docuseal-contract:${binding.workflowId}:${submissionId}:${kind}:${index}`, filename, mimeType: artifact.mimeType, bytes: artifact.bytes, category: "closing_document", source: kind === "signed" ? "docuseal_signed_contract" : "docuseal_audit_log", sourceReference: `docuseal-contract:${submissionId}:${kind}:${index}` })
+    }
+    const signedDocuments = await Promise.all(documents.map((document, index) => persist(document.url as string, typeof document.name === "string" ? document.name : `signed-contract-${index + 1}.pdf`, "signed", index)))
+    const audit = await persist(submission.audit_log_url, "docuseal-audit-log.pdf", "audit")
+    if (signedDocuments.some((document) => !isDocumentReady(document.processingState)) || !isDocumentReady(audit.processingState)) throw new AppError(423, "docuseal_artifact_not_clean", "DocuSeal contract evidence must be scan-clean before signing.")
+    await (dependencies.recordSignature ?? recordVerifiedExternalContractSignature)(actor, { workflowId: binding.workflowId, externalId: submissionId, evidenceDocumentId: signedDocuments[0].id })
+    await (dependencies.audit ?? recordAuditEvent)({ context: actor, action: "contract.docuseal_signature_verified", resourceType: "mca_contract_workflow", resourceId: binding.workflowId, metadata: { submissionId, evidenceDocumentId: signedDocuments[0].id, signedDocumentIds: signedDocuments.map((document) => document.id), auditDocumentId: audit.id, evidenceScanState: "clean" }, correlationId: actor.correlationId })
+    return { state: "signed", replayed: false, evidenceDocumentId: signedDocuments[0].id }
+  } catch (error) {
+    await (dependencies.audit ?? recordAuditEvent)({ context: actor, action: "contract.docuseal_verification_failed", resourceType: "mca_contract_workflow", resourceId: binding.workflowId, metadata: { submissionId, errorCode: error instanceof AppError ? error.code : "docuseal_verification_failed" }, correlationId: actor.correlationId })
+    throw error
+  }
+}
+
 export async function recordContractDocuSealWebhook(workspaceId: string, rawBody: string, signature: string | null): Promise<{ state: "ignored" } | { state: "received"; replayed: boolean }> {
   const connection = parseContractDocuSealConnections().find((item) => item.workspaceId === workspaceId)
   if (!connection) throw new AppError(503, "docuseal_unconfigured", "DocuSeal contract callback is not configured for this workspace.")
   const completed = verifyDocuSealCompletedWebhook(rawBody, signature, connection.webhookSecret)
   const database = getDatabase()
-  const staticBinding = connection.bindings.find((item) => item.submissionId === completed.submissionId)
-  const stored = await database.prepare<{ record_id: string; attempt_key: string }>("SELECT record_id,attempt_key FROM mca_closing_deliveries WHERE workspace_id=? AND kind='contract_docuseal' AND state='sent' AND external_id=?").get(workspaceId, completed.submissionId)
-  if (staticBinding && stored && (staticBinding.workflowId !== stored.record_id || (staticBinding.offerRevisionId && staticBinding.offerRevisionId !== stored.attempt_key))) throw new AppError(409, "docuseal_contract_binding_invalid", "Static and stored DocuSeal contract bindings conflict.")
-  const binding = staticBinding ?? (stored ? { submissionId: completed.submissionId, workflowId: stored.record_id, offerRevisionId: stored.attempt_key } : undefined)
+  const binding = await resolveBinding(connection, completed.submissionId)
   if (!binding) return { state: "ignored" }
   const id = createHash("sha256").update(JSON.stringify(["docuseal_contract_receipt", workspaceId, completed.submissionId])).digest("hex")
   const assertReplay = async (): Promise<{ state: "received"; replayed: true } | null> => {

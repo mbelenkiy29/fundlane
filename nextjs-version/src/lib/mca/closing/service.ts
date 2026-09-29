@@ -530,6 +530,37 @@ export async function recordContractSignature(actor: DealActor, input: { workflo
   return contract(updated!, actor)
 }
 
+/**
+ * Internal provider-completion entry point. Unlike the user-facing signature
+ * mutation, this accepts external signatures only while the complete DocuSeal
+ * verification gate is enabled. The evidence is re-read under the actor's
+ * workspace before the state transition.
+ */
+export async function recordVerifiedExternalContractSignature(actor: DealActor, input: { workflowId: string; externalId: string; evidenceDocumentId: string }): Promise<ContractWorkflow> {
+  if (!verifiedClosingFlowEnabled() || process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_ENABLED !== "true" || process.env.MCA_CLOSING_DOCUSEAL_CONTRACT_VERIFY_ENABLED !== "true") {
+    throw new AppError(503, "contract_signature_provider_unavailable", "No verified contract signature callback is connected. Use manual evidence review after provider setup.")
+  }
+  return withImmediateTransaction(async (database) => {
+    const externalId = required(input.externalId, "externalId", 300)
+    const evidenceId = required(input.evidenceDocumentId, "evidenceDocumentId", 300)
+    const row = await database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, input.workflowId)
+    if (!row) throw new AppError(404, "contract_workflow_not_found", "The contract workflow was not found.")
+    await getDealForDocument(actor, String(row.deal_id))
+    if (["signed", "final_review"].includes(String(row.state))) {
+      if (row.signature_source === "external" && row.signature_external_id === externalId && row.signature_evidence_document_id === evidenceId) return contract(row, actor)
+      throw new AppError(409, "signature_conflict", "A different signature decision has already been recorded.")
+    }
+    if (row.state !== "contract_sent") throw new AppError(409, "contract_not_sent", "Send the contract request before recording a signature.")
+    const evidence = await getDocument(actor, evidenceId)
+    if (evidence.dealId !== row.deal_id || evidence.category !== "closing_document" || evidence.processingState !== "clean") throw new AppError(422, "signature_evidence_invalid", "External signature evidence must be a scan-clean closing document from this deal.")
+    const now = nowIso()
+    const updated = await database.prepare<Row>(`UPDATE mca_contract_workflows SET state='signed',signed_at=?,signature_source='external',signature_external_id=?,signature_evidence_document_id=?,manual_signature_reason=NULL,updated_at=? WHERE workspace_id=? AND id=? AND state='contract_sent' RETURNING *`).get(now, externalId, evidenceId, now, actor.workspaceId, input.workflowId)
+    if (!updated) throw new AppError(409, "contract_not_sent", "The contract state changed before the verified signature was recorded.")
+    await recordAuditEvent({ context: actor, action: "closing.contract_signature_recorded", resourceType: "contract_workflow", resourceId: input.workflowId, metadata: { source: "external", externalIdPresent: true, evidenceDocumentId: evidenceId, verification: "docuseal_independent_fetch" }, correlationId: actor.correlationId, executor: database })
+    return contract(updated, actor)
+  })
+}
+
 export async function markContractFinalReview(actor: DealActor, workflowId: string): Promise<ContractWorkflow> {
   if (verifiedClosingFlowEnabled()) return withImmediateTransaction(async (database) => {
     const row = await database.prepare<Row>("SELECT * FROM mca_contract_workflows WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, workflowId)
