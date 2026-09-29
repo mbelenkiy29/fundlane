@@ -16,6 +16,7 @@
     "assistant:worker": "node --conditions=react-server --env-file=.env.local --import tsx scripts/assistant/worker.ts",
     "documents:worker": "node --conditions=react-server --import tsx scripts/workers/run.ts",
     "documents:worker:build": "node scripts/workers/build.mjs",
+    "funder:pilot-evidence": "node --conditions=react-server --import tsx scripts/ops/funder-pilot-evidence.ts",
     "messaging:worker": "node --conditions=react-server --import tsx scripts/messaging/worker.ts",
     "messaging:worker:build": "node scripts/messaging/build.mjs"
   },
