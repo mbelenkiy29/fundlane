@@ -45,7 +45,7 @@ pnpm exec tsx scripts/ops/backup-database.ts --confirm --kind weekly --directory
 # Use --kind pre-migration immediately before a reviewed migration.
 ```
 
-The command prints the completed archive path, SHA-256 and dump completion time. Save the hash in the private evidence record. It prunes only matching regular archives in that directory after success, leaving the newest four weekly and three pre-migration names. It does not upload or schedule backups. Verify the hash again before restore; the restore command checks it before running any database tool. Copy encrypted archives to Michael's private “Fundlane backups” location using a separately reviewed process. The script cannot establish that the local directory or later copy is an approved private location.
+The command refuses empty or invalid archives before reporting success. It prints the completed archive path, SHA-256 and dump completion time. Save the hash in the private evidence record. It prunes only matching regular archives in that directory after success, leaving the newest four weekly and three pre-migration names. It does not upload or schedule backups. Verify the hash again before restore; the restore command checks it before running any database tool. Copy encrypted archives to Michael's private “Fundlane backups” location using a separately reviewed process. The script cannot establish that the local directory or later copy is an approved private location.
 
 Restore locally with a disposable, empty database prepared by the operator:
 
