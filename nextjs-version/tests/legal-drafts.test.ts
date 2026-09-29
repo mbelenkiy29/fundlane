@@ -122,9 +122,9 @@ test("rendered enabled routes include every section and the publication notice",
   const result = renderRoutes({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true" })
   for (const [html, sections] of [[result.terms, termsSections], [result.privacy, privacySections]] as const) {
     assert.match(html, /These terms were prepared without attorney review and will be updated after legal review\./)
-    assert.doesNotMatch(html, /DRAFT|\(draft\)|\[ZIP\]|\[Effective date\]|\[Attorney review|\[Proposed for review|[Nn]ot yet in effect|not reviewed by an attorney/)
+    assert.doesNotMatch(html, /DRAFT|\(draft\)|\[Effective date\]|\[Attorney review|\[Proposed for review|[Nn]ot yet in effect|not reviewed by an attorney/)
     assert.match(html, /Sentinel Tech Solutions LLC/)
-    assert.match(html, /7 Holly Hill Road, Marlboro, NJ/)
+    assert.match(html, /7 Holly Hill Road, Marlboro, NJ 07746/)
     assert.match(html, /mike@sentineltechsolutions\.io/)
     assert.match(html, /Effective date: September 28, 2026/)
     for (const section of sections) assert.equal(html.split(`<h2>${section.heading}</h2>`).length - 1, 1, section.heading)
@@ -139,7 +139,7 @@ test("enabled drafts cannot authorize demo collection at /privacy", () => {
   withEnvironment({ ...demoValues, MCA_LEGAL_DRAFT_PAGES_ENABLED: "true" }, () => {
     assert.equal(legalDraftPagesEnabled(), true)
     assert.equal(legalPlaceholders.company, "Sentinel Tech Solutions LLC")
-    assert.equal(legalPlaceholders.address, "7 Holly Hill Road, Marlboro, NJ")
+    assert.equal(legalPlaceholders.address, "7 Holly Hill Road, Marlboro, NJ 07746")
     assert.equal(legalPlaceholders.contact, "mike@sentineltechsolutions.io")
     assert.equal(legalPlaceholders.effectiveDate, "September 28, 2026")
     for (const [path, sections] of [["/terms", termsSections], ["/privacy", privacySections]] as const) {

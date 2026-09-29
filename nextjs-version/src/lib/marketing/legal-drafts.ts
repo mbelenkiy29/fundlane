@@ -7,7 +7,7 @@
  */
 export const legalPlaceholders = {
   company: "Sentinel Tech Solutions LLC",
-  address: "7 Holly Hill Road, Marlboro, NJ",
+  address: "7 Holly Hill Road, Marlboro, NJ 07746",
   contact: "mike@sentineltechsolutions.io",
   effectiveDate: "September 28, 2026",
 } as const
