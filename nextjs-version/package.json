@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "release:evidence": "tsx scripts/ops/release-evidence.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -14,11 +15,13 @@
     "db:secure": "tsx scripts/database/secure-runtime.ts",
     "calendar:worker": "node --conditions=react-server --import tsx scripts/calendar/worker.ts",
     "assistant:worker": "node --conditions=react-server --env-file=.env.local --import tsx scripts/assistant/worker.ts",
+    "assistant:readiness": "node --import tsx scripts/assistant/readiness.ts",
     "documents:worker": "node --conditions=react-server --import tsx scripts/workers/run.ts",
     "documents:worker:build": "node scripts/workers/build.mjs",
     "messaging:worker": "node --conditions=react-server --import tsx scripts/messaging/worker.ts",
     "messaging:worker:build": "node scripts/messaging/build.mjs",
-    "ops:email-dns-check": "node --import tsx scripts/ops/email-dns-check.ts"
+    "ops:email-dns-check": "node --import tsx scripts/ops/email-dns-check.ts",
+    "sms:readiness": "node scripts/sms/readiness.mjs"
   },
   "engines": {
     "node": "24.x"

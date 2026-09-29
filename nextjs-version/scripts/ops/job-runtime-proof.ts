@@ -1,4 +1,7 @@
 import { pathToFileURL } from "node:url"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const PRODUCTION_PROJECT_REF = "drubsfvhlggmtyiigwxy"
 const MAX_PRIVATE_FILE_BYTES = 25 * 1024 * 1024
@@ -40,6 +43,25 @@ export function assertProofGuards(input: { env: Readonly<Record<string, string |
     .map(([, value]) => value ?? "")
     .join("\n")
   if (target.toLowerCase().includes(PRODUCTION_PROJECT_REF)) throw new Error("Refusing to run against the production Supabase project.")
+}
+
+function assertLoopbackAdminUrl(env: Readonly<Record<string, string | undefined>>): void {
+  let endpoint: URL
+  try {
+    endpoint = new URL(env.MCA_TEST_DATABASE_ADMIN_URL ?? "")
+  } catch {
+    throw new Error("MCA_TEST_DATABASE_ADMIN_URL must point to a loopback PostgreSQL server for the offline proof.")
+  }
+  if (endpoint.protocol !== "postgresql:" || !["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname)) {
+    throw new Error("MCA_TEST_DATABASE_ADMIN_URL must point to a loopback PostgreSQL server for the offline proof.")
+  }
+}
+
+export function assertLocalProofGuards(input: { env: Readonly<Record<string, string | undefined>>; argv: readonly string[] }): void {
+  if (input.env.MCA_OPS_JOB_PROOF_LOCAL_ENABLED !== "true") throw new Error("Set MCA_OPS_JOB_PROOF_LOCAL_ENABLED=true to run the offline proof.")
+  if (!input.argv.includes("--local")) throw new Error("Pass --local to select the offline proof.")
+  if (!input.argv.includes("--confirm")) throw new Error("Pass --confirm to acknowledge the offline proof.")
+  assertLoopbackAdminUrl(input.env)
 }
 
 export function syntheticPrivateFile(): Uint8Array {
@@ -143,7 +165,128 @@ async function createHostedRunner(env: NodeJS.ProcessEnv): Promise<JobRuntimePro
   }
 }
 
+interface LocalProofResources {
+  runner: JobRuntimeProofRunner
+  cleanup(): Promise<void>
+}
+
+export async function createLocalRunner(): Promise<LocalProofResources> {
+  assertLoopbackAdminUrl(process.env)
+  const [{ createPostgresTestDatabase }, { FilesystemDocumentStorage }, queue, database] = await Promise.all([
+    import("../../tests/helpers/postgres-test-db.mjs"),
+    import("../../src/lib/mca/documents/storage"),
+    import("../../src/lib/mca/jobs/queue"),
+    import("../../src/lib/mca/db"),
+  ])
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "fundlane-job-runtime-proof-"))
+  let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
+  try {
+    testDatabase = await createPostgresTestDatabase("job_runtime_proof")
+  } catch (error) {
+    await rm(temporaryRoot, { recursive: true, force: true })
+    throw error
+  }
+  const previousDatabaseUrl = process.env.DATABASE_URL
+  const previousStorageProvider = process.env.MCA_DOCUMENT_STORAGE_PROVIDER
+  const previousPoolMax = process.env.MCA_DB_POOL_MAX
+  process.env.DATABASE_URL = testDatabase.databaseUrl
+  process.env.MCA_DOCUMENT_STORAGE_PROVIDER = "filesystem"
+  process.env.MCA_DB_POOL_MAX = "4"
+  const storage = new FilesystemDocumentStorage(temporaryRoot)
+  const workspaceId = `workspace-proof-${database.newId()}`
+  const actor = { workspaceId, userId: null, membershipId: null, role: "admin" as const, managedMembershipIds: [], activeMembershipIds: [], source: "system" as const, correlationId: database.newId() }
+  const objects = new Map<string, string>()
+  const claims = new Map<string, Awaited<ReturnType<typeof queue.claimBackgroundJob>>>()
+  let claimedForExpiry: string | undefined
+  let cleaned = false
+
+  try {
+    const now = new Date().toISOString()
+    await database.getDatabase().prepare(`INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
+      VALUES (?,?,'America/New_York',5,'{}','{}','{}',?,?)`).run(workspaceId, "Offline job runtime proof", now, now)
+  } catch (error) {
+    await database.closeDatabaseForTests()
+    await Promise.all([rm(temporaryRoot, { recursive: true, force: true }), testDatabase.close()])
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = previousDatabaseUrl
+    if (previousStorageProvider === undefined) delete process.env.MCA_DOCUMENT_STORAGE_PROVIDER
+    else process.env.MCA_DOCUMENT_STORAGE_PROVIDER = previousStorageProvider
+    if (previousPoolMax === undefined) delete process.env.MCA_DB_POOL_MAX
+    else process.env.MCA_DB_POOL_MAX = previousPoolMax
+    throw error
+  }
+
+  async function claimExpected(jobId: string): Promise<ProofClaim> {
+    const job = await queue.claimBackgroundJob(["assistant_scan"])
+    if (!job || job.id !== jobId) throw new Error("The offline proof queue claimed a different job.")
+    claims.set(job.id, job)
+    claimedForExpiry = job.id
+    const row = await database.getDatabase().prepare<{ lease_expires_at: string; updated_at: string }>("SELECT lease_expires_at,updated_at FROM mca_background_jobs WHERE id=?").get(job.id)
+    if (!row) throw new Error("The claimed offline proof job disappeared.")
+    return { jobId: job.id, attempts: job.attempts, claimedAt: row.updated_at, leaseExpiresAt: row.lease_expires_at }
+  }
+
+  return {
+    runner: {
+      async enqueuePrivateScan({ bytes }) {
+        const key = `${workspaceId}/scans/${database.newId()}`
+        await storage.putImmutable(key, bytes)
+        const job = await queue.enqueueBackgroundJob({ actor, kind: "assistant_scan", resourceId: key, idempotencyKey: `offline-proof:${key}` })
+        objects.set(job.id, key)
+        return { jobId: job.id }
+      },
+      claim: claimExpected,
+      reclaim: claimExpected,
+      async waitUntil() {
+        if (!claimedForExpiry) throw new Error("No offline proof claim is available to expire.")
+        await database.getDatabase().prepare("UPDATE mca_background_jobs SET lease_expires_at=? WHERE id=? AND state='running'")
+          .run(new Date(Date.now() - 1_000).toISOString(), claimedForExpiry)
+      },
+      async scanClaim(claim) {
+        const started = Date.now()
+        const key = objects.get(claim.jobId)
+        const job = claims.get(claim.jobId)
+        if (!key || !job) throw new Error("Missing offline proof claim metadata.")
+        const bytes = await storage.get(key)
+        const infected = Buffer.from(bytes).equals(Buffer.from(syntheticEicarFile()))
+        if (infected) await queue.failBackgroundJob(job, new Error("proof_malware_refused"))
+        else await queue.completeBackgroundJob(job, { status: "clean", provider: "offline-exact-byte-mock" })
+        return { outcome: infected ? "infected" : "clean", durationMs: Date.now() - started }
+      },
+    },
+    async cleanup() {
+      if (cleaned) return
+      cleaned = true
+      await database.closeDatabaseForTests()
+      try {
+        await Promise.all([rm(temporaryRoot, { recursive: true, force: true }), testDatabase.close()])
+      } finally {
+        if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL
+        else process.env.DATABASE_URL = previousDatabaseUrl
+        if (previousStorageProvider === undefined) delete process.env.MCA_DOCUMENT_STORAGE_PROVIDER
+        else process.env.MCA_DOCUMENT_STORAGE_PROVIDER = previousStorageProvider
+        if (previousPoolMax === undefined) delete process.env.MCA_DB_POOL_MAX
+        else process.env.MCA_DB_POOL_MAX = previousPoolMax
+      }
+    },
+  }
+}
+
+export async function runLocalJobRuntimeProof(): Promise<ProofEvidence> {
+  const local = await createLocalRunner()
+  try {
+    return await runJobRuntimeProof(local.runner, "local-loopback")
+  } finally {
+    await local.cleanup()
+  }
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env): Promise<void> {
+  if (argv.includes("--local")) {
+    assertLocalProofGuards({ env, argv })
+    process.stdout.write(`${JSON.stringify(await runLocalJobRuntimeProof(), null, 2)}\n`)
+    return
+  }
   assertProofGuards({ env, argv })
   const projectRef = new URL(env.MCA_OPS_PROOF_SUPABASE_URL!).hostname.split(".")[0]
   const evidence = await runJobRuntimeProof(await createHostedRunner(env), projectRef)

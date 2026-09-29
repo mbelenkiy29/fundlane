@@ -23,6 +23,18 @@ The existing deployed monitor rules remain: three bad checks for website/databas
 
 Positive integer thresholds up to 86,400 are accepted. Review counts and expected traffic in synthetic staging, configure the approved operator recipient (`MCA_OPERATIONS_ALERT_EMAIL`) and transactional receiver, invoke `platform-monitor` with its dedicated `MCA_MONITOR_TOKEN`, then verify one opening and one recovery notification. Check `ops_alert_attempts` and the approved mailbox. A receiver timeout is an unknown outcome; inspect provider receipts before reconciling. Install or verify the existing monitor schedule only after acceptance; no new cron schedule is declared in this repository.
 
+### Offline alert drill
+
+The local alert drill requires an already migrated, disposable PostgreSQL database on `localhost`, `127.0.0.1`, or `::1`. It refuses the production Supabase project reference and does not read `DATABASE_URL` or `MCA_MONITOR_DATABASE_URL`. Its dedicated switch defaults to off and accepts only the exact value `true`; `--confirm` is also required. From `nextjs-version/`, run:
+
+```sh
+MCA_OPS_ALERT_DRILL_ENABLED=true MCA_OPS_ALERT_DRILL_DATABASE_URL='postgresql://operator:PLACEHOLDER@127.0.0.1:5432/disposable_alert_drill' pnpm exec tsx scripts/ops/alert-drill.ts --confirm
+```
+
+The command exercises the production monitor and transactional transport path with in-process health and webhook mocks. It opens and recovers a synthetic website incident, checks attempt IDs against transport idempotency keys, prints sanitized JSON evidence, and rolls back every database row. It binds no socket, performs no DNS lookup, and sends nothing. This proves only local incident, attempt, unknown-outcome, and idempotency behavior; it **does not** satisfy the hosted alert receipt requirement described above. Never replay an unknown external effect without inspecting the provider receipt first.
+
+For the offline half of worker-kill evidence, run `tests/jobs-worker.test.ts`; it expires and reclaims the same job identity in disposable PostgreSQL. The later hosted half remains the guarded staging command `MCA_OPS_JOB_PROOF_ENABLED=true pnpm exec tsx scripts/ops/job-runtime-proof.ts --confirm`, using only Michael's approved nonproduction target and synthetic objects. The alert drill does not duplicate that queue harness.
+
 ## Failed-job review and worker kill drill
 
 Set `MCA_JOB_RECOVERY_ENABLED=true` on an approved preview to expose the recovery endpoint. Its unset default is `false`. An authenticated platform administrator with MFA lists `GET /api/platform/companies/{workspaceId}/failed-jobs`. Results expose only job ID, kind, resource ID, attempts, error code and update time. `POST` to the same path with trusted same-origin request and JSON `{ "jobId": "...", "action": "replay" }` requeues only `document_scan`, `draft_scan`, `assistant_scan`, `document_upload`, `export` or `export_create`, preserving the job and idempotency IDs while resetting attempts. A paused-company failure cannot be replayed. Inspect the underlying resource and current authorization before using it. Other kinds require a new reviewed request or explicit reconciliation.
@@ -45,7 +57,7 @@ pnpm exec tsx scripts/ops/backup-database.ts --confirm --kind weekly --directory
 # Use --kind pre-migration immediately before a reviewed migration.
 ```
 
-The command prints the completed archive path, SHA-256 and dump completion time. Save the hash in the private evidence record. It prunes only matching regular archives in that directory after success, leaving the newest four weekly and three pre-migration names. It does not upload or schedule backups. Verify the hash again before restore; the restore command checks it before running any database tool. Copy encrypted archives to Michael's private “Fundlane backups” location using a separately reviewed process. The script cannot establish that the local directory or later copy is an approved private location.
+The command refuses empty or invalid archives before reporting success. It prints the completed archive path, SHA-256 and dump completion time. Save the hash in the private evidence record. It prunes only matching regular archives in that directory after success, leaving the newest four weekly and three pre-migration names. It does not upload or schedule backups. Verify the hash again before restore; the restore command checks it before running any database tool. Copy encrypted archives to Michael's private “Fundlane backups” location using a separately reviewed process. The script cannot establish that the local directory or later copy is an approved private location.
 
 Restore locally with a disposable, empty database prepared by the operator:
 

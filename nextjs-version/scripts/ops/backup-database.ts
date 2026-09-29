@@ -4,19 +4,21 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { commandEnv, connectionEnv, isLoopback, option, parseDatabaseUrl, pruneArchives, requireSwitch, sha256 } from "./safety"
 
-export type CommandRunner = (command: string, args: string[], env: Record<string, string | undefined>, output?: string) => Promise<void>
+export type CommandRunner = (command: string, args: string[], env: Record<string, string | undefined>, encryption?: { recipient: string; output: string }) => Promise<number>
 
-export const runCommand: CommandRunner = (command, args, env, output) => new Promise((resolveRun, reject) => {
-  const child = spawn(command, output ? args.slice(0, -1) : args, { env: commandEnv(env), stdio: ["ignore", output ? "pipe" : "ignore", "ignore"] })
-  if (output) {
-    const age = spawn("age", ["-r", output, "-o", args.at(-1)!], { stdio: ["pipe", "ignore", "ignore"] })
+export const runCommand: CommandRunner = (command, args, env, encryption) => new Promise((resolveRun, reject) => {
+  const child = spawn(command, args, { env: commandEnv(env), stdio: ["ignore", encryption ? "pipe" : "ignore", "ignore"] })
+  if (encryption) {
+    const age = spawn("age", ["-r", encryption.recipient, "-o", encryption.output], { stdio: ["pipe", "ignore", "ignore"] })
+    let stdoutBytes = 0
+    child.stdout!.on("data", (chunk: Buffer) => { stdoutBytes += chunk.length })
     age.stdin!.on("error", () => undefined)
     child.stdout!.pipe(age.stdin!)
     const results = Promise.all([new Promise<number>((ok, fail) => { child.on("error", fail); child.on("close", (code) => ok(code ?? 1)) }), new Promise<number>((ok, fail) => { age.on("error", fail); age.on("close", (code) => ok(code ?? 1)) })])
-    results.then(([dumpCode, ageCode]) => dumpCode === 0 && ageCode === 0 ? resolveRun() : reject(new Error(`Backup tools failed (${dumpCode}, ${ageCode}).`)), reject)
+    results.then(([dumpCode, ageCode]) => dumpCode === 0 && ageCode === 0 ? resolveRun(stdoutBytes) : reject(new Error(`Backup tools failed (${dumpCode}, ${ageCode}).`)), reject)
   } else {
     child.on("error", reject)
-    child.on("close", (code) => code === 0 ? resolveRun() : reject(new Error(`Database tool failed (${code}).`)))
+    child.on("close", (code) => code === 0 ? resolveRun(0) : reject(new Error(`Database tool failed (${code}).`)))
   }
 })
 
@@ -38,11 +40,24 @@ export async function backup(args: string[], env: Record<string, string | undefi
   const handle = await open(temporary, "wx", 0o600)
   await handle.close()
   try {
+    let stdoutBytes = 0
     if (recipient) {
       await unlink(temporary)
-      await runner("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file=-", temporary], connectionEnv(source), recipient)
+      stdoutBytes = await runner("pg_dump", ["--format=custom", "--no-owner", "--no-acl"], connectionEnv(source), { recipient, output: temporary })
     }
     else await runner("pg_dump", ["--format=custom", "--no-owner", "--no-acl", `--file=${temporary}`], connectionEnv(source))
+    let valid = (await lstat(temporary)).size > 0 && (recipient ? stdoutBytes > 0 : true)
+    if (valid && !recipient) {
+      const archive = await open(temporary, "r")
+      try {
+        const magic = Buffer.alloc(5)
+        const { bytesRead } = await archive.read(magic, 0, 5, 0)
+        valid = bytesRead === 5 && magic.toString() === "PGDMP"
+      } finally { await archive.close() }
+    }
+    if (!valid) {
+      throw new Error("Backup archive is empty or invalid.")
+    }
     const completedAt = new Date().toISOString()
     await chmod(temporary, 0o600)
     const existing = await lstat(final).then(() => true, (error: NodeJS.ErrnoException) => {

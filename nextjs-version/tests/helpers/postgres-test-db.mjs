@@ -12,7 +12,7 @@ function identifier(value) {
   return `"${value}"`;
 }
 
-export async function createPostgresTestDatabase(label = "suite") {
+export async function createPostgresTestDatabase(label = "suite", { migrateSchema = true } = {}) {
   const safeLabel = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "suite";
   const databaseName = `fundlane_test_${safeLabel}_${randomBytes(5).toString("hex")}`;
   const adminUrl = process.env.MCA_TEST_DATABASE_ADMIN_URL;
@@ -35,8 +35,10 @@ export async function createPostgresTestDatabase(label = "suite") {
   const migrationPool = new Pool({ ...postgresConnection(databaseUrlUnpooled), max: 1 });
   try {
     // Hosted setup creates this namespace before migrations; disposable databases need it too.
-    await migrationPool.query("CREATE SCHEMA IF NOT EXISTS mca_private");
-    await migrate(drizzle(migrationPool), { migrationsFolder: resolve(process.cwd(), "drizzle") });
+    if (migrateSchema) {
+      await migrationPool.query("CREATE SCHEMA IF NOT EXISTS mca_private");
+      await migrate(drizzle(migrationPool), { migrationsFolder: resolve(process.cwd(), "drizzle") });
+    }
   } catch (error) {
     await migrationPool.end();
     await dropDatabase(adminUrl, databaseName);
