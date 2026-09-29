@@ -79,3 +79,14 @@ Use an approved **nonproduction** Supabase project, a Vercel staging/preview dep
 | Rollback trigger and action | _deployment SHA to restore; disable feature/cron flags, inspect provider receipts before replay, preserve DB/Storage objects_ |
 
 At this writing the decision is **NO-GO**: every hosted check is needed; no deployment revision or staging run is attached. This document is the acceptance plan and claim inventory for the code review, not a claim that MIC-96 is complete.
+
+## Offline evidence generator
+
+The inert-by-default operator command inventories only the candidate's checked-in `.env.example`, Drizzle journal and SQL filenames, cron routes and manifest, `vercel.json`, this acceptance document, and local Git revision/status. It does not read `.env.local`, runtime secrets, databases, deployment state, or providers. Enable it only for a local invocation (never in Vercel):
+
+```sh
+MCA_RELEASE_EVIDENCE_ENABLED=true pnpm release:evidence -- --format=markdown
+MCA_RELEASE_EVIDENCE_ENABLED=true pnpm release:evidence -- --format=json
+```
+
+The command writes only to stdout, so an operator may redirect it outside the repository when an artifact is wanted. Inputs and ordering are deterministic for a checkout. The output is always an unfilled **NO-GO — hosted evidence required** skeleton until Michael attaches hosted proof and makes the release decision; it is not a release certificate.
