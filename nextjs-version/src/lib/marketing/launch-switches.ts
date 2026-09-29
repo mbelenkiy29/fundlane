@@ -8,6 +8,14 @@ export function publicRoadmapEnabled(): boolean {
   return process.env.MCA_PUBLIC_ROADMAP_ENABLED === "true"
 }
 
+export function expandedHelpCenterEnabled(): boolean {
+  return process.env.MCA_HELP_CENTER_EXPANDED_ENABLED === "true"
+}
+
+export function publicStatusPageEnabled(): boolean {
+  return process.env.MCA_PUBLIC_STATUS_PAGE_ENABLED === "true"
+}
+
 export function marketingTrialCtaEnabled(): boolean {
   return process.env.MCA_MARKETING_TRIAL_CTA_ENABLED === "true" && signupMode() === "open"
 }

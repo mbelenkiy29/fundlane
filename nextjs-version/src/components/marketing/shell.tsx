@@ -6,7 +6,7 @@ import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
-import { marketingTrialCtaEnabled, publicPricingEnabled, publicRoadmapEnabled } from "@/lib/marketing/launch-switches"
+import { marketingTrialCtaEnabled, publicPricingEnabled, publicRoadmapEnabled, publicStatusPageEnabled } from "@/lib/marketing/launch-switches"
 import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 import "./marketing.css"
 
@@ -109,7 +109,7 @@ export async function MarketingShell({
               <Link href="/#workflow">How it works</Link>
               <Link href="/demo">Book a demo</Link>
               <Link href="/sign-in">Sign in</Link>
-              {statusUrl && <a href={statusUrl}>System status</a>}
+              {publicStatusPageEnabled() ? <Link href="/status">System status</Link> : statusUrl && <a href={statusUrl}>System status</a>}
               {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
               {legalDraftPagesEnabled()
