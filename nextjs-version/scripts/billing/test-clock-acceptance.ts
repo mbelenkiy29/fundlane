@@ -89,7 +89,7 @@ async function runTrialToPaid(client: AcceptanceStripeClient, ids: { basePriceId
   if (subscription.status !== "trialing") fail(`Expected trialing, received ${subscription.status}.`)
   await client.testHelpers.testClocks.advance(clock.id, { frozen_time: clock.frozen_time + (TRIAL_DAYS + 1) * 86_400 })
   const paid = await waitForSubscription(client, subscription.id, ["active"])
-  const invoice = await client.invoices.retrieve(invoiceId(paid))
+  const invoice = await client.invoices.retrieve(invoiceId(paid.latest_invoice))
   const expected = monthlyPriceCents(1)
   if (invoice.status !== "paid" || invoice.total !== expected) fail(`Paid trial invoice ${invoice.id} did not match the expected ${expected} cents.`)
   return { scenario, result: "passed", objects: { testClock: clock.id, customer: customer.id, subscription: paid.id, invoice: invoice.id }, checks: [{ trialStatus: "trialing" }, { finalStatus: paid.status }, { invoiceStatus: invoice.status ?? "unknown", amountCents: invoice.total, expectedCents: expected }] }
@@ -118,7 +118,7 @@ async function runSeatQuotes(client: AcceptanceStripeClient, ids: { basePriceId:
     const card = await client.paymentMethods.attach("pm_card_visa", { customer: customer.id })
     const subscription = await client.subscriptions.create({ customer: customer.id, items: subscriptionItems(ids, seats), default_payment_method: card.id, metadata: { fundlane_acceptance: ACCEPTANCE_TAG, scenario, seats: String(seats) }, expand: ["latest_invoice"] })
     subscriptions.push(subscription.id)
-    const invoice = await client.invoices.retrieve(invoiceId(subscription))
+    const invoice = await client.invoices.retrieve(invoiceId(subscription.latest_invoice))
     const quote = await client.invoices.createPreview({ customer: customer.id, subscription: subscription.id })
     const expected = monthlyPriceCents(seats)
     if (invoice.total !== expected || quote.total !== expected) fail(`Stripe totals for ${seats} seats were invoice=${invoice.total}, quote=${quote.total}; expected ${expected}.`)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { cleanupAcceptanceObjects, runAcceptance, validateAcceptancePreflight, verifyAcceptancePrices, type AcceptanceStripeClient } from "../scripts/billing/test-clock-acceptance"
 
-const env = { MCA_BILLING_ACCEPTANCE_ENABLED: "true", MCA_STRIPE_MODE: "test", MCA_ACCEPTANCE_STRIPE_SECRET_KEY: "sk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats" }
+const env = { MCA_BILLING_ACCEPTANCE_ENABLED: "true", MCA_STRIPE_MODE: "test", MCA_ACCEPTANCE_STRIPE_SECRET_KEY: "sk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats" } as unknown as NodeJS.ProcessEnv
 const expectedTotals = new Map([[1, 39900], [2, 47800], [10, 111000], [11, 117900], [20, 180000], [21, 185900]])
 
 function price(id: string) {
@@ -76,7 +76,7 @@ test("cleanup deletes only customers and test clocks bearing the exact acceptanc
   client.customers.list = async () => ({ data: [{ id: "cus_owned", metadata: { fundlane_acceptance: "true" } }, { id: "cus_other", metadata: { fundlane_acceptance: "false" } }] })
   client.customers.retrieve = async id => ({ id, metadata: { fundlane_acceptance: id === "cus_owned" ? "true" : "false" } })
   client.customers.del = async id => { deleted.push(id) }
-  client.testHelpers.testClocks.list = async () => ({ data: [{ id: "clock_owned", frozen_time: 1, metadata: { fundlane_acceptance: "true" } }, { id: "clock_other", frozen_time: 1, metadata: {} }] })
+  client.testHelpers.testClocks.list = async () => ({ data: [{ id: "clock_owned", frozen_time: 1, metadata: { fundlane_acceptance: "true" } }, { id: "clock_other", frozen_time: 1, metadata: {} as Record<string, string> }] })
   client.testHelpers.testClocks.del = async id => { deleted.push(id) }
   const report = await cleanupAcceptanceObjects(client)
   assert.deepEqual(deleted, ["cus_owned", "clock_owned"])
