@@ -239,3 +239,37 @@ pnpm lint
 ```
 
 Before activation exercise actual Stripe test Checkout, successful/failed proration, renewal failure and processing, reduction schedule, period-end cancellation, signed retries and email receiver. Fixtures verify application logic, not provider account setup. Never use the application Supabase database for tests.
+
+### Hosted Stripe test-clock acceptance
+
+Issue #43 includes a deliberately operator-run, **test-mode-only** helper at `scripts/billing/test-clock-acceptance.ts`. It never creates or updates Products or Prices. Before creating an acceptance object, it retrieves `STRIPE_BASE_PRICE_ID` and `STRIPE_ADDITIONAL_SEAT_PRICE_ID` and requires their currency, recurrence, usage type, billing scheme, amount, and graduated tiers to exactly match `billing-catalog.ts`. It refuses to run unless all of the following are true:
+
+- `MCA_BILLING_ACCEPTANCE_ENABLED=true` (unset and every other value are off);
+- `--confirm` is present;
+- `MCA_ACCEPTANCE_STRIPE_SECRET_KEY` starts with `sk_test_` or `rk_test_`;
+- `MCA_STRIPE_MODE` is not `live`; and
+- both configured Price IDs are distinct test-mode Prices.
+
+Use a dedicated, least-privilege **Stripe test-mode** key. The key needs read access to Prices and read/write access to test clocks, test customers, test payment methods, test subscriptions, and test invoices. Do not pass a production key or production Price ID. From `nextjs-version/`, run one scenario at a time:
+
+```sh
+export MCA_BILLING_ACCEPTANCE_ENABLED=true
+export MCA_STRIPE_MODE=test
+export MCA_ACCEPTANCE_STRIPE_SECRET_KEY=rk_test_...
+export STRIPE_BASE_PRICE_ID=price_...
+export STRIPE_ADDITIONAL_SEAT_PRICE_ID=price_...
+
+pnpm exec tsx scripts/billing/test-clock-acceptance.ts trial-to-paid --confirm
+pnpm exec tsx scripts/billing/test-clock-acceptance.ts trial-end-missing-card-pauses --confirm
+pnpm exec tsx scripts/billing/test-clock-acceptance.ts seat-proration-quotes --confirm
+```
+
+The first scenario creates a card-backed 14-day test subscription, advances its test clock, and requires an `active` subscription plus a paid $399 invoice. The second advances a cardless trial and requires Stripe's missing-payment-method end behavior to produce `paused`. The seat scenario creates isolated test subscriptions for 1, 2, 10, 11, 20, and 21 seats; it compares both the initial invoice and the next-invoice preview to `monthlyPriceCents()` (39900, 47800, 111000, 117900, 180000, and 185900 cents). Output is a sanitized JSON evidence report containing only object IDs, statuses, and integer-cent amounts—never keys, card data, customer email, or hosted URLs. Save that output with Michael's acceptance record.
+
+Every created test clock, customer, and subscription carries `fundlane_acceptance=true` metadata (subscriptions are removed with their customer). Cleanup lists test objects and deletes only customers and clocks whose metadata contains that exact tag; it re-retrieves a customer and verifies the tag immediately before deletion:
+
+```sh
+pnpm exec tsx scripts/billing/test-clock-acceptance.ts --cleanup --confirm
+```
+
+Cleanup is intentionally limited to the tagged objects returned by Stripe's list calls. Review the sanitized scenario reports in the Stripe test Dashboard if an older tagged object falls outside that window. Cleanup and scenario execution use the same strict flag, confirmation, key, mode, and configured-Price preflight (cleanup does not need to retrieve or verify the Prices). This helper tests Stripe's subscription/test-clock behavior only. Michael must still complete and record the hosted application Checkout/3DS (`4000 0025 0000 3155`), decline (`4000 0000 0000 0341`), Portal payment-method/resume, signed webhook, app reconciliation, and Fundlane T-3 reminder checks. Stripe's own trial reminder emails stay off. No schedule, Dashboard setting, catalog object, live object, application database row, email, or deployment is changed by this script.
