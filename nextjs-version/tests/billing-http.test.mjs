@@ -1,17 +1,18 @@
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { rmSync } from "node:fs"
 import { resolve } from "node:path"
+import { readFile } from "node:fs/promises"
 import Stripe from "stripe"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { createSupabaseHttpFixture } from "./helpers/supabase-http.mjs"
 import { createStripeHttpFixture } from "./helpers/stripe-http.mjs"
-const port = 4300 + (process.pid % 500), base = `http://localhost:${port}`, dist = ".next-test-billing"
+import { forwardAcceptanceWebhook, startAcceptanceNextServer, waitForAcceptanceReconciliation } from "../scripts/stripe/webhook-acceptance-runtime.ts"
+let base, originalTypeIncludes
 let db, fixture, stripe, server, output = "", owner
 const signatureClient = new Stripe("sk_test_fixture")
 before(async () => {
+  originalTypeIncludes = JSON.parse(await readFile("tsconfig.json", "utf8")).include
   db = await createPostgresTestDatabase("billing_http")
   fixture = await createSupabaseHttpFixture(db)
   stripe = await createStripeHttpFixture()
@@ -20,24 +21,16 @@ before(async () => {
   await db.query("DELETE FROM company_subscription_state WHERE workspace_id=$1 AND state_kind='internal_demo'",[owner.workspaceId])
   await db.query("INSERT INTO company_subscription_state(workspace_id,trial_started_at,trial_ends_at,selected_seats,updated_at) VALUES($1,$2,$3,5,$2)",[owner.workspaceId,now,trialEnd])
   await db.query("INSERT INTO workspace_owners(workspace_id,membership_id,updated_at) VALUES($1,$2,$3)",[owner.workspaceId,owner.membershipId,now])
-  server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
-    env: db.env({ ...fixture.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${resolve("tests/helpers/stripe-test-fetch.mjs")}`, MCA_STRIPE_TEST_API_ORIGIN: stripe.origin, MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_PORTAL_CONFIGURATION: "bpc_fixture", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", NEXT_DIST_DIR: dist, MCA_APP_ORIGIN: base }),
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-  server.stdout.on("data", c => output += c); server.stderr.on("data", c => output += c)
-  const deadline = Date.now() + 60000
-  while (Date.now() < deadline) {
-    try { await fetch(`${base}/api/auth/session`, { signal: AbortSignal.timeout(5000) }); return }
-    catch { if (server.exitCode !== null) throw new Error(output); await new Promise(r => setTimeout(r, 200)) }
-  }
-  throw new Error("Billing HTTP server did not start.")
+  server = await startAcceptanceNextServer(db.env({ ...fixture.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${resolve("tests/helpers/stripe-test-fetch.mjs")}`, MCA_STRIPE_TEST_API_ORIGIN: stripe.origin, MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_PORTAL_CONFIGURATION: "bpc_fixture", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", MCA_APP_ORIGIN: "http://127.0.0.1" }), chunk => { output += chunk })
+  base = new URL(server.endpoint).origin
+
 })
 after(async () => {
-  if (server?.exitCode === null) { server.kill("SIGTERM"); await new Promise(r => server.once("exit", r)) }
+  await server?.close()
   if (stripe) await stripe.close()
   if (fixture) await fixture.close()
   if (db) await db.close()
-  rmSync(dist, { recursive: true, force: true })
+  assert.deepEqual(JSON.parse(await readFile("tsconfig.json", "utf8")).include, originalTypeIncludes, "acceptance server removes only its generated type paths")
 })
 async function login(email) {
   const result = await fixture.login(email, "Fixture unused password 99!")
@@ -90,7 +83,8 @@ test("webhook tampering is rejected and duplicate or outdated events queue for l
   assert.equal((await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body + " ", headers: { "stripe-signature": signature } })).response.status, 400)
   stripe.setSubscriptionListDelay(2500)
   const started = performance.now()
-  const first = await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body, headers: { "stripe-signature": signature } })
+  const response = await forwardAcceptanceWebhook(server.endpoint, body, signature)
+  const first = { response, payload: await response.json() }
   assert.ok(performance.now() - started < 2000, "receipt response must not wait for the slow provider read")
   stripe.setSubscriptionListDelay(0)
   assert.equal(first.response.status, 200)
@@ -100,8 +94,7 @@ test("webhook tampering is rejected and duplicate or outdated events queue for l
   const duplicate = await request("/api/webhooks/stripe", { cookie: null, method: "POST", rawBody: body, headers: { "stripe-signature": signature } })
   assert.equal(duplicate.response.status, 200)
   assert.equal(duplicate.payload.duplicate, true)
-  const deadline = Date.now() + 6000
-  while ((await request("/api/billing")).payload.billing.seatLimit !== 20 && Date.now() < deadline) await new Promise(r => setTimeout(r, 50))
+  await waitForAcceptanceReconciliation((sql, parameters) => db.query(sql, parameters), first.payload, "evt_billing_http", owner.workspaceId, customer().id)
   assert.equal((await request("/api/billing")).payload.billing.seatLimit, 20)
   assert.equal((await db.query("SELECT state FROM mca_background_jobs WHERE id=$1", [first.payload.jobId])).rows[0].state, "complete")
   assert.equal((await db.query("SELECT count(*)::int n FROM stripe_billing_events WHERE event_id='evt_billing_http'")).rows[0].n, 1)

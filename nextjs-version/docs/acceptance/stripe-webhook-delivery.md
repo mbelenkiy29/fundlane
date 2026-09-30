@@ -1,6 +1,22 @@
 # Stripe webhook delivery acceptance — task 4.2
 
-## Result: PASS
+## Current runner contract — 2026-09-30
+
+The runner now forwards the original body/signature to an owned loopback Next.js
+server so the route runs with the supported request and `after()` lifecycle.
+HTTP 200 with `queued: true` proves receipt only. Before checking entitlements,
+the runner independently verifies the exact event/customer/company receipt and
+waits for that event's matching `billing_reconcile` job to become `complete`.
+A queued, missing, failed, or mismatched job cannot certify completion. The same
+checks apply to each out-of-order event.
+
+The previous direct POST invocation fails on the current route because `after()`
+requires Next request scope; the old `reconciled: true` assertions are also stale.
+Local mocked HTTP regression tests exercise the current runtime and completion
+checks. No real Stripe CLI run was performed for this repair; the historical
+sandbox PASS below does not certify the current runner or a hosted deployment.
+
+## Historical result: PASS — 2026-09-22
 
 ### Out-of-order extension — 2026-09-22 02:52 UTC
 
@@ -69,9 +85,11 @@ The listener subscribes to `customer.subscription.updated` and
 `customer.subscription.deleted` with `--latest`.
 Its signing secret is captured in process memory; raw CLI output is confined to a
 mode-0600 file inside a private temporary directory and deleted during cleanup.
-The HTTP bridge calls the application's actual POST export and converts its
-Response back to Node HTTP. It does not run Next.js/Vercel routing or deploy an
-endpoint. Request bodies and signatures are retained only in process memory.
+The HTTP bridge forwards the original body/signature to the actual route in a
+local Next.js server. It does not deploy an endpoint. Next output shares the
+private listener log; bodies and signatures remain only in process memory.
+Cleanup stops the owned Next process, deletes its unique build directory and
+removes only that run's generated type paths from `tsconfig.json`.
 
 A new randomly named database is created and all checked Drizzle migrations are
 applied through the existing test-database helper. The runner creates its own
