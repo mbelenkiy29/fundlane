@@ -825,10 +825,13 @@ export async function changeBillingSeats(workspaceId: string, selectedSeats: num
       if (sub.status !== "trialing" || sub.pending_update || sub.cancel_at_period_end || sub.cancel_at || sub.schedule) throw new AppError(409,"billing_change_pending","Resolve the pending subscription change before changing seats.")
       if (selectedSeats === current.seatLimit) return getWorkspaceBilling(workspaceId)
       const additional = sub.items.data.find(i => i.price.id === ids.seats)
+      // Trial changes set an absolute quantity without proration. A fresh read
+      // makes retries after observed success no-ops; each new mutation needs a
+      // distinct key even when quantities repeat or an earlier local write rolled back.
       await client.subscriptions.update(sub.id, { proration_behavior: "none", ...automaticTaxWhenEnabled(), items: selectedSeats === 1
         ? additional?.id ? [{ id: additional.id, deleted: true }] : []
         : [{ ...(additional?.id ? { id: additional.id } : { price: ids.seats }), quantity: selectedSeats - 1 }] },
-      { idempotencyKey: `fundlane-trial-seats-${sub.id}-${current.seatLimit}-${selectedSeats}` })
+      { idempotencyKey: `fundlane-trial-seats-${sub.id}-${current.seatLimit}-${selectedSeats}-${newId()}` })
       await recordAuditEvent({context:{workspaceId,userId:actorUserId},action:"billing.seats_changed",resourceType:"workspace",resourceId:workspaceId,metadata:{from:current.seatLimit,to:selectedSeats,effective:"trial_immediate"},executor:db})
       await syncWorkspaceBilling(workspaceId,client)
       return getWorkspaceBilling(workspaceId)

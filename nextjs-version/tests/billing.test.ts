@@ -508,6 +508,152 @@ test("automatic paid increase grants only after Stripe reports the paid seat and
   assert.equal(params[0].proration_behavior,"always_invoice")
   delete process.env.MCA_BILLING_SEAT_SYNC_ENABLED
 })
+test("repeated trial seat selection applies a new mutation after returning to the original quantity",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  sub.status="trialing"
+  sub.trial_start=Math.floor(Date.now()/1000)
+  sub.trial_end=sub.trial_start+14*86400
+  const responses=new Map<string,{params:string;response:BillingSubscription}>()
+  const keys:string[]=[]
+  let writes=0,replays=0
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:Record<string,unknown>,options:{idempotencyKey:string})=>{
+    const key=options.idempotencyKey
+    keys.push(key)
+    const cached=responses.get(key)
+    if(cached){
+      assert.equal(JSON.stringify(params),cached.params,"an idempotency replay must keep the same request parameters")
+      replays++
+      return structuredClone(cached.response)
+    }
+    assert.equal(params.proration_behavior,"none")
+    const items=params.items as Array<{id:string;quantity:number}>
+    assert.equal(items.length,1)
+    assert.equal(items[0].id,"si_seats")
+    sub.items.data[1].quantity=items[0].quantity
+    writes++
+    responses.set(key,{params:JSON.stringify(params),response:structuredClone(sub)})
+    return structuredClone(sub)
+  }}} as unknown as StripeBillingClient
+  await syncWorkspaceBilling(f.workspaceId,client)
+  await changeBillingSeats(f.workspaceId,6,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,6)
+  await changeBillingSeats(f.workspaceId,5,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,5)
+  await changeBillingSeats(f.workspaceId,6,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,6,
+    `each selection must apply: writes=${writes}, replays=${replays}, keys=${JSON.stringify(keys)}`)
+})
+for(const failure of ["lost_response","outer_rollback"] as const) test(`trial seat retry observes provider success after ${failure} without another mutation`,async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  sub.status="trialing"
+  sub.trial_start=Math.floor(Date.now()/1000)
+  sub.trial_end=sub.trial_start+14*86400
+  const responses=new Map<string,{params:string;response:BillingSubscription}>()
+  const keys:string[]=[]
+  let writes=0
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:Record<string,unknown>,options:{idempotencyKey:string})=>{
+    keys.push(options.idempotencyKey)
+    const cached=responses.get(options.idempotencyKey)
+    if(cached){
+      assert.equal(JSON.stringify(params),cached.params)
+      return structuredClone(cached.response)
+    }
+    const items=params.items as Array<{id:string;quantity:number}>
+    assert.equal(params.proration_behavior,"none")
+    assert.equal(items[0].id,"si_seats")
+    sub.items.data[1].quantity=items[0].quantity
+    writes++
+    responses.set(options.idempotencyKey,{params:JSON.stringify(params),response:structuredClone(sub)})
+    if(failure==="lost_response") throw new Error("synthetic lost trial update response")
+    return structuredClone(sub)
+  }}} as unknown as StripeBillingClient
+  await syncWorkspaceBilling(f.workspaceId,client)
+  if(failure==="lost_response") {
+    await assert.rejects(changeBillingSeats(f.workspaceId,6,f.userId,client),/synthetic lost trial update response/)
+  } else {
+    await assert.rejects(withTransaction(async()=>{
+      await changeBillingSeats(f.workspaceId,6,f.userId,client)
+      throw new Error("synthetic outer trial rollback")
+    }),/synthetic outer trial rollback/)
+  }
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,5,"local transaction rolls back")
+  assert.equal(sub.items.data[1].quantity,5,"provider update survives the local failure")
+  assert.equal((await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='trial_immediate'").get(f.workspaceId))?.count,0,"a failed local transaction leaves no committed seat-change audit")
+  await changeBillingSeats(f.workspaceId,6,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,6)
+  assert.equal(writes,1)
+  assert.equal(keys.length,1,"retry observes authoritative provider quantity before considering a new mutation")
+})
+test("trial seat selection applies again after opposite provider successes both lose their responses",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  sub.status="trialing"
+  sub.trial_start=Math.floor(Date.now()/1000)
+  sub.trial_end=sub.trial_start+14*86400
+  const invoices=structuredClone(f.state.invoices)
+  const responses=new Map<string,{params:string;response:BillingSubscription}>()
+  const keys:string[]=[]
+  let writes=0,replays=0
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:Record<string,unknown>,options:{idempotencyKey:string})=>{
+    keys.push(options.idempotencyKey)
+    const cached=responses.get(options.idempotencyKey)
+    if(cached){
+      assert.equal(JSON.stringify(params),cached.params)
+      replays++
+      return structuredClone(cached.response)
+    }
+    assert.equal(params.proration_behavior,"none")
+    assert.equal("payment_behavior" in params,false)
+    const items=params.items as Array<{id:string;quantity:number}>
+    assert.equal(items[0].id,"si_seats")
+    sub.items.data[1].quantity=items[0].quantity
+    writes++
+    responses.set(options.idempotencyKey,{params:JSON.stringify(params),response:structuredClone(sub)})
+    if(writes<=2) throw new Error("synthetic opposite trial response lost")
+    return structuredClone(sub)
+  }}} as unknown as StripeBillingClient
+  await syncWorkspaceBilling(f.workspaceId,client)
+  await assert.rejects(changeBillingSeats(f.workspaceId,6,f.userId,client),/synthetic opposite trial response lost/)
+  assert.equal(sub.items.data[1].quantity,5)
+  await assert.rejects(changeBillingSeats(f.workspaceId,5,f.userId,client),/synthetic opposite trial response lost/)
+  assert.equal(sub.items.data[1].quantity,4)
+  assert.equal((await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.seats_changed' AND metadata::jsonb->>'effective'='trial_immediate'").get(f.workspaceId))?.count,0)
+  await changeBillingSeats(f.workspaceId,6,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,6,
+    `a new trial selection must apply after both local rollbacks: writes=${writes}, replays=${replays}, keys=${JSON.stringify(keys)}`)
+  assert.deepEqual(f.state.invoices,invoices)
+  assert.equal(f.state.invoiceUpdates.length,0)
+  assert.equal(f.state.finalizations.length,0)
+})
+test("trial seat retry after a pre-dispatch failure safely applies the absolute quantity without invoicing",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  sub.status="trialing"
+  sub.trial_start=Math.floor(Date.now()/1000)
+  sub.trial_end=sub.trial_start+14*86400
+  const invoices=structuredClone(f.state.invoices)
+  let attempts=0,writes=0
+  const client={...f.client,subscriptions:{...f.client.subscriptions,update:async(_id:string,params:Record<string,unknown>,options:{idempotencyKey:string})=>{
+    assert.ok(options.idempotencyKey)
+    assert.equal(params.proration_behavior,"none")
+    assert.equal("payment_behavior" in params,false)
+    if(++attempts===1) throw new Error("synthetic failure before provider dispatch")
+    const items=params.items as Array<{id:string;quantity:number}>
+    assert.equal(items[0].id,"si_seats")
+    sub.items.data[1].quantity=items[0].quantity
+    writes++
+    return structuredClone(sub)
+  }}} as unknown as StripeBillingClient
+  await syncWorkspaceBilling(f.workspaceId,client)
+  await assert.rejects(changeBillingSeats(f.workspaceId,6,f.userId,client),/synthetic failure before provider dispatch/)
+  assert.equal(sub.items.data[1].quantity,4)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,5)
+  await changeBillingSeats(f.workspaceId,6,f.userId,client)
+  assert.equal((await getWorkspaceBilling(f.workspaceId)).billing?.seatLimit,6)
+  assert.equal(attempts,2)
+  assert.equal(writes,1)
+  assert.deepEqual(f.state.invoices,invoices)
+  assert.equal(f.state.invoiceUpdates.length,0)
+  assert.equal(f.state.finalizations.length,0)
+})
 test("automatic trial increase has no proration",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   sub.status="trialing";sub.trial_start=Math.floor(Date.now()/1000);sub.trial_end=sub.trial_start+14*86400
