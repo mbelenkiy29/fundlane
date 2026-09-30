@@ -22,6 +22,7 @@ export type MonitorConfig = {
   systemProvider?: SystemProvider
   systemApiKey?: string
   systemFrom?: string
+  systemReplyTo?: string
   systemBaseUrl?: string
   recoveryAlerts?: boolean
   assistantEnabled?: boolean
@@ -229,7 +230,8 @@ export async function runMonitor(
             const response = await sendTransactionalWebhook(config.webhook,config.webhookToken,message,String(pending.pending_id),fetcher,8000)
             state = response.ok ? "accepted" : response.status >= 500 ? "unknown" : "rejected"
           } else {
-            const response = await requestSystemEmail({provider:config.systemProvider!,apiKey:config.systemApiKey!,from:config.systemFrom!,to:config.recipient,...renderEmailContent(message),idempotencyKey:String(pending.pending_id),fetchImpl:fetcher,baseUrl:config.systemBaseUrl})
+            const replyTo = config.systemReplyTo?.includes("@") ? config.systemReplyTo : undefined
+            const response = await requestSystemEmail({provider:config.systemProvider!,apiKey:config.systemApiKey!,from:config.systemFrom!,to:config.recipient,...renderEmailContent(message),idempotencyKey:String(pending.pending_id),fetchImpl:fetcher,baseUrl:config.systemBaseUrl,...(replyTo !== undefined ? { replyTo } : {})})
             state = response.status >= 200 && response.status < 300 && response.emailId ? "accepted" : [400,401,403,422,429].includes(response.status) ? "rejected" : "unknown"
           }
           await finishAlert(

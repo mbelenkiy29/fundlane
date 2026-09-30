@@ -68,6 +68,7 @@ Deno.serve(async (request) => {
         systemProvider,
         systemApiKey: env(systemProvider === "resend" ? "MCA_RESEND_API_KEY" : "MCA_USESEND_API_KEY")?.trim(),
         systemFrom: (systemProvider === "resend" ? env("MCA_RESEND_FROM")?.trim() || env("MCA_USESEND_FROM") : env("MCA_USESEND_FROM"))?.trim(),
+        systemReplyTo: env("MCA_SYSTEM_EMAIL_REPLY_TO")?.trim() || undefined,
         systemBaseUrl: env("MCA_USESEND_BASE_URL")?.trim() || undefined,
       }
     )
