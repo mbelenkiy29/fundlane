@@ -166,6 +166,7 @@ export async function requestSystemEmail(
     apiKey: string
     from: string
     to: string
+    replyTo?: string
     idempotencyKey: string
     fetchImpl?: typeof fetch
     /** Optional self-hosted useSend HTTPS origin (MCA_USESEND_BASE_URL); ignored for Resend. */
@@ -200,6 +201,7 @@ export async function requestSystemEmail(
               subject: input.subject,
               text: input.text,
               html: input.html,
+              ...(input.replyTo !== undefined ? { reply_to: input.replyTo } : {}),
             }
           : {
               to: input.to,
@@ -207,6 +209,7 @@ export async function requestSystemEmail(
               subject: input.subject,
               text: input.text,
               html: input.html,
+              ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
             }
       ),
       redirect: "error",

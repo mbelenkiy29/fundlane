@@ -1,7 +1,7 @@
 import "server-only"
 
 import { AppError } from "./errors"
-import { sendUsesendEmail } from "./intake/usesend"
+import { parseEmailAddress, sendUsesendEmail } from "./intake/usesend"
 import { requestSystemEmail } from "./operations/email-transport"
 
 type SystemEmailInput = Parameters<typeof sendUsesendEmail>[0]
@@ -17,11 +17,27 @@ export function systemEmailCredentials(): { apiKey: string; from: string } | und
   return apiKey && from ? { apiKey, from } : undefined
 }
 
+export function systemEmailReplyTo(): string | undefined {
+  const replyTo = process.env.MCA_SYSTEM_EMAIL_REPLY_TO?.trim()
+  if (replyTo && !parseEmailAddress(replyTo)) {
+    throw new AppError(503, "system_email_reply_to_invalid", "MCA_SYSTEM_EMAIL_REPLY_TO must be an email address.")
+  }
+  return replyTo || undefined
+}
+
 export async function sendSystemEmail(input: SystemEmailInput): Promise<{ emailId: string }> {
-  if (!resendSystemEmailEnabled()) return sendUsesendEmail(input)
+  if (!resendSystemEmailEnabled()) {
+    // Only Fundlane's own sender gets the system Reply-To; tenant integration
+    // senders are left untouched (and never fail on this setting).
+    const senderAddress = parseEmailAddress(input.from)
+    const systemSender = Boolean(senderAddress) && senderAddress === parseEmailAddress(systemEmailCredentials()?.from)
+    const replyTo = input.replyTo ?? (systemSender ? systemEmailReplyTo() : undefined)
+    return sendUsesendEmail({ ...input, ...(replyTo !== undefined ? { replyTo } : {}) })
+  }
   const credentials = systemEmailCredentials()
   if (!credentials) throw new AppError(503, "system_email_unconfigured", "Configure the Resend API key and From address.")
-  const result = await requestSystemEmail({ ...input, provider:"resend", apiKey:credentials.apiKey, from:credentials.from })
+  const replyTo = input.replyTo ?? systemEmailReplyTo()
+  const result = await requestSystemEmail({ ...input, provider:"resend", apiKey:credentials.apiKey, from:credentials.from, ...(replyTo !== undefined ? { replyTo } : {}) })
   const extra = { providerStatus:result.status }
   if (result.status === 401 || result.status === 403) throw new AppError(503, "resend_auth_rejected", "Resend rejected the configured API key or sender.", undefined, extra)
   if (result.status === 429) throw new AppError(503, "resend_rate_limited", "Resend rate limited the email. Retry later.", undefined, extra)

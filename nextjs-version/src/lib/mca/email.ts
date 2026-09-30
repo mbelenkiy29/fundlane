@@ -36,7 +36,7 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
       } catch (error) {
         // This validation runs before useSend invokes fetch. Keep it distinct
         // from a request whose acceptance cannot be determined.
-        if (error instanceof AppError && error.code === "usesend_base_url_invalid") {
+        if (error instanceof AppError && ["usesend_base_url_invalid", "system_email_reply_to_invalid"].includes(error.code)) {
           throw new AppError(503, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.");
         }
         const status = error instanceof AppError && typeof error.extra?.providerStatus === "number" ? error.extra.providerStatus : undefined;

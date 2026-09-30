@@ -263,13 +263,14 @@ export async function sendUsesendEmail(input: {
   subject: string
   text: string
   html: string
+  replyTo?: string
   idempotencyKey: string
   fetchImpl?: typeof fetch
 }): Promise<{ emailId: string }> {
   const { status, body } = await usesendRequest<Record<string, unknown>>(input.fetchImpl ?? fetch, input.apiKey, "/v1/emails", {
     method: "POST",
     headers: { "Idempotency-Key": input.idempotencyKey.slice(0, 256) },
-    body: JSON.stringify({ to: input.to, from: input.from, subject: input.subject, text: input.text, html: input.html }),
+    body: JSON.stringify({ to: input.to, from: input.from, subject: input.subject, text: input.text, html: input.html, ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}) }),
   })
   const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {}
   const error = record.error && typeof record.error === "object" && !Array.isArray(record.error) ? record.error as Record<string, unknown> : undefined
