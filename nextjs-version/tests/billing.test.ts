@@ -435,6 +435,30 @@ test("paid seat preview excludes renewal charges and pending invoice items",asyn
   assert.equal(calls,1)
   assert.equal(f.state.updates.length,0)
 })
+test("tax-disabled paid seat preview preserves the exact existing Stripe request",async()=>{
+  for (const flag of [undefined,"","false","TRUE","1"]) {
+    const f=await fixture(),sub=f.state.subscriptions[0]
+    if(flag===undefined)delete process.env.MCA_STRIPE_TAX_ENABLED;else process.env.MCA_STRIPE_TAX_ENABLED=flag
+    let request:Record<string,unknown>|undefined
+    const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:Record<string,unknown>)=>{request=params;const details=params.subscription_details as {proration_date:number};return{livemode:false,currency:"usd",lines:{has_more:false,data:[{amount:1234,period:{start:details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}}]}}}}} as unknown as StripeBillingClient
+    await previewBillingSeatIncrease(f.workspaceId,6,client)
+    const at=(request?.subscription_details as {proration_date:number}).proration_date
+    assert.deepEqual(request,{customer:f.customerId,subscription:sub.id,subscription_details:{proration_behavior:"always_invoice",proration_date:at,items:[{id:"si_seats",quantity:5}]}})
+    assert.equal("automatic_tax" in request!,false)
+  }
+  delete process.env.MCA_STRIPE_TAX_ENABLED
+})
+test("tax-enabled paid seat preview requests automatic tax without writing the subscription",async()=>{
+  const f=await fixture(),sub=f.state.subscriptions[0]
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    let request:Record<string,unknown>|undefined
+    const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:Record<string,unknown>)=>{request=params;const details=params.subscription_details as {proration_date:number};return{livemode:false,currency:"usd",lines:{has_more:false,data:[{amount:1234,period:{start:details.proration_date},parent:{subscription_item_details:{proration:true,subscription:sub.id,subscription_item:"si_seats"}}}]}}}}} as unknown as StripeBillingClient
+    await previewBillingSeatIncrease(f.workspaceId,6,client)
+    assert.deepEqual(request?.automatic_tax,{enabled:true})
+    assert.equal(f.state.updates.length,0)
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
+})
 test("paid seat preview fails closed when a proration cannot be attributed",async()=>{
   const f=await fixture(),sub=f.state.subscriptions[0]
   const client={...f.client,invoices:{...f.client.invoices,createPreview:async(params:{subscription_details:{proration_date:number}})=>({livemode:false,currency:"usd",lines:{has_more:false,data:[
@@ -1339,6 +1363,37 @@ test("tax-enabled seat changes activate existing subscriptions and tax both sche
     assert.equal(scheduleWrite.body.get("phases[0][automatic_tax][enabled]"),"true")
     assert.equal(scheduleWrite.body.get("phases[1][automatic_tax][enabled]"),"true")
   } finally {delete process.env.MCA_STRIPE_TAX_ENABLED;await http.close()}
+})
+test("tax-enabled paid seat increase maps customer_tax_location_invalid to billing portal guidance",async()=>{
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    for (const failingWrite of [1,2]) {
+      const f=await fixture(),sub=f.state.subscriptions[0]
+      await syncWorkspaceBilling(f.workspaceId,f.client)
+      let writes=0
+      const client={...f.client,subscriptions:{...f.client.subscriptions,update:async()=>{writes++;if(writes===failingWrite)throw Object.assign(new Error("provider detail"),{code:"customer_tax_location_invalid"});return sub}}} as unknown as StripeBillingClient
+      await assert.rejects(changeBillingSeats(f.workspaceId,8,f.userId,client),(error:unknown)=>{
+        assert.deepEqual({status:(error as {status:number}).status,code:(error as {code:string}).code},{status:409,code:"billing_tax_location_required"})
+        assert.match((error as Error).message,/billing address.*billing portal/i)
+        return true
+      })
+    }
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
+})
+test("tax-location error mapping is inert when tax is disabled and preserves unrelated errors",async()=>{
+  const locationError=Object.assign(new Error("original location error"),{code:"customer_tax_location_invalid"})
+  const disabled=await fixture(),disabledSub=disabled.state.subscriptions[0]
+  await syncWorkspaceBilling(disabled.workspaceId,disabled.client)
+  const disabledClient={...disabled.client,subscriptions:{...disabled.client.subscriptions,update:async()=>{throw locationError},retrieve:async()=>disabledSub}} as unknown as StripeBillingClient
+  await assert.rejects(changeBillingSeats(disabled.workspaceId,8,disabled.userId,disabledClient),error=>error===locationError)
+  const unrelated=Object.assign(new Error("unrelated"),{code:"api_connection_error"})
+  const enabled=await fixture(),enabledSub=enabled.state.subscriptions[0]
+  await syncWorkspaceBilling(enabled.workspaceId,enabled.client)
+  process.env.MCA_STRIPE_TAX_ENABLED="true"
+  try {
+    const enabledClient={...enabled.client,subscriptions:{...enabled.client.subscriptions,update:async()=>{throw unrelated},retrieve:async()=>enabledSub}} as unknown as StripeBillingClient
+    await assert.rejects(changeBillingSeats(enabled.workspaceId,8,enabled.userId,enabledClient),error=>error===unrelated)
+  } finally {delete process.env.MCA_STRIPE_TAX_ENABLED}
 })
 test("verified paid subscription replaces trial; failed proration cannot grant more seats",async()=>{
   const f=await fixture()
