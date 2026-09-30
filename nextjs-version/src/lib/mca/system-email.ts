@@ -2,6 +2,7 @@ import "server-only"
 
 import { AppError } from "./errors"
 import { sendUsesendEmail } from "./intake/usesend"
+import { requestSystemEmail } from "./operations/email-transport"
 
 type SystemEmailInput = Parameters<typeof sendUsesendEmail>[0]
 
@@ -20,24 +21,13 @@ export async function sendSystemEmail(input: SystemEmailInput): Promise<{ emailI
   if (!resendSystemEmailEnabled()) return sendUsesendEmail(input)
   const credentials = systemEmailCredentials()
   if (!credentials) throw new AppError(503, "system_email_unconfigured", "Configure the Resend API key and From address.")
-  const response = await (input.fetchImpl ?? fetch)("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${credentials.apiKey}`,
-      "content-type": "application/json",
-      "Idempotency-Key": input.idempotencyKey.slice(0, 256),
-    },
-    body: JSON.stringify({ from: credentials.from, to: [input.to], subject: input.subject, text: input.text, html: input.html }),
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  })
-  const body = await response.json().catch(() => undefined) as { id?: unknown } | undefined
-  if (response.status === 401 || response.status === 403) throw new AppError(503, "resend_auth_rejected", "Resend rejected the configured API key or sender.")
-  if (response.status === 429) throw new AppError(503, "resend_rate_limited", "Resend rate limited the email. Retry later.")
-  if (response.status === 409) throw new AppError(409, "resend_idempotency_conflict", "Resend already used this email idempotency key with a different payload.")
-  if (!response.ok || typeof body?.id !== "string" || !body.id.trim()) {
-    throw new AppError(502, "resend_send_failed", `Resend rejected the email with HTTP ${response.status}.`)
+  const result = await requestSystemEmail({ ...input, provider:"resend", apiKey:credentials.apiKey, from:credentials.from })
+  const extra = { providerStatus:result.status }
+  if (result.status === 401 || result.status === 403) throw new AppError(503, "resend_auth_rejected", "Resend rejected the configured API key or sender.", undefined, extra)
+  if (result.status === 429) throw new AppError(503, "resend_rate_limited", "Resend rate limited the email. Retry later.", undefined, extra)
+  if (result.status === 409) throw new AppError(409, "resend_idempotency_conflict", "Resend already used this email idempotency key with a different payload.", undefined, extra)
+  if (result.status < 200 || result.status >= 300 || !result.emailId) {
+    throw new AppError(502, "resend_send_failed", `Resend rejected the email with HTTP ${result.status}.`, undefined, extra)
   }
-  return { emailId: body.id }
+  return { emailId:result.emailId }
 }

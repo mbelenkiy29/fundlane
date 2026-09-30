@@ -16,6 +16,147 @@ function sendTransactionalWebhook(url, token, message, correlationId, fetcher = 
     redirect: "error"
   });
 }
+var escapeHtml = (value) => value.replace(
+  /[&<>"']/g,
+  (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]
+);
+var stringValue = (data, key) => typeof data?.[key] === "string" && data[key].trim() ? data[key].trim() : void 0;
+function renderEmailContent(message) {
+  const data = message.data;
+  const client = stringValue(data, "clientName");
+  const employee = stringValue(data, "employeeName");
+  const expiry = `This link expires at ${message.expiresAt}.`;
+  let subject, paragraph, cta;
+  const details = [];
+  switch (message.template) {
+    case "application_invitation":
+      subject = "Complete your business funding application";
+      paragraph = `${client ? `Hi ${client}, ` : ""}${employee ? `${employee} invited you` : "You\u2019ve been invited"} to complete your business funding application. Have your business details and recent bank statements ready.`;
+      cta = "Start application";
+      break;
+    case "application_invitation_reminder": {
+      subject = "Finish your business funding application";
+      paragraph = `${client ? `Hi ${client}, ` : ""}this is a reminder to finish the business funding application${employee ? ` ${employee} invited you to complete` : " you were invited to complete"}.`;
+      cta = "Continue application";
+      const form = stringValue(data, "formName"), step = stringValue(data, "lastStep");
+      if (form) details.push(`Form: ${form}.`);
+      if (step) details.push(`Current step: ${step}.`);
+      break;
+    }
+    case "workspace_invitation":
+      subject = "You\u2019re invited to join Fundlane";
+      paragraph = "You\u2019ve been invited to join a company workspace in Fundlane.";
+      cta = "Accept invitation";
+      break;
+    case "account_recovery":
+      subject = "Reset your Fundlane password";
+      paragraph = "We received a request to reset your Fundlane password. If you did not request this, you can ignore this email.";
+      cta = "Reset password";
+      break;
+    case "company_email_verification":
+      subject = "Verify your company email";
+      paragraph = "Verify your email address to continue setting up your company in Fundlane.";
+      cta = "Verify company email";
+      break;
+    case "funder_analysis_review":
+      subject = "Review Fundlane funder analysis";
+      paragraph = "A funder analysis is ready for your review. Review the recommendations and confirm your selection.";
+      cta = "Review analysis";
+      break;
+    case "ai_credit_alert": {
+      const exhausted = stringValue(data, "kind") === "exhausted" || data?.total === 0;
+      subject = exhausted ? "Fundlane AI credits are exhausted" : "Fundlane AI credits are running low";
+      paragraph = exhausted ? "Fundlane AI credits are exhausted." : "Fundlane AI credits are running low.";
+      cta = "Review AI credits";
+      for (const [key, label] of [
+        ["companyName", "Company"],
+        ["userName", "User"],
+        ["total", "Remaining"],
+        ["allowance", "Allowance"],
+        ["resetAt", "Reset"]
+      ]) {
+        const value = data?.[key];
+        if (typeof value === "string" || typeof value === "number")
+          details.push(`${label}: ${String(value)}.`);
+      }
+      break;
+    }
+    case "operations_alert": {
+      const component = stringValue(data, "component") ?? "platform";
+      subject = `Fundlane operations alert: ${component}`;
+      paragraph = stringValue(data, "summary") ?? "A platform component needs attention.";
+      cta = "Open platform status";
+      details.push(
+        `Component: ${component}.`,
+        `Time: ${stringValue(data, "time") ?? "Unavailable"}.`
+      );
+      break;
+    }
+    default: {
+      const exhaustive = message.template;
+      throw new Error(`Unsupported email template: ${exhaustive}`);
+    }
+  }
+  const text = [
+    paragraph,
+    ...details,
+    `${cta}: ${message.actionUrl}`,
+    expiry
+  ].join("\n\n");
+  const html = `<p>${escapeHtml(paragraph)}</p>${details.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}<p><a href="${escapeHtml(message.actionUrl)}">${escapeHtml(cta)}</a></p><p>${escapeHtml(expiry)}</p>`;
+  return { subject, text, html };
+}
+function usesendOrigin(configured) {
+  if (!configured) return "https://app.usesend.com";
+  const url = new URL(configured);
+  if (url.protocol !== "https:" || url.username || url.password)
+    throw new Error("MCA_USESEND_BASE_URL must be an HTTPS origin.");
+  return url.origin;
+}
+async function requestSystemEmail(input) {
+  const resend = input.provider === "resend";
+  const response = await (input.fetchImpl ?? fetch)(
+    resend ? "https://api.resend.com/emails" : new URL("/api/v1/emails", usesendOrigin(input.baseUrl)).href,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${input.apiKey}`,
+        "content-type": "application/json",
+        "Idempotency-Key": input.idempotencyKey.slice(0, 256),
+        // useSend's edge rejects default runtime agents; match the app's useSend client.
+        ...resend ? {} : {
+          "user-agent": "Mozilla/5.0 (compatible; MCA-Intake/1.0; +https://fundlane.io)"
+        }
+      },
+      body: JSON.stringify(
+        resend ? {
+          from: input.from,
+          to: [input.to],
+          subject: input.subject,
+          text: input.text,
+          html: input.html
+        } : {
+          to: input.to,
+          from: input.from,
+          subject: input.subject,
+          text: input.text,
+          html: input.html
+        }
+      ),
+      redirect: "error",
+      signal: AbortSignal.timeout(15e3)
+    }
+  );
+  const body = await response.json().catch(() => void 0);
+  const error = body?.error && typeof body.error === "object" ? body.error : void 0;
+  const id = resend ? body?.id : body?.emailId ?? body?.id;
+  return {
+    status: response.status,
+    ...typeof id === "string" && id.trim() ? { emailId: id } : {},
+    ...typeof error?.code === "string" ? { errorCode: error.code } : typeof body?.code === "string" ? { errorCode: body.code } : {}
+  };
+}
 
 // src/lib/mca/operations/contracts.ts
 function documentWorkerReady(metrics) {
@@ -197,7 +338,8 @@ async function runMonitor(db, config, fetcher = fetch) {
         ]
       );
     }
-    if (config.alerts && config.recipient && config.webhook) {
+    const providerReady = config.systemProviderEnabled && config.systemProvider && config.systemApiKey && config.systemFrom;
+    if (config.alerts && config.recipient && (config.webhook || providerReady)) {
       const [pending] = await db.query(
         `WITH claimed AS (UPDATE mca_private.ops_incidents SET delivery_state='sending',last_attempt_at=now(),last_sent_at=now()
         WHERE component=(SELECT component FROM mca_private.ops_incidents WHERE pending_kind IS NOT NULL AND delivery_state='pending' ORDER BY last_attempt_at NULLS FIRST,component LIMIT 1)
@@ -207,29 +349,30 @@ async function runMonitor(db, config, fetcher = fetch) {
       );
       if (pending) {
         try {
-          const response = await sendTransactionalWebhook(
-            config.webhook,
-            config.webhookToken,
-            {
-              recipient: config.recipient,
-              template: "operations_alert",
-              actionUrl: new URL("/admin/status", config.origin).href,
-              expiresAt: new Date(Date.now() + 864e5).toISOString(),
-              data: {
-                component: pending.component,
-                time: now,
-                summary: `${pending.pending_kind}: ${pending.component}`
-              }
-            },
-            String(pending.pending_id),
-            fetcher,
-            8e3
-          );
+          const message = {
+            recipient: config.recipient,
+            template: "operations_alert",
+            actionUrl: new URL("/admin/status", config.origin).href,
+            expiresAt: new Date(Date.now() + 864e5).toISOString(),
+            data: {
+              component: pending.component,
+              time: now,
+              summary: `${pending.pending_kind}: ${pending.component}`
+            }
+          };
+          let state;
+          if (config.webhook) {
+            const response = await sendTransactionalWebhook(config.webhook, config.webhookToken, message, String(pending.pending_id), fetcher, 8e3);
+            state = response.ok ? "accepted" : response.status >= 500 ? "unknown" : "rejected";
+          } else {
+            const response = await requestSystemEmail({ provider: config.systemProvider, apiKey: config.systemApiKey, from: config.systemFrom, to: config.recipient, ...renderEmailContent(message), idempotencyKey: String(pending.pending_id), fetchImpl: fetcher, baseUrl: config.systemBaseUrl });
+            state = response.status >= 200 && response.status < 300 && response.emailId ? "accepted" : [400, 401, 403, 422, 429].includes(response.status) ? "rejected" : "unknown";
+          }
           await finishAlert(
             db,
             String(pending.component),
             String(pending.pending_id),
-            response.ok ? "accepted" : response.status >= 500 ? "unknown" : "rejected"
+            state
           );
         } catch {
           await finishAlert(
@@ -281,6 +424,7 @@ var SUPABASE_DATABASE_CA = "-----BEGIN CERTIFICATE-----\nMIIDxDCCAqygAwIBAgIUbLx
 
 // scripts/operations/edge-entry.ts
 var env = (name) => Deno.env.get(name);
+var systemProvider = env("MCA_SYSTEM_EMAIL_PROVIDER") === "resend" ? "resend" : "usesend";
 function queueThresholds() {
   try {
     const raw = JSON.parse(env("MCA_OPERATIONS_QUEUE_AGE_BY_KIND_SECONDS") ?? "{}");
@@ -336,7 +480,12 @@ Deno.serve(async (request) => {
         },
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
-        webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN")
+        webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN"),
+        systemProviderEnabled: env("MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED") === "true",
+        systemProvider,
+        systemApiKey: env(systemProvider === "resend" ? "MCA_RESEND_API_KEY" : "MCA_USESEND_API_KEY")?.trim(),
+        systemFrom: (systemProvider === "resend" ? env("MCA_RESEND_FROM")?.trim() || env("MCA_USESEND_FROM") : env("MCA_USESEND_FROM"))?.trim(),
+        systemBaseUrl: env("MCA_USESEND_BASE_URL")?.trim() || void 0
       }
     );
     return Response.json(result);

@@ -4,7 +4,7 @@ import { getDatabase, newId, nowIso, withTransaction } from "../db"
 import { AppError } from "../errors"
 import { getSupabaseAdminClient } from "../../supabase/server"
 import { verifiedSupabaseUser } from "../supabase-auth"
-import { deliverEmail } from "../email"
+import { deliverEmail, transactionalEmailReady } from "../email"
 import { creditMonth, nextReset, type CreditAccount } from "./credits"
 import { seal, unseal } from "./repository"
 
@@ -256,7 +256,7 @@ export async function deliverCreditAlerts(
     )
     .all(nowIso(), ...(workspaceId ? [workspaceId] : []))
   for (const n of rows) {
-    if (!process.env.MCA_EMAIL_WEBHOOK_URL && !options.send) continue
+    if (!transactionalEmailReady() && !options.send) continue
     const claim = await getDatabase()
       .prepare<{
         attempts: number

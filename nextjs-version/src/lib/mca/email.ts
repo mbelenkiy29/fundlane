@@ -1,4 +1,4 @@
-import { sendTransactionalWebhook } from "./operations/email-transport";
+import { renderEmailContent, sendTransactionalWebhook, type TransactionalMessage } from "./operations/email-transport";
 import "server-only";
 
 import { AppError } from "./errors";
@@ -6,21 +6,18 @@ import { newId } from "./db";
 import { sendSystemEmail, systemEmailCredentials, resendSystemEmailEnabled } from "./system-email";
 import { trialRequiresCard } from "./stripe-checkout-trial";
 
-interface EmailMessage {
-  recipient: string;
-  template: "workspace_invitation" | "account_recovery" | "funder_analysis_review" | "company_email_verification" | "ai_credit_alert" | "application_invitation" | "application_invitation_reminder" | "operations_alert";
-  actionUrl: string;
-  expiresAt: string;
-  data?: Record<string, unknown>;
-}
+export type EmailMessage = TransactionalMessage;
+export { renderEmailContent } from "./operations/email-transport";
+export const transactionalSystemEmailEnabled = () => process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED === "true";
+export const transactionalEmailReady = () => Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) || (transactionalSystemEmailEnabled() && Boolean(systemEmailCredentials()));
 
 export function assertEmailDeliveryConfigured(): void {
-  if (process.env.NODE_ENV === "production" && !process.env.MCA_EMAIL_WEBHOOK_URL) {
+  if (process.env.NODE_ENV === "production" && !transactionalEmailReady()) {
     throw new AppError(503, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.");
   }
 }
 
-export async function deliverEmail(message: EmailMessage, options?: {correlationId?: string; workspaceId?: string; approvedAt?: string}): Promise<{
+export async function deliverEmail(message: EmailMessage, options?: {correlationId?: string; workspaceId?: string; approvedAt?: string; fetchImpl?: typeof fetch}): Promise<{
   delivery: "sent" | "preview";
   correlationId: string;
   previewUrl?: string;
@@ -30,6 +27,18 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
   const correlationId = options?.correlationId ?? newId();
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL;
   if (!webhook) {
+    if (transactionalSystemEmailEnabled()) {
+      const credentials = systemEmailCredentials();
+      if (!credentials) throw new AppError(503, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.");
+      validateTransactionalActionUrl(message.actionUrl);
+      try {
+        await sendSystemEmail({apiKey:credentials.apiKey,from:credentials.from,to:message.recipient,...renderEmailContent(message),idempotencyKey:correlationId,fetchImpl:options?.fetchImpl});
+      } catch (error) {
+        const status = error instanceof AppError && typeof error.extra?.providerStatus === "number" ? error.extra.providerStatus : undefined;
+        throw new AppError(502, status !== 409 && [400,401,403,422,429].includes(status ?? 0) ? "email_delivery_failed" : "email_delivery_uncertain", "The email provider did not accept the message.");
+      }
+      return { delivery:"sent", correlationId };
+    }
     if (process.env.NODE_ENV === "production") {
       throw new AppError(503, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.");
     }
@@ -38,6 +47,13 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
   const response = await sendTransactionalWebhook(webhook, process.env.MCA_EMAIL_WEBHOOK_TOKEN, message, correlationId);
   if (!response.ok) throw new AppError(502, response.status >= 500 ? "email_delivery_uncertain" : "email_delivery_failed", "The email provider did not accept the message.");
   return { delivery: "sent", correlationId };
+}
+
+function validateTransactionalActionUrl(value:string):void {
+  let url:URL;
+  try { url = new URL(value) } catch { throw new AppError(422,"email_action_url_invalid","Email action links require a valid URL.") }
+  const loopback = process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["localhost","127.0.0.1"].includes(url.hostname)
+  if ((url.protocol !== "https:" && !loopback) || url.username || url.password) throw new AppError(422,"email_action_url_invalid","Email action links require HTTPS.")
 }
 
 export interface BillingEmailMessage {
