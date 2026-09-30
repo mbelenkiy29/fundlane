@@ -9,6 +9,7 @@ import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import Stripe from "stripe"
 import { BILLING_CATALOG } from "../../src/lib/mca/billing-catalog"
+import { forwardAcceptanceWebhook, startAcceptanceNextServer, waitForAcceptanceReconciliation } from "./webhook-acceptance-runtime"
 
 const ACCOUNT = "acct_1UIDeIBP3qJwlwms"
 class AcceptanceError extends Error {}
@@ -37,14 +38,14 @@ async function main() {
   let listener: ChildProcess | undefined
   let database: Awaited<ReturnType<typeof import("../../tests/helpers/postgres-test-db.mjs").createPostgresTestDatabase>> | undefined
   let closeApp: (() => Promise<void>) | undefined
-  let route: ((request: Request) => Promise<Response>) | undefined
+  let app: Awaited<ReturnType<typeof startAcceptanceNextServer>> | undefined
   let customerId: string | undefined
   const deliveries: Delivery[] = []
   const held: Array<{ body: string; signature: string; event: Stripe.Event }> = []
   let hold = false
   const server = createServer(async (request, response) => {
     try {
-      if (request.method !== "POST" || request.url !== "/api/webhooks/stripe" || !route) { response.writeHead(404).end(); return }
+      if (request.method !== "POST" || request.url !== "/api/webhooks/stripe" || !app) { response.writeHead(404).end(); return }
       const chunks: Buffer[] = []
       for await (const chunk of request) chunks.push(Buffer.from(chunk))
       const body = Buffer.concat(chunks).toString("utf8")
@@ -55,7 +56,7 @@ async function main() {
         response.writeHead(200, { "content-type": "application/json" }).end('{"held":true}')
         return
       }
-      const result = await route(new Request("http://127.0.0.1/api/webhooks/stripe", { method: "POST", headers: { "stripe-signature": signature }, body }))
+      const result = await forwardAcceptanceWebhook(app.endpoint, body, signature)
       const text = await result.text()
       const event = JSON.parse(body) as Stripe.Event
       const object = event.data.object as { customer?: string }
@@ -114,16 +115,17 @@ async function main() {
     const snapshot = async () => ({ entitlements: await db.prepare("SELECT * FROM workspace_billing_entitlements ORDER BY workspace_id").all(), receipts: await db.prepare("SELECT * FROM stripe_billing_events ORDER BY event_id").all(), audits: await db.prepare("SELECT * FROM audit_events ORDER BY id").all() })
     const before = await snapshot()
     assert.equal(before.entitlements.length, 0)
-    route = (await import("../../src/app/api/webhooks/stripe/route")).POST
+    app = await startAcceptanceNextServer(process.env, chunk => { void log.write(chunk) })
     assert.equal((await fetch(`${endpoint}?success=true&session_id=untrusted`)).status, 404)
     assert.deepEqual(await snapshot(), before)
     await check("paid provider state and untrusted success URL do not independently grant local entitlements")
     evidence.stage = "real HTTP delivery"
     await stripe.subscriptions.update(subscription.id, { metadata: { acceptance_delivery: run } })
-    for (let i = 0; i < 150 && !deliveries.some(d => d.result.reconciled); i++) await sleep(200)
-    const delivery = deliveries.find(d => d.result.reconciled)
-    if (!delivery) throw new AcceptanceError(`No reconciled CLI delivery; observed HTTP statuses: ${deliveries.map(d => d.status).join(",") || "none"}`)
+    for (let i = 0; i < 150 && !deliveries.some(d => d.result.queued); i++) await sleep(200)
+    const delivery = deliveries.find(d => d.result.queued)
+    if (!delivery) throw new AcceptanceError(`No queued CLI delivery; observed HTTP statuses: ${deliveries.map(d => d.status).join(",") || "none"}`)
     assert.equal(delivery.status, 200)
+    await waitForAcceptanceReconciliation((sql, parameters) => database!.query(sql, parameters), delivery.result, delivery.event, local.workspaceId, customer.id)
     evidence.ids.event = delivery.event
     const actual = await stripe.events.retrieve(delivery.event)
     assert.equal(actual.type, "customer.subscription.updated")
@@ -161,7 +163,7 @@ async function main() {
     for (const item of [newer, older]) {
       const response = await fetch(endpoint, { method: "POST", headers: { "stripe-signature": item.signature }, body: item.body })
       assert.equal(response.status, 200)
-      assert.equal((await response.json()).reconciled, true)
+      await waitForAcceptanceReconciliation((sql, parameters) => database!.query(sql, parameters), await response.json(), item.event.id, local.workspaceId, customer.id)
       assert.equal((await getCompanyAccess(local.workspaceId)).allowed, false)
       assert.equal((await db.prepare<{status: string}>("SELECT status FROM workspace_billing_entitlements WHERE workspace_id=?").get(local.workspaceId))?.status, "canceled")
     }
@@ -188,6 +190,7 @@ async function main() {
     evidence.cleanup.push("listener stopped")
     await new Promise<void>(resolve => server.close(() => resolve()))
     const cleanup = async (name: string, fn: () => Promise<unknown>) => { try { await fn(); evidence.cleanup.push(name) } catch { evidence.cleanup.push(`${name}: FAILED`); process.exitCode = 1 } }
+    await cleanup("local Next server stopped", async () => { await app?.close() })
     await cleanup("owned subscription canceled", async () => {
       if (!evidence.ids.subscription) return
       const sub = await stripe.subscriptions.retrieve(evidence.ids.subscription)
