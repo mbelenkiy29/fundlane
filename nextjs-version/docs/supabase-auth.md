@@ -109,3 +109,5 @@ The isolated project `drubsfvhlggmtyiigwxy` passed nine hosted checks using real
 The Vercel staging landing, sign-in, recovery and reset screens were also inspected in Chrome at desktop size and 390×844. A disposable staging account signed in through the deployed UI, reached its company dashboard, and opened the application company selector. SMTP delivery remains a separate deployment check.
 
 The staging Site URL is `https://fundlane-staging-michael-belenkiys-projects.vercel.app`; only its `/auth/callback`, `/auth/callback?next=/onboarding`, and `/auth/callback?next=/reset-password` redirects are configured. Email confirmation is enabled, anonymous sign-in is disabled, and the hosted minimum password length is 12.
+
+Business workspace invitations and account recovery use Fundlane’s transactional adapter (webhook first, with the default-off system-provider fallback). This is independent of Supabase Auth SMTP and does not configure or replace it.

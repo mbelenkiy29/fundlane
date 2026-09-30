@@ -1,4 +1,4 @@
-import { sendTransactionalWebhook } from "./email-transport"
+import { renderEmailContent, requestSystemEmail, sendTransactionalWebhook, type SystemProvider, type TransactionalMessage } from "./email-transport"
 import {
   documentWorkerReady,
   incidentTransition,
@@ -18,6 +18,11 @@ export type MonitorConfig = {
   recipient?: string
   webhook?: string
   webhookToken?: string
+  systemProviderEnabled?: boolean
+  systemProvider?: SystemProvider
+  systemApiKey?: string
+  systemFrom?: string
+  systemBaseUrl?: string
   recoveryAlerts?: boolean
   assistantEnabled?: boolean
   thresholds?: {
@@ -197,7 +202,8 @@ export async function runMonitor(
       )
     }
     // Send at most one alert per tick: bounded time and no overlapping provider calls.
-    if (config.alerts && config.recipient && config.webhook) {
+    const providerReady = config.systemProviderEnabled && config.systemProvider && config.systemApiKey && config.systemFrom
+    if (config.alerts && config.recipient && (config.webhook || providerReady)) {
       const [pending] = await db.query(
         `WITH claimed AS (UPDATE mca_private.ops_incidents SET delivery_state='sending',last_attempt_at=now(),last_sent_at=now()
         WHERE component=(SELECT component FROM mca_private.ops_incidents WHERE pending_kind IS NOT NULL AND delivery_state='pending' ORDER BY last_attempt_at NULLS FIRST,component LIMIT 1)
@@ -207,10 +213,7 @@ export async function runMonitor(
       )
       if (pending) {
         try {
-          const response = await sendTransactionalWebhook(
-            config.webhook,
-            config.webhookToken,
-            {
+          const message:TransactionalMessage = {
               recipient: config.recipient,
               template: "operations_alert",
               actionUrl: new URL("/admin/status", config.origin).href,
@@ -220,20 +223,20 @@ export async function runMonitor(
                 time: now,
                 summary: `${pending.pending_kind}: ${pending.component}`,
               },
-            },
-            String(pending.pending_id),
-            fetcher,
-            8000
-          )
+            }
+          let state:"accepted"|"rejected"|"unknown"
+          if (config.webhook) {
+            const response = await sendTransactionalWebhook(config.webhook,config.webhookToken,message,String(pending.pending_id),fetcher,8000)
+            state = response.ok ? "accepted" : response.status >= 500 ? "unknown" : "rejected"
+          } else {
+            const response = await requestSystemEmail({provider:config.systemProvider!,apiKey:config.systemApiKey!,from:config.systemFrom!,to:config.recipient,...renderEmailContent(message),idempotencyKey:String(pending.pending_id),fetchImpl:fetcher,baseUrl:config.systemBaseUrl})
+            state = response.status >= 200 && response.status < 300 && response.emailId ? "accepted" : [400,401,403,422,429].includes(response.status) ? "rejected" : "unknown"
+          }
           await finishAlert(
             db,
             String(pending.component),
             String(pending.pending_id),
-            response.ok
-              ? "accepted"
-              : response.status >= 500
-                ? "unknown"
-                : "rejected"
+            state
           )
         } catch {
           await finishAlert(

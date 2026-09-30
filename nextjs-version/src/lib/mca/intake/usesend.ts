@@ -275,12 +275,13 @@ export async function sendUsesendEmail(input: {
   const error = record.error && typeof record.error === "object" && !Array.isArray(record.error) ? record.error as Record<string, unknown> : undefined
   const errorCode = text(error?.code) ?? text(record.code)
   const emailId = text(record.emailId) ?? text(record.id)
-  if (usesendAuthRejected(status, body)) throw new AppError(503, "usesend_auth_rejected", "useSend rejected the configured API key.")
-  if (status === 403) throw new AppError(503, "usesend_edge_blocked", "useSend's edge blocked the receipt send. Retry from a deployed origin.")
-  if (status === 429) throw new AppError(503, "usesend_rate_limited", "useSend rate limited the receipt. Retry later.")
-  if (status === 409 && errorCode === "NOT_UNIQUE") throw new AppError(409, "usesend_idempotency_conflict", "useSend already used this receipt idempotency key with a different payload.")
+  const extra = { providerStatus: status }
+  if (usesendAuthRejected(status, body)) throw new AppError(503, "usesend_auth_rejected", "useSend rejected the configured API key.", undefined, extra)
+  if (status === 403) throw new AppError(503, "usesend_edge_blocked", "useSend's edge blocked the receipt send. Retry from a deployed origin.", undefined, extra)
+  if (status === 429) throw new AppError(503, "usesend_rate_limited", "useSend rate limited the receipt. Retry later.", undefined, extra)
+  if (status === 409 && errorCode === "NOT_UNIQUE") throw new AppError(409, "usesend_idempotency_conflict", "useSend already used this receipt idempotency key with a different payload.", undefined, extra)
   if (status !== 200 || !emailId) {
-    throw new AppError(502, "usesend_send_failed", `useSend rejected the receipt with HTTP ${status}.`)
+    throw new AppError(502, "usesend_send_failed", `useSend rejected the receipt with HTTP ${status}.`, undefined, extra)
   }
   return { emailId }
 }

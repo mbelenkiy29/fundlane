@@ -8,6 +8,7 @@ declare const Deno: {
   serve: (handler: (request: Request) => Promise<Response>) => void
 }
 const env = (name: string) => Deno.env.get(name)
+const systemProvider = env("MCA_SYSTEM_EMAIL_PROVIDER") === "resend" ? "resend" : "usesend"
 function queueThresholds(): Record<string, number> {
   try {
     const raw: unknown = JSON.parse(env("MCA_OPERATIONS_QUEUE_AGE_BY_KIND_SECONDS") ?? "{}")
@@ -63,6 +64,11 @@ Deno.serve(async (request) => {
         recipient: env("MCA_OPERATIONS_ALERT_EMAIL"),
         webhook: env("MCA_EMAIL_WEBHOOK_URL"),
         webhookToken: env("MCA_EMAIL_WEBHOOK_TOKEN"),
+        systemProviderEnabled: env("MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED") === "true",
+        systemProvider,
+        systemApiKey: env(systemProvider === "resend" ? "MCA_RESEND_API_KEY" : "MCA_USESEND_API_KEY")?.trim(),
+        systemFrom: (systemProvider === "resend" ? env("MCA_RESEND_FROM")?.trim() || env("MCA_USESEND_FROM") : env("MCA_USESEND_FROM"))?.trim(),
+        systemBaseUrl: env("MCA_USESEND_BASE_URL")?.trim() || undefined,
       }
     )
     return Response.json(result)

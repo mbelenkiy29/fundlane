@@ -267,6 +267,42 @@ test("ambiguous alert delivery is not automatically retried", async () => {
     2
   )
 })
+test("operations alert uses the opted-in system provider without a webhook; webhook wins; 409 is not retried", async () => {
+  const reset = async () => {
+    await database.query("TRUNCATE mca_private.ops_incidents")
+    await database.query("UPDATE mca_private.ops_control SET document_worker_heartbeat_at=now()")
+  }
+  const provider = { ...config, alerts: true, recipient: "owner@example.test", systemProviderEnabled: true, systemProvider: "usesend" as const, systemApiKey: "use-key", systemFrom: "Fundlane <ops@example.test>" }
+  await reset()
+  const urls: string[] = []
+  const keys = new Set<string>()
+  const ok: typeof fetch = async (url, init) => {
+    if (String(url).includes("/api/internal/health")) throw new Error("secret database password")
+    urls.push(String(url))
+    const headers = new Headers(init?.headers)
+    keys.add(headers.get("idempotency-key") ?? "")
+    const body = JSON.parse(String(init?.body))
+    assert.equal(body.to, "owner@example.test")
+    assert.match(body.subject, /^Fundlane operations alert: /)
+    assert.equal(JSON.stringify(body).includes("password"), false)
+    return Response.json({ emailId: "e" })
+  }
+  for (let i = 0; i < 4; i++) await runMonitor(db, provider, ok)
+  assert.equal(urls.length, 2)
+  assert.ok(urls.every((url) => url === "https://app.usesend.com/api/v1/emails"))
+  assert.equal(keys.size, 2)
+  await reset()
+  const webhookUrls: string[] = []
+  for (let i = 0; i < 4; i++) await runMonitor(db, { ...provider, webhook: "https://mail.example.test" }, async (url) => String(url).includes("/api/internal/health") ? Promise.reject(new Error("offline")) : (webhookUrls.push(String(url)), new Response(null, { status: 200 })))
+  assert.equal(webhookUrls.length, 2)
+  assert.ok(webhookUrls.every((url) => url.startsWith("https://mail.example.test")))
+  await reset()
+  let conflicts = 0
+  for (let i = 0; i < 5; i++) await runMonitor(db, provider, async (url) => String(url).includes("/api/internal/health") ? Promise.reject(new Error("offline")) : (conflicts++, Response.json({ error: { code: "NOT_UNIQUE" } }, { status: 409 })))
+  assert.equal(conflicts, 2)
+  assert.equal((await database.query("SELECT * FROM mca_private.ops_incidents WHERE delivery_state='unknown'")).rowCount, 2)
+  await reset()
+})
 test("failed aggregate does not become a healthy zero and telemetry failure is contained", async () => {
   const broken: MonitorDb = {
     query: (sql, values) => {

@@ -56,7 +56,7 @@ test("Resend errors and timeout never report sent", async () => withEnv(async ()
   process.env.MCA_RESEND_FROM = "sender@example.test"
   for (const [status, code] of [[400, "resend_send_failed"], [401, "resend_auth_rejected"], [429, "resend_rate_limited"], [500, "resend_send_failed"]] as const) {
     globalThis.fetch = async () => Response.json({ message: "rejected" }, { status })
-    await assert.rejects(sendSystemEmail(message), { code })
+    await assert.rejects(sendSystemEmail(message), (error: unknown) => error instanceof Error && "code" in error && error.code === code && "extra" in error && (error.extra as {providerStatus:number}).providerStatus === status)
   }
   globalThis.fetch = async () => { throw new DOMException("timed out", "TimeoutError") }
   await assert.rejects(sendSystemEmail(message), { name: "TimeoutError" })
