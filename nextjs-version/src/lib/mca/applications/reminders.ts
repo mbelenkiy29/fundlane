@@ -3,10 +3,10 @@ import "server-only"
 import { decryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, withTransaction } from "../db"
 import { actorForDeals } from "../deals/service"
-import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
+import { assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
-import { invitationActive, invitationEmailEnabled as emailEnabled, invitationUrl, isVercelDeliveryAttempt, markVercelDeliveryAttempt, type InvitationRecord } from "./service"
+import { invitationActive, invitationEmailEnabled as emailEnabled, invitationUrl, isVercelDeliveryAttempt, deliverInvitationEmail, type InvitationRecord } from "./service"
 
 const CADENCE_MS = [2 * 3600_000, 24 * 3600_000, 72 * 3600_000]
 
@@ -81,8 +81,7 @@ export async function processInvitationReminder(job: BackgroundJob): Promise<{ d
   invitationEmailEnabled()
   await (await import("../outbound-approval")).assertOutboundDispatch(job.workspace_id, new Date(scheduledAt).toISOString())
   const { origin } = JSON.parse(job.payload_json) as { origin: string }
-  await markVercelDeliveryAttempt(job)
-  const result = await deliverEmail({
+  const result = await deliverInvitationEmail(job, {
     recipient: decryptSensitive(row.email_cipher, row.workspace_id),
     template: "application_invitation_reminder",
     actionUrl: invitationUrl(row, origin),
