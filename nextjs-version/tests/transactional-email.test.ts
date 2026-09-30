@@ -18,6 +18,7 @@ const names = [
   "MCA_SYSTEM_EMAIL_PROVIDER",
   "MCA_USESEND_API_KEY",
   "MCA_USESEND_FROM",
+  "MCA_USESEND_BASE_URL",
   "MCA_RESEND_API_KEY",
   "MCA_RESEND_FROM",
   "MCA_APPLICATION_INVITATION_EMAIL_ENABLED",
@@ -266,6 +267,25 @@ test("direct useSend request honors the configured origin and sends the useSend 
   assert.equal(url, "https://api.resend.com/emails")
   assert.equal(headers.get("user-agent"), null)
 })
+
+test("local useSend configuration failure is unconfigured; Resend ignores useSend origin", () =>
+  withEnv(async () => {
+    process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED = "true"
+    process.env.MCA_USESEND_API_KEY = "fake-key"
+    process.env.MCA_USESEND_FROM = "sender@example.test"
+    let sends = 0
+    globalThis.fetch = async () => { sends++; return Response.json({ emailId: "synthetic-receipt", id: "synthetic-receipt" }) }
+    for (const origin of ["http://mail.example.test", "not-a-url", "https://user:pass@mail.example.test"]) {
+      process.env.MCA_USESEND_BASE_URL = origin
+      await assert.rejects(deliverEmail(message), { code: "email_delivery_unconfigured" })
+      assert.equal(sends, 0)
+    }
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "resend"
+    process.env.MCA_RESEND_API_KEY = "fake-resend-key"
+    process.env.MCA_RESEND_FROM = "sender@example.test"
+    assert.equal((await deliverEmail(message)).delivery, "sent")
+    assert.equal(sends, 1)
+  }))
 
 test("production invitation readiness accepts the credentialed fallback but keeps sender gates", () =>
   withEnv(async () => {

@@ -36,7 +36,7 @@ export function invitationRuntimeEnabled(): boolean {
   return process.env.MCA_JOB_RUNTIME === "vercel_cron" && process.env.MCA_INVITATION_JOB_RUNTIME === "vercel_cron"
 }
 function requiresDeliveryReconciliation(delivery: { state: string; delivery: string | null; attempts: number; error_code: string | null; result_json: string | null }): boolean {
-  return delivery.state === "failed" && !delivery.delivery && isVercelDeliveryAttempt(delivery.result_json)
+  return delivery.state === "failed" && !delivery.delivery && (isVercelDeliveryAttempt(delivery.result_json) || delivery.error_code === "email_delivery_uncertain")
 }
 function invalidLink(): AppError { return new AppError(410, "invitation_inactive", "This application link is expired, completed, or no longer active. Ask your representative for a new link.") }
 
@@ -175,7 +175,7 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
       WHERE d.invitation_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT 1`).get(id)
     if (prior && !prior.delivery && ["queued", "running"].includes(prior.state)) return { jobId: prior.job_id }
     if (prior?.state === "failed" && !prior.delivery) {
-      if (isVercelDeliveryAttempt(prior.result_json)) {
+      if (isVercelDeliveryAttempt(prior.result_json) || prior.error_code === "email_delivery_uncertain") {
         throw new AppError(409, "delivery_uncertain", "Reconcile the prior invitation delivery with the email provider before another send.")
       } else if (isVercelClaim(prior.result_json) || invitationRuntimeEnabled() && (prior.error_code === "outbound_review_required" || prior.error_code === "company_paused" && prior.attempts === 0)) {
         // A claimed Vercel job with no provider-attempt marker never reached the
@@ -198,24 +198,48 @@ export async function queueInvitationEmail(actor: DealActor, id: string, request
 }
 export function isVercelDeliveryAttempt(resultJson: string | null): boolean {
   if (!resultJson) return false
-  try { const value = JSON.parse(resultJson) as { deliveryRuntime?: string; providerAttempt?: boolean }; return value.deliveryRuntime === "vercel_cron" && value.providerAttempt !== false } catch { return false }
+  try { const value = JSON.parse(resultJson) as { deliveryRuntime?: string; providerAttempt?: boolean }; return ["vercel_cron", "private_email"].includes(value.deliveryRuntime ?? "") && value.providerAttempt !== false } catch { return false }
 }
 export function isVercelClaim(resultJson: string | null): boolean {
   if (!resultJson) return false
-  try { return (JSON.parse(resultJson) as { deliveryRuntime?: string }).deliveryRuntime === "vercel_cron" } catch { return false }
+  try { return ["vercel_cron", "private_email"].includes((JSON.parse(resultJson) as { deliveryRuntime?: string }).deliveryRuntime ?? "") } catch { return false }
 }
 export async function markVercelInvitationClaim(job: BackgroundJob): Promise<string | null> {
-  if (!invitationRuntimeEnabled()) return job.result_json
   const saved = await getDatabase().prepare<{ result_json: string }>("UPDATE mca_background_jobs SET result_json=COALESCE(result_json,?) WHERE workspace_id=? AND id=? AND state='running' AND lease_token=? RETURNING result_json")
-    .get(JSON.stringify({ deliveryRuntime: "vercel_cron", providerAttempt: false }), job.workspace_id, job.id, job.lease_token)
+    .get(JSON.stringify({ deliveryRuntime: invitationRuntimeEnabled() ? "vercel_cron" : "private_email", providerAttempt: job.error_code === "email_delivery_uncertain" }), job.workspace_id, job.id, job.lease_token)
   if (!saved) throw new Error("background_job_lease_lost")
   return saved.result_json
 }
 export async function markVercelDeliveryAttempt(job: BackgroundJob): Promise<void> {
-  if (!isVercelClaim(job.result_json) && !invitationRuntimeEnabled()) return
   const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET result_json=? WHERE workspace_id=? AND id=? AND state='running' AND lease_token=?")
-    .run(JSON.stringify({ deliveryRuntime: "vercel_cron", providerAttempt: true }), job.workspace_id, job.id, job.lease_token)
+    .run(JSON.stringify({ deliveryRuntime: invitationRuntimeEnabled() ? "vercel_cron" : "private_email", providerAttempt: true }), job.workspace_id, job.id, job.lease_token)
   if (!saved.changes) throw new Error("background_job_lease_lost")
+}
+/** Both invitation consumers share the durable no-resend contract. Historical helper names
+ * remain compatible with stored vercel_cron markers and existing worker callers. */
+export async function deliverInvitationEmail(job: BackgroundJob, message: Parameters<typeof deliverEmail>[0], options: Parameters<typeof deliverEmail>[1]): ReturnType<typeof deliverEmail> {
+  // Check operational state and approval before recording a provider attempt.
+  // A database or validation failure here cannot have dispatched this message.
+  if (options?.workspaceId) {
+    await (await import("../company-access")).assertCompanyOperational(options.workspaceId)
+    await (await import("../outbound-approval")).assertOutboundDispatch(options.workspaceId, options.approvedAt ?? new Date().toISOString())
+  }
+  await markVercelDeliveryAttempt(job)
+  try {
+    // The workspace checks above are authoritative; transport must not repeat
+    // them after the attempt marker, where an outage would look like a send.
+    return await deliverEmail(message, { ...options, workspaceId: undefined })
+  } catch (error) {
+    // Observed rejection or a pre-dispatch validation failure proves no acceptance.
+    // Preserve ordinary retries for these failures; unknown outcomes require receipts.
+    if (error instanceof AppError && error.code !== "email_delivery_uncertain" && error.code !== "delivery_uncertain" && (error.status < 500 || ["email_delivery_failed", "email_delivery_unconfigured"].includes(error.code))) {
+      const saved = await getDatabase().prepare("UPDATE mca_background_jobs SET result_json=? WHERE workspace_id=? AND id=? AND state='running' AND lease_token=?")
+        .run(JSON.stringify({ deliveryRuntime: invitationRuntimeEnabled() ? "vercel_cron" : "private_email", providerAttempt: false }), job.workspace_id, job.id, job.lease_token)
+      if (!saved.changes) throw new Error("background_job_lease_lost")
+      throw error
+    }
+    throw new AppError(409, "delivery_uncertain", "The invitation email may have reached the provider. Reconcile its delivery ID before retrying.")
+  }
 }
 export async function reconcileInvitationDelivery(actor: DealActor, invitationId: string, input: unknown): Promise<void> {
   await assertApplicationAccess(actor, true)
@@ -264,8 +288,7 @@ export async function processInvitationEmail(actor: DealActor, job: BackgroundJo
   if (!invitationActive(row)) throw invalidLink()
   assertInvitationEmailEnabled()
   const { origin } = JSON.parse(job.payload_json) as { origin: string }
-  await markVercelDeliveryAttempt(job)
-  const result = await deliverEmail({ recipient: decryptSensitive(row.email_cipher, row.workspace_id), template: "application_invitation",
+  const result = await deliverInvitationEmail(job, { recipient: decryptSensitive(row.email_cipher, row.workspace_id), template: "application_invitation",
     actionUrl: invitationUrl(row, origin), expiresAt: row.expires_at,
     data: { clientName: row.client_name, employeeName: row.employee_name, formName: row.form_name } }, { correlationId: job.resource_id, workspaceId: actor.workspaceId, approvedAt: job.created_at })
   await withTransaction(async () => {

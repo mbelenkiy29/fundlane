@@ -34,6 +34,11 @@ export async function deliverEmail(message: EmailMessage, options?: {correlation
       try {
         await sendSystemEmail({apiKey:credentials.apiKey,from:credentials.from,to:message.recipient,...renderEmailContent(message),idempotencyKey:correlationId,fetchImpl:options?.fetchImpl});
       } catch (error) {
+        // This validation runs before useSend invokes fetch. Keep it distinct
+        // from a request whose acceptance cannot be determined.
+        if (error instanceof AppError && error.code === "usesend_base_url_invalid") {
+          throw new AppError(503, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.");
+        }
         const status = error instanceof AppError && typeof error.extra?.providerStatus === "number" ? error.extra.providerStatus : undefined;
         throw new AppError(502, status !== 409 && [400,401,403,422,429].includes(status ?? 0) ? "email_delivery_failed" : "email_delivery_uncertain", "The email provider did not accept the message.");
       }
