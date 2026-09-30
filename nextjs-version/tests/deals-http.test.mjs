@@ -6,11 +6,11 @@ import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { rmSync } from "node:fs"
 import { createServer } from "node:http"
 import { join } from "node:path"
+import { reserveLoopbackPort } from "./helpers/loopback-port.mjs"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 const projectRoot = new URL("../", import.meta.url).pathname
-const port = 4900 + (process.pid % 500)
-const baseUrl = `http://localhost:${port}`
+let baseUrl
 const distDirectoryName = ".next-test-deals"
 let server
 let serverOutput = ""
@@ -33,7 +33,11 @@ before(async () => {
   emailServer = createServer((_request, response) => response.writeHead(202).end())
   await new Promise((resolve) => emailServer.listen(0, "127.0.0.1", resolve))
   const emailAddress = emailServer.address()
-  server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "localhost", "--port", String(port)], {
+  const reservation = await reserveLoopbackPort()
+  const port = reservation.port
+  baseUrl = `http://127.0.0.1:${port}`
+  await reservation.release()
+  server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: projectRoot,
     env: testDatabase.env({
       ...supabaseFixture.env,
