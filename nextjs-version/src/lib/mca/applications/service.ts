@@ -159,7 +159,7 @@ export async function completeInvitationSubmission(row: InvitationRecord, intake
 
 export function invitationEmailEnabled(): boolean {
   return process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED === "true" && emailSenderVerified()
-    && ((Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) && Boolean(process.env.MCA_EMAIL_WEBHOOK_TOKEN)) || (transactionalSystemEmailEnabled() && transactionalEmailReady()) || process.env.NODE_ENV !== "production")
+    && ((Boolean(process.env.MCA_EMAIL_WEBHOOK_URL) && Boolean(process.env.MCA_EMAIL_WEBHOOK_TOKEN)) || (!process.env.MCA_EMAIL_WEBHOOK_URL && transactionalSystemEmailEnabled() && transactionalEmailReady()) || process.env.NODE_ENV !== "production")
 }
 function assertInvitationEmailEnabled(): void {
   if (!invitationEmailEnabled()) throw new AppError(503, "invitation_email_disabled", "Application emails need a verified sender and receiver. Ask an administrator to complete email setup, or copy the link.")
