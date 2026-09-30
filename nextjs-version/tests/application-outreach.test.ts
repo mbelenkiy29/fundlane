@@ -874,3 +874,50 @@ for (const state of ["queued", "failed"] as const) {
     }
   })
 }
+
+
+for (const runtime of ["private_email", "vercel_cron"] as const) {
+  for (const purpose of ["invite", "reminder"] as const) {
+    test(`${runtime} ${purpose}: invalid useSend configuration is recoverable without receipt reconciliation`, async () => {
+      const names = ["MCA_JOB_RUNTIME", "MCA_INVITATION_JOB_RUNTIME", "MCA_EMAIL_WEBHOOK_URL", "MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_USESEND_BASE_URL", "MCA_SYSTEM_EMAIL_PROVIDER"] as const
+      const previous = names.map(name => process.env[name])
+      let sends = 0
+      try {
+        process.env.MCA_JOB_RUNTIME = "vercel_cron"
+        if (runtime === "vercel_cron") process.env.MCA_INVITATION_JOB_RUNTIME = "vercel_cron"
+        else delete process.env.MCA_INVITATION_JOB_RUNTIME
+        delete process.env.MCA_EMAIL_WEBHOOK_URL
+        process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED = "true"
+        process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
+        process.env.MCA_USESEND_API_KEY = "fake-key"
+        process.env.MCA_USESEND_FROM = "sender@example.test"
+        process.env.MCA_USESEND_BASE_URL = "http://mail.example.test"
+        globalThis.fetch = async () => { sends++; return Response.json({ emailId: "synthetic-receipt" }) }
+        const invitation = await invite()
+        const queued = await queueInvitationEmail(ada, invitation.id, randomUUID(), origin)
+        if (purpose === "reminder") {
+          await getDatabase().prepare("UPDATE mca_background_jobs SET kind='application_invitation_reminder' WHERE id=?").run(queued.jobId)
+          await getDatabase().prepare("UPDATE mca_application_invitation_deliveries SET purpose='reminder' WHERE job_id=?").run(queued.jobId)
+          await getDatabase().prepare("UPDATE mca_application_invitations SET started_at=?,last_activity_at=? WHERE id=?").run(nowIso(), new Date(Date.now() - 3 * 3600_000).toISOString(), invitation.id)
+        }
+        const processJob = (job: BackgroundJob) => purpose === "invite" ? processInvitationEmail(ada, job) : processInvitationReminder(job)
+        const first = await runningJob(queued.jobId)
+        let error: unknown
+        try { await processJob(first) } catch (caught) { error = caught }
+        assert.equal(sends, 0)
+        assert.equal((error as { code: string }).code, "email_delivery_unconfigured")
+        await failBackgroundJob(first, error)
+        const saved = (await getDatabase().prepare<{ state: string; result_json: string }>("SELECT state,result_json FROM mca_background_jobs WHERE id=?").get(queued.jobId))!
+        assert.equal(saved.state, "queued")
+        assert.equal(JSON.parse(saved.result_json).providerAttempt, false)
+        assert.equal((await listApplicationInvitations(admin)).find(row => row.id === invitation.id)!.deliveries[0].requiresReconciliation, false)
+        process.env.MCA_USESEND_BASE_URL = "https://mail.example.test"
+        assert.equal((await processJob(await runningJob(queued.jobId))).delivery, "sent")
+        assert.equal(sends, 1)
+      } finally {
+        globalThis.fetch = originalFetch
+        names.forEach((name, index) => { if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index] })
+      }
+    })
+  }
+}
