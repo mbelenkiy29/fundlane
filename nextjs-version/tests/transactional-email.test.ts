@@ -283,3 +283,29 @@ test("production invitation readiness accepts the credentialed fallback but keep
     delete process.env.MCA_USESEND_FROM
     assert.equal(invitationEmailEnabled(), false)
   }))
+
+
+test("production invitation readiness requires authentication for the selected webhook", () =>
+  withEnv(async () => {
+    ;(process.env as Record<string, string | undefined>).NODE_ENV = "production"
+    process.env.MCA_APPLICATION_INVITATION_EMAIL_ENABLED = "true"
+    process.env.MCA_EMAIL_SENDER_VERIFIED = "true"
+    process.env.MCA_EMAIL_WEBHOOK_URL = "https://hook.example.test"
+    for (const flag of [undefined, "false", "true"]) {
+      if (flag) process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED = flag
+      else delete process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED
+      for (const credentialed of [false, true]) {
+        if (credentialed) {
+          process.env.MCA_USESEND_API_KEY = "key"
+          process.env.MCA_USESEND_FROM = "sender@example.test"
+        } else {
+          delete process.env.MCA_USESEND_API_KEY
+          delete process.env.MCA_USESEND_FROM
+        }
+        delete process.env.MCA_EMAIL_WEBHOOK_TOKEN
+        assert.equal(invitationEmailEnabled(), false, `webhook without token: flag=${flag}, provider=${credentialed}`)
+        process.env.MCA_EMAIL_WEBHOOK_TOKEN = "token"
+        assert.equal(invitationEmailEnabled(), true)
+      }
+    }
+  }))
