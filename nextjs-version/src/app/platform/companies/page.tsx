@@ -1,9 +1,23 @@
 import Link from "next/link"
-import { platformCompanies,platformQuerySchema,listBillingStateExceptions } from "@/lib/mca/platform-console"
+import { platformCompanies, platformQuerySchema, listBillingStateExceptions } from "@/lib/mca/platform-console"
 import { requirePlatformPage } from "@/lib/mca/platform-page-access"
-import { PlatformSearch,PlatformPagination } from "@/components/mca/platform/tables"
-import { Table,TableHeader,TableHead,TableBody,TableRow,TableCell } from "@/components/ui/table"
-export default async function CompaniesPage({searchParams}:{searchParams:Promise<Record<string,string|undefined>>}) {
-  await requirePlatformPage();const query=platformQuerySchema.parse(await searchParams),[rows,exceptions]=await Promise.all([platformCompanies(query),listBillingStateExceptions()])
-  return <div className="space-y-6"><h1 className="text-3xl font-bold">Companies</h1><section className="rounded-lg border p-4"><h2 className="font-semibold">Billing state exceptions ({exceptions.length})</h2><p className="text-sm text-muted-foreground">Review each missing state or explicit exemption before choosing a resolution.</p>{exceptions.map(row=><p key={row.id}><Link className="underline" href={`/platform/companies/${row.id}`}>{row.name}</Link> — {row.legacyExempt?`Legacy exempt (${row.stateKind??"historical"})`:"Missing billing state"}</p>)}</section><PlatformSearch query={query} statuses={["access:trial","access:active","access:grace","access:paused","access:extended","missing_state","no_subscription","active","past_due","unpaid","canceled","incomplete","legacy_exempt","manual_paused"]}/><p className="text-sm text-muted-foreground">Filter by current access, subscription status or explicit override. Current access includes trial and grace expiration.</p>{rows.length===0?<p>No matching companies.</p>:<Table><TableHeader><TableRow><TableHead>Company</TableHead><TableHead>Billing state</TableHead><TableHead>Access</TableHead><TableHead>Subscription</TableHead><TableHead>Selected / purchased</TableHead><TableHead>Reserved / limit</TableHead></TableRow></TableHeader><TableBody>{rows.map(row=><TableRow key={row.id}><TableCell><Link className="font-medium underline" href={`/platform/companies/${row.id}`}>{row.name}</Link></TableCell><TableCell>{row.billingState.replaceAll("_"," ")}</TableCell><TableCell>{row.access.status.replaceAll("_"," ")}<div className="text-xs text-muted-foreground">{row.access.reason?.replaceAll("_"," ")}</div></TableCell><TableCell>{row.subscriptionStatus}</TableCell><TableCell>{row.selectedSeats} / {row.purchasedSeats}</TableCell><TableCell>{row.occupiedSeats} / {row.access.seatLimit}</TableCell></TableRow>)}</TableBody></Table>}<PlatformPagination query={query} count={rows.length}/></div>
+import { PlatformSearch, PlatformPagination } from "@/components/mca/platform/tables"
+import { PlatformHeading, PlatformSection, PlatformStatus } from "@/components/mca/platform/presentation"
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table"
+
+export default async function CompaniesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
+  await requirePlatformPage()
+  const query = platformQuerySchema.parse(await searchParams)
+  const [rows, exceptions] = await Promise.all([platformCompanies(query), listBillingStateExceptions()])
+  return <div className="min-w-0 space-y-6">
+    <PlatformHeading title="Companies" description="Review company access, subscriptions and seat usage." />
+    <PlatformSection title={`Billing state exceptions (${exceptions.length})`} description="Review each missing state or explicit exemption before choosing a resolution.">
+      {exceptions.length ? <ul className="divide-y">{exceptions.map(row => <li className="flex flex-wrap items-center justify-between gap-2 py-3" key={row.id}><Link className="font-medium underline-offset-4 hover:underline" href={`/platform/companies/${row.id}`}>{row.name}</Link><PlatformStatus value={row.legacyExempt ? `Legacy exempt (${row.stateKind ?? "historical"})` : "Missing billing state"} /></li>)}</ul> : <p className="text-sm text-muted-foreground">No billing state exceptions.</p>}
+    </PlatformSection>
+    <PlatformSection title="Company directory" description="Filter by current access, subscription status or explicit override. Current access includes trial and grace expiration.">
+      <PlatformSearch query={query} statuses={["access:trial", "access:active", "access:grace", "access:paused", "access:extended", "missing_state", "no_subscription", "active", "past_due", "unpaid", "canceled", "incomplete", "legacy_exempt", "manual_paused"]} />
+      {rows.length === 0 ? <p className="py-6 text-sm text-muted-foreground">No matching companies.</p> : <Table aria-label="Company directory"><TableHeader><TableRow><TableHead>Company</TableHead><TableHead>Billing state</TableHead><TableHead>Access</TableHead><TableHead>Subscription</TableHead><TableHead>Selected / purchased</TableHead><TableHead>Reserved / limit</TableHead></TableRow></TableHeader><TableBody>{rows.map(row => <TableRow key={row.id}><TableCell><Link className="font-medium underline-offset-4 hover:underline" href={`/platform/companies/${row.id}`}>{row.name}</Link></TableCell><TableCell><PlatformStatus value={row.billingState} /></TableCell><TableCell><PlatformStatus value={row.access.status} /><div className="mt-1 text-xs text-muted-foreground">{row.access.reason?.replaceAll("_", " ")}</div></TableCell><TableCell><PlatformStatus value={row.subscriptionStatus} /></TableCell><TableCell className="tabular-nums">{row.selectedSeats} / {row.purchasedSeats}</TableCell><TableCell className="tabular-nums">{row.occupiedSeats} / {row.access.seatLimit}</TableCell></TableRow>)}</TableBody></Table>}
+      <PlatformPagination query={query} count={rows.length} />
+    </PlatformSection>
+  </div>
 }
