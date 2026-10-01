@@ -18,6 +18,7 @@ mock.module(new URL("../src/lib/supabase/server.ts", import.meta.url).href, { na
 // Client components are not executed by these server entry-point tests.
 mock.module(new URL("../src/components/mca/operations/status-dashboard.tsx", import.meta.url).href, { namedExports: { StatusDashboard: () => null } })
 mock.module(new URL("../src/components/mca/platform/sms-review.tsx", import.meta.url).href, { defaultExport: () => null })
+mock.module(new URL("../src/components/mca/platform/platform-chrome.tsx", import.meta.url).href, { namedExports: { PlatformChrome: () => null } })
 mock.module("next/link", { defaultExport: () => null })
 mock.module("next/navigation", { namedExports: {
   redirect: (path: string) => { throw new Error(`redirect:${path}`) },
@@ -150,16 +151,11 @@ test("portal and legacy pages gate direct URLs and redirect authorized owners in
     assert.ok(await monitoring()); assert.ok(await smsPage())
     await assert.rejects(legacyStatus(), /redirect:\/platform\/monitoring/)
     await assert.rejects(legacySms(), /redirect:\/platform\/sms/)
-    const links: string[] = []
-    const visit = (node: unknown): void => {
-      if (Array.isArray(node)) { node.forEach(visit); return }
-      if (!node || typeof node !== "object" || !("props" in node)) return
-      const props = (node as { props: { href?: string; children?: unknown } }).props
-      if (props.href) links.push(props.href)
-      visit(props.children)
-    }
-    visit(await layout({ children: null }))
-    assert.ok(links.includes("/platform/monitoring")); assert.ok(links.includes("/platform/sms"))
+    const shell = await layout({ children: null })
+    const { PlatformChrome } = await import("../src/components/mca/platform/platform-chrome")
+    assert.equal(shell.type, PlatformChrome)
+    assert.equal(shell.props.email, owner.email)
+    assert.equal(typeof shell.props.roadmapEnabled, "boolean")
     assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM platform_admin_audit WHERE actor_user_id=? AND action='super_admin.first_access'").get(owner.userId))?.n, 1)
   }
   try {

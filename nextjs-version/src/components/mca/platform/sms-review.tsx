@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { requestJson } from "@/lib/mca/client"
+import { PlatformHeading, PlatformSection, PlatformStatus } from "./presentation"
+
 type Company = {
   optOutReady: boolean
   workspaceId: string
@@ -20,6 +22,7 @@ type Company = {
   profile: Record<string, unknown> | null
 }
 export default function SmsReview() {
+  const [loading, setLoading] = useState(true)
   const [companies, setCompanies] = useState<Company[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -33,27 +36,18 @@ export default function SmsReview() {
     )
   }
   useEffect(() => {
-    void load().catch((e) => setError(e.message))
+    void load().catch((e) => setError(e.message)).finally(() => setLoading(false))
   }, [])
   return (
     <section className="space-y-5">
-      <h1 className="text-2xl font-semibold">Company SMS review</h1>
-      <p className="text-sm text-muted-foreground">
-        Platform operators review the actual business, application-update use
-        case, and consent evidence. Company roles do not grant access here.
-      </p>
+      <PlatformHeading title="Company SMS review" description="Platform operators review the actual business, application-update use case, and consent evidence. Company roles do not grant access here." />
       {error && (
         <p role="alert" className="text-destructive">
           {error}
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      <div className="space-y-3 rounded border p-4">
-        <h2 className="font-medium">Verify before approving or rejecting</h2>
-        <p className="text-sm text-muted-foreground">
-          Approve and reject decisions require a fresh authenticator code from
-          this session. Verification lasts a few minutes.
-        </p>
+      <PlatformSection title="Verify before approving or rejecting" description="Approve and reject decisions require a fresh authenticator code from this session. Verification lasts a few minutes.">
         <div className="flex flex-wrap gap-2">
           <Input
             aria-label="Authenticator code"
@@ -86,11 +80,13 @@ export default function SmsReview() {
             Verify code
           </Button>
         </div>
-      </div>
+      </PlatformSection>
+      {loading && <p role="status" className="text-sm text-muted-foreground">Loading SMS reviews…</p>}
+      {!loading && !error && !companies.length && <p className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">No companies available for review.</p>}
       {companies.map((c) => (
         <form
           key={c.workspaceId}
-          className="space-y-4 rounded border p-4"
+          className="space-y-4 rounded-xl border bg-card p-6 shadow-sm"
           onSubmit={async (e) => {
             e.preventDefault()
             const f = new FormData(e.currentTarget)
@@ -123,7 +119,7 @@ export default function SmsReview() {
           <h2 className="text-lg font-medium">{c.name}</h2>
           <p className="text-sm">
             Email {c.emailVerified ? "verified" : "unverified"} · Review{" "}
-            {c.reviewState} · Carrier {c.registrationState}
+            <PlatformStatus value={c.reviewState} /> · Carrier <PlatformStatus value={c.registrationState} />
             {c.suspended ? " · Suspended" : ""}
           </p>
           <dl className="grid gap-2 text-sm md:grid-cols-2">
@@ -164,7 +160,7 @@ export default function SmsReview() {
           </div>
           <Label className="grid gap-2">
             Decision
-            <select className="rounded border p-2" name="decision">
+            <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" name="decision">
               {["approved", "rejected", "suspended", "resumed", "limits"].map(
                 (x) => (
                   <option key={x}>{x}</option>
@@ -193,10 +189,7 @@ export default function SmsReview() {
           <Button disabled={busy}>Save decision and limits</Button>
         </form>
       ))}
-      <div className="space-y-3 rounded border p-4">
-        <h2 className="font-medium">
-          Reconcile an interrupted purchase or subaccount creation
-        </h2>
+      <PlatformSection title="Reconcile an interrupted purchase or subaccount creation">
         <Input
           aria-label="Operation ID"
           value={operation}
@@ -221,7 +214,7 @@ export default function SmsReview() {
         >
           Verify remote result
         </Button>
-      </div>
+      </PlatformSection>
     </section>
   )
 }

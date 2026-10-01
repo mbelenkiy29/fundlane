@@ -12,6 +12,8 @@ import {
   Bar,
   Legend,
 } from "recharts"
+import { Card, CardContent } from "@/components/ui/card"
+import { PlatformSection } from "@/components/mca/platform/presentation"
 import { Button } from "@/components/ui/button"
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table"
 import {
@@ -109,30 +111,30 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         ? "Healthy"
         : "Degraded"
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Fundlane / Owner console
+            Fundlane / Platform administration
           </p>
-          <h1 className="text-3xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             Platform status
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Health, delivery, and activity across Fundlane.
           </p>
           {preview && (
-            <p className="mt-2 text-sm font-medium text-amber-700">
+            <p className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-300">
               Sample data · Design preview
             </p>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select
             aria-label="Time range"
             value={window}
             onChange={(e) => setWindow(e.target.value as Window)}
-            className="rounded-md border bg-background px-3 text-sm"
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
           >
             <option value="24h">Last 24 hours</option>
             <option value="7d">Last 7 days</option>
@@ -150,7 +152,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
       {error && (
         <p
           role="alert"
-          className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900"
+          className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
         >
           {error} Previous data, if shown, is stale.
         </p>
@@ -158,24 +160,23 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
       {metrics && !documentWorkerReady(metrics) && (
         <p
           role="alert"
-          className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+          className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-300"
         >
           Document worker heartbeat is stale. Check the document cron schedule, CRON_SECRET, database access, and native executor logs.
         </p>
       )}
       {documentRuntimeEnabled && metrics && metrics.scannerUnavailable > 0 && (
-        <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <p role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-300">
           {metrics.scannerUnavailable} document job{metrics.scannerUnavailable === 1 ? " is" : "s are"} waiting for a scanner verdict. Check native executor health or Cloudmersive credentials; retry failed scans after recovery.
         </p>
       )}
       {documentRuntimeEnabled && metrics && metrics.documentFailed > 0 && (
-        <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <p role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-300">
           {metrics.documentFailed} document or intake job{metrics.documentFailed === 1 ? " has" : "s have"} failed. Inspect worker job error codes and retry only after the cause is resolved.
         </p>
       )}
       {data?.emailRuntime && (
-        <section className="rounded-xl border bg-card p-5">
-          <h2 className="font-semibold">Email conversation worker</h2>
+        <PlatformSection title="Email conversation worker">
           <p className="mt-1 text-sm text-muted-foreground">
             Last completed tick: {data.emailRuntime.lastCompletedAt ? stamp(data.emailRuntime.lastCompletedAt) : "Never"}
             {(!data.emailRuntime.lastCompletedAt || Date.now() - Date.parse(data.emailRuntime.lastCompletedAt) > 600_000) && " · Worker stale or stopped"}
@@ -190,7 +191,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
               ["Stale or never synced", number(data.emailRuntime.staleSyncs)],
             ].map(([title, value]) => <div key={title}><dt className="text-sm text-muted-foreground">{title}</dt><dd className="mt-1 text-xl font-semibold">{value}</dd></div>)}
           </dl>
-        </section>
+        </PlatformSection>
       )}
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
         <div className="flex items-center gap-3">
@@ -208,7 +209,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           Checks every minute · UTC reporting
         </span>
       </section>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
           title="Observed availability"
           value={
@@ -273,12 +274,12 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
                   minTickGap={50}
                 />
                 <YAxis />
-                <Tooltip labelFormatter={(v) => stamp(String(v))} />
+                <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", color: "var(--card-foreground)", borderRadius: "var(--radius)" }} labelFormatter={(v) => stamp(String(v))} />
                 <Legend />
                 <Line
                   name="Website"
                   dataKey="websiteMs"
-                  stroke="#2563eb"
+                  stroke="var(--chart-1)"
                   strokeWidth={2}
                   dot={false}
                   isAnimationActive={false}
@@ -286,7 +287,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
                 <Line
                   name="Database"
                   dataKey="databaseMs"
-                  stroke="#059669"
+                  stroke="var(--chart-2)"
                   strokeWidth={2}
                   dot={false}
                   isAnimationActive={false}
@@ -314,11 +315,11 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
                   minTickGap={50}
                 />
                 <YAxis allowDecimals={false} />
-                <Tooltip labelFormatter={(v) => stamp(String(v))} />
+                <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", color: "var(--card-foreground)", borderRadius: "var(--radius)" }} labelFormatter={(v) => stamp(String(v))} />
                 <Line
                   name="Errors"
                   dataKey="errors"
-                  stroke="#d97706"
+                  stroke="var(--chart-3)"
                   strokeWidth={2}
                   dot={false}
                   isAnimationActive={false}
@@ -394,7 +395,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           </dl>
         </Panel>
       )}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Metric
           title="Companies"
           value={number(data?.companies)}
@@ -431,26 +432,26 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis dataKey="day" />
               <YAxis allowDecimals={false} />
-              <Tooltip />
+              <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", color: "var(--card-foreground)", borderRadius: "var(--radius)" }} />
               <Legend />
               <Bar
                 name="Active users"
                 dataKey="activeUsers"
-                fill="#2563eb"
+                fill="var(--chart-1)"
                 radius={[3, 3, 0, 0]}
                 isAnimationActive={false}
               />
               <Bar
                 name="Application links"
                 dataKey="invitations"
-                fill="#059669"
+                fill="var(--chart-2)"
                 radius={[3, 3, 0, 0]}
                 isAnimationActive={false}
               />
               <Bar
                 name="Submitted"
                 dataKey="submitted"
-                fill="#a78bfa"
+                fill="var(--chart-3)"
                 radius={[3, 3, 0, 0]}
                 isAnimationActive={false}
               />
@@ -485,7 +486,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
             aria-label="Error component"
             value={component}
             onChange={(e) => setComponent(e.target.value)}
-            className="ml-2 rounded border bg-background p-2"
+            className="ml-2 h-9 rounded-md border border-input bg-background px-3"
           >
             <option value="">All</option>
             {["api", "worker", "database", "email"].map((x) => (
@@ -580,11 +581,11 @@ function Metric({
   detail: string
 }) {
   return (
-    <section className="rounded-xl border bg-card p-4">
+    <section className="min-w-0"><Card><CardContent>
       <h2 className="text-sm text-muted-foreground">{title}</h2>
-      <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+      <p className="mt-2 break-words text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
       <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
-    </section>
+    </CardContent></Card></section>
   )
 }
 function Panel({
@@ -597,10 +598,6 @@ function Panel({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-xl border bg-card p-5">
-      <h2 className="font-semibold">{title}</h2>
-      <p className="mb-5 mt-1 text-xs text-muted-foreground">{subtitle}</p>
-      {children}
-    </section>
+    <PlatformSection title={title} description={subtitle}>{children}</PlatformSection>
   )
 }
