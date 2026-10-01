@@ -48,6 +48,7 @@ export async function createPostgresTestDatabase(label = "suite", { migrateSchem
 
   let queryPool = new Pool({ ...postgresConnection(databaseUrl), max: 4 });
   let closed = false;
+  let closePromise;
   return {
     databaseName,
     databaseUrl,
@@ -59,10 +60,15 @@ export async function createPostgresTestDatabase(label = "suite", { migrateSchem
     query(text, values = []) { return queryPool.query(text, values); },
     async close() {
       if (closed) return;
-      closed = true;
-      await queryPool.end();
-      queryPool = null;
-      await dropDatabase(adminUrl, databaseName);
+      if (!closePromise) closePromise = (async () => {
+        const pool = queryPool;
+        queryPool = null;
+        if (pool) await pool.end();
+        await dropDatabase(adminUrl, databaseName);
+        closed = true;
+      })();
+      try { await closePromise; }
+      finally { if (!closed) closePromise = undefined; }
     },
   };
 }
@@ -70,6 +76,16 @@ export async function createPostgresTestDatabase(label = "suite", { migrateSchem
 async function dropDatabase(adminUrl, databaseName) {
   const admin = new Client(postgresConnection(adminUrl));
   await admin.connect();
-  try { await admin.query(`DROP DATABASE IF EXISTS ${identifier(databaseName)} WITH (FORCE)`); }
-  finally { await admin.end(); }
+  try {
+    // pg-pool may resolve end() before its sockets finish closing. Check the
+    // server rather than terminating those connections with DROP ... FORCE.
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      const sessions = await admin.query("SELECT count(*)::integer AS connections FROM pg_stat_activity WHERE datname=$1", [databaseName]);
+      if (sessions.rows[0].connections === 0) break;
+      if (Date.now() >= deadline) throw new Error(`Disposable database ${databaseName} still has open sessions; cleanup refused to terminate them.`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    await admin.query(`DROP DATABASE IF EXISTS ${identifier(databaseName)}`);
+  } finally { await admin.end(); }
 }
