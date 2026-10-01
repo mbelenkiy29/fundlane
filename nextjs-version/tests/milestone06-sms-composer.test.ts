@@ -286,3 +286,20 @@ test("composer panel source includes loading, empty, validation, success, and fa
   assert.match(source, /Text accepted/)
   assert.match(source, /idempotencyKey: sendKey.current/)
 })
+
+test("concurrent retries reserve one message and never reject with a database uniqueness failure", async () => {
+  await recordSmsConsent(admin, { dealId: ids.deal, recipient: phone, state: "opted_in", evidence: "Synthetic current application consent", idempotencyKey: "m6-concurrent-consent", effectiveAt: "2099-01-01T00:00:00.000Z" })
+  const body = "Concurrent application update"
+  const input = { dealId: ids.deal, recipient: phone, body, senderAccountId: assignedId,
+    idempotencyKey: "m6-concurrent-send", correlationId: "m6-concurrent", payloadHash: payloadHash(body), deliveryMode: "never_attempted" as const }
+  let sends = 0
+  const transport: TwilioSmsTransport = { send: async () => {
+    sends++
+    return { state: "accepted", externalId: `SM${"d".repeat(32)}` }
+  } }
+  const results = await Promise.allSettled([deliverClosingSms(rep, input, transport), deliverClosingSms(rep, input, transport)])
+  assert.equal(results.filter(r => r.status === "fulfilled").length, 2)
+  const idsReturned = results.flatMap(r => r.status === "fulfilled" ? [r.value.messageId] : [])
+  assert.equal(new Set(idsReturned).size, 1)
+  assert.equal(sends, 1)
+})
