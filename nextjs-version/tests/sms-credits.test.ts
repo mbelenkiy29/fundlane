@@ -145,3 +145,52 @@ test("competing terminal operations apply only one outcome and ledger deltas rec
     HAVING a.reserved_segments <> COALESCE(sum(r.segments),0)`)
   assert.equal(reservations.rows.length, 0)
 })
+
+test("same executor concurrent grants return the committed grant balance exactly once", async () => {
+  const workspaceId = await company(), input = { workspaceId, purchaseId: newId(), providerPaymentId: newId(), segments: 100 }
+  const results = await withTransaction(db => Promise.all([credits.grantSmsCredits(db, input), credits.grantSmsCredits(db, input)]))
+  assert.deepEqual(results.map(result => result.balanceSegments), [100, 100])
+  assert.deepEqual(await amounts(workspaceId), { balanceSegments: 100, reservedSegments: 0, availableSegments: 100 })
+})
+
+test("same executor concurrent reservation retries share one reservation", async () => {
+  const workspaceId = await company(), messageId = await message(workspaceId)
+  await grant(workspaceId)
+  const input = { workspaceId, messageId, segments: 2, payloadHash: "payload" }
+  const results = await withTransaction(db => Promise.all([credits.reserveSmsCredits(db, input), credits.reserveSmsCredits(db, input)]))
+  assert.deepEqual(results[0], results[1])
+  assert.deepEqual(await amounts(workspaceId), { balanceSegments: 100, reservedSegments: 2, availableSegments: 98 })
+})
+
+for (const operation of ["settle", "release"] as const) {
+  test(`same executor concurrent ${operation} retries preserve another pending reservation`, async () => {
+    const workspaceId = await company(), messageId = await message(workspaceId), otherMessage = await message(workspaceId)
+    await grant(workspaceId); await reserve(workspaceId, messageId, 2); await reserve(workspaceId, otherMessage, 2)
+    await withTransaction(db => Promise.all([newId(), newId()].map(eventKey => operation === "settle"
+      ? credits.settleSmsCredits(db, { workspaceId, messageId, eventKey, chargeSegments: 2 })
+      : credits.releaseSmsCredits(db, { workspaceId, messageId, eventKey }))))
+    assert.deepEqual(await amounts(workspaceId), operation === "settle"
+      ? { balanceSegments: 98, reservedSegments: 2, availableSegments: 96 }
+      : { balanceSegments: 100, reservedSegments: 2, availableSegments: 98 })
+    const sums = await getDatabase().queryOne<{ balance: string; reserved: string }>("SELECT sum(balance_delta)::text balance,sum(reserved_delta)::text reserved FROM sms_credit_ledger WHERE workspace_id=?", [workspaceId])
+    assert.deepEqual(sums, { balance: operation === "settle" ? "98" : "100", reserved: "2" })
+    const reservation = await reserve(workspaceId, otherMessage, 2)
+    assert.equal(reservation.state, "reserved")
+  })
+}
+
+test("same executor competing reservations retain the successful operation after a rejected request", async () => {
+  const workspaceId = await company(), first = await message(workspaceId), second = await message(workspaceId)
+  await grant(workspaceId)
+  await withTransaction(async db => {
+    const results = await Promise.allSettled([first, second].map(messageId => credits.reserveSmsCredits(db, { workspaceId, messageId, segments: 60, payloadHash: "payload" })))
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
+    const rejection = results.find(result => result.status === "rejected")
+    assert.equal(rejection?.reason.code, "sms_credits_exhausted")
+    const reserved = results[0].status === "fulfilled" ? first : second
+    const balance = await credits.getSmsCreditBalance(workspaceId, db)
+    assert.equal(balance.reservedSegments, 60)
+    await credits.releaseSmsCredits(db, { workspaceId, messageId: reserved, eventKey: newId() })
+  })
+  assert.deepEqual(await amounts(workspaceId), { balanceSegments: 100, reservedSegments: 0, availableSegments: 100 })
+})

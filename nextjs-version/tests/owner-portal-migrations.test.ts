@@ -27,7 +27,8 @@ test("SMS ledger upgrade preserves legacy company, provider, audit and AI record
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
     END $$`)
     const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8")) as { entries: {tag: string; idx: number}[] }
-    const prior = journal.entries.filter(e => e.idx < 62)
+    const prior = journal.entries.filter(e => e.idx < 63)
+    assert.equal(prior.at(-1)?.tag, "0071_notification_foundation")
     await mkdir(join(folder, "meta"))
     await writeFile(join(folder, "meta/_journal.json"), JSON.stringify({ ...journal, entries: prior }))
     for (const entry of prior) await writeFile(join(folder, `${entry.tag}.sql`), await sql(entry.tag))
@@ -40,12 +41,18 @@ test("SMS ledger upgrade preserves legacy company, provider, audit and AI record
       INSERT INTO sms_registrations(id,workspace_id,kind,attempt,provider_sid,status,created_at,updated_at) VALUES ('legacy-registration','legacy','brand',1,'BNsynthetic','approved','2026-01-01','2026-01-01');
       INSERT INTO sms_meter_events(id,workspace_id,message_id,segments,occurred_at,state,created_at,updated_at) VALUES ('legacy-meter','legacy','legacy-message',4,'2026-01-01','sent','2026-01-01','2026-01-01');
       INSERT INTO mca_credit_accounts(id,workspace_id,user_id,purchased_balance,created_at) VALUES ('legacy-ai','legacy','legacy-user',37,'2026-01-01');
+      INSERT INTO mca_notification_preferences(workspace_id,channel,recipient_hash,consented,suppressed,updated_at) VALUES ('legacy','sms','synthetic-recipient',1,0,'2026-01-01');
       INSERT INTO platform_admin_audit(id,actor_user_id,actor_email,action,target_workspace_id) VALUES ('legacy-audit','legacy-user','legacy@example.test','synthetic','legacy');
     `)
-    const tables = ['workspaces','sms_companies','sms_numbers','sms_registrations','sms_meter_events','mca_credit_accounts','platform_admin_audit']
+    const tables = ['workspaces','sms_companies','sms_numbers','sms_registrations','sms_meter_events','mca_credit_accounts','platform_admin_audit','mca_notification_preferences']
     const before = []
     for (const table of tables) before.push(await client.query(`SELECT * FROM ${table}`))
-    await client.query(await sql("0071_sms_credit_ledger"))
+    await migrate(drizzle(client), { migrationsFolder: "drizzle" })
+    const applied = await client.query("SELECT count(*)::int count FROM drizzle.__drizzle_migrations WHERE created_at=1790385600021")
+    assert.equal(applied.rows[0].count, 1)
+    const history = (await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows
+    await migrate(drizzle(client), { migrationsFolder: "drizzle" })
+    assert.deepEqual((await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows, history)
     for (const [i,t] of tables.entries()) assert.deepEqual((await client.query(`SELECT * FROM ${t}`)).rows, before[i].rows, t)
     assert.equal((await client.query("SELECT count(*)::int count FROM sms_credit_accounts")).rows[0].count, 0)
     await assert.rejects(client.query(`INSERT INTO sms_numbers(id,workspace_id,account_id,provider_sid,phone,state,monthly_cents,created_at,updated_at) VALUES ('second','legacy','second-account','PNsecond','+12125550101','active',100,'2026-01-01','2026-01-01')`), {code:'23505'})
@@ -56,10 +63,11 @@ test("SMS ledger upgrade preserves legacy company, provider, audit and AI record
       has_table_privilege('mca_app','sms_credit_ledger','UPDATE,DELETE,TRUNCATE') can_rewrite,
       has_table_privilege('mca_app','sms_credit_accounts','UPDATE') can_balance,
       has_table_privilege('mca_app','sms_credit_reservations','UPDATE') can_reserve,
+      has_table_privilege('mca_app','mca_notification_receipts','UPDATE,DELETE,TRUNCATE') can_rewrite_notification_receipts,
       has_table_privilege('mca_app','platform_admin_grants','INSERT,UPDATE,DELETE') can_grant_admin,
       has_table_privilege('anon','sms_credit_ledger','SELECT') anon_read,
       has_table_privilege('authenticated','sms_credit_accounts','SELECT') authenticated_read`)
-    assert.deepEqual(privileges.rows[0], {can_append:true,can_rewrite:false,can_balance:true,can_reserve:true,can_grant_admin:false,anon_read:false,authenticated_read:false})
+    assert.deepEqual(privileges.rows[0], {can_append:true,can_rewrite:false,can_balance:true,can_reserve:true,can_grant_admin:false,can_rewrite_notification_receipts:false,anon_read:false,authenticated_read:false})
     await client.query(`SET ROLE mca_app;
       INSERT INTO sms_credit_accounts(workspace_id,updated_at) VALUES ('legacy','2026-01-01');
       INSERT INTO sms_credit_ledger(id,workspace_id,purchase_id,provider_payment_id,kind,segments,balance_delta,reserved_delta,created_at) VALUES ('grant','legacy','purchase','payment','grant',5,5,0,'2026-01-01');
