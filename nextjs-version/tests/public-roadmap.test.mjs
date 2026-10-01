@@ -42,8 +42,12 @@ test("roadmap mutations keep publication and audit atomic on disposable PostgreS
     assert.deepEqual((await fixture.query("SELECT action FROM roadmap_item_audit ORDER BY created_at, action")).rows.map(row => row.action).sort(), ["created", "deleted", "published", "unpublished"]);
     assert.equal((await fixture.query("SELECT bool_and(relrowsecurity) secured FROM pg_class WHERE oid IN ('roadmap_items'::regclass,'roadmap_item_audit'::regclass)")).rows[0].secured, true);
   } finally {
-    if (previous === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = previous;
-    await fixture.close();
+    const { closeDatabaseForTests } = await import("../src/lib/mca/db.ts");
+    try { await closeDatabaseForTests(); }
+    finally {
+      if (previous === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previous;
+      await fixture.close();
+    }
   }
 });
