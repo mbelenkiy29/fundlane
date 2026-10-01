@@ -1,3 +1,5 @@
+import type { SmsReadiness } from "../sms/contracts"
+
 export const CONNECTION_LABELS = [
   "Not connected",
   "Pending",
@@ -117,6 +119,11 @@ export function emailChannelStatus(senders: EmailSenderStatusInput[]): ChannelSt
   }
 }
 
+function smsNumberReadiness(number: unknown): SmsReadiness | undefined {
+  if (!number || typeof number !== "object" || !("readiness" in number)) return undefined
+  return number.readiness as SmsReadiness | undefined
+}
+
 export function smsChannelStatus(input: {
   accounts?: SmsAccountStatusInput[]
   onboarding?: SmsOnboardingStatusInput
@@ -149,7 +156,7 @@ export function smsChannelStatus(input: {
   const reviewApproved = input.onboarding?.reviewState === "approved"
   const registrationApproved = input.onboarding?.registrationState === "approved"
   const onboarded = Boolean(
-    reviewApproved && registrationApproved && input.onboarding?.platformReady && input.onboarding.optOutReady && numbers.length,
+    reviewApproved && registrationApproved && input.onboarding?.platformReady && input.onboarding.optOutReady && numbers.some((n) => smsNumberReadiness(n)?.ready ?? true),
   )
   if (onboarded) {
     return {
@@ -174,6 +181,11 @@ export function smsChannelStatus(input: {
     if (input.onboarding && onboardingStarted && !registrationApproved) missing.push("carrier registration approval")
     if (input.onboarding && onboardingStarted && !input.onboarding.optOutReady) missing.push("Advanced Opt-Out")
     if (input.onboarding && onboardingStarted && !numbers.length) missing.push("an assigned number")
+    for (const number of numbers) {
+      for (const blocker of smsNumberReadiness(number)?.blockers ?? []) {
+        if (!missing.includes(blocker.message)) missing.push(blocker.message)
+      }
+    }
     return {
       channel: "sms",
       title,

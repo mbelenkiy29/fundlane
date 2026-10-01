@@ -1,5 +1,6 @@
 # Fundlane owner portal — design brief for Mike and Ben
 
+> Historical planning snapshot. The subsequent direct execution authorization and current scope are recorded in [owner portal decisions](../../acceptance/owner-portal-decisions.md); unanswered policy gates remain binding.
 **Review draft, October 1, 2026. Execution has not started.** Mike authorized drafting this design and the implementation plan now, with unresolved choices exposed rather than guessed. Approval of this document does not create accounts, charge money, send messages, deploy code or grant implementation permission.
 
 ## The proposed outcome

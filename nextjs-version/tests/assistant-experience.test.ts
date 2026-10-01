@@ -491,6 +491,34 @@ test("files are encrypted, private, validated, immutable revisions and expire du
     )
   )
 })
+test("cleanup recovers an expired final claim without consuming an active lease or earlier retry", async () => {
+  const db = getDatabase()
+  const expiredId = newId(), activeId = newId(), retryId = newId()
+  const past = "2020-01-01T00:00:00.000Z"
+  const future = "2099-01-01T00:00:00.000Z"
+  for (const [id, attempts, due] of [[expiredId, 8, past], [activeId, 8, future], [retryId, 7, past]] as const) {
+    await sql(
+      "INSERT INTO mca_assistant_cleanup(id,resource_type,resource_id,workspace_id,attempts,next_attempt_at) VALUES (?,'file',?,'xp-company',?,?)",
+      id, newId(), attempts, due
+    )
+  }
+  const job = (id: string) => db.prepare<{ state: string; attempts: number }>(
+    "SELECT state,attempts FROM mca_assistant_cleanup WHERE id=?"
+  ).get(id)
+  // A maintenance pass with no deletion budget still reconciles expired claims.
+  await maintainAssistantExperience(0)
+  assert.deepEqual(await job(expiredId), { state: "failed", attempts: 8 })
+  assert.deepEqual(await job(activeId), { state: "pending", attempts: 8 })
+  assert.deepEqual(await job(retryId), { state: "pending", attempts: 7 })
+  // The earlier retry remains eligible; deleting an already absent file is idempotent.
+  await maintainAssistantExperience(30)
+  assert.deepEqual(await job(retryId), { state: "completed", attempts: 8 })
+  assert.deepEqual(await job(activeId), { state: "pending", attempts: 8 })
+  await sql("UPDATE mca_assistant_cleanup SET next_attempt_at=? WHERE id=?", past, activeId)
+  await maintainAssistantExperience(0)
+  assert.deepEqual(await job(activeId), { state: "failed", attempts: 8 })
+  assert.deepEqual(await job(expiredId), { state: "failed", attempts: 8 })
+})
 test("scanner failure and active Office content fail closed without publishing files", async () => {
   const f = await setup()
   setDocumentScannerForTests({
