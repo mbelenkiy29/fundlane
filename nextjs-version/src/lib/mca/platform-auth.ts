@@ -37,7 +37,7 @@ export async function requirePlatformAdmin() {
 }
 
 const DEFAULT_SUPER_ADMIN_EMAILS = "mike@sentineltechsolutions.io,ben@sentineltechsolutions.io"
-const DEFAULT_SMS_APPROVERS = "mike@sentineltechsolutions.io"
+const DEFAULT_SMS_APPROVERS = DEFAULT_SUPER_ADMIN_EMAILS
 
 export function emailInCeiling(email: string, list: string): boolean {
   return list.split(",").some(value => value.trim().toLowerCase() === email.trim().toLowerCase())

@@ -1,11 +1,11 @@
-import { requirePlatformOwner } from "@/lib/mca/operations/access"
+import { requireSuperAdmin } from "@/lib/mca/platform-auth"
 import { platformErrors } from "@/lib/mca/operations/status"
 import { parseWindow, sinceFor } from "@/lib/mca/operations/contracts"
 import { apiError } from "@/lib/mca/errors"
 export const dynamic = "force-dynamic"
 export async function GET(request: Request) {
   try {
-    await requirePlatformOwner()
+    await requireSuperAdmin(request)
     const p = new URL(request.url).searchParams,
       component = p.get("component"),
       before = p.get("before")

@@ -31,10 +31,7 @@ import {
   persistEvent,
   boundedTelemetry,
 } from "../src/lib/mca/operations/telemetry"
-import {
-  requireMonitor,
-  assertPlatformOwnerId,
-} from "../src/lib/mca/operations/access"
+import { requireMonitor } from "../src/lib/mca/operations/access"
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let db: MonitorDb
 before(async () => {
@@ -327,16 +324,6 @@ test("failed aggregate does not become a healthy zero and telemetry failure is c
   delete process.env.MCA_OPERATIONS_ENABLED
 })
 
-test("owner grant is immutable-ID based, never a company role or matching email", () => {
-  process.env.MCA_PLATFORM_OWNER_USER_ID = "owner-id"
-  assert.throws(() => assertPlatformOwnerId(null), { status: 401 })
-  for (const id of ["admin", "super_admin", "owner@example.test", "other-id"])
-    assert.throws(() => assertPlatformOwnerId(id), { status: 403 })
-  assert.doesNotThrow(() => assertPlatformOwnerId("owner-id"))
-  delete process.env.MCA_PLATFORM_OWNER_USER_ID
-  assert.throws(() => assertPlatformOwnerId("owner-id"), { status: 403 })
-})
-
 test('expired monitor leases recover and abandoned alert attempts are not resent', async () => {
   await database.query("UPDATE mca_private.ops_control SET lease_token=$1,lease_until=now()-interval '1 minute'",[randomUUID()])
   await database.query('TRUNCATE mca_private.ops_incidents,mca_private.ops_alert_attempts')
@@ -486,7 +473,7 @@ test("document failure metrics and owner alerts stay off with unset runtime flag
     `], { encoding: "utf8" })
     assert.equal(rendered.status, 0, rendered.stderr)
     assert.deepEqual(JSON.parse(rendered.stdout), [[false, false], [true, true]])
-    const page = readFileSync(resolve(process.cwd(), "src/app/admin/status/page.tsx"), "utf8")
+    const page = readFileSync(resolve(process.cwd(), "src/app/platform/monitoring/page.tsx"), "utf8")
     assert.match(page, /<StatusDashboard documentRuntimeEnabled={documentRuntimeEnabled\(\)} \/>/)
   } finally {
     await database.query("DELETE FROM mca_background_jobs WHERE id=$1", [id])

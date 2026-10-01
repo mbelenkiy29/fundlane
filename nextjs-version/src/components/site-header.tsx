@@ -22,7 +22,7 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
             <NewDealHeaderAction onOpen={() => newDeal.open()} />
           )}
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
-          {session?.platformOwner && <Link href="/admin/status" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform status</Link>}
+          {session?.platformOwner && <Link href="/platform" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform</Link>}
           {pathname !== "/assistant" && <AssistantButton />}
           <ModeToggle />
         </div>

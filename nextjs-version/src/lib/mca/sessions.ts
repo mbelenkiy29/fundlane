@@ -6,6 +6,7 @@ import { getDatabase, newId, nowIso, withImmediateTransaction } from "./db";
 import { effectiveActionVisibility, effectivePageVisibility, canManageApiKeys, canManageUsers, canManageWorkspace, canViewCompanyFinancials } from "./policy";
 import { getWorkspaceSettings, ensureBootstrapFromEnvironment } from "./workspaces";
 import type { MembershipContext, Role, SessionResponse } from "./types";
+import { requireSuperAdmin } from "./platform-auth";
 
 const SESSION_DURATION_MS = 12 * 60 * 60 * 1_000;
 
@@ -28,9 +29,11 @@ async function responseForRow(row: ActiveMembershipRow): Promise<SessionResponse
   const settings = await getWorkspaceSettings(row.workspace_id);
   const pages = effectivePageVisibility(row.role, settings.pageVisibility, settings.featureFlags);
   const actions = effectiveActionVisibility(row.role, settings.actionVisibility);
+  let platformOwner = false;
+  try { platformOwner = (await requireSuperAdmin()).userId === row.user_id; } catch { /* Navigation hints fail closed; page and API guards remain authoritative. */ }
   return {
     authenticated: true,
-    platformOwner: Boolean(process.env.MCA_PLATFORM_OWNER_USER_ID && row.supabase_user_id === process.env.MCA_PLATFORM_OWNER_USER_ID),
+    platformOwner,
     user: {
       id: row.user_id,
       email: row.email,
