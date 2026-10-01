@@ -1024,3 +1024,15 @@ test("unsuccessful provider responses record token usage without sensitive error
   assert.equal(JSON.parse(r!.usage_json).requests, 1)
   assert.ok(!r!.error.includes("Synthetic private"))
 })
+
+test("approved assistant SMS rechecks STOP at execution and on retry", async () => {
+  const f = await setup("Send a synthetic application update")
+  const { approvalId } = await pendingSms(f)
+  await decideApproval(f.c, approvalId, true)
+  let sends = 0
+  f.ctx.smsTransport = { send: async () => { sends++; return { state: "accepted", externalId: `SM${"a".repeat(32)}` } } }
+  await persistInbound(workspace, accountId, new URLSearchParams({ From: phone, To: sender, Body: "STOP", MessageSid: `SM${"1".repeat(32)}` }), "phone_number", sender)
+  await assert.rejects(executeAction(f.ctx, approvalId), /opted out|consent|changed/)
+  await assert.rejects(executeAction(f.ctx, approvalId))
+  assert.equal(sends, 0)
+})

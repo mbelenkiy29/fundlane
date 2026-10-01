@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { requireWorkspaceAccess } from "../auth"
 import { getDatabase } from "../db"
@@ -438,7 +439,7 @@ export async function getRepFunnelReport(actor: DealActor, filters: ReportFilter
       ).all(actor.workspaceId)
       : Promise.resolve([]),
     db.prepare<{ id: string; name: string }>(
-      "SELECT m.id, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?",
+      `SELECT m.id, ${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?`,
     ).all(actor.workspaceId),
     db.prepare<{ deal_id: string; source_id: string | null; batch_id: string | null }>(
       "SELECT deal_id, source_id, batch_id FROM mca_deal_acquisition_events WHERE workspace_id = ?",

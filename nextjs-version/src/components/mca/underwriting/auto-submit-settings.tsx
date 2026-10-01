@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { requestJson } from "@/lib/mca/client"
 
 type Settings = { mode: "off" | "score_only" | "auto_submit"; minMatchScore: number; maxFundersPerDeal: number; eligibleFunderIds: string[] }
-type Payload = { settings: Settings; funders: Array<{ id: string; name: string }> }
+type Payload = { settings: Settings; funders: Array<{ id: string; name: string; providerReadiness?: string }> }
 
 export function AutoSubmitSettingsPanel({ enabled }: { enabled: boolean }) {
   const [payload, setPayload] = React.useState<Payload>()
@@ -45,7 +45,7 @@ export function AutoSubmitSettingsPanel({ enabled }: { enabled: boolean }) {
         <div><Label htmlFor="auto-score">Minimum match score</Label><Input id="auto-score" type="number" min={0} max={100} value={settings.minMatchScore} onChange={event => setSettings({ ...settings, minMatchScore: Number(event.target.value) })} /></div>
         <div><Label htmlFor="auto-max">Maximum funders per deal</Label><Input id="auto-max" type="number" min={1} max={25} value={settings.maxFundersPerDeal} onChange={event => setSettings({ ...settings, maxFundersPerDeal: Number(event.target.value) })} /></div>
       </div>
-      <fieldset><legend className="text-sm font-medium">Eligible funders</legend><div className="grid gap-1 sm:grid-cols-2">{payload.funders.map(funder => <label key={funder.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.eligibleFunderIds.includes(funder.id)} onChange={event => setSettings({ ...settings, eligibleFunderIds: event.target.checked ? [...settings.eligibleFunderIds, funder.id] : settings.eligibleFunderIds.filter(id => id !== funder.id) })} />{funder.name}</label>)}</div></fieldset>
+      <fieldset><legend className="text-sm font-medium">Eligible funders</legend><div className="grid gap-1 sm:grid-cols-2">{payload.funders.map(funder => <label key={funder.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.eligibleFunderIds.includes(funder.id)} onChange={event => setSettings({ ...settings, eligibleFunderIds: event.target.checked ? [...settings.eligibleFunderIds, funder.id] : settings.eligibleFunderIds.filter(id => id !== funder.id) })} />{funder.name}{funder.providerReadiness && <span className="text-muted-foreground"> · {funder.providerReadiness}</span>}</label>)}</div></fieldset>
       <Button disabled={busy} onClick={() => void save()}>Save auto-submit settings</Button>
       {message && <p role="status" className="text-sm">{message}</p>}
     </CardContent>

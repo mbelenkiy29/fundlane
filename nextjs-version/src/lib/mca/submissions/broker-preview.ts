@@ -1,5 +1,6 @@
 import "server-only"
 
+import { providerReadinessView } from "./provider-readiness"
 import { createHash } from "node:crypto"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
@@ -53,13 +54,13 @@ type Snapshot = Awaited<ReturnType<typeof snapshotFor>>
 export interface BrokerSubmissionPreview {
   id: string
   expiresAt: string
-  destinations: Array<{ funderId: string; name: string; method: string; destination: string; errors: string[]; documents: Array<{ id: string; filename: string; checksum: string }>; email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string } }>
+  destinations: Array<{ funderId: string; name: string; method: string; destination: string; providerReadiness?: string; errors: string[]; documents: Array<{ id: string; filename: string; checksum: string }>; email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string } }>
 }
 function previewView(id: string, expiresAt: string, snapshot: Snapshot): BrokerSubmissionPreview {
   return { id, expiresAt, destinations: snapshot.destinations.map(({ funderId, name, route, errors, approved }) => {
     let destination = route.destination
     if (route.kind === "custom_webhook") { const target = resolveWebhookTarget(destination); destination = target.ok ? target.target.url : "Webhook" }
-    return { funderId, name, method: route.kind, destination, errors, documents: (approved?.documents ?? []).map(d => ({ id: d.documentId, filename: approved?.filenames[d.originalDocumentId] ?? d.documentId, checksum: d.checksum })), email: approved?.email ? { from: approved.email.fromAddress, to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined }
+    return { funderId, name, method: route.kind, destination, ...providerReadinessView(route), errors, documents: (approved?.documents ?? []).map(d => ({ id: d.documentId, filename: approved?.filenames[d.originalDocumentId] ?? d.documentId, checksum: d.checksum })), email: approved?.email ? { from: approved.email.fromAddress, to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined }
   }) }
 }
 export async function prepareDealSubmission(actor: DealActor, dealId: string, funderIds: unknown): Promise<BrokerSubmissionPreview> {

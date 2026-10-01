@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -184,4 +185,9 @@ test("MIC-112 serializes accounting mutations through the advance and blocks rev
   assert.equal(resultRows<{ status: string }>(await fixture.query(
     `SELECT status FROM mca_payment_distributions WHERE id=$1`, [distribution.id],
   ))[0].status, "expected")
+})
+
+test("pending shared recipients are masked in payment distributions", async () => {
+  const { listDistributionRows } = await import("../src/lib/mca/accounting/repository")
+  await assertPendingProfileHidden(ids.memberB, () => listDistributionRows(ids.workspace))
 })

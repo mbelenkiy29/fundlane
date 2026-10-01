@@ -1,5 +1,5 @@
 import "server-only"
-import { managedConfig, managedReady, managedReadiness, reserveManagedSend, smsRecipientHash, suppress } from "./managed"
+import { assertNotSuppressed, managedConfig, managedReady, managedReadiness, reserveManagedSend, smsRecipientHash, suppress } from "./managed"
 import { persistInbound, rememberOutbound, smsKeywordDirection } from "./inbox"
 
 import { createHash } from "node:crypto"
@@ -124,6 +124,7 @@ async function dispatchOutboundSms(input: {
   accountRow: Row
   route: SmsRoute
   messageId: string
+  dealId: string
   approvedAt: string
   recipient: string
   body: string
@@ -132,6 +133,34 @@ async function dispatchOutboundSms(input: {
 }): Promise<SmsDeliveryResult> {
   await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   const provider = asSmsProvider(input.accountRow.provider)
+  // Serialize the final consent check against inbound STOP/manual opt-out.
+  // Reservation commits earlier; consent and managed eligibility may have changed since then.
+  const guardedSend = async (send: () => Promise<SmsDeliveryResult>): Promise<SmsDeliveryResult> => {
+    try {
+      await withImmediateTransaction(async (db) => {
+        await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+          .get(`sms-consent:${smsRecipientHash(input.actor.workspaceId, input.recipient)}`)
+        await assertNotSuppressed(db, input.actor.workspaceId, input.recipient)
+        const consent = await getSmsConsent(input.actor, input.dealId, input.recipient, { matchDealContact: false })
+        if (consent.state !== "opted_in") throw new AppError(409, consent.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", "Current SMS consent is required.")
+        const current = await db.prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? AND id=? AND state='active'").get(input.actor.workspaceId, input.route.accountId)
+        if (!current) throw new AppError(409, "sms_route_unavailable", "The selected SMS account became unavailable.")
+        const company = await db.prepare<{ suspended: number }>("SELECT suspended FROM sms_companies WHERE workspace_id=?").get(input.actor.workspaceId)
+        if (company?.suspended) throw new AppError(409, "sms_setup_incomplete", "Company SMS is suspended.")
+        if (current.credential_ref === "MANAGED" && !await managedReady(input.actor.workspaceId, input.route.accountId))
+          throw new AppError(409, "sms_setup_incomplete", "Company SMS is suspended or awaiting setup.")
+        await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
+      })
+    } catch (error) {
+      if (error instanceof AppError) return { state: "failed", errorCode: error.code, errorMessage: error.message }
+      throw error
+    }
+    // Commit and release the consent lock before provider I/O. Errors from here
+    // must propagate: dispatch may have occurred, so a never-sent result is unsafe.
+    const result = await send()
+    if (result.state === "failed" && result.errorCode === "twilio_21610") await suppress(input.actor.workspaceId, input.recipient, "opted_out")
+    return result
+  }
   await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
   const credentialRef = String(input.accountRow.credential_ref)
   if (input.transport && provider === "twilio") {
@@ -140,7 +169,7 @@ async function dispatchOutboundSms(input: {
     const statusCallbackUrl = await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId)
     await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
     await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
-    return input.transport.send({
+    return guardedSend(() => input.transport!.send({
       accountSid: config.accountSid,
       apiKeySid: config.apiKeySid,
       apiKeySecret: config.apiKeySecret,
@@ -151,7 +180,7 @@ async function dispatchOutboundSms(input: {
       body: input.body,
       statusCallbackUrl,
       correlationId: input.correlationId,
-    })
+    }))
   }
   const credentials = provider === "twilio"
     ? await twilioSendCredentials(input.actor.workspaceId, credentialRef, input.route.senderIdentity)
@@ -160,7 +189,7 @@ async function dispatchOutboundSms(input: {
   const statusCallbackUrl = provider === "twilio" ? await twilioStatusCallbackUrl(input.actor.workspaceId, credentialRef, input.route.senderIdentity, input.route.accountId, input.messageId) : ""
   await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
   await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
-  return getSmsAdapter(provider).send({
+  return guardedSend(() => getSmsAdapter(provider).send({
     account: senderAccount,
     idempotencyKey: input.messageId,
     senderKind: input.route.senderKind,
@@ -170,7 +199,7 @@ async function dispatchOutboundSms(input: {
     statusCallbackUrl,
     correlationId: input.correlationId,
     credentials,
-  })
+  }))
 }
 
 async function twilioConfig(workspaceId: string, reference: string, senderIdentity?: string): Promise<TwilioConfig | undefined> {
@@ -346,12 +375,13 @@ export async function recordSmsConsent(actor: DealActor, input: { dealId: string
   const normalizedEffectiveAt = new Date(effectiveAt).toISOString()
   const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient), suppressionHash = smsRecipientHash(actor.workspaceId, recipient)
   const { row, inserted } = await withImmediateTransaction(async (db) => {
-    if (input.state === "opted_in") await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-consent:${suppressionHash}`)
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-consent:${suppressionHash}`)
     const inserted = await db.prepare<Row>(`INSERT INTO mca_sms_consent_events
     (id,workspace_id,deal_id,recipient_hash,recipient_cipher,state,source,evidence,idempotency_key,actor_user_id,effective_at,created_at)
     VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, normalizedEffectiveAt, createdAt)
     const row = inserted ?? await db.prepare<Row>("SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
     if (!row || row.deal_id !== input.dealId || row.recipient_hash !== hash || row.state !== input.state || row.evidence !== evidence) throw new AppError(409, "idempotency_conflict", "That retry key already identifies different SMS consent evidence.")
+    if (inserted && input.state === "opted_out") await suppress(actor.workspaceId, recipient, "opted_out")
     if (inserted && input.state === "opted_in") {
       const suppression = await db.prepare<{ updated_at: string }>("SELECT updated_at FROM sms_suppressions WHERE workspace_id=? AND recipient_hash=?").get(actor.workspaceId, suppressionHash)
       if (!suppression || normalizedEffectiveAt >= suppression.updated_at) await db.prepare("INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,'opted_in',?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state='opted_in',updated_at=EXCLUDED.updated_at").run(actor.workspaceId, suppressionHash, nowIso())
@@ -422,8 +452,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
   })
   if (!prepared.created) return storedResult(prepared.row)
   await rememberOutbound(actor.workspaceId,route.accountId,input.dealId,recipient)
-  const result = await dispatchOutboundSms({ actor, accountRow: prepared.accountRow!, route, messageId: String(prepared.row.id), approvedAt, recipient, body, correlationId: input.correlationId, transport })
-  if (result.state === "failed" && result.errorCode === "twilio_21610") await suppress(actor.workspaceId, recipient, "opted_out")
+  const result = await dispatchOutboundSms({ actor, accountRow: prepared.accountRow!, route, messageId: String(prepared.row.id), dealId: input.dealId, approvedAt, recipient, body, correlationId: input.correlationId, transport })
   const now = nowIso()
   const saved = await getDatabase().prepare<Row>(`UPDATE mca_sms_messages SET state=?,provider_message_id=?,provider_status=?,error_code=?,error_message=?,accepted_at=?,updated_at=?
     WHERE workspace_id=? AND id=? AND state='pending' RETURNING *`).get(result.state, result.externalId ?? null, result.providerStatus ?? null, result.errorCode ?? null, result.errorMessage ?? null, result.state === "accepted" ? now : null, now, actor.workspaceId, prepared.row.id)
@@ -567,6 +596,7 @@ export async function processTwilioStatus(accountId: string, params: URLSearchPa
     const inserted = await database.prepare<Row>(`INSERT INTO mca_sms_status_events (id,workspace_id,message_id,provider_message_id,provider_status,error_code,event_key,received_at)
       VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (workspace_id,event_key) DO NOTHING RETURNING id`).get(eventId, workspaceId, row.id, providerId, providerStatus, errorCode, eventKey, now)
     if (inserted) {
+      if (errorCode === "21610") await suppress(workspaceId, callbackRecipient, "opted_out")
       const current = String(row.state), next: SmsMessageState = providerStatus === "delivered" ? "delivered"
         : failedStatuses.includes(providerStatus) ? "failed" : sentStatuses.includes(providerStatus) ? "sent" : "accepted"
       const rank: Record<SmsMessageState, number> = { pending: 0, unknown: 0, accepted: 1, sent: 2, failed: 3, delivered: 4 }

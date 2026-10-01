@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { AppError } from "../errors"
 import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateTransaction, type DbExecutor } from "../db"
@@ -262,12 +263,12 @@ async function loadSchedule(database: DbExecutor, workspaceId: string, scheduleI
 
 async function listInstallments(database: DbExecutor, workspaceId: string, scheduleId?: string): Promise<ScheduledInstallment[]> {
   const rows = await database.prepare<InstallmentRow>(`SELECT i.id, i.schedule_id, i.schedule_version, i.occurrence_date, i.recipient_membership_id,
-      COALESCE(u.name, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
+      COALESCE(${membershipProfileNameSql}, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
     FROM mca_scheduled_installments i
     LEFT JOIN memberships m ON m.workspace_id=i.workspace_id AND m.id=i.recipient_membership_id
     LEFT JOIN users u ON u.id=m.user_id
     WHERE i.workspace_id=? AND (?::text IS NULL OR i.schedule_id=?)
-    ORDER BY i.occurrence_date, i.schedule_version, COALESCE(u.name, i.recipient_membership_id), i.id`)
+    ORDER BY i.occurrence_date, i.schedule_version, COALESCE(${membershipProfileNameSql}, i.recipient_membership_id), i.id`)
     .all(workspaceId, scheduleId ?? null, scheduleId ?? null)
   return rows.map(installmentFrom)
 }
@@ -645,7 +646,7 @@ export async function exceptOccurrence(
     if (current.status === "cancelled") throw new AppError(409, "schedule_cancelled", "A cancelled schedule cannot record exceptions.")
     const timestamp = nowIso()
     const rows = await database.prepare<InstallmentRow>(`SELECT i.id, i.schedule_id, i.schedule_version, i.occurrence_date, i.recipient_membership_id,
-        COALESCE(u.name, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
+        COALESCE(${membershipProfileNameSql}, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
       FROM mca_scheduled_installments i
       LEFT JOIN memberships m ON m.workspace_id=i.workspace_id AND m.id=i.recipient_membership_id
       LEFT JOIN users u ON u.id=m.user_id
@@ -688,13 +689,13 @@ export async function markInstallmentPaid(
     await lockSchedule(database, actor.workspaceId, scheduleId)
     const row = input.installmentId
       ? await database.prepare<InstallmentRow>(`SELECT i.id, i.schedule_id, i.schedule_version, i.occurrence_date, i.recipient_membership_id,
-            COALESCE(u.name, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
+            COALESCE(${membershipProfileNameSql}, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
           FROM mca_scheduled_installments i
           LEFT JOIN memberships m ON m.workspace_id=i.workspace_id AND m.id=i.recipient_membership_id
           LEFT JOIN users u ON u.id=m.user_id
           WHERE i.workspace_id=? AND i.schedule_id=? AND i.id=? FOR UPDATE OF i`).get(actor.workspaceId, scheduleId, input.installmentId)
       : await database.prepare<InstallmentRow>(`SELECT i.id, i.schedule_id, i.schedule_version, i.occurrence_date, i.recipient_membership_id,
-            COALESCE(u.name, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
+            COALESCE(${membershipProfileNameSql}, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
           FROM mca_scheduled_installments i
           LEFT JOIN memberships m ON m.workspace_id=i.workspace_id AND m.id=i.recipient_membership_id
           LEFT JOIN users u ON u.id=m.user_id
@@ -714,7 +715,7 @@ export async function markInstallmentPaid(
       metadata: { scheduleId, occurrenceDate: row.occurrence_date, noBankTransfer: true }, executor: database,
     })
     const saved = await database.prepare<InstallmentRow>(`SELECT i.id, i.schedule_id, i.schedule_version, i.occurrence_date, i.recipient_membership_id,
-        COALESCE(u.name, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
+        COALESCE(${membershipProfileNameSql}, 'Unknown recipient') recipient_name, i.amount_cents, i.percentage_basis_points, i.status, i.paid_at, i.snapshot_json
       FROM mca_scheduled_installments i
       LEFT JOIN memberships m ON m.workspace_id=i.workspace_id AND m.id=i.recipient_membership_id
       LEFT JOIN users u ON u.id=m.user_id

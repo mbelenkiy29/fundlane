@@ -1,11 +1,143 @@
 [
-  { "path": "/api/cron/assistant", "cron": "* * * * *", "requiredFlags": ["MCA_ASSISTANT_MAINTENANCE_ENABLED=true"], "ownerIssue": "#45" },
-  { "path": "/api/cron/billing", "cron": "*/10 * * * *", "requiredFlags": [], "ownerIssue": "#35 (existing pg_cron owner; do not duplicate)" },
-  { "path": "/api/cron/calendar", "cron": "*/5 * * * *", "requiredFlags": ["MCA_CALENDAR_GOOGLE_ENABLED=true", "MCA_CALENDAR_RUNTIME=vercel_cron"], "ownerIssue": "#44" },
-  { "path": "/api/cron/comms", "cron": "*/5 * * * *", "requiredFlags": [], "ownerIssue": "#35 (verify current owner before installation)" },
-  { "path": "/api/cron/documents", "cron": "* * * * *", "requiredFlags": ["MCA_DOCUMENT_JOB_RUNTIME=vercel_cron"], "ownerIssue": "#36" },
-  { "path": "/api/cron/email-conversations", "cron": "*/5 * * * *", "requiredFlags": ["MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron"], "ownerIssue": "#38" },
-  { "path": "/api/cron/jobs", "cron": "* * * * *", "requiredFlags": ["MCA_JOB_RUNTIME=vercel_cron"], "ownerIssue": "#37" },
-  { "path": "/api/cron/private-email", "cron": "*/5 * * * *", "requiredFlags": ["MCA_PRIVATE_EMAIL_CRON_ENABLED=true"], "ownerIssue": "#39" },
-  { "path": "/api/cron/sms", "cron": "*/5 * * * *", "requiredFlags": ["MCA_SMS_CRON_ENABLED=true"], "ownerIssue": "#42" }
+  {
+    "path": "/api/cron/assistant",
+    "cron": "* * * * *",
+    "requiredFlags": [
+      "MCA_ASSISTANT_MAINTENANCE_ENABLED=true"
+    ],
+    "ownerIssue": "#45",
+    "enqueuePath": "assistant/credits.ts, assistant/alerts.ts, assistant/maintenance.ts",
+    "sideEffect": "Release reservations, enqueue/deliver credit alerts, expire experience state and delete queued files/containers",
+    "leaseRetry": "Advisory accounting lock; separate email claims (unknown sends held), cleanup two-minute claims/eight attempts; 240-second tick",
+    "optionalFlags": [
+      "MCA_ASSISTANT_EXPERIENCE_ENABLED=true",
+      "MCA_RETENTION_HOLDS_ENABLED=true"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/billing",
+    "cron": "*/10 * * * *",
+    "requiredFlags": [],
+    "ownerIssue": "#35 (existing pg_cron owner; do not duplicate)",
+    "enqueuePath": "billing.ts webhooks, billing-reconciliation.ts, billing-operations.ts",
+    "sideEffect": "Reconcile Stripe entitlement/invoice state, enqueue trial notices and deliver owner billing notices",
+    "leaseRetry": "Ten-minute reconcile lease/exponential backoff; five-minute notice lease/exponential backoff",
+    "optionalFlags": [
+      "MCA_BILLING_VERIFIED_INVOICE_NOTICES=true"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "Active pg_cron fundlane-billing-maintenance; 144/144 succeeded in 24h, last 12:30 PM ET. Do not duplicate."
+  },
+  {
+    "path": "/api/cron/calendar",
+    "cron": "*/5 * * * *",
+    "requiredFlags": [
+      "MCA_CALENDAR_GOOGLE_ENABLED=true",
+      "MCA_CALENDAR_RUNTIME=vercel_cron"
+    ],
+    "ownerIssue": "#44",
+    "enqueuePath": "calendar/sync.ts due connections, local edits and callbacks",
+    "sideEffect": "Reconcile Google calendar events and renew watches",
+    "leaseRetry": "Transaction advisory lock; three connections/230-second work deadline; connection retry/conflict state",
+    "optionalFlags": [],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/comms",
+    "cron": "*/5 * * * *",
+    "requiredFlags": [],
+    "ownerIssue": "#35 (notification/discovery/receipt and comms acceptance; verify dashboard ownership)",
+    "enqueuePath": "comms/digest.ts subscriptions, comms/workflow-events.ts, notifications/service.ts, documents/notification-discovery.ts, voice/service.ts",
+    "sideEffect": "Daily reports, workflow webhook outbox, gated notifications, document discovery and receipt polling; excludes followup registry kind",
+    "leaseRetry": "Digest identity claim; webhook five-attempt counter without exclusive lease; notifications 120-second fenced lease/three attempts/uncertain-send hold; discovery 30-second lease",
+    "optionalFlags": [
+      "MCA_NOTIFICATION_RUNTIME=enabled"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/documents",
+    "cron": "* * * * *",
+    "requiredFlags": [
+      "MCA_DOCUMENT_JOB_RUNTIME=vercel_cron"
+    ],
+    "ownerIssue": "#36",
+    "enqueuePath": "documents/direct-uploads.ts, documents/scan-job.ts, jobs/remote-scan.ts, intake/processing.ts and intake/service.ts",
+    "sideEffect": "Attachment retries, intake scheduling and document queue dispatch; draft_extract has no automatic producer",
+    "leaseRetry": "Shared ten-minute renewable lease/three attempts; two attachment retries, ten intake schedules, two claims/230-second work deadline",
+    "optionalFlags": [
+      "MCA_DOCUMENT_SCANNER=cloudmersive"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/email-conversations",
+    "cron": "*/5 * * * *",
+    "requiredFlags": [
+      "MCA_EMAIL_CONVERSATIONS_RUNTIME=vercel_cron"
+    ],
+    "ownerIssue": "#38",
+    "enqueuePath": "email-conversations/service.ts and email-conversations/worker.ts",
+    "sideEffect": "Send queued conversations, reconcile Sent mail and sync inbound messages",
+    "leaseRetry": "310-second global tick claim; renewed 120-second sender leases; unknown sends held for reconciliation",
+    "optionalFlags": [],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/jobs",
+    "cron": "* * * * *",
+    "requiredFlags": [
+      "MCA_JOB_RUNTIME=vercel_cron"
+    ],
+    "ownerIssue": "#37",
+    "enqueuePath": "jobs/worker.ts dispatch and submission outbox recovery; per-kind producers in background-job-runtime.md",
+    "sideEffect": "Default exports, gated auto-submit/invitations, explicit business allowlist, optional assistant/storage maintenance",
+    "leaseRetry": "Shared ten-minute renewable lease/three attempts/30-second-times-attempt backoff; three claims/230-second work deadline",
+    "optionalFlags": [
+      "MCA_JOB_RUNTIME_KINDS=<reviewed comma-separated allowlist>",
+      "MCA_AUTO_SUBMIT_ENABLED=true",
+      "MCA_INVITATION_JOB_RUNTIME=vercel_cron",
+      "MCA_JOB_RUNTIME_MAINTENANCE=true"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/private-email",
+    "cron": "*/5 * * * *",
+    "requiredFlags": [
+      "MCA_PRIVATE_EMAIL_CRON_ENABLED=true"
+    ],
+    "ownerIssue": "#39",
+    "enqueuePath": "applications/service.ts, applications/reminders.ts, intake/email.ts",
+    "sideEffect": "Invitation delivery and intake receipts; does not invoke the reminder producer",
+    "leaseRetry": "Shared queue lease/retry; receipts 60-second fenced lease; three jobs plus three receipts/100-second deadline",
+    "optionalFlags": [
+      "MCA_APPLICATION_INVITATION_EMAIL_ENABLED=true",
+      "MCA_PRIVATE_EMAIL_DELIVERY_ENABLED=true",
+      "MCA_INVITATION_JOB_RUNTIME=vercel_cron (hands invitation claims to /api/cron/jobs)"
+    ],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  },
+  {
+    "path": "/api/cron/sms",
+    "cron": "*/5 * * * *",
+    "requiredFlags": [
+      "MCA_SMS_CRON_ENABLED=true"
+    ],
+    "ownerIssue": "#42",
+    "enqueuePath": "sms/provisioning.ts, sms/maintenance.ts, sms/scheduler.ts",
+    "sideEffect": "Provisioning operation and company registration refresh; no separate SMS credit worker",
+    "leaseRetry": "Transaction advisory lock; one operation/two refreshes/240-second deadline; ambiguous paid changes need review",
+    "optionalFlags": [],
+    "inventoryAsOf": "2026-10-01T12:35:00-04:00",
+    "productionStatus": "No corresponding active pg_cron or deployed MCA Edge function in supplied live inventory; vercel.json installs no crons. Vercel dashboard/manual consumption and runtime flags not established."
+  }
 ]

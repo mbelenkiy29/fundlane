@@ -167,3 +167,18 @@ test("closing and reminder send actions stay disabled until ready", () => {
   assert.equal(psfProviderReady({ docuSealConfigured: true }), false)
   assert.equal(psfProviderReady({ docuSealConfigured: true, enabled: true }), true)
 })
+
+test("enabled funder evidence prevents configuration-only Connected claims", () => {
+  for (const input of [
+    { funders: [{ routes: [{ active: true, kind: "api" }] }] },
+    { credentials: [{ hasCredential: true, active: true }] },
+    { funders: [{ routes: [{ active: true, kind: "email" }] }] },
+  ]) {
+    const status = funderSubmissionChannelStatus({ ...input, providerReadinessEnabled: true })
+    assert.equal(status.label, "Pending")
+    assert.equal(status.ready, false)
+    assert.match(status.detail, /untested.*configuration only/)
+    assert.equal(funderSubmissionChannelStatus(input).label, "Connected")
+  }
+  assert.equal(funderSubmissionChannelStatus({ providerReadinessEnabled: true }).label, "Not connected")
+})

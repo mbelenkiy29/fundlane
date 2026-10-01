@@ -163,11 +163,13 @@ export function configuredPostmarkClosingTransport(request: ClosingTransportRequ
 
 const liveTransport: ClosingTransport = {
   async deliver(request) {
+    // Legacy SMS webhooks bypass company SMS readiness and recipient consent.
+    // Only the shared SMS service is allowed to dispatch texts.
+    if (request.channel === "sms") return { state: "blocked", correlationId: request.correlationId, errorCode: "merchant_sms_unconfigured", errorMessage: "Use the consent-checked SMS sender; legacy SMS webhook delivery is disabled." }
     if (request.channel === "email" && process.env.MCA_CLOSING_EMAIL_PROVIDER === "postmark") return configuredPostmarkClosingTransport(request).deliver(request)
     const endpoint = endpointFor(request)
     if (!endpoint) {
-      const capability = request.channel === "sms" ? "merchant_sms_unconfigured"
-        : request.kind === "psf_request" ? "psf_webhook_unconfigured"
+      const capability = request.kind === "psf_request" ? "psf_webhook_unconfigured"
           : request.kind === "offer_message" ? "merchant_email_unconfigured" : "closing_email_unconfigured"
       return { state: "blocked", correlationId: request.correlationId, errorCode: capability, errorMessage: "The requested delivery provider is not configured." }
     }

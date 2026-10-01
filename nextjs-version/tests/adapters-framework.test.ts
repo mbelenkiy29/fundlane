@@ -340,6 +340,9 @@ test("inventory pairs the active API route with its adapter and leaves the ordin
       routes: [
         { kind: "api", label: "Old", destination: "fixture-submit-only", documentExceptions: [], active: false },
         { kind: "api", label: "Current", destination: "fixture-status", documentExceptions: [], active: true },
+        { kind: "email", label: "Pilot", destination: "pilot@example.test", documentExceptions: [], active: false },
+        { kind: "custom_webhook", label: "Webhook", destination: "https://fixture.example.test/submit", documentExceptions: [], active: false },
+        { kind: "manual_portal", label: "Portal", destination: "https://portal.example.test/submit", documentExceptions: [], active: false },
       ],
     })).funder.id
     delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
@@ -350,9 +353,16 @@ test("inventory pairs the active API route with its adapter and leaves the ordin
     process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = "true"
     const on = await (await listGet(cookieRequest("/api/mca/adapters", "admin-session-token"))).json() as {
       funders: Array<Record<string, unknown>>
-      inventory: { funders: Array<{ id: string; adapterSlug?: string; routeActive: boolean }> }
+      inventory: { funders: Array<{ id: string; adapterSlug?: string; routeActive: boolean; destinations: Array<{kind: string; active: boolean; providerReadiness: string}> }> }
     }
     assert.equal(Object.hasOwn(on.funders.find((item) => item.id === funderId)!, "configuredAdapterSlug"), false)
+    assert.deepEqual(on.inventory.funders.find(item => item.id === funderId)?.destinations, [
+      { kind: "api", active: false, providerReadiness: "Untested — provider access and live delivery are unverified." },
+      { kind: "api", active: true, providerReadiness: "Untested — provider access and live delivery are unverified." },
+      { kind: "email", active: false, providerReadiness: "Untested — controlled email application-to-reply pilot pending." },
+      { kind: "custom_webhook", active: false, providerReadiness: "Untested — webhook contract and provider reply are unverified." },
+      { kind: "manual_portal", active: false, providerReadiness: "Untested — manual submission; provider acceptance must be checked separately." },
+    ])
     assert.deepEqual(
       (({ adapterSlug, routeActive }) => ({ adapterSlug, routeActive }))(on.inventory.funders.find((item) => item.id === funderId)!),
       { adapterSlug: "fixture-status", routeActive: true },
