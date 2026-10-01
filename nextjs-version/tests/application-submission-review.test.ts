@@ -14,6 +14,7 @@ import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
+import { publishFunderCriteria } from "../src/lib/mca/funders/criteria"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { setEmailDeliveryFetchForTests, upsertSubmissionEmailTemplate } from "../src/lib/mca/submissions/email-templates"
@@ -47,6 +48,7 @@ before(async () => {
   await testSend(actor,sender.id,{to:"ops@example.test"})
   portalFunderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Portal Capital",routes:[{kind:"manual_portal",label:"Portal",destination:"https://portal.example.test/submit",documentExceptions:[],active:true}]})).funder.id
   funderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Review Capital",routes:[{kind:"email",label:"Email",destination:"lender@example.test",documentExceptions:[],active:true}]})).funder.id
+  for (const id of [portalFunderId, funderId]) await publishFunderCriteria(actor, id, [{ field: "requested_amount", operator: "max", unit: "usd", value: 100000, sourceText: "Synthetic approval-flow fixture; not lender policy", sourceAsOf: "2026-01-01", unspecified: false }])
 })
 after(async()=>{setDocumentStorageForTests();setDocumentScannerForTests();setEmailDeliveryFetchForTests();setSenderDeliveryFetchForTests();await closeDatabaseForTests();await database?.close()})
 async function readyApplication() {
