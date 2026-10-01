@@ -19,6 +19,7 @@ import {
   reviewCompany,
   saveProvider,
   profileSchema,
+  publicOrigin,
   type ProviderConfig,
   type Company,
 } from "../src/lib/mca/sms/onboarding"
@@ -35,6 +36,8 @@ import {
   assertNotSuppressed,
   managedReady,
   reserveManagedSend,
+  suppress,
+  smsRecipientHash,
 } from "../src/lib/mca/sms/managed"
 import { twilioMessageForm } from "../src/lib/mca/sms/adapters/twilio/mapping"
 import { registrationEvents } from "../src/lib/mca/sms/registration-events"
@@ -145,6 +148,63 @@ test("signup creates an admin and prevents unauthenticated reuse of an existing 
     }),
     { code: "sign_in_required" }
   )
+})
+test("public SMS origin trims values, falls back, and rejects invalid origins", () => {
+  const sms = process.env.MCA_SMS_PUBLIC_BASE_URL, app = process.env.MCA_APP_ORIGIN
+  try {
+    for (const value of ["", "   "]) {
+      process.env.MCA_SMS_PUBLIC_BASE_URL = value
+      process.env.MCA_APP_ORIGIN = " https://fallback.example.test "
+      assert.equal(publicOrigin(), "https://fallback.example.test")
+    }
+    process.env.MCA_SMS_PUBLIC_BASE_URL = " https://sms.example.test "
+    assert.equal(publicOrigin(), "https://sms.example.test")
+    for (const value of ["http://sms.example.test", "https://sms.example.test/path", "not a URL"]) {
+      process.env.MCA_SMS_PUBLIC_BASE_URL = value
+      process.env.MCA_APP_ORIGIN = "https://fallback.example.test"
+      assert.equal(publicOrigin(), "https://fallback.example.test")
+    }
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "bad"
+    process.env.MCA_APP_ORIGIN = "http://fallback.example.test"
+    assert.throws(() => publicOrigin(), { code: "sms_public_url_unconfigured", status: 503 })
+    delete process.env.MCA_SMS_PUBLIC_BASE_URL
+    delete process.env.MCA_APP_ORIGIN
+    assert.throws(() => publicOrigin(), { code: "sms_public_url_unconfigured", status: 503 })
+  } finally {
+    if (sms === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL
+    else process.env.MCA_SMS_PUBLIC_BASE_URL = sms
+    if (app === undefined) delete process.env.MCA_APP_ORIGIN
+    else process.env.MCA_APP_ORIGIN = app
+  }
+})
+
+test("parallel suppressions serialize on the recipient lock and leave one row", async () => {
+  const recipient = "+12125559876", hash = smsRecipientHash(owner.workspaceId, recipient)
+  let acquired!: () => void, release!: () => void
+  const locked = new Promise<void>((resolve) => { acquired = resolve })
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const holder = withImmediateTransaction(async (db) => {
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-consent:${hash}`)
+    acquired()
+    await held
+  })
+  await locked
+  let completed = false
+  const first = suppress(owner.workspaceId, recipient, "opted_out").then(() => { completed = true })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(completed, false, "suppress must wait for the held advisory lock")
+  } finally {
+    release()
+    await holder
+    await first
+  }
+  await Promise.all([
+    suppress(owner.workspaceId, recipient, "opted_in"),
+    suppress(owner.workspaceId, recipient, "opted_in"),
+  ])
+  const rows = await getDatabase().prepare<{ state: string }>("SELECT state FROM sms_suppressions WHERE workspace_id=? AND recipient_hash=?").all(owner.workspaceId, hash)
+  assert.deepEqual(rows, [{ state: "opted_in" }])
 })
 test("email verification is expiring and single-use", async () => {
   const token = createOpaqueToken(),

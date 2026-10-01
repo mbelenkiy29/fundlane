@@ -161,6 +161,7 @@ async function dispatchOutboundSms(input: {
   await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   return getSmsAdapter(provider).send({
     account: senderAccount,
+    idempotencyKey: input.messageId,
     senderKind: input.route.senderKind,
     senderIdentity: input.route.senderIdentity,
     recipient: input.recipient,
