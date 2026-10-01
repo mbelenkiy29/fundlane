@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import "./helpers/business-auth"
@@ -405,4 +406,11 @@ test("connected application flows from notification and real matches through pre
   const repeated = await sendApplicationSubmission(rep, received.intakeId, preview.id)
   assert.deepEqual(repeated.jobs, sent.jobs)
   assert.equal((await listJobsForDeal(ids.workspace, received.dealId!)).length, 1, "repeated Send cannot duplicate a handoff")
+})
+
+test("pending shared assignees are masked in intake summaries", async () => {
+  const intake = await ingestApplication(adminActor, { schemaVersion: 1, provider: "custom", eventId: "pending-profile-intake", application: { legalName: "Profile isolation" } })
+  assert.ok(intake.dealId)
+  await getDatabase().prepare("INSERT INTO deal_assignments (id,workspace_id,deal_id,membership_id,kind,is_primary,assigned_at) VALUES (?,?,?,?,'originator',1,?)").run(newId(), ids.workspace, intake.dealId, ids.repAMember, new Date().toISOString())
+  await assertPendingProfileHidden(ids.repAMember, () => listIntakeSummaries(adminActor))
 })

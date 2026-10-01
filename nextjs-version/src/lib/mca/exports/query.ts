@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { getDatabase } from "../db"
 import { canActorAccessDeal } from "../deals/access-policy"
@@ -30,7 +31,7 @@ function ids(values: string[]): Cell {
 
 function membershipNames(workspaceId: string): Promise<Map<string, string>> {
   return getDatabase().prepare<{ id: string; name: string }>(
-    `SELECT m.id, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?`,
+    `SELECT m.id, ${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?`,
   ).all(workspaceId).then((rows) => new Map(rows.map((row) => [row.id, row.name])))
 }
 
