@@ -1,0 +1,25 @@
+# T7 performance reporting design
+
+User-approved scope: broker/date-filtered leads, pipeline, submissions, offers, funded volume, conversion, renewals and commissions. Native plan-then-execute is explicitly authorized. This is an architectural composition of existing reports, with no accounting policy or mutation changes.
+
+## Selected approach
+Reuse rep-funnel's authenticated workspace actor, filter validation, timezone, stage evidence and unique-deal drilldowns. Add a reports-only performance service and UI. Alternatives were replacing the existing reports (unnecessary regression risk) and summing submission rows (incorrect duplicate inflation). Existing reports remain available.
+
+## Definitions
+- Leads means unique deals created in the selected local calendar window; it is labeled Created deals (lead intake), not an assertion that every created deal is a lead.
+- Pipeline is current deal status for the creation-date cohort in the filter window, independent of event mode. It is a current snapshot, never reconstructed historical pipeline.
+- Submitted and offered are unique deals with existing rep-funnel stage evidence, not lender-attempt/offer counts. Approved stage is labeled Offered/approved evidence because historical status evidence can exist without an offer revision. Company totals are unique, assigned brokers each get full deal credit; assignments are current originator/closer records, not historical ownership.
+- Event basis counts each stage on its first recorded event date; cohort basis selects created deals and observes recorded downstream outcomes as of report generation. Event ratios compare period activity and may exceed 100%; cohort rates intersect target IDs with denominator IDs, zero denominators return null.
+- Funded deals count unique deals; funded volume sums committed funding-event IDs individually on funded_at for event mode and all committed events for created cohort mode. Reversed/corrected events are excluded from current committed volume and reported separately with IDs on reversed_at; this is a current restatement, not immutable historical accounting.
+- Renewals count unique source advances with recorded renewal actions, using eligible_at for event mode or source deal creation cohort. Converted counts only state=converted with a workspace-valid linked renewed deal. It does not imply funded renewal or predict eligibility; future estimates stay owned by the estimates feature.
+- Estimated commission is the recorded commission_cents on active selected offer revisions for deals with no committed funding; dates use revision effective_at. Unknown/incomplete values remain unknown. No points, policy or derived calculation is invented. One selected revision per deal is required; ambiguous selections produce unknown.
+- Earned commission is explicitly labeled Recorded funding commission: committed event commission_cents dated funded_at, a recorded contract figure rather than client revenue-recognition policy.
+- Collected commission is nonvoid commission-only accounting payment received_amount_cents dated received_at. Paid broker commission is nonvoid commission payment distributions with status=paid, dated paid_at; broker filter uses recipient membership for paid distributions. Fees are excluded. These figures are separate and must not be added together. Adjustments stay owned by the ledger, whose adjusted current values are read; no bank transfer or external bookkeeping claim.
+- Financial values, IDs and evidence require both payment-table and company-financial permissions in this company report; otherwise all finance metrics return only visible=false. No finance hidden as zero. Renewals and stage counts remain visible to authorized reports admins.
+- All filters use workspace-local inclusive calendar dates, exact real dates, verified workspace IDs. CSV serializes the same sanitized report object displayed, with basis/timezone/attribution, count/amount units and unknown/restricted state. CSV uses existing formula-safe escaping. It is a report snapshot, no async export contract changes.
+
+## Ownership and boundaries
+Only reports service/contracts/UI/routes, reports page, targeted report tests and plan/evidence documents. Read existing funding/accounting/offer tables; no migrations, provider calls, accounting writes, shared calculations, security configuration or credentials. Estimates owner may later provide pinned authoritative estimation contract; T7 only reads persisted selected revision values and renewal records today.
+
+## Verification and review
+Disposable local Postgres on T7 port 55479; harness creates unique databases. Verify duplicate funder submissions, multi-event funding date windows, reversal exclusion, fees/voids, recipient attribution, timezone boundary, real-date validation, cohort intersections, cross-tenant invalid filters, restricted API/CSV. Independent reviewer after implementation. Full suite/build needs parent's coordinated slot. Hosted preview remains a human gate.
