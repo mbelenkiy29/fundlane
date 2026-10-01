@@ -9,6 +9,7 @@ import { AppError } from '../errors';
 import { withOutboundApproval } from '../outbound-approval';
 import { notificationInput, notificationPreflight, notificationRecipientHash, notificationView, notificationActor, requireNotificationAdmin, notificationUnsubscribeToken } from './service';
 import { defaultNotificationTransport, lookupNotificationReceipt } from './transport';
+import { NotificationDispatchBlocked, NotificationDeadlineError, type NotificationLookupContext } from './contracts';
 import type { NotificationRow, NotificationOutcome, NotificationContent, NotificationTransport } from './contracts';
 let transportOverride: NotificationTransport | undefined;
 export function setNotificationTransportForTests(transport?: NotificationTransport) { transportOverride = transport; }
@@ -29,13 +30,14 @@ export async function recordNotificationOutcome(workspaceId: string, id: string,
         return true;
     });
 }
-async function claim(clock: string): Promise<NotificationRow | undefined> {
+async function claim(clock: string, operationClock: () => string): Promise<NotificationRow | undefined> {
     return withImmediateTransaction(async (db) => {
         const row = await db.prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE state IN ('queued','retry') AND next_attempt_at<=? AND scheduled_for<=? AND attempts<3 ORDER BY next_attempt_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`).get(clock, clock);
         if (!row)
             return;
-        const token = newId(), until = new Date(Date.parse(clock) + 120000).toISOString();
-        return db.prepare<NotificationRow>(`UPDATE mca_notifications SET state='sending',attempts=attempts+1,claim_token=?,lease_until=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(token, until, clock, row.workspace_id, row.id);
+        const leaseClock = operationClock();
+        const token = newId(), until = new Date(Date.parse(leaseClock) + 120000).toISOString();
+        return db.prepare<NotificationRow>(`UPDATE mca_notifications SET state='sending',attempts=attempts+1,claim_token=?,lease_until=?,updated_at=? WHERE workspace_id=? AND id=? RETURNING *`).get(token, until, leaseClock, row.workspace_id, row.id);
     });
 }
 async function expireClaims(clock: string) {
@@ -54,7 +56,9 @@ async function suppressClaim(row: NotificationRow, code: string, clock: string) 
 }
 export async function runScheduledNotifications(clock = nowIso(), limit = 25, options?: {
     deadlineMs?: number;
+    operationClock?: () => string;
 }) {
+    const operationClock = options?.operationClock ?? nowIso;
     const result = { attempted: 0, accepted: 0, uncertain: 0, suppressed: 0 };
     if (process.env.MCA_NOTIFICATION_RUNTIME !== 'enabled')
         return result;
@@ -64,11 +68,11 @@ export async function runScheduledNotifications(clock = nowIso(), limit = 25, op
     if (deadline - Date.now() < 45000)
         return result;
     registerDocumentNotificationCondition();
-    await expireClaims(clock);
+    await expireClaims(operationClock());
     if (!transportOverride)
-        await reconcileNotificationProviders(clock, 5, { deadlineMs: deadline });
+        await reconcileNotificationProviders(operationClock(), 5, { deadlineMs: deadline });
     for (let i = 0; i < limit && deadline - Date.now() >= 45000; i++) {
-        const row = await claim(clock);
+        const row = await claim(clock, operationClock);
         if (!row)
             break;
         result.attempted++;
@@ -97,20 +101,38 @@ export async function runScheduledNotifications(clock = nowIso(), limit = 25, op
         catch (error) {
             if (!(error instanceof AppError))
                 throw error;
-            await suppressClaim(row, error.code, clock);
+            await suppressClaim(row, error.code, operationClock());
             result.suppressed++;
             continue;
         }
-        const message = { ...content, id: row.id, workspaceId: row.workspace_id, actor, dealId: row.deal_id, audience: row.audience, channel: row.channel, senderId: row.sender_id ?? undefined, approvedAt: row.approved_at, idempotencyKey: `notification:${row.id}` };
+        const beforeSend = async () => {
+            try {
+                const live = await liveEmailActor(row.workspace_id, row.actor_membership_id);
+                const fresh = await notificationPreflight(live, input);
+                if (notificationRecipientHash(row.workspace_id, row.channel, fresh.recipient) !== row.recipient_hash)
+                    throw new AppError(409, 'notification_recipient_changed', 'Review the changed recipient.');
+            }
+            catch (error) {
+                if (error instanceof AppError)
+                    throw new NotificationDispatchBlocked(error.code);
+                throw error;
+            }
+        };
+        const message = { beforeSend, deadlineMs: deadline, ...content, id: row.id, workspaceId: row.workspace_id, actor, dealId: row.deal_id, audience: row.audience, channel: row.channel, senderId: row.sender_id ?? undefined, approvedAt: row.approved_at, idempotencyKey: `notification:${row.id}` };
         let outcome: NotificationOutcome;
         try {
             const send = () => (transportOverride ?? defaultNotificationTransport)(message);
             outcome = row.audience === 'merchant' ? await withOutboundApproval(row.workspace_id, row.approved_at, send) : await send();
         }
-        catch {
-            outcome = { state: 'uncertain', errorCode: 'provider_outcome_unknown' };
+        catch (error) {
+            if (error instanceof NotificationDispatchBlocked) {
+                await suppressClaim(row, error.code, operationClock());
+                result.suppressed++;
+                continue;
+            }
+            outcome = error instanceof NotificationDeadlineError ? { state: 'retry', errorCode: 'notification_deadline' } : { state: 'uncertain', errorCode: 'provider_outcome_unknown' };
         }
-        const recorded = await recordNotificationOutcome(row.workspace_id, row.id, row.claim_token!, outcome, clock);
+        const recorded = await recordNotificationOutcome(row.workspace_id, row.id, row.claim_token!, outcome, operationClock());
         if (!recorded)
             continue;
         if (outcome.state === 'accepted' || outcome.state === 'delivered')
@@ -135,7 +157,7 @@ export async function reconcileNotification(actor: DealActor, id: string, raw: z
         return notificationView({ ...row, state: input.outcome, error_code: null });
     });
 }
-type ReceiptLookup = (row: NotificationRow) => Promise<NotificationOutcome | undefined>;
+type ReceiptLookup = (row: NotificationRow, context: NotificationLookupContext) => Promise<NotificationOutcome | undefined>;
 let receiptLookupOverride: ReceiptLookup | undefined;
 export function setNotificationReceiptLookupForTests(lookup?: ReceiptLookup) { receiptLookupOverride = lookup; }
 export async function reconcileNotificationProviders(clock = nowIso(), limit = 5, options?: {
@@ -146,9 +168,10 @@ export async function reconcileNotificationProviders(clock = nowIso(), limit = 5
     if (!Number.isFinite(Date.parse(clock)) || !Number.isInteger(limit) || limit < 1 || limit > 25)
         throw new AppError(422, 'notification_clock_invalid', 'Use a valid clock and a limit between 1 and 25.');
     const rows = await getDatabase().prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE state IN ('uncertain','accepted') AND next_attempt_at<=? ORDER BY next_attempt_at,id LIMIT ?`).all(clock, limit);
+    const deadlineMs = options?.deadlineMs ?? Date.now() + 60000;
     let resolved = 0;
     for (const row of rows) {
-        if ((options?.deadlineMs ?? Infinity) - Date.now() < 60000)
+        if (deadlineMs - Date.now() < 60000)
             break;
         const nextCheck = new Date(Date.parse(clock) + 15 * 60000).toISOString();
         const claimed = await getDatabase().prepare(`UPDATE mca_notifications SET next_attempt_at=? WHERE workspace_id=? AND id=? AND state=? AND next_attempt_at=?`).run(nextCheck, row.workspace_id, row.id, row.state, row.next_attempt_at);
@@ -156,7 +179,7 @@ export async function reconcileNotificationProviders(clock = nowIso(), limit = 5
             continue;
         let outcome: NotificationOutcome | undefined;
         try {
-            outcome = await (receiptLookupOverride ?? lookupNotificationReceipt)(row);
+            outcome = await (receiptLookupOverride ?? lookupNotificationReceipt)(row, { deadlineMs });
         }
         catch {
             continue;

@@ -6,11 +6,21 @@ import { getDatabase, closeDatabaseForTests, withImmediateTransaction } from '..
 import { createDeal } from '../src/lib/mca/deals/service';
 import type { DealActor } from '../src/lib/mca/deals/schema';
 import { enqueueNotification, getNotification, setNotificationPolicy, setNotificationConsent, suppressNotificationRecipient, notificationUnsubscribeToken, unsubscribeNotification } from '../src/lib/mca/notifications/service';
-import { runScheduledNotifications, setNotificationTransportForTests, reconcileNotification, recordNotificationOutcome, reconcileNotificationProviders, setNotificationReceiptLookupForTests } from '../src/lib/mca/notifications/worker';
+import { runScheduledNotifications as runNotifications, setNotificationTransportForTests, reconcileNotification, recordNotificationOutcome, reconcileNotificationProviders, setNotificationReceiptLookupForTests } from '../src/lib/mca/notifications/worker';
 import { createMessageTemplate, publishMessageTemplate } from '../src/lib/mca/comms/templates';
 import { recordSmsConsent } from '../src/lib/mca/sms/service';
-import { defaultNotificationTransport } from '../src/lib/mca/notifications/transport';
+import { defaultNotificationTransport, lookupNotificationReceipt } from '../src/lib/mca/notifications/transport';
 import { registerNotificationCondition } from '../src/lib/mca/notifications/conditions';
+import { Mailbox, setEmailProviderFetchForTests } from '../src/lib/mca/email-conversations/providers';
+import { encryptSenderCredential } from '../src/lib/mca/senders/repository';
+import { GOOGLE_SENDER_SCOPES, MICROSOFT_SENDER_SCOPES } from '../src/lib/mca/senders/oauth';
+import type { NotificationRow } from '../src/lib/mca/notifications/contracts';
+async function runScheduledNotifications(clock: string, limit = 25, options?: {
+    deadlineMs?: number;
+    operationClock?: () => string;
+}) {
+    return runNotifications(clock, limit, { ...options, operationClock: options?.operationClock ?? (() => clock) });
+}
 let cluster: Awaited<ReturnType<typeof createPostgresTestDatabase>>;
 let dealId: string;
 const actor = (workspaceId = 'notify-a'): DealActor => ({ workspaceId, userId: `${workspaceId}-user`, membershipId: `${workspaceId}-member`, role: 'admin', source: 'user', managedMembershipIds: [], activeMembershipIds: [`${workspaceId}-member`], correlationId: 'notification-test' });
@@ -27,7 +37,14 @@ before(async () => {
     }
     dealId = (await createDeal(actor(), { idempotencyKey: 'notification-deal', legalName: 'Synthetic Notification LLC', contactEmail: 'merchant@example.test', contactPhone: '+15551234567', owners: [{ firstName: 'Pat', lastName: 'Test', isPrimary: true }], assignments: [{ membershipId: 'notify-a-member', kind: 'originator', isPrimary: true }] })).deal.id;
 });
-beforeEach(async () => { process.env.MCA_NOTIFICATION_RUNTIME = 'enabled'; await getDatabase().prepare('DELETE FROM mca_notification_receipts').run(); await getDatabase().prepare('DELETE FROM mca_notifications').run(); await getDatabase().prepare('DELETE FROM mca_notification_preferences').run(); await getDatabase().prepare('DELETE FROM mca_notification_policies').run(); });
+beforeEach(async () => {
+    process.env.MCA_NOTIFICATION_RUNTIME = 'enabled';
+    await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id='notify-a'").run();
+    await getDatabase().prepare('DELETE FROM mca_notification_receipts').run();
+    await getDatabase().prepare('DELETE FROM mca_notifications').run();
+    await getDatabase().prepare('DELETE FROM mca_notification_preferences').run();
+    await getDatabase().prepare('DELETE FROM mca_notification_policies').run();
+});
 after(async () => { await closeDatabaseForTests(); await cluster?.close(); });
 test('tenant references, broker recipient membership and reads are scoped', async () => {
     await assert.rejects(enqueueNotification(actor('notify-b'), event('foreign-deal')));
@@ -186,7 +203,7 @@ test('broker system adapter preserves provider IDs and never retries ambiguous H
     process.env.MCA_SYSTEM_EMAIL_PROVIDER = 'resend';
     process.env.MCA_RESEND_API_KEY = 'synthetic-no-live-key';
     process.env.MCA_RESEND_FROM = 'Notify <notify@example.test>';
-    const message = { id: 'synthetic-id', workspaceId: 'notify-a', actor: actor(), dealId: null, audience: 'broker' as const, channel: 'email' as const, recipient: 'notify-a@example.test', subject: 'Alert', text: 'Synthetic alert', approvedAt: now, idempotencyKey: 'notification:synthetic-id' };
+    const message = { beforeSend: async () => { }, deadlineMs: Date.now() + 60000, id: 'synthetic-id', workspaceId: 'notify-a', actor: actor(), dealId: null, audience: 'broker' as const, channel: 'email' as const, recipient: 'notify-a@example.test', subject: 'Alert', text: 'Synthetic alert', approvedAt: now, idempotencyKey: 'notification:synthetic-id' };
     try {
         let key = '';
         globalThis.fetch = async (_url, init) => { key = new Headers(init?.headers).get('idempotency-key') ?? ''; return Response.json({ id: 'synthetic-provider-id' }, { status: 201 }); };
@@ -253,3 +270,80 @@ test('a comms tick with exhausted total runtime budget leaves notifications queu
     assert.equal(sends, 0);
     assert.equal((await getNotification(actor(), row.id)).state, 'queued');
 });
+test('later batch claims use fresh operation time and concurrent tick cannot expire a healthy send', async () => {
+    const a = await enqueueNotification(actor(), event('lease-batch-a')), b = await enqueueNotification(actor(), event('lease-batch-b'));
+    let opTime = Date.parse(now), calls = 0;
+    let release!: () => void, started!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { started = resolve; });
+    setNotificationTransportForTests(async () => {
+        calls++;
+        if (calls === 1) {
+            opTime += 180000;
+            return { state: 'accepted', providerMessageId: 'first-accepted' };
+        }
+        started();
+        await waiting;
+        return { state: 'accepted', providerMessageId: 'second-accepted' };
+    });
+    const firstTick = runScheduledNotifications(now, 25, { operationClock: () => new Date(opTime).toISOString() });
+    await ready;
+    await runScheduledNotifications(new Date(opTime).toISOString(), 25, { operationClock: () => new Date(opTime).toISOString() });
+    release();
+    await firstTick;
+    assert.equal(calls, 2);
+    assert.equal((await getNotification(actor(), a.id)).state, 'accepted');
+    assert.equal((await getNotification(actor(), b.id)).state, 'accepted');
+});
+async function seedMailbox(id: string, provider: 'google' | 'microsoft' = 'google') {
+    const scopes = provider === 'google' ? GOOGLE_SENDER_SCOPES : MICROSOFT_SENDER_SCOPES;
+    await getDatabase().prepare(`INSERT INTO mca_email_senders(id,workspace_id,provider,purpose,from_name,from_address,credential_cipher,state,is_default,owner_membership_id,created_at,updated_at) VALUES(?,'notify-a',?,'merchant','Synthetic Sender','sender@example.test',?,'verified',1,'notify-a-member',?,?)`).run(id, provider, encryptSenderCredential('notify-a', { kind: 'oauth', email: 'sender@example.test', accessToken: 'synthetic-token', refreshToken: 'synthetic-refresh', expiresAt: '2099-01-01T00:00:00.000Z', scope: scopes.join(' ') }), now, now);
+}
+test('receipt lookup with 61 seconds remaining stops pagination before its deadline', async () => {
+    await seedMailbox('bounded-microsoft', 'microsoft');
+    const queued = await enqueueNotification(actor(), event('bounded-lookup'));
+    const row = await getDatabase().prepare<NotificationRow>('SELECT * FROM mca_notifications WHERE id=?').get(queued.id);
+    let elapsed = 0, calls = 0;
+    setEmailProviderFetchForTests(async () => { calls++; elapsed += 15000; return Response.json({ value: [], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$skip=next' }); });
+    try {
+        await assert.rejects(lookupNotificationReceipt({ ...row!, audience: 'merchant', sender_id: 'bounded-microsoft' }, { deadlineMs: 61000, now: () => elapsed }), /deadline/);
+        assert.equal(calls, 4);
+        assert.ok(elapsed < 61000);
+    }
+    finally {
+        setEmailProviderFetchForTests();
+    }
+});
+for (const revoke of ['unsubscribe', 'condition'] as const) {
+    test(`merchant ${revoke} during blocked OAuth refresh prevents send POST`, async (t) => {
+        await seedMailbox(`refresh-${revoke}`);
+        await setNotificationPolicy(actor(), { kind: 'document', brokerEnabled: true, merchantEnabled: true });
+        await setNotificationConsent(actor(), { dealId, channel: 'email', enabled: true });
+        const template = await createMessageTemplate(actor(), { name: `Refresh ${revoke}`, channel: 'email', scope: 'merchant', subject: 'Synthetic documents', body: 'Review your synthetic request.' });
+        await publishMessageTemplate(actor(), template.id);
+        let eligible = true;
+        registerNotificationCondition(`refresh_${revoke}`, async () => eligible);
+        const row = await enqueueNotification(actor(), { ...event(`refresh-event-${revoke}`), audience: 'merchant', recipientUserId: undefined, payload: undefined, templateId: template.id, senderId: `refresh-${revoke}`, condition: { type: `refresh_${revoke}`, key: 'request-owned' } });
+        let release!: () => void, started!: () => void, posts = 0;
+        const barrier = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { started = resolve; });
+        t.mock.method(Mailbox.prototype, 'connect', async () => { started(); await barrier; });
+        setEmailProviderFetchForTests(async (_url, init) => { if (init?.method === 'POST')
+            posts++; return Response.json({ id: 'would-send' }); });
+        setNotificationTransportForTests();
+        try {
+            const tick = runScheduledNotifications(now);
+            await ready;
+            if (revoke === 'unsubscribe')
+                await unsubscribeNotification(notificationUnsubscribeToken('notify-a', row.id));
+            else
+                eligible = false;
+            release();
+            await tick;
+            assert.equal(posts, 0);
+            assert.equal((await getNotification(actor(), row.id)).state, 'suppressed');
+        }
+        finally {
+            setEmailProviderFetchForTests();
+            release();
+        }
+    });
+}
