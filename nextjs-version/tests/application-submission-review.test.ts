@@ -52,7 +52,7 @@ before(async () => {
 })
 after(async()=>{setDocumentStorageForTests();setDocumentScannerForTests();setEmailDeliveryFetchForTests();setSenderDeliveryFetchForTests();await closeDatabaseForTests();await database?.close()})
 async function readyApplication() {
-  const deal=(await createDeal(actor,{idempotencyKey:newId(),legalName:"Bakery",monthlyRevenue:100000,requestedAmount:25000})).deal
+  const deal=(await createDeal(actor,{idempotencyKey:newId(),legalName:"Bakery",monthlyRevenue:100000,requestedAmount:25000,ficoScore:720})).deal
   const intake=(await reserveIntake(actor.workspaceId,{schemaVersion:1,provider:"custom",eventId:newId(),application:{legalName:"Bakery"}},newId(),integrationId)).record
   await updateIntake({workspaceId:actor.workspaceId,intakeId:intake.intakeId,state:"created",dealId:deal.id})
   const jobsMode = process.env.MCA_BACKGROUND_JOBS
@@ -66,9 +66,14 @@ async function readyApplication() {
   await getDatabase().prepare("UPDATE mca_completeness_results SET ready=1 WHERE workspace_id=? AND deal_id=?").run(actor.workspaceId,deal.id)
   const timestamp = new Date().toISOString()
   await getDatabase().prepare("INSERT INTO intake_processing(intake_id,workspace_id,progress_json,checked_at,updated_at) VALUES (?,?,?,?,?)").run(intake.intakeId,actor.workspaceId,JSON.stringify({state:"ready_for_review",stages:{}}),timestamp,timestamp)
+  // Explicit synthetic financial facts make this approval-flow fixture matchable without promoting unknown inputs.
+  const metric=(value:number)=>JSON.stringify({value,unknown:false,confidence:1,text:"Synthetic approval fixture"})
+  await getDatabase().prepare(`INSERT INTO mca_underwriting_aggregates
+    (workspace_id,deal_id,version,monthly_revenue,average_daily_balance,nsf_count,negative_days,deposit_count,worst_month_nsf,position_count,stale,source_fingerprint,computed_at)
+    VALUES (?,?,1,?,?,?,?,?,?,0,0,'synthetic-approval-fixture',?)`).run(actor.workspaceId,deal.id,metric(100000),metric(8000),metric(0),metric(0),metric(12),metric(0),timestamp)
   const scores=await runAnalysis(actor,deal.id,{mode:"review_first",reviewNotificationChannel:"select_only"})
   assert.equal(scores.snapshot.scores.find(s=>s.funderId===funderId)?.eligible,true)
-  await getDatabase().prepare("UPDATE mca_score_snapshots SET scores_json=? WHERE id=?").run(JSON.stringify(scores.snapshot.scores.map(score=>({...score,grade:"A",score:90}))),scores.snapshot.id)
+  assert.equal(scores.snapshot.scores.find(s=>s.funderId===funderId)?.fitStatus,"matched")
   await getDatabase().prepare("UPDATE mca_analysis_runs SET state='review_pending' WHERE id=?").run(scores.run.id)
   return {intakeId:intake.intakeId,dealId:deal.id}
 }
