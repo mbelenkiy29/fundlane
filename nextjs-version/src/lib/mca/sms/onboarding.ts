@@ -128,16 +128,14 @@ export function platformReady(): boolean {
   )
 }
 export function publicOrigin(): string {
-  for (const candidate of [process.env.MCA_SMS_PUBLIC_BASE_URL, process.env.MCA_APP_ORIGIN]) {
-    const value = candidate?.trim()
-    if (!value) continue
-    try {
-      const u = new URL(value)
-      if (u.protocol === "https:" && !u.username && !u.password && u.pathname === "/" && !u.search && !u.hash)
-        return u.origin
-    } catch { /* Try the fallback origin. */ }
-  }
-  throw new AppError(503, "sms_public_url_unconfigured", "Configure the public HTTPS origin.")
+  // Blank values count as unset; a non-blank but invalid value fails closed
+  // instead of silently falling back to a different origin.
+  const value = process.env.MCA_SMS_PUBLIC_BASE_URL?.trim() || process.env.MCA_APP_ORIGIN?.trim()
+  let u: URL | undefined
+  try { u = value ? new URL(value) : undefined } catch { u = undefined }
+  if (!u || u.protocol !== "https:" || u.username || u.password || u.pathname !== "/" || u.search || u.hash)
+    throw new AppError(503, "sms_public_url_unconfigured", "Configure the public HTTPS origin.")
+  return u.origin
 }
 export async function company(
   workspaceId: string

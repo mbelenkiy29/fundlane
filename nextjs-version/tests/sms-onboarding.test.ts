@@ -149,7 +149,7 @@ test("signup creates an admin and prevents unauthenticated reuse of an existing 
     { code: "sign_in_required" }
   )
 })
-test("public SMS origin trims values, falls back, and rejects invalid origins", () => {
+test("public SMS origin trims values, falls back only when blank, and rejects invalid origins", () => {
   const sms = process.env.MCA_SMS_PUBLIC_BASE_URL, app = process.env.MCA_APP_ORIGIN
   try {
     for (const value of ["", "   "]) {
@@ -162,9 +162,9 @@ test("public SMS origin trims values, falls back, and rejects invalid origins", 
     for (const value of ["http://sms.example.test", "https://sms.example.test/path", "not a URL"]) {
       process.env.MCA_SMS_PUBLIC_BASE_URL = value
       process.env.MCA_APP_ORIGIN = "https://fallback.example.test"
-      assert.equal(publicOrigin(), "https://fallback.example.test")
+      assert.throws(() => publicOrigin(), { code: "sms_public_url_unconfigured", status: 503 })
     }
-    process.env.MCA_SMS_PUBLIC_BASE_URL = "bad"
+    process.env.MCA_SMS_PUBLIC_BASE_URL = ""
     process.env.MCA_APP_ORIGIN = "http://fallback.example.test"
     assert.throws(() => publicOrigin(), { code: "sms_public_url_unconfigured", status: 503 })
     delete process.env.MCA_SMS_PUBLIC_BASE_URL

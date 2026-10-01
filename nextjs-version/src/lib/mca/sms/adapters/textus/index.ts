@@ -4,7 +4,6 @@ import type { SmsAdapter, SmsAdapterSendInput, SmsDeliveryResult } from "../../c
 import {
   isTextusFixtureApiKey,
   resolveTextusSendScenario,
-  resetTextusFixtures,
   textusFixtureFetch,
   textusFixtureSendResult,
 } from "./fixtures"
