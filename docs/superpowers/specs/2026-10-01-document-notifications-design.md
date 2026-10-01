@@ -1,0 +1,19 @@
+# Document notification design
+
+T11 produces company-scoped missing, requested and stale document events for brokers, with optional merchant reminders through the shared notification foundation. This implements the approved client feature design under the user's explicit plan-and-execute instruction. All work stays in this isolated worktree; no external sends, scheduler, transport, migrations, or edits to `documents/service.ts`.
+
+## Existing modules and decisions
+
+Use `getDealForDocument` for role/company access, `listDocuments` for the vault, `mca_statement_months` for statement periods, closing stipulations and `mca_merchant_upload_links` for persisted scoped requests. Reuse foundation `enqueueNotification` and live conditions for consent, company opt-in, dedup, dispatch, receipts and reconciliation. A separate module derives conditions and a separate guard loads fresh data at enqueue and dispatch. The shared cron must explicitly bootstrap the guard; registration in a web request does not activate a separate worker.
+
+A missing condition means no malware-clean document in the category. Statements additionally require the immediately previous completed UTC calendar month; their current upload date or filename is never evidence of the covered period. A stale condition means clean statements exist but no trusted, nonduplicate extracted/corrected period covers that month. A requested condition identifies an open/received closing stipulation whose linked document is not malware-clean; verified or waived tasks resolve the condition. Pending uploads/scans, validation-only `ready`, scan failure and quarantined documents never satisfy a condition. Future and malformed periods never satisfy freshness. Only current lineage versions participate.
+
+A stable event identity includes deal, condition, required UTC month and request identity. Repeats use the original schedule/approval and deduplicate; changed payload under the same key conflicts. Closed/funded deals suppress. Broker recipients must be active members with deal access; default recipient is the initiating broker. Merchant reminders require explicit action, enabled company document policy, current consent, suppression checks, original outbound approval and a published channel template. They carry only existing live persisted request links bound to this company/deal/category/stipulation, with unused capacity. Expired/revoked/consumed/wrong-company links deny enqueue and suppress dispatch. A resolved condition suppresses queued/retry delivery; accepted/uncertain sends remain governed by foundation reconciliation and are never replayed.
+
+## Product surface
+
+Add a document alert panel alongside the vault showing missing/requested/stale conditions and the required statement month. Each condition can queue the broker alert. A merchant request requires a selected published template, sender for email, existing request link and explicit confirmation. Show queued/suppressed/uncertain status precisely; queuing does not claim delivery. No policy/consent settings duplicated here.
+
+## Dependencies and verification
+
+Foundation pin41a4264 initially; committed live guard contract and safe server-derived template values are required before dependent edits. T0 exclusively owns document integrity service. Tests use disposable Postgres port55481, synthetic companies/roles and overridden provider transport. Test readiness, current versions, month/year/leap/timezone boundaries, wrong-company/role access, live links, repeated events, resolution after enqueue, consent/optout, unknown-send reconciliation, and UI rendering. Parent coordinates final build/aggregate execution and independent review. Functional implementation remains distinct from hosted/provider activation.
