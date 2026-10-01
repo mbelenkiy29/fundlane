@@ -236,9 +236,13 @@ test("generic deal preview sends only exact reviewed package, survives replay an
   const fresh = await prepareDealSubmission(actor, item.dealId, [funderId])
   const count = sent.length
   const [first, replay] = await Promise.all([confirmDealSubmission(actor, item.dealId, { previewId: fresh.id }), confirmDealSubmission(actor, item.dealId, { previewId: fresh.id })])
-  assert.equal(first.jobs[0]?.state, "sent")
+  // The two concurrent confirmations race: either may perform the single send while the
+  // other observes the same in-flight job. Exactly one delivery and one shared job are required.
+  assert.ok([first.jobs[0]?.state, replay.jobs[0]?.state].includes("sent"))
   assert.equal(replay.jobs[0]?.jobId, first.jobs[0]?.jobId)
   assert.equal(sent.length, count + 1)
+  const [settled] = await listJobsForDeal(actor.workspaceId, item.dealId).then(jobs => jobs.filter(job => job.id === first.jobs[0]?.jobId))
+  assert.equal(settled?.state, "sent")
 })
 
 
