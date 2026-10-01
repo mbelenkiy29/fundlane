@@ -1,6 +1,6 @@
 # Invited Merchant Application Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Close save/resume, validation and scan-state gaps in the existing invited merchant funnel.
 
@@ -26,25 +26,25 @@
 ### Task 1: Shared required-field validation
 **Files:** Modify `src/lib/mca/applications/form-schema.ts`; Test `tests/application-form-schema.test.ts`.
 **Interfaces:** Consumes `DealWriteInput`; produces existing `stepError(step, answers, optional): string | undefined` and `parseMoneyInput(value): number | undefined`.
-- [ ] Add negative tests for impossible/future dates, invalid ZIP/phone, nonfinite/negative amounts and ownership shares; zero values remain valid.
-- [ ] Run schema tests and observe expected failures.
-- [ ] Implement validation and parseMoneyInput with calendar round-trip and finite-number checks.
-- [ ] Run schema tests; commit.
+- [x] Add negative tests for impossible/future dates, invalid ZIP/phone, nonfinite/negative amounts and ownership shares; zero values remain valid.
+- [x] Run schema tests and observe expected failures.
+- [x] Implement validation and parseMoneyInput with calendar round-trip and finite-number checks.
+- [x] Run schema tests; commit.
 
 ### Task 2: Safe client persistence and scan feedback
 **Files:** Create `src/lib/mca/applications/funnel-session.ts`; Modify `src/components/mca/applications/funnel-form.tsx`, `public-application.tsx`; Test `tests/application-funnel-session.test.ts`.
 **Interfaces:** `saveThenSubmit(session, save, submit): Promise<ApplicationSession>` sequences save and submit; `mergeUploadedSession(current, uploaded): ApplicationSession` retains current draft; `applicationFileError(files, months): string | undefined` gates ready/clean statements and all file states.
-- [ ] Write sequencing tests: failed save rejects without submission; successful save precedes submit; upload retains draft; pending/blocked/unknown files reject.
-- [ ] Run tests and observe failure before implementation.
-- [ ] Implement helpers; wire explicit save-and-exit/return, success confirmation, locked controls, accessible scan feedback/status refresh, owner removal, and load error/retry handling.
-- [ ] Run targeted tests and type/lint; commit.
+- [x] Write sequencing tests: failed save rejects without submission; successful save precedes submit; upload retains draft; pending/blocked/unknown files reject.
+- [x] Run tests and observe failure before implementation.
+- [x] Implement helpers; wire explicit save-and-exit/return, success confirmation, locked controls, accessible scan feedback/status refresh, owner removal, and load error/retry handling.
+- [x] Run targeted tests and type/lint; commit.
 
 ### Task 3: Negative integration and mobile acceptance
 **Files:** Modify `tests/application-forms.test.ts`; Create local synthetic browser harness/evidence under ignored `output/`; update acceptance record.
 **Interfaces:** Existing public session, upload and submit routes; no new service API.
-- [ ] Add integration fixtures for revoked/rebound/expired scopes, invalid fields and pending/quarantined files. Verify original invitation/deal linkage remains covered.
-- [ ] Run targeted integration tests against unique disposable cluster/database.
-- [ ] Exercise real funnel component at 390/768 using synthetic intercepted HTTP responses: save/resume, failed-save-submit, upload-preserved draft, scan gate, layout overflow.
+- [x] Add integration fixtures for revoked/rebound/expired scopes, invalid fields and pending/quarantined files. Verify original invitation/deal linkage remains covered.
+- [x] Run targeted integration tests against unique disposable cluster/database.
+- [x] Exercise real funnel component at 390/768 using synthetic intercepted HTTP responses: save/resume, failed-save-submit, upload-preserved draft, scan gate, layout overflow.
 - [ ] Coordinate final build/aggregate slot with parent; request independent whole-branch review; fix material findings.
 - [ ] Record missing consent/replacement contract gates, publish draft PR, attach and verify remote SHA/checks.
 
