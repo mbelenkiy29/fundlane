@@ -477,6 +477,13 @@
       "when": 1790819000075,
       "tag": "0076_sms_credit_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790819000076,
+      "tag": "0077_email_sync_error_time",
+      "breakpoints": true
     }
   ]
 }

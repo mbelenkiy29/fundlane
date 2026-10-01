@@ -1952,7 +1952,7 @@ export const mca_email_conversations = pgTable("mca_email_conversations", {
   id: text().primaryKey(), workspace_id: text().notNull().references(() => workspaces.id),
   deal_id: text().notNull().references(() => deals.id), sender_id: text().notNull().references(() => mca_email_senders.id),
   recipient_cipher: text().notNull(), subject_cipher: text().notNull(), provider_thread_id: text(),
-  created_at: text().notNull(), updated_at: text().notNull(), next_sync_at: text().notNull(), last_synced_at: text(), sync_error: text(),
+  created_at: text().notNull(), updated_at: text().notNull(), next_sync_at: text().notNull(), last_synced_at: text(), sync_error: text(), sync_error_at: timestamp({ withTimezone: true, mode: "string" }),
 }, table => [unique().on(table.workspace_id,table.id),index("email_conversations_deal_idx").on(table.workspace_id,table.deal_id,table.updated_at,table.id),index("email_conversations_workspace_idx").on(table.workspace_id,table.updated_at,table.id),index("email_conversations_sync_idx").on(table.next_sync_at)])
 export const mca_email_messages = pgTable("mca_email_messages", {
   id: text().primaryKey(), workspace_id: text().notNull(), conversation_id: text().notNull(),

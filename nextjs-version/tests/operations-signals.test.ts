@@ -40,11 +40,11 @@ before(async () => {
   await insert("deals", { id: "d", workspace_id: "w", display_id: "SYN-1", legal_name: "Synthetic", status: "offer", pipeline_version: 1, draft_state: "submission_ready", missing_required_json: "[]", field_sources_json: "{}", version: 1, created_at: old, updated_at: now })
   for (let i = 0; i < 5; i++) {
     await insert("mca_email_senders", { id: `s${i}`, workspace_id: "w", provider: "google", purpose: "merchant", from_name: "Synthetic", from_address: "synthetic@example.test", credential_cipher: sensitive, state: i % 2 ? "revoked" : "expired", created_at: old, updated_at: now })
-    await insert("mca_email_conversations", { id: `c${i}`, workspace_id: "w", deal_id: "d", sender_id: `s${i}`, recipient_cipher: sensitive, subject_cipher: sensitive, sync_error: sensitive, created_at: old, updated_at: now, next_sync_at: old, last_synced_at: i ? old : null })
+    await insert("mca_email_conversations", { id: `c${i}`, workspace_id: "w", deal_id: "d", sender_id: `s${i}`, recipient_cipher: sensitive, subject_cipher: sensitive, sync_error: sensitive, sync_error_at: now, created_at: old, updated_at: now, next_sync_at: old, last_synced_at: i ? old : null })
   }
   await insert("mca_email_messages", { id: "mail", workspace_id: "w", conversation_id: "c0", direction: "outbound", body_cipher: sensitive, author_cipher: sensitive, internet_message_id: "synthetic", state: "queued", next_attempt_at: old, created_at: old, updated_at: now })
   await insert("mca_email_runtime_lease", { id: 1, token: "synthetic", expires_at: old, last_started_at: old, last_completed_at: old })
-  await insert("mca_calendar_connections", { id: "cal", workspace_id: "w", user_id: "u", membership_id: "m", email: "synthetic@example.test", credential_cipher: sensitive, next_sync_at: old, failures: 5, error: sensitive, created_at: old })
+  await insert("mca_calendar_connections", { id: "cal", workspace_id: "w", user_id: "u", membership_id: "m", email: "synthetic@example.test", credential_cipher: sensitive, next_sync_at: old, status: "error", failures: 5, error: sensitive, created_at: old })
   await insert("intake_events", { id: "intake", workspace_id: "w", provider: "email", provider_event_id: "synthetic", payload_checksum: "synthetic", application_cipher: sensitive, state: "received", created_at: old, updated_at: now })
   await insert("sms_numbers", { id: "number", workspace_id: "w", account_id: "synthetic", provider_sid: "synthetic", phone: "+12025550100", state: "registering", monthly_cents: 0, created_at: old, updated_at: now })
   await insert("mca_funders", { id: "funder", workspace_id: "w", idempotency_key: "synthetic", legal_name: "Synthetic", created_at: old, updated_at: now })
@@ -77,9 +77,9 @@ test("existing durable signals use real Postgres, with recovery and runtime flag
   assert.equal(sample.billingMaintenanceFailures, 1)
   assert.equal(sample.assistantRuns, 100)
   for (const name of ["email", "sms", "calendar", "receipts", "notifications", "billing"] as const) assert.ok(sample.runtimeSignals[name]!.queueSeconds! > 600, name)
-  for (const [name, signal] of Object.entries(sample.runtimeSignals)) if (signal.failures !== undefined) assert.equal(signal.failures, 5, name)
+  for (const [name, signal] of Object.entries(sample.runtimeSignals)) if (signal.failures !== undefined) assert.equal(signal.failures, name === "calendar" ? 1 : 5, name)
   assert.equal(sample.runtimeSignals.email?.reconnect, 5)
-  assert.equal(sample.runtimeSignals.email?.staleSyncs, 5)
+  assert.equal(sample.runtimeSignals.email?.staleSyncs, 0)
   assert.equal(sample.runtimeSignals.calendar?.staleSyncs, 1)
   assert.ok(sample.runtimeSignals.email!.heartbeatSeconds! > 600)
   const rules = recoveryRules(sample, config)
@@ -145,6 +145,55 @@ test("expired in-flight leases and recent failure windows do not need provider c
   for (const name of ["voice", "submissions", "documents"] as const) assert.equal(signals[name]?.failures, 0)
 })
 
+test("sender sync progress tolerates conversation backlog and errors expire or clear", async () => {
+  try {
+    await database.query("UPDATE mca_email_senders SET state='verified'")
+    await database.query("UPDATE mca_email_conversations SET last_synced_at=(now()-interval '31 minutes')::text,created_at=(now()-interval '1 hour')::text")
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 5)
+    await database.query("UPDATE mca_email_conversations SET last_synced_at=NULL WHERE id='c0'")
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 5)
+    await database.query("UPDATE mca_email_conversations SET created_at=now()::text WHERE id='c0'")
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 4)
+    await database.query("UPDATE mca_email_conversations SET last_synced_at=(now()-interval '29 minutes')::text WHERE id='c1'")
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 3)
+    // A sender with many old conversations still makes progress when one succeeds.
+    await insert("mca_email_conversations", { id: "fresh", workspace_id: "w", deal_id: "d", sender_id: "s2", recipient_cipher: sensitive, subject_cipher: sensitive, created_at: old, updated_at: now, next_sync_at: future, last_synced_at: now })
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 2)
+    await database.query("UPDATE mca_email_senders SET state='revoked' WHERE id='s3'")
+    assert.equal((await runtimeSignals(db, config)).email?.staleSyncs, 1)
+    await database.query("UPDATE mca_email_conversations SET sync_error_at=now()-interval '11 minutes'")
+    assert.equal((await runtimeSignals(db, config)).email?.failures, 0)
+    await database.query("UPDATE mca_email_conversations SET sync_error='synthetic failure',sync_error_at=now() WHERE id='c4'")
+    assert.equal((await runtimeSignals(db, config)).email?.failures, 1)
+    await database.query("UPDATE mca_email_conversations SET sync_error=NULL WHERE id='c4'")
+    assert.equal((await runtimeSignals(db, config)).email?.failures, 0)
+    await database.query("UPDATE mca_calendar_connections SET status='connected',failures=999")
+    assert.equal((await runtimeSignals(db, config)).calendar?.failures, 0)
+    await database.query("UPDATE mca_calendar_connections SET status='reconnect',failures=0")
+    assert.equal((await runtimeSignals(db, config)).calendar?.failures, 1)
+  } finally {
+    await database.query("DELETE FROM mca_email_conversations WHERE id='fresh'")
+    await database.query("UPDATE mca_email_senders SET state=CASE WHEN id IN ('s1','s3') THEN 'revoked' ELSE 'expired' END")
+    await database.query("UPDATE mca_email_conversations SET last_synced_at=$1,created_at=$1,sync_error=$2,sync_error_at=$3", [old, sensitive, now])
+    await database.query("UPDATE mca_calendar_connections SET status='error',failures=5")
+  }
+})
+
+test("telemetry preserves legitimate component, code and request correlation IDs", async () => {
+  const event = operationalEvent("calendar_sync", "provider_quota_exceeded", "request-123")
+  assert.equal(event.component, "calendar_sync")
+  assert.equal(event.code, "provider_quota_exceeded")
+  assert.equal(event.correlationId, "request-123")
+  process.env.MCA_OPERATIONS_ENABLED = "true"
+  try {
+    await persistEvent(event)
+    const row = (await database.query("SELECT * FROM mca_private.ops_errors WHERE id=$1", [event.id])).rows[0]
+    assert.equal(row.correlation_id, event.correlationId)
+    assert.equal(row.code, event.code)
+    assert.equal(row.component, event.component)
+  } finally { delete process.env.MCA_OPERATIONS_ENABLED }
+})
+
 test("aggregate failure stays unavailable rather than recovering with healthy zeros", async () => {
   const broken: MonitorDb = { query: (sql, values) => sql.includes("FROM voice_calls") ? Promise.reject(Error(sensitive)) : db.query(sql, values) }
   await database.query("UPDATE mca_private.ops_control SET last_started_at=now()-interval '1 minute'")
@@ -153,16 +202,16 @@ test("aggregate failure stays unavailable rather than recovering with healthy ze
   assert.equal((await database.query("SELECT metrics FROM mca_private.ops_health ORDER BY checked_at DESC LIMIT 1")).rows[0].metrics, null)
 })
 
-test("native logs, operational error rows and alert payloads exclude credentials, bank data and document content", async () => {
+test("native diagnostics redact labeled secrets; event rows and alerts exclude provider payloads", async () => {
   const lines: string[] = []
   const original = console.error
   console.error = line => { lines.push(String(line)) }
   process.env.MCA_OPERATIONS_ENABLED = "true"
   try {
     for (const secret of secrets) {
-      apiError(Object.assign(new Error(secret), { name: secret, code: secret, type: secret, rawType: secret, requestId: secret, param: secret, cause: Error(secret), headers: { authorization: secret }, documentContent: secret }), secret)
-      await recordOperationalError(secret, secret)
-      await persistEvent(operationalEvent("api", "internal_error", secret, `/api/mca/documents/${secret}?token=${secret}`))
+      apiError(Object.assign(new Error(`access_token="${secret}"`), { code: "provider_error", requestId: "req_synthetic", param: "price", cause: Error(secret), headers: { authorization: secret }, documentContent: secret }), "request-123")
+      await recordOperationalError("provider_runtime", "provider_request_failed")
+      await persistEvent(operationalEvent("api", "internal_error", "request-123", `/api/mca/documents/${secret}?token=${secret}`))
     }
   } finally { console.error = original }
   const rows = (await database.query("SELECT * FROM mca_private.ops_errors")).rows

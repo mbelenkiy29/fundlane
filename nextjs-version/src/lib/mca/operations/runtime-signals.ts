@@ -20,20 +20,26 @@ export async function runtimeSignals(db: MonitorDb, config: MonitorConfig): Prom
     // Voice is request/callback driven, with no worker queue or heartbeat.
     voice: `SELECT count(*)::int failures FROM voice_calls WHERE state='failed' AND terminal_at::timestamptz>=now()-interval '10 minutes'`,
   }
+  // Sender progress uses the latest successful conversation sync, not the oldest queued conversation.
   if (config.emailRuntimeEnabled) queries.email = `SELECT
     COALESCE((SELECT greatest(0,extract(epoch FROM now()-min(next_attempt_at::timestamptz)))::int FROM mca_email_messages WHERE direction='outbound' AND state='queued' AND next_attempt_at::timestamptz<=now()),0) "queueSeconds",
     (SELECT extract(epoch FROM now()-last_completed_at)::int FROM mca_email_runtime_lease WHERE id=1) "heartbeatSeconds",
     (SELECT count(*)::int FROM mca_email_senders WHERE state IN ('expired','revoked')) reconnect,
-    (SELECT count(*)::int FROM mca_email_conversations WHERE sync_error IS NOT NULL) failures,
-    (SELECT count(*)::int FROM mca_email_conversations WHERE COALESCE(last_synced_at,created_at)::timestamptz<now()-interval '10 minutes') "staleSyncs"`
+    (SELECT count(*)::int FROM mca_email_conversations WHERE sync_error IS NOT NULL AND sync_error_at>=now()-interval '10 minutes') failures,
+    (SELECT count(*)::int FROM (
+      SELECT s.id FROM mca_email_senders s JOIN mca_email_conversations c ON c.sender_id=s.id
+      WHERE s.state='verified' AND s.purpose='merchant' AND s.provider IN ('google','microsoft') AND s.credential_cipher IS NOT NULL
+      GROUP BY s.id HAVING COALESCE(max(c.last_synced_at::timestamptz),min(c.created_at::timestamptz))<now()-interval '30 minutes'
+    ) stale_senders) "staleSyncs"`
   if (config.smsRuntimeEnabled) queries.sms = `SELECT
     (SELECT count(*)::int FROM sms_operations WHERE state='running' AND lease_until::timestamptz<now()) "expiredLeases",
     COALESCE((SELECT greatest(0,extract(epoch FROM now()-min(created_at::timestamptz)))::int FROM sms_operations WHERE state='queued'),0) "queueSeconds",
     ((SELECT count(*) FROM sms_operations WHERE state IN ('failed','needs_review') AND error_code IS DISTINCT FROM 'company_paused' AND updated_at::timestamptz>=now()-interval '10 minutes')+
      (SELECT count(*) FROM mca_sms_messages WHERE state IN ('failed','unknown') AND updated_at::timestamptz>=now()-interval '10 minutes'))::int failures`
+  // Count currently unhealthy connections, not accumulated retry attempts; success clears status.
   if (config.calendarRuntimeEnabled) queries.calendar = `SELECT
     COALESCE((SELECT greatest(0,extract(epoch FROM now()-min(next_sync_at::timestamptz)))::int FROM mca_calendar_connections WHERE status<>'reconnect' AND next_sync_at::timestamptz<=now()),0) "queueSeconds",
-    (SELECT COALESCE(sum(greatest(failures,CASE WHEN status='reconnect' THEN 1 ELSE 0 END)),0)::int FROM mca_calendar_connections) failures,
+    (SELECT count(*)::int FROM mca_calendar_connections WHERE status IN ('error','reconnect')) failures,
     (SELECT count(*)::int FROM mca_calendar_connections WHERE status<>'reconnect' AND COALESCE(last_sync_at,created_at)::timestamptz<now()-interval '10 minutes') "staleSyncs"`
   if (config.privateEmailRuntimeEnabled) queries.receipts = `SELECT
     (SELECT count(*)::int FROM intake_receipts WHERE state IN ('pending','failed') AND lease_token IS NOT NULL AND lease_expires_at::timestamptz<now()) "expiredLeases",

@@ -378,7 +378,7 @@ async function synchronize(
     await fenced(c.sender_id, token, async (executor) => {
       await executor
         .prepare(
-          "UPDATE mca_email_conversations SET last_synced_at=?,next_sync_at=?,sync_error=NULL WHERE id=?"
+          "UPDATE mca_email_conversations SET last_synced_at=?,next_sync_at=?,sync_error=NULL,sync_error_at=NULL WHERE id=?"
         )
         .run(nowIso(), later(60), c.id)
     })
@@ -388,9 +388,9 @@ async function synchronize(
     await fenced(c.sender_id, token, async (executor) => {
       await executor
         .prepare(
-          "UPDATE mca_email_conversations SET next_sync_at=?,sync_error=? WHERE id=?"
+          "UPDATE mca_email_conversations SET next_sync_at=?,sync_error=?,sync_error_at=? WHERE id=?"
         )
-        .run(later(Math.max(failure.delay, 60)), failure.message, c.id)
+        .run(later(Math.max(failure.delay, 60)), failure.message, nowIso(), c.id)
     })
   }
 }
