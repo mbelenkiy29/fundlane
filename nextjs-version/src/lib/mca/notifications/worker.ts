@@ -51,17 +51,21 @@ async function suppressClaim(row: NotificationRow, code: string, clock: string) 
             await receipt(db, updated, 'suppressed', 'live_policy_check', clock);
     });
 }
-export async function runScheduledNotifications(clock = nowIso(), limit = 25) {
+export async function runScheduledNotifications(clock = nowIso(), limit = 25, options?: {
+    deadlineMs?: number;
+}) {
     const result = { attempted: 0, accepted: 0, uncertain: 0, suppressed: 0 };
     if (process.env.MCA_NOTIFICATION_RUNTIME !== 'enabled')
         return result;
     if (!Number.isFinite(Date.parse(clock)) || !Number.isInteger(limit) || limit < 1 || limit > 100)
         throw new AppError(422, 'notification_clock_invalid', 'Use a valid clock and a limit between 1 and 100.');
+    const deadline = Math.min(options?.deadlineMs ?? Infinity, Date.now() + 230000);
+    if (deadline - Date.now() < 45000)
+        return result;
     await expireClaims(clock);
     if (!transportOverride)
-        await reconcileNotificationProviders(clock);
-    const deadline = Date.now() + 230000;
-    for (let i = 0; i < limit && Date.now() < deadline; i++) {
+        await reconcileNotificationProviders(clock, 5, { deadlineMs: deadline });
+    for (let i = 0; i < limit && deadline - Date.now() >= 45000; i++) {
         const row = await claim(clock);
         if (!row)
             break;
@@ -132,7 +136,9 @@ export async function reconcileNotification(actor: DealActor, id: string, raw: z
 type ReceiptLookup = (row: NotificationRow) => Promise<NotificationOutcome | undefined>;
 let receiptLookupOverride: ReceiptLookup | undefined;
 export function setNotificationReceiptLookupForTests(lookup?: ReceiptLookup) { receiptLookupOverride = lookup; }
-export async function reconcileNotificationProviders(clock = nowIso(), limit = 5) {
+export async function reconcileNotificationProviders(clock = nowIso(), limit = 5, options?: {
+    deadlineMs?: number;
+}) {
     if (process.env.MCA_NOTIFICATION_RUNTIME !== 'enabled')
         return { resolved: 0 };
     if (!Number.isFinite(Date.parse(clock)) || !Number.isInteger(limit) || limit < 1 || limit > 25)
@@ -140,6 +146,8 @@ export async function reconcileNotificationProviders(clock = nowIso(), limit = 5
     const rows = await getDatabase().prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE state IN ('uncertain','accepted') AND next_attempt_at<=? ORDER BY next_attempt_at,id LIMIT ?`).all(clock, limit);
     let resolved = 0;
     for (const row of rows) {
+        if ((options?.deadlineMs ?? Infinity) - Date.now() < 60000)
+            break;
         const nextCheck = new Date(Date.parse(clock) + 15 * 60000).toISOString();
         const claimed = await getDatabase().prepare(`UPDATE mca_notifications SET next_attempt_at=? WHERE workspace_id=? AND id=? AND state=? AND next_attempt_at=?`).run(nextCheck, row.workspace_id, row.id, row.state, row.next_attempt_at);
         if (!claimed.changes)

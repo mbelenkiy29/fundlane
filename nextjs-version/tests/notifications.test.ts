@@ -245,3 +245,11 @@ test('receipt polling rotates unresolved rows instead of starving later events',
     assert.deepEqual(new Set(seen), new Set([a.id, b.id]));
     setNotificationReceiptLookupForTests();
 });
+test('a comms tick with exhausted total runtime budget leaves notifications queued', async () => {
+    const row = await enqueueNotification(actor(), event('runtime-budget'));
+    let sends = 0;
+    setNotificationTransportForTests(async () => { sends++; return { state: 'accepted' }; });
+    await runScheduledNotifications(now, 25, { deadlineMs: Date.now() - 1 });
+    assert.equal(sends, 0);
+    assert.equal((await getNotification(actor(), row.id)).state, 'queued');
+});
