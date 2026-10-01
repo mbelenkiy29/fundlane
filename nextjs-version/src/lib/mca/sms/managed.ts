@@ -1,6 +1,6 @@
 import "server-only"
 import { createHash } from "node:crypto"
-import { getDatabase, nowIso, type DbExecutor } from "../db"
+import { getDatabase, nowIso, withImmediateTransaction, type DbExecutor } from "../db"
 import { AppError } from "../errors"
 import {
   company,
@@ -148,12 +148,11 @@ export async function suppress(
   recipient: string,
   state: "opted_out" | "opted_in"
 ) {
-  await getDatabase()
-    .prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
-    .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
-  await getDatabase()
-    .prepare(
+  await withImmediateTransaction(async (db) => {
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+      .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
+    await db.prepare(
       "INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,?,?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state=EXCLUDED.state,updated_at=EXCLUDED.updated_at"
-    )
-    .run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+    ).run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+  })
 }
