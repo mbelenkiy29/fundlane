@@ -13,7 +13,7 @@ import { findLatestAnalysisRun } from "../underwriting/analysis-repository"
 import { confirmAnalysisReview } from "../underwriting/review-mail"
 import { findIntake, getIntegration } from "./repository"
 import { intakeProgress } from "./processing"
-import { getDealScores } from "../underwriting/scoring"
+import { autoSelectableFunderIds, getDealScores } from "../underwriting/scoring"
 import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../underwriting/send-gates"
 import type { ApprovedSubmissionPackage, QueuedJobSummary } from "../submissions/contracts"
 import { prepareApprovedSubmissionEmail } from "../submissions/email-templates"
@@ -61,8 +61,9 @@ async function currentSnapshot(actor: DealActor, intakeId: string, funderIds: st
   const scores = await getDealScores(actor, deal.id)
   const run = await findLatestAnalysisRun(actor.workspaceId, deal.id)
   if (!scores.snapshot || scores.stale || !run || run.snapshotId !== scores.snapshot.id) refreshRequired()
+  const selectable = new Set(autoSelectableFunderIds(scores.snapshot.scores))
   for (const id of funderIds) {
-    if (!scores.snapshot.scores.some((score) => score.funderId === id && score.eligible && ["A", "B", "C"].includes(score.grade))) {
+    if (!selectable.has(id)) {
       throw new AppError(422, "funder_not_eligible", "Select only eligible lenders from the current analysis.")
     }
   }

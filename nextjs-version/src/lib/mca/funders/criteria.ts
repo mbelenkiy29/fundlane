@@ -1,5 +1,6 @@
 import "server-only"
 
+import { isCalendarDate } from "./criteria-readiness"
 import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
 import { canManageWorkspace } from "../policy"
@@ -60,6 +61,8 @@ export interface EligibilityRuleInput {
   unit: string
   value?: string | number | string[] | boolean | null
   sourceText?: string
+  sourceAsOf?: string
+  validUntil?: string
   unspecified?: boolean
 }
 
@@ -202,6 +205,12 @@ function normalizeRule(input: EligibilityRuleInput, index: number, funderId: str
   const unspecified = input.unspecified === true
   const sourceText = text(input.sourceText) || undefined
   if (sourceText && sourceText.length > 500) invalid(`${prefix}.sourceText`, "Use at most 500 characters.")
+  const sourceAsOf = text(input.sourceAsOf) || undefined
+  const validUntil = text(input.validUntil) || undefined
+  for (const [name, date] of [["sourceAsOf", sourceAsOf], ["validUntil", validUntil]] as const) {
+    if (date && !isCalendarDate(date)) invalid(`${prefix}.${name}`, "Enter a valid date as YYYY-MM-DD.")
+  }
+  if (sourceAsOf && validUntil && validUntil < sourceAsOf) invalid(`${prefix}.validUntil`, "Valid until cannot precede the source as-of date.")
   return {
     id: text(input.id) || newId(),
     funderId,
@@ -210,6 +219,8 @@ function normalizeRule(input: EligibilityRuleInput, index: number, funderId: str
     unit: unspecified && !unit ? "unspecified" : unit as CriteriaUnit,
     value: normalizeValue(input, index, operator as CriteriaOperator, unspecified),
     sourceText,
+    sourceAsOf,
+    validUntil,
     unspecified,
   }
 }
@@ -222,6 +233,8 @@ function fingerprint(rules: EligibilityRule[]): string {
     value: rule.value,
     unspecified: rule.unspecified,
     sourceText: rule.sourceText ?? "",
+    sourceAsOf: rule.sourceAsOf ?? "",
+    validUntil: rule.validUntil ?? "",
   })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))
 }
 

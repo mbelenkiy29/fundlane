@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch"
 import { uploadMultipart } from "@/components/mca/documents/upload"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { CRITERIA_OPERATORS, CRITERIA_UNITS, type CriteriaOperator, type CriteriaUnit, type EligibilityRule } from "@/lib/mca/funders/contracts"
+import { sourceDraft, sourcePayload } from "@/lib/mca/funders/criteria-source-draft"
 import type { SessionResponse } from "@/lib/mca/types"
 
 type Evidence = { confidence: number; page?: number; text?: string; unknown?: boolean }
@@ -52,6 +53,8 @@ type RuleDraft = {
   unit: CriteriaUnit
   value: string
   sourceText: string
+  sourceAsOf: string
+  validUntil: string
   unspecified: boolean
 }
 
@@ -70,7 +73,7 @@ function fromRule(rule: EligibilityRule): RuleDraft {
     operator: rule.operator,
     unit: rule.unit,
     value: formatValue(rule.value),
-    sourceText: rule.sourceText ?? "",
+    ...sourceDraft(rule),
     unspecified: rule.unspecified,
   }
 }
@@ -86,7 +89,7 @@ function payloadValue(draft: RuleDraft): EligibilityRule["value"] {
 }
 
 function emptyRule(): RuleDraft {
-  return { key: crypto.randomUUID(), field: "revenue", operator: "min", unit: "usd_monthly", value: "", sourceText: "", unspecified: false }
+  return { key: crypto.randomUUID(), field: "revenue", operator: "min", unit: "usd_monthly", value: "", sourceText: "", sourceAsOf: "", validUntil: "", unspecified: false }
 }
 
 function importStatus(proposal: Proposal): string {
@@ -203,7 +206,7 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
             operator: rule.operator,
             unit: rule.unit,
             value: payloadValue(rule),
-            sourceText: rule.sourceText || undefined,
+            ...sourcePayload(rule),
             unspecified: rule.unspecified,
           })),
         })
@@ -316,6 +319,12 @@ export function CriteriaScanPanel({ funderId }: { funderId: string }) {
                 {canManage && selected.status === "proposed" && <Button type="button" variant="ghost" size="icon" aria-label={`Remove proposed rule ${index + 1}`} onClick={() => setRuleDrafts((current) => current.filter((item) => item.key !== rule.key))}><Trash2 /></Button>}
               </div>
               <Input aria-label={`Proposed rule ${index + 1} source`} value={rule.sourceText} disabled={!canManage || selected.status !== "proposed" || busy} placeholder="Source wording" onChange={(event) => setRuleDrafts((current) => current.map((item) => item.key === rule.key ? { ...item, sourceText: event.target.value } : item))} />
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(["sourceAsOf", "validUntil"] as const).map((field) => <label key={field} className="space-y-1 text-sm">
+                  <span>{field === "sourceAsOf" ? "Source as of" : "Valid until (optional)"}</span>
+                  <Input type="date" aria-label={`Proposed rule ${index + 1} ${field}`} value={rule[field]} disabled={!canManage || selected.status !== "proposed" || busy} onChange={(event) => setRuleDrafts((current) => current.map((item) => item.key === rule.key ? { ...item, [field]: event.target.value } : item))} />
+                </label>)}
+              </div>
               <label className="flex items-center gap-2 text-sm">
                 <Switch checked={rule.unspecified} disabled={!canManage || selected.status !== "proposed" || busy} onCheckedChange={(unspecified) => setRuleDrafts((current) => current.map((item) => item.key === rule.key ? { ...item, unspecified, value: unspecified ? "" : item.value } : item))} />
                 Unspecified

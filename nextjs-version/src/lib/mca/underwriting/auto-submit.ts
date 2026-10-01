@@ -12,6 +12,7 @@ import { resolveAdapterEnvironment, resolveAdapterSecrets } from "../submissions
 import { queueSubmissions } from "../submissions/queue"
 import { findJobByConfirmation } from "../submissions/repository"
 import { getCompleteness } from "./completeness"
+import type { FunderScore } from "./contracts"
 import { scoreDeal } from "./scoring"
 import { evaluateUnderwritingSendGates } from "./send-gates"
 
@@ -56,9 +57,10 @@ export async function setAutoSubmitSettings(actor: DealActor, value: unknown): P
   return next
 }
 
-export function autoSubmitDecision(input: { mode: AutoSubmitMode; score: number; eligible: boolean; allowedFunder: boolean; adapterReady: boolean; complete: boolean; capacity: boolean; minScore: number }): { outcome: "scored" | "skipped" | "submit"; reason: string } {
+export function autoSubmitDecision(input: { mode: AutoSubmitMode; score: number; eligible: boolean; fitStatus?: FunderScore["fitStatus"]; allowedFunder: boolean; adapterReady: boolean; complete: boolean; capacity: boolean; minScore: number }): { outcome: "scored" | "skipped" | "submit"; reason: string } {
   if (input.mode === "score_only") return { outcome: "scored", reason: "score_only" }
   if (!input.complete) return { outcome: "skipped", reason: "deal_incomplete" }
+  if (input.fitStatus !== "matched") return { outcome: "skipped", reason: "match_needs_review" }
   if (!input.eligible) return { outcome: "skipped", reason: "match_ineligible" }
   if (input.score < input.minScore) return { outcome: "skipped", reason: "below_min_score" }
   if (!input.allowedFunder) return { outcome: "skipped", reason: "funder_not_selected" }
@@ -121,7 +123,7 @@ export async function processAutoSubmit(actor: DealActor, dealId: string, expect
       const capacity = Boolean(existing?.outcome === "pending" || (reserved?.n ?? 0) < settings.maxFundersPerDeal)
       const decision = priorSubmission
         ? { outcome: "skipped" as const, reason: "previous_submission" }
-        : autoSubmitDecision({ mode: settings.mode, score: score.score, eligible: score.eligible, allowedFunder: settings.eligibleFunderIds.includes(score.funderId), adapterReady, complete, capacity, minScore: settings.minMatchScore })
+        : autoSubmitDecision({ mode: settings.mode, score: score.score, eligible: score.eligible, fitStatus: score.fitStatus, allowedFunder: settings.eligibleFunderIds.includes(score.funderId), adapterReady, complete, capacity, minScore: settings.minMatchScore })
       if (existing?.outcome === "pending" && decision.outcome !== "submit" && !priorSubmission) return null
       const id = existing?.id ?? newId()
       await db.prepare(`INSERT INTO mca_auto_submit_decisions (id,workspace_id,deal_id,deal_version,completeness_version,funder_id,score,outcome,reason,created_at)

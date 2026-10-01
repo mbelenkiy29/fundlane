@@ -14,6 +14,7 @@ import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
+import { publishFunderCriteria } from "../src/lib/mca/funders/criteria"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { setEmailDeliveryFetchForTests, upsertSubmissionEmailTemplate } from "../src/lib/mca/submissions/email-templates"
@@ -21,6 +22,7 @@ import { processJobDelivery, reconcileUncertainDelivery } from "../src/lib/mca/s
 import { listJobsForDeal, persistNewDestination, insertAttempt, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { checkCompleteness } from "../src/lib/mca/underwriting/completeness"
 import { runAnalysis } from "../src/lib/mca/underwriting/analysis"
+import { getDealScores } from "../src/lib/mca/underwriting/scoring"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const actor: DealActor = { workspaceId: newId(), userId: "t2-application-broker", membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "user", correlationId: newId() }
@@ -48,10 +50,11 @@ before(async () => {
   await testSend(actor,sender.id,{to:"ops@example.test"})
   portalFunderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Portal Capital",routes:[{kind:"manual_portal",label:"Portal",destination:"https://portal.example.test/submit",documentExceptions:[],active:true}]})).funder.id
   funderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Review Capital",routes:[{kind:"email",label:"Email",destination:"lender@example.test",documentExceptions:[],active:true}]})).funder.id
+  for (const id of [portalFunderId, funderId]) await publishFunderCriteria(actor, id, [{ field: "requested_amount", operator: "max", unit: "usd", value: 100000, sourceText: "Synthetic approval-flow fixture; not lender policy", sourceAsOf: "2026-01-01", unspecified: false }])
 })
 after(async()=>{setDocumentStorageForTests();setDocumentScannerForTests();setEmailDeliveryFetchForTests();setSenderDeliveryFetchForTests();await closeDatabaseForTests();await database?.close()})
 async function readyApplication() {
-  const deal=(await createDeal(actor,{idempotencyKey:newId(),legalName:"Bakery",monthlyRevenue:100000,requestedAmount:25000})).deal
+  const deal=(await createDeal(actor,{idempotencyKey:newId(),legalName:"Bakery",monthlyRevenue:100000,requestedAmount:25000,ficoScore:720})).deal
   const intake=(await reserveIntake(actor.workspaceId,{schemaVersion:1,provider:"custom",eventId:newId(),application:{legalName:"Bakery"}},newId(),integrationId)).record
   await updateIntake({workspaceId:actor.workspaceId,intakeId:intake.intakeId,state:"created",dealId:deal.id})
   const jobsMode = process.env.MCA_BACKGROUND_JOBS
@@ -65,9 +68,14 @@ async function readyApplication() {
   await getDatabase().prepare("UPDATE mca_completeness_results SET ready=1 WHERE workspace_id=? AND deal_id=?").run(actor.workspaceId,deal.id)
   const timestamp = new Date().toISOString()
   await getDatabase().prepare("INSERT INTO intake_processing(intake_id,workspace_id,progress_json,checked_at,updated_at) VALUES (?,?,?,?,?)").run(intake.intakeId,actor.workspaceId,JSON.stringify({state:"ready_for_review",stages:{}}),timestamp,timestamp)
+  // Explicit synthetic financial facts make this approval-flow fixture matchable without promoting unknown inputs.
+  const metric=(value:number)=>JSON.stringify({value,unknown:false,confidence:1,text:"Synthetic approval fixture"})
+  await getDatabase().prepare(`INSERT INTO mca_underwriting_aggregates
+    (workspace_id,deal_id,version,monthly_revenue,average_daily_balance,nsf_count,negative_days,deposit_count,worst_month_nsf,position_count,stale,source_fingerprint,computed_at)
+    VALUES (?,?,1,?,?,?,?,?,?,0,0,'synthetic-approval-fixture',?)`).run(actor.workspaceId,deal.id,metric(100000),metric(8000),metric(0),metric(0),metric(12),metric(0),timestamp)
   const scores=await runAnalysis(actor,deal.id,{mode:"review_first",reviewNotificationChannel:"select_only"})
   assert.equal(scores.snapshot.scores.find(s=>s.funderId===funderId)?.eligible,true)
-  await getDatabase().prepare("UPDATE mca_score_snapshots SET scores_json=? WHERE id=?").run(JSON.stringify(scores.snapshot.scores.map(score=>({...score,grade:"A",score:90}))),scores.snapshot.id)
+  assert.equal(scores.snapshot.scores.find(s=>s.funderId===funderId)?.fitStatus,"matched")
   await getDatabase().prepare("UPDATE mca_analysis_runs SET state='review_pending' WHERE id=?").run(scores.run.id)
   return {intakeId:intake.intakeId,dealId:deal.id}
 }
@@ -123,6 +131,19 @@ test("invalid selection, other workspace, expired approval and stale analysis fa
   await assert.rejects(()=>sendApplicationSubmission(actor,item.intakeId,preview.id),{code:"submission_preview_stale"})
   await getDatabase().prepare("UPDATE deals SET version=version+1 WHERE id=?").run(item.dealId)
   await assert.rejects(()=>prepareApplicationSubmission(actor,item.intakeId,[funderId]),{code:"submission_preview_stale"})
+  assert.equal((await listJobsForDeal(actor.workspaceId,item.dealId)).length,0)
+})
+
+test("missing criteria provenance blocks an eligible A-C fit at preview",async()=>{
+  const reviewFunderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Unverified Capital",routes:[]})).funder.id
+  await publishFunderCriteria(actor,reviewFunderId,[{field:"requested_amount",operator:"max",unit:"usd",value:100000,sourceText:"Synthetic unverified policy",unspecified:false}])
+  const item=await readyApplication()
+  const scores=await getDealScores(actor,item.dealId)
+  const fit=scores.snapshot?.scores.find(score=>score.funderId===reviewFunderId)
+  assert.equal(fit?.eligible,true)
+  assert.ok(fit && ["A","B","C"].includes(fit.grade))
+  assert.equal(fit.fitStatus,"needs_review")
+  await assert.rejects(()=>prepareApplicationSubmission(actor,item.intakeId,[reviewFunderId]),{code:"funder_not_eligible"})
   assert.equal((await listJobsForDeal(actor.workspaceId,item.dealId)).length,0)
 })
 

@@ -699,3 +699,18 @@ test("guideline PDF upload without a deal can be edited before matching uses the
     (error: { status?: number; code?: string }) => error.status === 422 && error.code === "document_content_mismatch",
   )
 })
+
+test("reviewing a scan preserves dated unrelated criteria and rollback source facts", async () => {
+  const { sourceDraft, sourcePayload } = await import("../src/lib/mca/funders/criteria-source-draft")
+  const funder=(await createFunder(actor(),{idempotencyKey:"dated-scan",legalName:"Dated Scan Fixture"})).funder
+  const deal=(await createDeal(actor(),{idempotencyKey:"dated-scan-deal",legalName:"Dated Scan Merchant"})).deal
+  await publishFunderCriteria(actor(),funder.id,[{field:"fico",operator:"min",unit:"fico",value:620,sourceText:"Synthetic source",sourceAsOf:"2026-01-01",validUntil:"2026-09-01"}])
+  extraction({filename:"dated-scan.pdf",rules:[rule({field:"revenue",operator:"min",unit:"usd_monthly",value:10000,unspecified:false,sourceText:"Synthetic new revenue rule"})]})
+  const document=await uploadSheet(actor(),deal.id,"dated-scan.pdf","dated-scan-doc")
+  const proposal=await scanFunderCriteria(actor(),{funderId:funder.id,documentId:document.id})
+  const accepted=await acceptCriteriaScan(actor(),proposal.id,proposal.rules.map((rule)=>({...rule,...sourcePayload(sourceDraft(rule))})))
+  assert.equal(findRule(accepted.criteria.rules,"fico")?.sourceAsOf,"2026-01-01")
+  assert.equal(findRule(accepted.criteria.rules,"fico")?.validUntil,"2026-09-01")
+  const rolled=await rollbackCriteriaScan(actor(),proposal.id)
+  assert.equal(findRule(rolled.criteria.rules,"fico")?.validUntil,"2026-09-01")
+})
