@@ -45,3 +45,7 @@ supabase/.temp/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# T12 synthetic browser evidence and task scratch
+/output/playwright/t12/
+/.playwright-cli/

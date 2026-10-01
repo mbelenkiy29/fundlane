@@ -389,3 +389,200 @@ test("MIC-104 UI states cover loading empty validation success and failure", () 
   assert.match(source, /\{REP_FUNNEL_COPY\.retry\}/)
   assert.match(source, /Restricted/)
 })
+
+test("T7 performance counts unique stage deals and reconciles funding and commissions", async () => {
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const report = await getPerformanceReport(adminActor, januaryFilters(), "2026-02-01T17:00:00.000Z")
+  assert.equal(report.stages.submitted.dealCount, 4)
+  assert.equal(report.stages.submitted.deals.filter((item) => item.dealId === ids.harbor).length, 1)
+  assert.equal(report.finance.fundedVolume.visible, true)
+  if (report.finance.fundedVolume.visible) {
+    assert.equal(report.finance.fundedVolume.knownCents, 4_000_000)
+    assert.equal(report.finance.fundedVolume.records.length, 1)
+  }
+  if (report.finance.recordedFundingCommission.visible) assert.equal(report.finance.recordedFundingCommission.knownCents, 320_000)
+  if (report.finance.collectedCommission.visible) assert.equal(report.finance.collectedCommission.knownCents, 320_000)
+  assert.equal(report.timezone, "America/New_York")
+  assert.equal(report.pipeline.deals.some((item) => item.dealId === ids.otherDeal), false)
+  await assert.rejects(getPerformanceReport(adminActor, { ...januaryFilters(), membershipIds: [ids.otherMember] }), /not in this workspace/)
+})
+
+test("T7 finance restriction removes values and record identities from report and CSV", async () => {
+  const { getPerformanceReport, performanceCsv } = await import("../src/lib/mca/reports/performance")
+  const hidden = JSON.stringify({ createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: true, viewCompanyFinancials: false })
+  await getDatabase().prepare("UPDATE workspaces SET action_visibility=? WHERE id=?").run(hidden, ids.workspace)
+  try {
+    const report = await getPerformanceReport(adminActor, januaryFilters())
+    for (const metric of Object.values(report.finance)) assert.deepEqual(metric, { visible: false })
+    for (const stage of Object.values(report.stages)) assert.equal(stage.deals.every((item) => item.amountCents === null), true)
+    const csv = performanceCsv(report)
+    assert.ok(csv.includes("Restricted"))
+    assert.ok(!csv.includes("event-harbor"))
+    assert.ok(!csv.includes("320000"))
+  } finally {
+    await getDatabase().prepare("UPDATE workspaces SET action_visibility=? WHERE id=?").run(actions, ids.workspace)
+  }
+})
+
+test("T7 API applies admin role/filter gates and CSV snapshot parity", async () => {
+  const { GET: performanceGet } = await import("../src/app/api/mca/reports/performance/route")
+  const url = "http://localhost/api/mca/reports/performance?basis=event&from=2026-01-01&to=2026-01-31"
+  assert.equal((await performanceGet(new Request(url))).status, 401)
+  for (const token of ["funnel-rep-token", "funnel-manager-token"]) {
+    assert.equal((await performanceGet(new Request(url, { headers: { cookie: `mca_session=${token}` } }))).status, 403)
+  }
+  const headers = { cookie: "mca_session=funnel-admin-token" }
+  for (const query of ["basis=weekly", "basis=event&from=2026-02-30", `basis=event&membershipIds=${ids.otherMember}`, `basis=event&funderIds=foreign-funder`, "basis=event&format=xlsx"]) {
+    assert.equal((await performanceGet(new Request(`http://localhost/api/mca/reports/performance?${query}`, { headers }))).status, 422)
+  }
+  const response = await performanceGet(new Request(url, { headers }))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get("cache-control"), "no-store")
+  const payload = await response.json()
+  const { performanceCsv } = await import("../src/lib/mca/reports/performance")
+  assert.equal(payload.csvSnapshot, performanceCsv(payload.report))
+  assert.ok(payload.csvSnapshot.includes("finance,fundedVolume,,,,1,4000000,0,Complete"))
+  assert.ok(payload.csvSnapshot.includes("stage,submitted,,,,4"))
+  const csvResponse = await performanceGet(new Request(`${url}&format=csv`, { headers }))
+  assert.equal(csvResponse.status, 200)
+  assert.ok(csvResponse.headers.get("content-type")?.includes("text/csv"))
+})
+
+test("T7 later funding dates reconcile independently and expected payments do not masquerade as collections", async () => {
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  await db.prepare(`INSERT INTO mca_funding_events (id,workspace_id,deal_id,offer_id,offer_revision_id,advance_id,idempotency_key,funded_at,amount_cents,commission_cents,source,state,created_at)
+    VALUES ('event-t7-later',?,?,'offer-harbor','rev-harbor','adv-t7-later','fund-t7-later','2026-02-01T04:00:00.000Z',100000,5000,'historical','committed',?)`).run(ids.workspace, ids.harbor, now)
+  await db.prepare(`INSERT INTO mca_accounting_payments (id,workspace_id,advance_id,type,origin,expected_amount_cents,received_amount_cents,status,idempotency_key,created_at,updated_at)
+    VALUES ('pay-t7-expected',?,'adv-harbor','commission','manual',7000,0,'expected','pay-t7-expected',?,?)`).run(ids.workspace, now, now)
+  try {
+    const filters = parseReportFilters(new URLSearchParams("basis=event&from=2026-01-31&to=2026-01-31"))
+    const report = await getPerformanceReport(adminActor, filters)
+    assert.equal(report.stages.funded.dealCount, 1)
+    if (report.finance.fundedVolume.visible) assert.equal(report.finance.fundedVolume.knownCents, 100_000)
+    const cohort = await getPerformanceReport(adminActor, { ...januaryFilters(), basis: "cohort" })
+    if (cohort.finance.collectedCommission.visible) assert.equal(cohort.finance.collectedCommission.records.some((row) => row.recordId === "pay-t7-expected"), false)
+  } finally {
+    await db.prepare("DELETE FROM mca_funding_events WHERE id='event-t7-later'").run()
+    await db.prepare("DELETE FROM mca_accounting_payments WHERE id='pay-t7-expected'").run()
+  }
+})
+
+test("T7 zero-cent reconciliation with a receipt date is not collected company commission", async () => {
+  const { reconcilePayment } = await import("../src/lib/mca/accounting/service")
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  const paymentId = "pay-t7-zero-reconciled"
+  const receivedAt = "2026-01-28T15:00:00.000Z"
+  await db.prepare(`INSERT INTO mca_accounting_payments (id,workspace_id,advance_id,type,origin,expected_amount_cents,received_amount_cents,status,idempotency_key,created_at,updated_at)
+    VALUES (?,?,'adv-harbor','commission','manual',7000,0,'expected',?,?,?)`).run(paymentId, ids.workspace, paymentId, now, now)
+  try {
+    const reconciled = await reconcilePayment(adminActor, paymentId, { receivedAmountCents: 0, receivedAt })
+    assert.equal(reconciled.status, "expected")
+    assert.equal(reconciled.receivedAt, receivedAt)
+    const report = await getPerformanceReport(adminActor, januaryFilters())
+    assert.equal(report.finance.collectedCommission.visible, true)
+    if (report.finance.collectedCommission.visible) {
+      assert.equal(report.finance.collectedCommission.count, 1)
+      assert.equal(report.finance.collectedCommission.knownCents, 320_000)
+      assert.equal(report.finance.collectedCommission.records.some((row) => row.recordId === paymentId), false)
+    }
+  } finally {
+    await db.prepare("DELETE FROM mca_accounting_payments WHERE workspace_id=? AND id=?").run(ids.workspace, paymentId)
+  }
+})
+
+test("T7 renewals deduplicate source advances, fees/voids are excluded and broker payouts use recipients", async () => {
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  await db.prepare(`INSERT INTO mca_renewal_actions (id,workspace_id,source_advance_id,renewed_deal_id,policy_version,eligible_at,state,message_subject,message_body,idempotency_key,created_at,updated_at)
+    VALUES ('t7-renew-1',?,'adv-harbor',?,1,'2026-01-28T15:00:00.000Z','converted','fixture','fixture','t7-renew-1',?,?),
+    ('t7-renew-2',?,'adv-harbor',?,1,'2026-01-28T15:00:00.000Z','converted','fixture','fixture','t7-renew-2',?,?)`).run(ids.workspace, ids.beacon, now, now, ids.workspace, ids.otherDeal, now, now)
+  await db.prepare(`INSERT INTO mca_accounting_payments (id,workspace_id,advance_id,type,origin,expected_amount_cents,received_amount_cents,received_at,status,idempotency_key,created_at,updated_at)
+    VALUES ('t7-fee',?,'adv-harbor','fee','manual',9000,9000,'2026-01-28T15:00:00.000Z','received','t7-fee',?,?),
+    ('t7-void',?,'adv-harbor','commission','manual',9999,9999,'2026-01-28T15:00:00.000Z','void','t7-void',?,?)`).run(ids.workspace, now, now, ids.workspace, now, now)
+  try {
+    const report = await getPerformanceReport(adminActor, januaryFilters())
+    assert.equal(report.renewals.eligibleAdvanceCount, 1)
+    assert.equal(report.renewals.convertedAdvanceCount, 1)
+    assert.equal(report.renewals.records.find((row) => row.renewedDealId === ids.otherDeal), undefined)
+    if (report.finance.collectedCommission.visible) assert.equal(report.finance.collectedCommission.knownCents, 320_000)
+    if (report.finance.reversedFunding.visible) assert.equal(report.finance.reversedFunding.knownCents, 900_000)
+    const broker = await getPerformanceReport(adminActor, { ...januaryFilters(), membershipIds: [ids.ada] })
+    if (broker.finance.paidBrokerCommission.visible) assert.equal(broker.finance.paidBrokerCommission.knownCents, 192_000)
+  } finally {
+    await db.prepare("DELETE FROM mca_renewal_actions WHERE id IN ('t7-renew-1','t7-renew-2')").run()
+    await db.prepare("DELETE FROM mca_accounting_payments WHERE id IN ('t7-fee','t7-void')").run()
+  }
+})
+
+test("T7 selected offer estimate preserves unknown terms, excludes expiry and reconciles recorded cents", async () => {
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  await db.prepare(`INSERT INTO mca_offer_selections (id,workspace_id,deal_id,offer_id,offer_revision_id,active,selected_at)
+    VALUES ('t7-selected-unknown',?,?,'offer-unknown','rev-unknown',1,'2026-01-21T15:00:00.000Z')`).run(ids.workspace, ids.unknown)
+  try {
+    const unknown = await getPerformanceReport(adminActor, januaryFilters(), "2026-02-01T00:00:00.000Z")
+    if (unknown.finance.estimatedCommission.visible) {
+      assert.equal(unknown.finance.estimatedCommission.count, 1)
+      assert.equal(unknown.finance.estimatedCommission.unknownCount, 1)
+      assert.equal(unknown.finance.estimatedCommission.knownCents, 0)
+    }
+    await db.prepare("UPDATE mca_offer_revisions SET commission_cents=24000 WHERE id='rev-unknown'").run()
+    const known = await getPerformanceReport(adminActor, januaryFilters(), "2026-02-01T00:00:00.000Z")
+    if (known.finance.estimatedCommission.visible) assert.equal(known.finance.estimatedCommission.knownCents, 24000)
+    const expired = await getPerformanceReport(adminActor, januaryFilters(), "2026-02-05T00:00:00.000Z")
+    if (expired.finance.estimatedCommission.visible) assert.equal(expired.finance.estimatedCommission.count, 0)
+  } finally {
+    await db.prepare("DELETE FROM mca_offer_selections WHERE id='t7-selected-unknown'").run()
+    await db.prepare("UPDATE mca_offer_revisions SET commission_cents=NULL WHERE id='rev-unknown'").run()
+  }
+})
+
+test("T7 API restricted CSV cannot reveal commissions and report disablement is enforced", async () => {
+  const { GET: performanceGet } = await import("../src/app/api/mca/reports/performance/route")
+  const headers = { cookie: "mca_session=funnel-admin-token" }
+  const url = "http://localhost/api/mca/reports/performance?basis=cohort&from=2026-01-01&to=2026-01-31"
+  await getDatabase().prepare("UPDATE workspaces SET action_visibility=? WHERE id=?").run(JSON.stringify({ createDeal: true, exportDeals: true, inviteUsers: true, manageApiKeys: true, viewPaymentTable: false, viewCompanyFinancials: true }), ids.workspace)
+  try {
+    const response = await performanceGet(new Request(url, { headers }))
+    const payload = await response.json()
+    assert.equal(response.status, 200)
+    assert.equal(payload.report.finance.paidBrokerCommission.visible, false)
+    assert.ok(!JSON.stringify(payload).includes("320000"))
+    assert.ok(!JSON.stringify(payload).includes("pay-harbor"))
+    const csv = await performanceGet(new Request(`${url}&format=csv`, { headers }))
+    assert.ok(!(await csv.text()).includes("event-harbor"))
+    await getDatabase().prepare("UPDATE workspaces SET feature_flags=? WHERE id=?").run(JSON.stringify({ reports: false, payments: true, integrations: true }), ids.workspace)
+    assert.equal((await performanceGet(new Request(url, { headers }))).status, 403)
+  } finally {
+    await getDatabase().prepare("UPDATE workspaces SET action_visibility=?,feature_flags=? WHERE id=?").run(actions, flags, ids.workspace)
+  }
+})
+
+test("T7 estimate ambiguity cannot be hidden by date or funder filters", async () => {
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  await db.prepare(`INSERT INTO mca_offers (id,workspace_id,deal_id,funder_id,funder_name,source,current_revision_id,created_at,updated_at)
+    VALUES ('t7-other-offer',?,?,'funder-1','Funder 1','manual','t7-other-revision',?,?)`).run(ids.workspace, ids.unknown, now, now)
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,commission_cents,effective_at,expires_at,created_at)
+    VALUES ('t7-other-revision',?,'t7-other-offer',1,'active',100000,30000,'2026-02-03T15:00:00.000Z','2026-03-01T15:00:00.000Z',?)`).run(ids.workspace, now)
+  await db.prepare(`INSERT INTO mca_offer_selections (id,workspace_id,deal_id,offer_id,offer_revision_id,active,selected_at)
+    VALUES ('t7-selection-one',?,?,'offer-unknown','rev-unknown',1,?),('t7-selection-two',?,?,'t7-other-offer','t7-other-revision',1,?)`).run(ids.workspace, ids.unknown, now, ids.workspace, ids.unknown, now)
+  await db.prepare("UPDATE mca_offer_revisions SET commission_cents=24000 WHERE id='rev-unknown'").run()
+  try {
+    for (const filters of [januaryFilters(), { ...januaryFilters(), funderIds: ["funder-2"] }]) {
+      const report = await getPerformanceReport(adminActor, filters, "2026-02-01T00:00:00.000Z")
+      assert.equal(report.finance.estimatedCommission.visible, true)
+      if (report.finance.estimatedCommission.visible) {
+        assert.equal(report.finance.estimatedCommission.unknownCount, 1)
+        assert.equal(report.finance.estimatedCommission.knownCents, 0)
+      }
+    }
+  } finally {
+    await db.prepare("DELETE FROM mca_offer_selections WHERE id IN ('t7-selection-one','t7-selection-two')").run()
+    await db.prepare("DELETE FROM mca_offer_revisions WHERE id='t7-other-revision'").run()
+    await db.prepare("DELETE FROM mca_offers WHERE id='t7-other-offer'").run()
+    await db.prepare("UPDATE mca_offer_revisions SET commission_cents=NULL WHERE id='rev-unknown'").run()
+  }
+})

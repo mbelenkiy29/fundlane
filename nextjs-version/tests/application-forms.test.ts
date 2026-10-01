@@ -25,7 +25,7 @@ const actor = (name: string, role: DealActor["role"] = "rep"): DealActor => ({
   workspaceId: workspace, userId: `user-${name}`, membershipId: `member-${name}`, role, source: "user",
   managedMembershipIds: [], activeMembershipIds: ["member-admin", "member-ada"], correlationId: "forms-test", sessionId: `session-${name}`,
 })
-const admin = actor("admin", "admin"), ada = actor("ada")
+const admin = actor("admin", "admin"), ada = actor("ada"), bob = actor("bob")
 const pdf = Uint8Array.from(Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"))
 const answers = {
   legalName: "Harbor Bakery LLC",
@@ -56,7 +56,7 @@ before(async () => {
     JSON.stringify({ dashboard: true, deals: true, users: true, reports: true, payments: true, workspace: true, integrations: true }),
     JSON.stringify(actions), at, at,
   )
-  for (const a of [admin, ada]) {
+  for (const a of [admin, ada, bob]) {
     await db.prepare("INSERT INTO users(id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(a.userId, `${a.userId}@example.test`, a.userId, a.userId, at, at)
     await db.prepare("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,?,'active',?,?)").run(a.membershipId, a.workspaceId, a.userId, a.role, at, at)
     await db.prepare("INSERT INTO sessions(id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at) VALUES (?,?,?,?,?,?,?)").run(a.sessionId, a.userId, a.membershipId, hashOpaqueToken(a.membershipId!), new Date(Date.now() + 86400000).toISOString(), at, at)
@@ -148,4 +148,71 @@ test("public session routes accept the invitation token without a login", async 
   assert.equal(patched.status, 200)
   const rejected = await submitRoute(request("/api/applications/submit", null, "POST", { token: invitation.token }))
   assert.equal(rejected.status, 422)
+})
+
+test("revoked, rebound and disabled invitations reject public drafts and uploads", async () => {
+  for (const condition of ["revoked", "rebound", "disabled"] as const) {
+    const invitation = await invite()
+    const db = getDatabase()
+    if (condition === "revoked") await db.prepare("UPDATE mca_application_invitations SET revoked_at=? WHERE id=?").run(nowIso(), invitation.id)
+    if (condition === "rebound") await db.prepare("UPDATE mca_application_invitations SET form_id='wrong-form' WHERE id=?").run(invitation.id)
+    if (condition === "disabled") await db.prepare("UPDATE intake_integrations SET enabled=0 WHERE id=?").run(invitation.form.id)
+    const session = await sessionGet(request(`/api/applications/session?token=${invitation.token}`, null))
+    assert.equal(session.status, 410, condition)
+    await assert.rejects(saveApplicationDraft(invitation.token, "legalName", answers), (error: { code?: string }) => error.code === "invitation_inactive")
+    await assert.rejects(stageInvitationFile({ token: invitation.token, idempotencyKey: randomUUID(), category: "statement", filename: "synthetic.pdf", mimeType: "application/pdf", bytes: pdf }), (error: { code?: string }) => error.code === "invitation_inactive")
+    if (condition === "disabled") await db.prepare("UPDATE intake_integrations SET enabled=1 WHERE id=?").run(invitation.form.id)
+  }
+})
+
+test("server submit rejects invalid required details without consuming invitation", async () => {
+  for (const invalid of [
+    { startDate: "2025-02-30" }, { contactPhone: "bad-number" },
+    { address: { ...answers.address, postalCode: "abc" } },
+    { owners: [{ firstName: "A", lastName: "B", ownershipPercent: -10 }, { firstName: "C", lastName: "D", ownershipPercent: 110 }] },
+  ]) {
+    const invitation = await invite()
+    await saveApplicationDraft(invitation.token, "review", { ...answers, ...invalid })
+    const response = await submitRoute(request("/api/applications/submit", null, "POST", { token: invitation.token }))
+    assert.equal(response.status, 422)
+    const body = await response.json()
+    assert.equal(body.error.code, "application_incomplete")
+    const row = (await listApplicationInvitations(ada)).find(item => item.id === invitation.id)
+    assert.equal(row?.submittedAt, null)
+    assert.equal(row?.dealId, null)
+  }
+})
+
+test("server does not treat pending or quarantined statements as accepted", async () => {
+  try {
+    for (const status of ["unavailable", "infected"] as const) {
+      const invitation = await invite()
+      await saveApplicationDraft(invitation.token, "review", answers)
+      setDocumentScannerForTests({ name: "blocked-fixture", scan: async () => ({ status, provider: "blocked-fixture", evidence: {} }) })
+      const upload = () => stageInvitationFile({ token: invitation.token, idempotencyKey: randomUUID(), category: "statement", filename: "blocked.pdf", mimeType: "application/pdf", bytes: pdf })
+      if (status === "infected") await assert.rejects(upload(), (error: { code?: string }) => error.code === "file_quarantined")
+      else await upload()
+      setDocumentScannerForTests({ name: "test", scan: async () => ({ status: "clean", provider: "test", evidence: {} }) })
+      for (let index = 0; index < 3; index++) await stageInvitationFile({ token: invitation.token, idempotencyKey: randomUUID(), category: "statement", filename: `clean-${index}.pdf`, mimeType: "application/pdf", bytes: pdf })
+      await assert.rejects(submitFundlaneApplication(invitation.token), (error: { code?: string }) => error.code === "file_not_ready")
+      const row = (await listApplicationInvitations(ada)).find(item => item.id === invitation.id)
+      assert.equal(row?.submittedAt, null)
+      assert.equal(row?.dealId, null)
+    }
+  } finally { setDocumentScannerForTests({ name: "test", scan: async () => ({ status: "clean", provider: "test", evidence: {} }) }) }
+})
+
+test("tenant and employee scope prevent unauthorized invitation access", async () => {
+  const invitation = await invite()
+  const at = nowIso()
+  await getDatabase().prepare(`INSERT INTO workspaces(id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) VALUES (?,?,'America/New_York',10,?,?,?,?,?)`).run(
+    "other-tenant", "Other synthetic company", JSON.stringify({ reports: true }), JSON.stringify({ deals: true }), JSON.stringify(actions), at, at,
+  )
+  await getDatabase().prepare("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)").run("other-admin", "other-tenant", admin.userId, at, at)
+  const otherTenant = { ...admin, workspaceId: "other-tenant", membershipId: "other-admin" }
+  const { ownedInvitation, claimInvitationSubmission } = await import("../src/lib/mca/applications/service")
+  await assert.rejects(ownedInvitation(otherTenant, invitation.id), (error: { status?: number; code?: string }) => error.status === 404 && error.code === "invitation_not_found")
+  await assert.rejects(ownedInvitation({ ...admin, role: "rep" }, invitation.id), (error: { status?: number; code?: string }) => error.status === 403 && error.code === "membership_changed")
+  await assert.rejects(ownedInvitation(bob, invitation.id), (error: { status?: number }) => error.status === 404)
+  await assert.rejects(claimInvitationSubmission(invitation.token, "other-tenant", invitation.form.id, randomUUID()), (error: { code?: string }) => error.code === "invitation_quarantined")
 })
