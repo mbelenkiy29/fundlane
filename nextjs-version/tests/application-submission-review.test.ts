@@ -18,7 +18,7 @@ import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { setEmailDeliveryFetchForTests, upsertSubmissionEmailTemplate } from "../src/lib/mca/submissions/email-templates"
 import { processJobDelivery, reconcileUncertainDelivery } from "../src/lib/mca/submissions/outbox"
-import { listJobsForDeal, persistNewDestination, insertAttempt } from "../src/lib/mca/submissions/repository"
+import { listJobsForDeal, persistNewDestination, insertAttempt, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { checkCompleteness } from "../src/lib/mca/underwriting/completeness"
 import { runAnalysis } from "../src/lib/mca/underwriting/analysis"
 
@@ -136,6 +136,23 @@ test("independent destinations retain duplicate failure and continue the other l
   assert.equal(sent.jobs.find(job=>job.funderId===portalFunderId)?.state,"pending_portal")
   assert.deepEqual((await sendApplicationSubmission(actor,item.intakeId,next.id)).jobs,sent.jobs)
 })
+test("generic preview confirmation reports an unknown funder on first approval and replay", async () => {
+  const item = await readyApplication()
+  const unknownFunderId = newId()
+  const { prepareDealSubmission, confirmDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const preview = await prepareDealSubmission(actor, item.dealId, [unknownFunderId])
+  assert.match(preview.destinations[0]?.errors[0] ?? "", /not found/i)
+
+  const first = await confirmDealSubmission(actor, item.dealId, { previewId: preview.id })
+  const replay = await confirmDealSubmission(actor, item.dealId, { previewId: preview.id })
+
+  assert.equal(first.jobs.length, 1)
+  assert.equal(first.jobs[0]?.funderId, unknownFunderId)
+  assert.equal(first.jobs[0]?.state, "preflight_failed")
+  assert.match(first.jobs[0]?.reason ?? "", /not found/i)
+  assert.deepEqual(replay.jobs, first.jobs)
+  assert.equal((await listJobsForDeal(actor.workspaceId, item.dealId)).length, 0)
+})
 test("disabled connection and changed completeness block Send",async()=>{
   const item=await readyApplication()
   const preview=await prepareApplicationSubmission(actor,item.intakeId,[funderId])
@@ -217,6 +234,18 @@ test("uncertain API and webhook deliveries require broker reconciliation and fre
     const reconciled = await reconcileUncertainDelivery(actor, job.id, { outcome: "not_sent", evidence: "Fixture receiver confirms no acceptance" })
     assert.equal(reconciled.state, "failed")
     await assert.rejects(() => reconcileUncertainDelivery(actor, job.id, { outcome: "accepted", evidence: "fixture" }), { code: "delivery_not_uncertain" })
+
+    for (const lenderState of ["funded", "declined"] as const) {
+      const lateKey = newId()
+      const late = (await persistNewDestination({ workspaceId: actor.workspaceId, dealId: item.dealId, funderId: funder.id, displayFunderName: funder.legalName, routeKind: kind, route: funder.routes[0], state: "failed", confirmationKey: lateKey, attemptKey: lateKey, dealVersion: 1, documentVersions: [], packageDocumentIds: [], preflightErrors: [], merchantIdentityKey: "fixture", packageFingerprint: "fixture", actor, createdByUserId: actor.userId })).job
+      await insertAttempt({ workspaceId: actor.workspaceId, jobId: late.id, attemptKey: late.attemptKey, transport: kind, state: "failed", correlationId: "late-receipt", errorCode: "delivery_uncertain" })
+      await updateJobRecord(actor.workspaceId, late.id, { state: lenderState })
+      await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, late.id)
+      await assert.rejects(() => reconcileUncertainDelivery(actor, late.id, { outcome: "not_sent", evidence: "fixture" }), { code: "lender_evidence_exists" })
+      const acceptedLate = await reconcileUncertainDelivery(actor, late.id, { outcome: "accepted", evidence: "late receipt" })
+      assert.equal(acceptedLate.state, lenderState)
+      assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(late.id))?.status, lenderState)
+    }
   }
 })
 

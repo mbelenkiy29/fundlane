@@ -2,7 +2,7 @@ import "server-only"
 
 import { createHash } from "node:crypto"
 import { getOutgoingDocumentBytes } from "./compress"
-import { getDatabase, newId, recordAuditEvent, withTransaction } from "../db"
+import { getDatabase, newId, recordAuditEvent, withTransaction, type DbExecutor } from "../db"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { assertCompanyOperational } from "../company-access"
@@ -43,7 +43,7 @@ export function assertProductionDeliveryNotPreview(delivered: DeliverResult): vo
   }
 }
 
-async function refreshCache(job: SubmissionJob): Promise<void> {
+async function refreshCache(job: SubmissionJob, executor?: DbExecutor): Promise<void> {
   await insertDealSubmissionCache({
     workspaceId: job.workspaceId,
     dealId: job.dealId,
@@ -52,15 +52,26 @@ async function refreshCache(job: SubmissionJob): Promise<void> {
     funderId: job.funderId,
     jobId: job.id,
     routeKind: job.routeKind,
+  }, executor)
+}
+
+async function saveTransportState(job: SubmissionJob, patch: Parameters<typeof updateJobRecord>[2]): Promise<SubmissionJob> {
+  return withTransaction(async executor => {
+    await executor.prepare("SELECT id FROM mca_submission_jobs WHERE workspace_id = ? AND id = ? FOR UPDATE").get(job.workspaceId, job.id)
+    const current = await findJobById(job.workspaceId, job.id, executor)
+    if (!current) throw new Error("Submission job not found")
+    if (current.state === "funded" || current.state === "declined") return current
+    const saved = await updateJobRecord(job.workspaceId, job.id, patch, executor)
+    if (patch.state !== "sending") await refreshCache(saved, executor)
+    return saved
   })
 }
 
 async function settleUncertainDelivery(job: SubmissionJob): Promise<SubmissionJob> {
   const reason = "Delivery status is uncertain after an interrupted attempt. Check with the lender before creating another submission."
   await updateAttempt(job.id, job.attemptKey, { state: "failed", errorCode: "delivery_uncertain", errorMessage: reason })
-  const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason })
-  if (job.autoSubmitDecisionId) await recordAutoDeliveryCancellation(job, "manual_retry_required")
-  await refreshCache(saved)
+  const saved = await saveTransportState(job, { state: "failed", reason })
+  if (job.autoSubmitDecisionId && saved.state === "failed") await recordAutoDeliveryCancellation(job, "manual_retry_required")
   await markOutboxProcessed(job.id, reason)
   return saved
 }
@@ -68,13 +79,12 @@ async function settleUncertainDelivery(job: SubmissionJob): Promise<SubmissionJo
 async function recoverCompletedAttempt(job: SubmissionJob, attempt: SubmissionAttempt): Promise<SubmissionJob> {
   if (!isCompletedAttempt(attempt.state)) throw new Error("Submission attempt is not complete")
   const reason = attempt.errorMessage ?? (attempt.state === "sent" ? null : job.reason ?? (attempt.state === "skipped" ? "Delivery skipped." : "Delivery failed."))
-  const saved = await updateJobRecord(job.workspaceId, job.id, { state: attempt.state, reason })
-  if (attempt.state === "skipped" && attempt.errorCode === "auto_submit_cancelled") {
+  const saved = await saveTransportState(job, { state: attempt.state, reason })
+  if (saved.state === "skipped" && attempt.errorCode === "auto_submit_cancelled") {
     await recordAutoDeliveryCancellation(job, reason ?? "Automatic delivery was cancelled.")
   }
   await recordAuditEvent({ context: submissionDeliveryActor(job), action: "submission.delivery_recovered", resourceType: "submission_job", resourceId: job.id,
     metadata: { state: attempt.state, errorCode: attempt.errorCode, attemptKey: job.attemptKey, providerCorrelationId: attempt.correlationId, funderId: job.funderId }, correlationId: attempt.correlationId })
-  await refreshCache(saved)
   await markOutboxProcessed(job.id)
   return saved
 }
@@ -133,9 +143,8 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
   const autoBlock = await autoDeliveryBlockReason(job)
   if (autoBlock) {
     if (existing) await updateAttempt(job.id, job.attemptKey, { state: "skipped", errorCode: "auto_submit_cancelled", errorMessage: autoBlock })
-    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "skipped", reason: autoBlock })
-    await recordAutoDeliveryCancellation(job, autoBlock)
-    await refreshCache(saved)
+    const saved = await saveTransportState(job, { state: "skipped", reason: autoBlock })
+    if (saved.state === "skipped") await recordAutoDeliveryCancellation(job, autoBlock)
     await markOutboxProcessed(job.id, autoBlock)
     return saved
   }
@@ -153,7 +162,8 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       if (isCompletedAttempt(reserved.attempt.state)) return finishCompletedAttempt(job, reserved.attempt)
       return await findJobById(job.workspaceId, job.id) ?? job
     }
-    await updateJobRecord(job.workspaceId, job.id, { state: "sending" })
+    const sending = await saveTransportState(job, { state: "sending" })
+    if (sending.state === "funded" || sending.state === "declined") return sending
   }
 
   let providerOutcomeReceived = false
@@ -196,15 +206,14 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       errorCode: delivered.errorCode ?? null,
       errorMessage: clip(delivered.errorMessage) ?? null,
     })
-    const saved = await updateJobRecord(job.workspaceId, job.id, {
+    const saved = await saveTransportState(job, {
       state: nextState,
       reason: reason ?? null,
       packageDocumentIds: packaged.documents.map((document) => document.documentId),
     })
-    if (nextState === "skipped" && delivered.errorCode === "auto_submit_cancelled") await recordAutoDeliveryCancellation(job, reason ?? "Automatic delivery was cancelled.")
+    if (saved.state === "skipped" && delivered.errorCode === "auto_submit_cancelled") await recordAutoDeliveryCancellation(job, reason ?? "Automatic delivery was cancelled.")
     await recordAuditEvent({ context: submissionDeliveryActor(job), action: "submission.delivery_recorded", resourceType: "submission_job", resourceId: job.id,
       metadata: { state: nextState, errorCode: delivered.errorCode, attemptKey: job.attemptKey, providerCorrelationId: delivered.correlationId, funderId: job.funderId }, correlationId: delivered.correlationId })
-    await refreshCache(saved)
     await markOutboxProcessed(job.id)
     return saved
   } catch (error) {
@@ -218,10 +227,9 @@ export async function processJobDelivery(job: SubmissionJob, options: { observeG
       errorCode,
       errorMessage: message ?? null,
     })
-    const saved = await updateJobRecord(job.workspaceId, job.id, { state: "failed", reason: message ?? "Delivery failed." })
+    const saved = await saveTransportState(job, { state: "failed", reason: message ?? "Delivery failed." })
     await recordAuditEvent({ context: submissionDeliveryActor(job), action: "submission.delivery_failed", resourceType: "submission_job", resourceId: job.id,
       metadata: { errorCode, attemptKey: job.attemptKey, funderId: job.funderId }, correlationId: job.id })
-    await refreshCache(saved)
     await markOutboxProcessed(job.id, message ?? null)
     if (error instanceof AppError && ["company_paused", "company_outbound_reapproval_required"].includes(error.code)) throw error
     return saved
@@ -243,6 +251,16 @@ export async function reconcileUncertainDelivery(actor: DealActor, jobId: string
     const attempt = await findAttempt(job.id, job.attemptKey, executor)
     if (!attempt || attempt.errorCode !== "delivery_uncertain") throw new AppError(409, "delivery_not_uncertain", "This submission has no uncertain delivery to reconcile.")
     const accepted = input.outcome === "accepted"
+    if (!accepted) {
+      const laterEvidence = await executor.prepare<{ id: string }>(`SELECT id FROM mca_submission_attempts
+        WHERE job_id = ? AND error_code = 'provider_status' LIMIT 1`).get(job.id)
+      const offer = await executor.prepare<{ id: string }>(`SELECT o.id FROM deal_offers o
+        JOIN deal_submissions s ON s.id = o.submission_id
+        WHERE s.workspace_id = ? AND s.job_id = ? LIMIT 1`).get(job.workspaceId, job.id)
+      if (job.state === "funded" || job.state === "declined" || laterEvidence || offer) {
+        throw new AppError(409, "lender_evidence_exists", "Later lender evidence prevents marking this delivery not sent.")
+      }
+    }
     const ref = parseEmailAttemptRef(attempt.externalRef) ?? approvedEmailAttemptRef(job, attempt.correlationId)
     await updateAttempt(job.id, job.attemptKey, {
       state: accepted ? "sent" : "failed",
@@ -250,12 +268,11 @@ export async function reconcileUncertainDelivery(actor: DealActor, jobId: string
       errorCode: accepted ? null : "delivery_not_sent",
       errorMessage: null,
     }, executor)
-    const saved = await updateJobRecord(actor.workspaceId, job.id, {
+    const saved = job.state === "funded" || job.state === "declined" ? job : await updateJobRecord(actor.workspaceId, job.id, {
       state: accepted ? "sent" : "failed",
       reason: accepted ? null : "Provider confirmed the submission was not sent.",
     }, executor)
-    await insertDealSubmissionCache({ workspaceId: job.workspaceId, dealId: job.dealId, funderName: job.displayFunderName,
-      status: displayCacheStatus(saved.state), funderId: job.funderId, jobId: job.id, routeKind: job.routeKind }, executor)
+    if (job.state !== "funded" && job.state !== "declined") await refreshCache(saved, executor)
     await recordAuditEvent({ context: actor, action: "submission.delivery_reconciled", resourceType: "submission_job", resourceId: job.id,
       metadata: { outcome: input.outcome, evidence, correlationId: attempt.correlationId }, correlationId: actor.correlationId, executor })
     return saved

@@ -8,7 +8,7 @@ import { getDealForDocument } from "../deals/service"
 import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { backgroundJobsEnabled } from "../jobs/queue"
-import type { ApprovedSubmissionPackage } from "./contracts"
+import type { ApprovedSubmissionPackage, QueueSubmissionsResult } from "./contracts"
 import { prepareApprovedSubmissionEmail } from "./email-templates"
 import { eligibleAtFromReason } from "./duplicate-rules"
 import { toQueuedSummary } from "./jobs"
@@ -88,23 +88,33 @@ export async function confirmDealSubmission(actor: DealActor, dealId: string, in
   if (typeof input.previewId !== "string" || !input.previewId.trim() || input.previewId.length > 128) throw new AppError(409, "broker_approval_required", "Prepare and review the exact submission preview first.")
   const previewId = input.previewId
   await getDealForDocument(actor, dealId)
+  let snapshot: Snapshot | undefined
+  let queued: QueueSubmissionsResult | undefined
   await withTransaction(async executor => {
     await executor.prepare("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))").get(`broker-send:${actor.workspaceId}:${dealId}`)
     const row = await executor.prepare<{ snapshot_cipher: string; fingerprint: string; confirmed_at: string | null; expires_at: string }>(`SELECT snapshot_cipher,fingerprint,confirmed_at,expires_at FROM intake_submission_previews
       WHERE id=? AND workspace_id=? AND deal_id=? AND intake_id IS NULL FOR UPDATE`).get(previewId, actor.workspaceId, dealId)
     if (!row) throw new AppError(404, "preview_not_found", "The requested submission preview was not found.")
+    snapshot = JSON.parse(decryptSensitive(row.snapshot_cipher, actor.workspaceId)) as Snapshot
     if (row.confirmed_at) return
     if (Date.parse(row.expires_at) <= Date.now()) stale()
-    const snapshot = JSON.parse(decryptSensitive(row.snapshot_cipher, actor.workspaceId)) as Snapshot
     if (hash(snapshot) !== row.fingerprint) stale()
     const funderIds = snapshot.destinations.map(d => d.funderId)
     if (hash(await snapshotFor(actor, dealId, funderIds)) !== row.fingerprint) stale()
-    await queueSubmissions({ actor, dealId, funderIds, confirmationKey: previewId, expectedDealVersion: snapshot.dealVersion, approvedPackages: Object.fromEntries(snapshot.destinations.filter(d => d.approved).map(d => [d.funderId, d.approved!])), deferDelivery: true,
+    queued = await queueSubmissions({ actor, dealId, funderIds, confirmationKey: previewId, expectedDealVersion: snapshot.dealVersion, approvedPackages: Object.fromEntries(snapshot.destinations.filter(d => d.approved).map(d => [d.funderId, d.approved!])), deferDelivery: true,
       privilegedRetry: input.privilegedRetry === true, privilegedReason: typeof input.privilegedReason === "string" ? input.privilegedReason : undefined })
     await executor.prepare("UPDATE intake_submission_previews SET confirmed_at=? WHERE id=? AND workspace_id=?").run(nowIso(), previewId, actor.workspaceId)
     await recordAuditEvent({ context: actor, action: "submission.package_approved", resourceType: "submission_preview", resourceId: previewId, metadata: { dealId, funderIds, fingerprint: row.fingerprint }, correlationId: actor.correlationId, executor })
   })
   const jobs = () => listJobsForDeal(actor.workspaceId, dealId).then(rows => rows.filter(job => job.confirmationKey === previewId))
   if (!backgroundJobsEnabled()) for (const job of await jobs()) await processJobDelivery(job)
-  return { ok: true as const, confirmationKey: previewId, jobs: (await jobs()).map(job => { const summary = toQueuedSummary(job); const eligibleAt = job.state === "blocked_duplicate" ? eligibleAtFromReason(job.reason) : undefined; return eligibleAt ? { ...summary, eligibleAt } : summary }) }
+  const persisted = (await jobs()).map(job => { const summary = toQueuedSummary(job); const eligibleAt = job.state === "blocked_duplicate" ? eligibleAtFromReason(job.reason) : undefined; return eligibleAt ? { ...summary, eligibleAt } : summary })
+  const persistedFunders = new Set(persisted.map(job => job.funderId))
+  const rejected = snapshot!.destinations.filter(destination => destination.name === "Unknown funder" && !persistedFunders.has(destination.funderId)).map(destination => ({
+    jobId: `rejected:${hash([previewId, destination.funderId])}`,
+    funderId: destination.funderId,
+    state: "preflight_failed" as const,
+    reason: queued?.jobs.find(job => job.funderId === destination.funderId)?.reason ?? destination.errors[0] ?? "The requested funder was not found.",
+  }))
+  return { ok: true as const, confirmationKey: previewId, jobs: [...persisted, ...rejected] }
 }

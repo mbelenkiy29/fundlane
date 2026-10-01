@@ -490,6 +490,51 @@ test("completed attempt recovery restores sent job without a second delivery", a
   assert.equal(deliveries, 0)
 })
 
+test("completed transport recovery preserves a later funded or declined lender outcome", async () => {
+  for (const lenderState of ["funded", "declined"] as const) {
+    const { deal, document } = await seedDeal()
+    const queued = await persistQueuedJob(deal.id, document, `late-${lenderState}-${deal.id}`)
+    await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey,
+      transport: queued.routeKind, state: "sent", correlationId: newId() })
+    const staleSending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
+    await updateJobRecord(queued.workspaceId, queued.id, { state: lenderState })
+    await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, queued.id)
+    deliveries = 0
+
+    const recovered = await withCompletedAttemptRecovery(true, () => processJobDelivery(staleSending))
+
+    assert.equal(recovered.state, lenderState)
+    assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, lenderState)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(queued.id))?.status, lenderState)
+    assert.ok(await outboxProcessedAt(queued.id))
+    assert.equal(deliveries, 0)
+  }
+})
+
+test("uncertain reconciliation preserves later lender outcomes and rejects contrary not-sent evidence", async () => {
+  for (const lenderState of ["funded", "declined"] as const) {
+    const { deal, document } = await seedDeal()
+    const job = await persistQueuedJob(deal.id, document, `reconcile-${lenderState}-${deal.id}`)
+    await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey,
+      transport: job.routeKind, state: "failed", correlationId: newId(), errorCode: "delivery_uncertain" })
+    await updateJobRecord(job.workspaceId, job.id, { state: lenderState })
+    await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, job.id)
+    await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "not_sent", evidence: "provider log" }), { code: "lender_evidence_exists" })
+    const accepted = await reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "accepted", evidence: "provider receipt" })
+    assert.equal(accepted.state, lenderState)
+    assert.equal((await findJobById(job.workspaceId, job.id))?.state, lenderState)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(job.id))?.status, lenderState)
+  }
+
+  const { deal, document } = await seedDeal()
+  const job = await persistQueuedJob(deal.id, document, `reconcile-provider-evidence-${deal.id}`)
+  await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey,
+    transport: job.routeKind, state: "failed", correlationId: newId(), errorCode: "delivery_uncertain" })
+  await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: "provider-status-later",
+    transport: "api", state: "sent", correlationId: newId(), errorCode: "provider_status" })
+  await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "not_sent", evidence: "provider log" }), { code: "lender_evidence_exists" })
+})
+
 test("processJobDelivery restores a saved failed attempt without sending again", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-failed")
