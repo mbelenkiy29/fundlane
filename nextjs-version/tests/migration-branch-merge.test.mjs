@@ -19,9 +19,12 @@ const demoNotificationTimestamp = 1790385600013;
 const smsRefreshTimestamp = 1790385600014;
 const publicRoadmapTimestamp = 1790385600015;
 const retentionHoldsTimestamp = 1790385600016;
+const smsKeywordConsentTimestamp = 1790385600017;
 const billingRecoveryTimestamp = 1790035200002;
 
 async function revertLaterThanCatchup(fixture) {
+  await fixture.query("ALTER TABLE mca_sms_consent_events DROP CONSTRAINT IF EXISTS mca_sms_consent_events_source_check");
+  await fixture.query("ALTER TABLE mca_sms_consent_events ADD CONSTRAINT mca_sms_consent_events_source_check CHECK (source = ANY (ARRAY['manual'::text, 'provider_webhook'::text]))");
   await fixture.query("DROP TABLE IF EXISTS retention_holds");
   await fixture.query("DROP TABLE IF EXISTS roadmap_item_audit, roadmap_items");
   await fixture.query("ALTER TABLE sms_companies DROP COLUMN IF EXISTS refresh_attempted_at");
@@ -35,7 +38,7 @@ async function revertLaterThanCatchup(fixture) {
   await fixture.query("DROP TABLE IF EXISTS user_totp_recovery_codes, auth_session_totp, user_totp_factors");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS require_2fa");
   await fixture.query("ALTER TABLE workspaces DROP COLUMN IF EXISTS setup_checklist_dismissed_at");
-  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp, emailRuntimeTimestamp, demoNotificationTimestamp, smsRefreshTimestamp, publicRoadmapTimestamp, retentionHoldsTimestamp]);
+  await fixture.query("DELETE FROM drizzle.__drizzle_migrations WHERE created_at IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", [setupChecklistTimestamp, totpTimestamp, demoSubmissionsTimestamp, trialAbuseTimestamp, billingStateKindTimestamp, autoSubmitTimestamp, emailRuntimeTimestamp, demoNotificationTimestamp, smsRefreshTimestamp, publicRoadmapTimestamp, retentionHoldsTimestamp, smsKeywordConsentTimestamp]);
 }
 
 async function withFixture(label, run) {
@@ -70,6 +73,8 @@ test("merged fresh schema includes both migration branches; catch-up does not re
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [publicRoadmapTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [retentionHoldsTimestamp])).rows[0].n, 1);
     assert.equal((await fixture.query("SELECT relrowsecurity FROM pg_class WHERE oid='retention_holds'::regclass")).rows[0].relrowsecurity, true);
+    assert.equal((await fixture.query("SELECT count(*)::int n FROM drizzle.__drizzle_migrations WHERE created_at=$1", [smsKeywordConsentTimestamp])).rows[0].n, 1);
+    assert.match((await fixture.query("SELECT pg_get_constraintdef(oid) def FROM pg_constraint WHERE conname='mca_sms_consent_events_source_check'")).rows[0].def, /'keyword'/);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM information_schema.tables WHERE table_name IN ('roadmap_items','roadmap_item_audit')")).rows[0].n, 2);
     assert.equal((await fixture.query("SELECT count(*)::int n FROM information_schema.columns WHERE table_name='marketing_demo_submissions' AND column_name IN ('notified_at','notification_error','notification_attempts','notification_lease_until','notification_tracking_enabled')")).rows[0].n, 5);
   });
