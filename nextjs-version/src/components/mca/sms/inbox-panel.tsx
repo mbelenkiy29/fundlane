@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { RequestError, requestJson } from "@/lib/mca/client"
-import { editSmsReplyDraft, reserveSmsReplyDraft, settleSmsReplyDraft, rejectSmsReplyDraft, type SmsReplyDraft } from "@/lib/mca/sms/reply-draft"
+import { editSmsReplyDraft, reserveSmsReplyDraft, settleSmsReplyDraft, rejectSmsReplyDraft, postSmsReplyAndRefresh, type SmsReplyDraft } from "@/lib/mca/sms/reply-draft"
 import { refreshSmsConversation } from "@/lib/mca/sms/inbox-refresh"
 type Thread = {
   id: string
@@ -116,53 +116,58 @@ export function SmsInboxPanel({ dealId }: { dealId?: string }) {
     const key = reserved.idempotencyKey ?? crypto.randomUUID()
     if (!isPreview) { setDraft(reserved); drafts.current.set(target.id, reserved) }
     try {
-      const result = await requestJson<{
-        canSend: boolean
-        block?: { message: string }
-        state?: string
-        messageId?: string
-        errorMessage?: string
-      }>("/api/mca/sms/messages", {
-        method: "POST",
-        body: JSON.stringify({
-          dealId: target.dealId,
-          conversationId: target.id,
-          recipient: target.recipient,
-          body: reserved.body,
-          senderAccountId: target.accountId,
-          idempotencyKey: key,
-          preview: isPreview,
+      await postSmsReplyAndRefresh({
+        post: () => requestJson<{
+          canSend: boolean
+          block?: { message: string }
+          state?: string
+          messageId?: string
+          errorMessage?: string
+        }>("/api/mca/sms/messages", {
+          method: "POST",
+          body: JSON.stringify({
+            dealId: target.dealId,
+            conversationId: target.id,
+            recipient: target.recipient,
+            body: reserved.body,
+            senderAccountId: target.accountId,
+            idempotencyKey: key,
+            preview: isPreview,
+          }),
         }),
+        onResult: (result) => {
+          if (selectedRef.current !== target.id) return false
+          if (isPreview) { setPreview(result); return false }
+          if (result.messageId) attempts.current.set(target.id, result.messageId)
+          const next = settleSmsReplyDraft(reserved, result.state)
+          drafts.current.set(target.id, next)
+          setDraft(next)
+          if (result.state === "failed") { failures.current.add(target.id); setFailedAttempt(true) }
+          if (result.state !== "accepted")
+            setError(
+              result.errorMessage ??
+                "Provider outcome is unknown. Refresh delivery status before sending again."
+            )
+          else {
+            attempts.current.delete(target.id)
+            failures.current.delete(target.id)
+            setFailedAttempt(false)
+            setPreview(undefined)
+          }
+          return true
+        },
+        onPostError: (e) => {
+          if (!isPreview && e instanceof RequestError) {
+            const next = rejectSmsReplyDraft(reserved, e.code, !!draft.idempotencyKey)
+            drafts.current.set(target.id, next)
+            setDraft(next)
+            if (!next.idempotencyKey) setPreview(undefined)
+          }
+          setError(e instanceof Error ? e.message : "Message failed")
+        },
+        refresh: () => open(target.id),
+        onRefreshError: (e) => setError(`Conversation refresh failed: ${e instanceof Error ? e.message : "Unknown error"}`),
       })
-      if (selectedRef.current !== target.id) return
-      if (isPreview) setPreview(result)
-      else {
-        if (result.messageId) attempts.current.set(target.id, result.messageId)
-        const next = settleSmsReplyDraft(reserved, result.state)
-        drafts.current.set(target.id, next)
-        setDraft(next)
-        if (result.state === "failed") { failures.current.add(target.id); setFailedAttempt(true) }
-        if (result.state !== "accepted")
-          setError(
-            result.errorMessage ??
-              "Provider outcome is unknown. Refresh delivery status before sending again."
-          )
-        else {
-          attempts.current.delete(target.id)
-          failures.current.delete(target.id)
-          setFailedAttempt(false)
-          setPreview(undefined)
-        }
-        await open(target.id)
-      }
-    } catch (e) {
-      if (!isPreview && e instanceof RequestError) {
-        const next = rejectSmsReplyDraft(reserved, e.code, !!draft.idempotencyKey)
-        drafts.current.set(target.id, next)
-        setDraft(next)
-        if (!next.idempotencyKey) setPreview(undefined)
-      }
-      setError(e instanceof Error ? e.message : "Message failed")
     } finally {
       setBusy(false)
     }

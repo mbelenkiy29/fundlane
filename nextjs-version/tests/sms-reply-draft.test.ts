@@ -36,6 +36,31 @@ test("known first-attempt rejection unlocks a draft while lost responses and unc
   assert.deepEqual(contract.rejectSmsReplyDraft(reserved, "idempotency_conflict", false), reserved)
 })
 
+test("an accepted SMS reply stays cleared when the conversation refresh fails", async () => {
+  const contract = await import("../src/lib/mca/sms/reply-draft")
+  const { RequestError } = await import("../src/lib/mca/client")
+  const reserved = contract.reserveSmsReplyDraft({ body: "Application update" }, "reserved-key")
+  let draft = reserved
+  let postErrors = 0
+  let error = ""
+  let refreshes = 0
+  await contract.postSmsReplyAndRefresh({
+    post: async () => ({ state: "accepted" }),
+    onResult: result => { draft = contract.settleSmsReplyDraft(reserved, result.state); return true },
+    onPostError: failure => {
+      postErrors++
+      if (failure instanceof RequestError)
+        draft = contract.rejectSmsReplyDraft(reserved, failure.code, false)
+    },
+    refresh: async () => { refreshes++; throw new RequestError(403, "Read unavailable", "sms_recipient_opted_out") },
+    onRefreshError: failure => { error = `Conversation refresh failed: ${(failure as Error).message}` },
+  })
+  assert.equal(refreshes, 1)
+  assert.equal(postErrors, 0)
+  assert.deepEqual(draft, { body: "" })
+  assert.equal(error, "Conversation refresh failed: Read unavailable")
+})
+
 test("changing inbox context during read acknowledgement cannot refresh the old deal's conversation list", async () => {
   const contract = await import("../src/lib/mca/sms/inbox-refresh").catch(() => null)
   assert.equal(typeof contract?.refreshSmsConversation, "function")
