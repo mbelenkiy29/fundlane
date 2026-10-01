@@ -414,6 +414,27 @@
       "when": 1790385600016,
       "tag": "0067_retention_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790385600017,
+      "tag": "0068_sms_keyword_consent",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790385600018,
+      "tag": "0069_sms_company_provisioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790385600019,
+      "tag": "0070_platform_super_admin",
+      "breakpoints": true
     }
   ]
 }

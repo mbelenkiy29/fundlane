@@ -251,3 +251,15 @@ export async function sessionHasAppTotp(sessionId: string, userId: string): Prom
 }
 
 export { RECOVERY_CODE_COUNT };
+
+/** Step-up accepts a fresh authenticator code only; recovery codes never enter this path. */
+export async function verifyFreshAppTotp(userId: string, code: string, database: DbExecutor = getDatabase()): Promise<void> {
+  const factor = await database.prepare<FactorRow>("SELECT user_id,status,secret_cipher,last_used_counter,confirmed_at FROM user_totp_factors WHERE user_id=? FOR UPDATE").get(userId)
+  if (!factor || factor.status !== "enabled" || !normalizeTotpCode(code))
+    throw new AppError(400,"totp_verification_failed","Enter a fresh authenticator code.")
+  const verified = verifyTotpCode(decryptUserSecret(factor.secret_cipher,userId),code)
+  const last = factor.last_used_counter == null ? null : Number(factor.last_used_counter)
+  if (!verified.valid || verified.counter == null || (last != null && verified.counter <= last))
+    throw new AppError(400,"totp_verification_failed","That authenticator code is invalid or expired.")
+  await database.prepare("UPDATE user_totp_factors SET last_used_counter=?,updated_at=? WHERE user_id=?").run(verified.counter,nowIso(),userId)
+}
