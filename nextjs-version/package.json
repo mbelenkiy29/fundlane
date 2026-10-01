@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1 src/lib/mca/deals/acceptance.test.ts tests/*.test.mjs tests/*.test.ts",
+    "test": "node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1 src/lib/mca/deals/acceptance.test.ts tests/*.test.mjs tests/*.test.ts tests/sms-adapters/*.test.ts",
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
     "db:migrate": "tsx scripts/database/migrate.ts",
     "db:secure": "tsx scripts/database/secure-runtime.ts",

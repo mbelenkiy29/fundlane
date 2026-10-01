@@ -13,7 +13,7 @@ import { smsChannelStatus } from "@/lib/mca/integrations/connection-status"
 import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 
 type Membership = { id: string; name: string; email: string; role: string; status: string }
-type AccountsPayload = { accounts: SmsAccount[]; canManage: boolean }
+type AccountsPayload = { accounts: SmsAccount[]; canManage: boolean; publicOrigin: string | null }
 
 const emptyForm = {
   label: "",
@@ -30,6 +30,17 @@ function errorText(error: unknown): string {
     return fields.length ? fields.join(" ") : error.message
   }
   return error instanceof Error ? error.message : "SMS settings could not be updated."
+}
+
+export function LegacySmsWebhookDetails({ accountId, publicOrigin }: { accountId: string; publicOrigin: string | null }) {
+  const base = publicOrigin ? `${publicOrigin}/api/mca/sms/webhooks/twilio/${encodeURIComponent(accountId)}` : null
+  return <div className="mt-3 space-y-2 text-sm">
+    <Label className="grid gap-1">Account ID<Input readOnly value={accountId} /></Label>
+    {base ? (["inbound", "status"] as const).map((kind) => {
+      const url = `${base}/${kind}`
+      return <Label key={kind} className="grid gap-1">{kind === "inbound" ? "Inbound webhook URL" : "Status webhook URL"}<span className="flex gap-2"><Input readOnly value={url} /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(url)}>Copy</Button></span></Label>
+    }) : <p role="status">Configure MCA_SMS_PUBLIC_BASE_URL with the public HTTPS origin to show webhook URLs.</p>}
+  </div>
 }
 
 export function SmsConnectionsPanel() {
@@ -114,6 +125,7 @@ export function SmsConnectionsPanel() {
             </div>
             {payload.canManage && account.state === "active" && <div className="flex gap-2">{!account.isDefault && <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void update(account, { isDefault: true }, `${account.label} is now the default.`)}>Make default</Button>}<Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void update(account, { state: "revoked" }, `${account.label} was revoked.`)}>Revoke</Button></div>}
           </div>
+          <LegacySmsWebhookDetails accountId={account.id} publicOrigin={payload.publicOrigin} />
           <div className="mt-3"><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assigned team members</p><div className="mt-2 flex flex-wrap gap-2">
             {members.filter((member) => account.memberIds.includes(member.id)).map((member) => <Badge key={member.id} variant="outline">{member.name}</Badge>)}
             {!members.some((member) => account.memberIds.includes(member.id)) && <span className="text-sm text-muted-foreground">{account.memberIds.length} assigned</span>}
@@ -139,7 +151,7 @@ export function SmsConnectionsPanel() {
         <Button disabled={Boolean(busy) || !form.memberIds.length}>{busy === "create" && <Loader2 className="animate-spin" />}Save SMS account</Button>
       </form>}
 
-      <div className="flex gap-3 rounded-lg bg-muted/50 p-4 text-sm"><ShieldCheck className="mt-0.5 size-5 shrink-0" /><p><span className="font-medium">Activation stays fail closed.</span> An account marked “Credentials absent” cannot send. Configure its workspace-specific secret, allowed sender, public HTTPS callback URL, and Twilio Advanced Opt-Out in the deployment environment before use.</p></div>
+      <div className="flex gap-3 rounded-lg bg-muted/50 p-4 text-sm"><ShieldCheck className="mt-0.5 size-5 shrink-0" /><p><span className="font-medium">Activation stays fail closed.</span> An account marked “Credentials absent” cannot send. Configure its workspace-specific secret, allowed sender, and public HTTPS callback URL in the deployment environment before use.</p></div>
     </CardContent>
   </Card>
 }

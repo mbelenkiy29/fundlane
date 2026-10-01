@@ -23,6 +23,13 @@ type Conversation = {
   updated_at: string
   unread?: number
 }
+export function smsKeywordDirection(body: string, optOutType?: string | null): "STOP" | "START" | "" {
+  const word = body.trim().toUpperCase()
+  const providerType = optOutType?.trim().toUpperCase()
+  if (providerType === "STOP" || /^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT|REVOKE|OPTOUT)$/.test(word)) return "STOP"
+  if (providerType === "START" || /^(START|UNSTOP|YES)$/.test(word)) return "START"
+  return ""
+}
 export async function persistInbound(
   workspaceId: string,
   accountId: string,
@@ -51,15 +58,7 @@ export async function persistInbound(
       "twilio_service_mismatch",
       "The receiving service does not match this route."
     )
-  const type =
-    params.get("OptOutType")?.toUpperCase() ??
-    (/^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT|REVOKE|OPTOUT)$/i.test(
-      body.trim()
-    )
-      ? "STOP"
-      : /^(START|UNSTOP)$/i.test(body.trim())
-        ? "START"
-        : "")
+  const type = smsKeywordDirection(body, params.get("OptOutType"))
   await withImmediateTransaction(async (db) => {
     if (
       sid &&
@@ -71,8 +70,7 @@ export async function persistInbound(
     )
       return
     if (type === "STOP") await suppress(workspaceId, recipient, "opted_out")
-    // START removes a suppression only when Twilio explicitly confirms the opt-in.
-    if (type === "START" && params.get("OptOutType") === "START")
+    if (type === "START")
       await suppress(workspaceId, recipient, "opted_in")
     if (!/^(SM|MM)[a-fA-F0-9]{32}$/.test(sid)) {
       if (type) return

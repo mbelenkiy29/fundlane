@@ -47,12 +47,17 @@ test("migration comparison reports parity failures, duplicates, invalid journals
   assert.throws(() => compareMigrations([], {}), /expected an entries array/)
 })
 
-test("real migration fixture is consistent at 0067_retention_holds", async () => {
+test("real migration fixture retains the historical release and a unique forward order", async () => {
   const files = await readdir(new URL("../drizzle/", import.meta.url))
   const journal = JSON.parse(await readFile(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"))
   const result = compareMigrations(files, journal)
   assert.equal(result.consistent, true)
-  assert.equal(result.journalHead, "0067_retention_holds")
+  assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0067_retention_holds"))
+  assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0068_sms_keyword_consent"))
+  for (let index = 0; index < journal.entries.length; index++) {
+    assert.ok(Number.isInteger(journal.entries[index].idx)); if (index > 0) assert.ok(journal.entries[index].idx > journal.entries[index - 1].idx)
+    if (index > 0) assert.ok(journal.entries[index].when > journal.entries[index - 1].when)
+  }
 })
 
 test("cron validation covers routes, checked defaults, and schedule-free Vercel config", async () => {
