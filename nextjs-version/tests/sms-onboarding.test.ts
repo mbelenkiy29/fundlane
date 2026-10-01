@@ -909,7 +909,7 @@ test("signed consent keywords remain authoritative with unknown provider metadat
   const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
   await recordSmsConsent(actor, {dealId:"managed-send-deal",recipient:"+12125550198",state:"opted_in",evidence:"Synthetic keyword regression consent",idempotencyKey:"unknown-metadata-consent",matchDealContact:false})
   const send = async (body: string, digit: string) => {
-    const params = new URLSearchParams({AccountSid:p.accountSid,From:"+12125550198",To:n.phone,MessageSid:`SM${digit.repeat(32)}`,Body:body,OptOutType:"UNSUPPORTED"})
+    const params = new URLSearchParams({AccountSid:p.accountSid,From:"+12125550198",To:n.phone,MessageSid:`SM${createHash("sha256").update(`unknown-metadata:${digit}`).digest("hex").slice(0,32)}`,Body:body,OptOutType:"UNSUPPORTED"})
     const signature=createHmac("sha1",p.authToken).update(url+[...params.keys()].sort().map(k=>k+params.get(k)).join("")).digest("base64")
     const result=await processTwilioOptOut(n.id,params,signature,url)
     assert.ok(await getDatabase().prepare("SELECT id FROM sms_inbox_messages WHERE workspace_id=? AND provider_id=?").get(owner.workspaceId,params.get("MessageSid")))
