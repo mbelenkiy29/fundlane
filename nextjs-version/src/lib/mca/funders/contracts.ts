@@ -78,6 +78,8 @@ export interface EligibilityRule {
   unit: CriteriaUnit
   value: string | number | string[] | boolean | null
   sourceText?: string
+  sourceAsOf?: string
+  validUntil?: string
   unspecified: boolean
 }
 
@@ -124,6 +126,8 @@ export interface FunderImportDraft {
     unit: string
     value?: string | number | string[] | boolean | null
     sourceText?: string
+  sourceAsOf?: string
+  validUntil?: string
     unspecified?: boolean
   }>
 }

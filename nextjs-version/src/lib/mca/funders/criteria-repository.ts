@@ -12,6 +12,8 @@ type CriteriaRow = {
   unit: string
   value_json: string | null
   source_text: string | null
+  source_as_of: string | null
+  valid_until: string | null
   unspecified: number
   position: number
   created_at: string
@@ -47,6 +49,8 @@ function fromCriteriaRow(row: CriteriaRow): EligibilityRule {
     unit: row.unit as CriteriaUnit,
     value: unspecified ? null : parseJson<EligibilityRule["value"]>(row.value_json, null),
     sourceText: row.source_text ?? undefined,
+    sourceAsOf: row.source_as_of ?? undefined,
+    validUntil: row.valid_until ?? undefined,
     unspecified,
   }
 }
@@ -94,8 +98,8 @@ export async function replaceCriteriaRules(input: {
   await withImmediateTransaction(async (database) => {
     await database.prepare("DELETE FROM mca_funder_criteria WHERE workspace_id = ? AND funder_id = ?").run(input.workspaceId, input.funderId)
     const insert = database.prepare(`INSERT INTO mca_funder_criteria
-      (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, unspecified, position, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, source_as_of, valid_until, unspecified, position, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     for (const [index, rule] of input.rules.entries()) {
       await insert.run(
         rule.id,
@@ -106,6 +110,8 @@ export async function replaceCriteriaRules(input: {
         rule.unit,
         rule.unspecified ? null : JSON.stringify(rule.value),
         rule.sourceText ?? null,
+        rule.sourceAsOf ?? null,
+        rule.validUntil ?? null,
         rule.unspecified ? 1 : 0,
         index,
         input.publishedAt,

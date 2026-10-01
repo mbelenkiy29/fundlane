@@ -86,6 +86,7 @@ export interface FunderScore {
   score: number
   grade: "A" | "B" | "C" | "D" | "F" | "DQ"
   eligible: boolean
+  fitStatus?: "matched" | "excluded" | "needs_review" | "inactive" | "stale_criteria"
   reasons: Array<{ ruleId: string; result: "pass" | "fail" | "unknown"; detail: string }>
   dataAge?: string
 }

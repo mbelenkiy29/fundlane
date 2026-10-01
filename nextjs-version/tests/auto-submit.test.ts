@@ -14,6 +14,17 @@ import { upsertAdapterCredential } from "../src/lib/mca/submissions/adapters/cre
 import { setSandboxFunderEnabled } from "../src/lib/mca/sandbox/service"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
+async function seedSyntheticAutoFit(workspaceId: string, dealId: string, funderId: string) {
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_funder_criteria (id,workspace_id,funder_id,field,operator,unit,value_json,source_text,source_as_of,unspecified,position,created_at,updated_at)
+    VALUES (?, ?, ?, 'fico', 'min', 'fico', '600', 'Synthetic auto-submit test policy', '2026-01-01', 0, 0, ?, ?)
+    ON CONFLICT (id) DO NOTHING`).run(`auto-fixture-${funderId}`,workspaceId,funderId,now,now)
+  const metric=(value:number)=>JSON.stringify({value,unknown:false,confidence:1})
+  await getDatabase().prepare(`INSERT INTO mca_underwriting_aggregates (workspace_id,deal_id,version,monthly_revenue,average_daily_balance,nsf_count,negative_days,deposit_count,worst_month_nsf,position_count,stale,source_fingerprint,computed_at)
+    VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 0, 0, 'synthetic-auto-fit', ?)`)
+    .run(workspaceId,dealId,metric(20000),metric(8000),metric(1),metric(0),metric(12),metric(1),now)
+}
+
 test("auto-submit kill switch is strictly off by default", () => {
   const previous = process.env.MCA_AUTO_SUBMIT_ENABLED
   try {
@@ -36,7 +47,7 @@ test("settings validation rejects unsafe limits and deduplicates funders", () =>
 })
 
 test("score only never submits; auto-submit needs every guardrail", () => {
-  const ready = { score: 90, eligible: true, allowedFunder: true, adapterReady: true, complete: true, capacity: true, minScore: 80 }
+  const ready = { score: 90, eligible: true, fitStatus: "matched" as const, allowedFunder: true, adapterReady: true, complete: true, capacity: true, minScore: 80 }
   assert.deepEqual(autoSubmitDecision({ ...ready, mode: "score_only" }), { outcome: "scored", reason: "score_only" })
   assert.deepEqual(autoSubmitDecision({ ...ready, mode: "auto_submit" }), { outcome: "submit", reason: "matched_and_ready" })
   assert.equal(autoSubmitDecision({ ...ready, mode: "auto_submit", score: 79 }).reason, "below_min_score")
@@ -125,6 +136,18 @@ test("sandbox auto-submit retries a failed preflight, then never sends the deal 
       (id,workspace_id,deal_id,ready,version,rule_snapshot,findings_json,findings_fingerprint,checked_at)
       VALUES (?,?,?,1,1,'{}','[]','ready',?)`).run("auto-retry-complete", actor.workspaceId, deal.id, now)
 
+    await seedSyntheticAutoFit(actor.workspaceId,deal.id,funderId)
+    for (const sourceDate of [null, "2099-01-01"] as const) {
+      await getDatabase().prepare("UPDATE mca_funder_criteria SET source_as_of=? WHERE workspace_id=? AND funder_id=?").run(sourceDate,actor.workspaceId,funderId)
+      await processAutoSubmit(actor,deal.id,1,"auto_submit",deal.version)
+      assert.equal((await getDatabase().prepare<{reason:string}>("SELECT reason FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(deal.id,funderId))?.reason,"match_needs_review")
+    }
+    await getDatabase().prepare("UPDATE mca_funder_criteria SET source_as_of='2026-01-01' WHERE workspace_id=? AND funder_id=?").run(actor.workspaceId,funderId)
+    await getDatabase().prepare("UPDATE mca_underwriting_aggregates SET average_daily_balance=? WHERE workspace_id=? AND deal_id=?").run(JSON.stringify({value:null,unknown:true,confidence:0}),actor.workspaceId,deal.id)
+    await processAutoSubmit(actor,deal.id,1,"auto_submit",deal.version)
+    assert.equal((await getDatabase().prepare<{reason:string}>("SELECT reason FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(deal.id,funderId))?.reason,"match_needs_review")
+    assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::integer AS n FROM mca_submission_jobs WHERE deal_id=?").get(deal.id))?.n,0)
+    await getDatabase().prepare("UPDATE mca_underwriting_aggregates SET average_daily_balance=? WHERE workspace_id=? AND deal_id=?").run(JSON.stringify({value:8000,unknown:false,confidence:1}),actor.workspaceId,deal.id)
     await processAutoSubmit(actor, deal.id, 1, "auto_submit", deal.version)
     const before = await getDatabase().prepare<{ id: string; outcome: string; retry_count: number }>("SELECT id,outcome,retry_count FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(deal.id, funderId)
     assert.ok(before)
@@ -201,6 +224,7 @@ test("sandbox auto-submit retries a failed preflight, then never sends the deal 
       VALUES (?,?,?,1,1,'{}','[]','ready',?)`).run("auto-revoked-complete", actor.workspaceId, queuedDeal.id, now)
     await storeDocument(actor, { dealId: queuedDeal.id, idempotencyKey: "auto-revoked-doc", filename: "statement.pdf", mimeType: "application/pdf", bytes, category: "statement", source: "test" })
     process.env.MCA_BACKGROUND_JOBS = "enabled"
+    await seedSyntheticAutoFit(actor.workspaceId,queuedDeal.id,funderId)
     await processAutoSubmit(actor, queuedDeal.id, 1, "auto_submit", queuedDeal.version)
     const queuedDecision = await getDatabase().prepare<{ submission_job_id: string }>("SELECT submission_job_id FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(queuedDeal.id, funderId)
     assert.ok(queuedDecision?.submission_job_id)
@@ -298,6 +322,7 @@ test("sandbox auto-submit retries a failed preflight, then never sends the deal 
     await getDatabase().prepare(`INSERT INTO mca_auto_submit_decisions
       (id,workspace_id,deal_id,deal_version,completeness_version,funder_id,score,outcome,reason,created_at)
       VALUES (?,?,?,?,?,?,90,'submit','matched_and_ready',?)`).run("existing-other-funder", actor.workspaceId, capped.id, capped.version, 1, "other-funder", now)
+    await seedSyntheticAutoFit(actor.workspaceId,capped.id,funderId)
     await processAutoSubmit(actor, capped.id, 1, "auto_submit", capped.version)
     assert.equal((await getDatabase().prepare<{ outcome: string; reason: string }>("SELECT outcome,reason FROM mca_auto_submit_decisions WHERE deal_id=? AND funder_id=?").get(capped.id, funderId))?.reason, "max_funders_reached")
     assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::integer AS n FROM mca_submission_jobs WHERE deal_id=?").get(capped.id))?.n, 0)
@@ -316,4 +341,12 @@ test("sandbox auto-submit retries a failed preflight, then never sends the deal 
     if (previous.vercel === undefined) delete process.env.VERCEL
     else process.env.VERCEL = previous.vercel
   }
+})
+
+test("worker decision never submits needs-review or legacy fit evidence", () => {
+  const ready = { mode:"auto_submit" as const, score:99, eligible:true, allowedFunder:true, adapterReady:true, complete:true, capacity:true, minScore:0 }
+  for (const fitStatus of ["needs_review", "stale_criteria", "inactive", undefined] as const) {
+    assert.equal(autoSubmitDecision({...ready,fitStatus}).outcome,"skipped")
+  }
+  assert.equal(autoSubmitDecision({...ready,fitStatus:"matched"}).outcome,"submit")
 })

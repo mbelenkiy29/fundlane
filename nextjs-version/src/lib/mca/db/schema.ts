@@ -750,6 +750,8 @@ export const mca_funder_criteria = pgTable("mca_funder_criteria", {
 	unit: text().notNull(),
 	value_json: text(),
 	source_text: text(),
+	source_as_of: text(),
+	valid_until: text(),
 	unspecified: integer().default(0).notNull(),
 	position: integer().notNull(),
 	created_at: text().notNull(),

@@ -414,6 +414,13 @@
       "when": 1790385600016,
       "tag": "0067_retention_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790816520074,
+      "tag": "0074_lender_criteria_provenance",
+      "breakpoints": true
     }
   ]
 }

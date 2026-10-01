@@ -19,6 +19,8 @@ import {
   resolveDefaultFlag,
   scoreDeal,
 } from "../src/lib/mca/underwriting/scoring"
+import { GET as getFit } from "../src/app/api/mca/underwriting/lender-fit/[dealId]/route"
+import { getLenderFit } from "../src/lib/mca/underwriting/lender-fit"
 import type { ScoringInputs } from "../src/lib/mca/underwriting/scoring"
 import type { ExistingPositionCandidate, FunderScore, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
 import { AUTO_SELECT_GRADES } from "../src/lib/mca/underwriting/policy"
@@ -54,7 +56,7 @@ function fitRules(): EligibilityRule[] {
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
     { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
-  ]
+  ].map((rule) => ({ ...rule, sourceText: "Synthetic scoring fixture", sourceAsOf: "2026-01-01" })) as EligibilityRule[]
 }
 
 const harborInputs: ScoringInputs = {
@@ -123,10 +125,10 @@ async function seedFunder(workspaceId: string, key: string, rules: EligibilityRu
   )
   for (const [index, rule] of rules.entries()) {
     await exec(
-      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, unspecified, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, source_as_of, valid_until, unspecified, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       newId(), workspaceId, id, rule.field, rule.operator, rule.unit,
-      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? null, rule.unspecified ? 1 : 0, index, now, now,
+      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? null, rule.sourceAsOf ?? null, rule.validUntil ?? null, rule.unspecified ? 1 : 0, index, now, now,
     )
   }
   return id
@@ -210,11 +212,11 @@ test("MIC-163 hard DQ runs before score and cannot be auto-selected", async () =
 test("auto-select is C+ only: D and F grades are not auto-selected", () => {
   assert.deepEqual(AUTO_SELECT_GRADES, ["A", "B", "C"])
   const scored: FunderScore[] = [
-    { funderId: "grade-a", rank: 1, score: 90, grade: "A", eligible: true, reasons: [] },
-    { funderId: "grade-b", rank: 2, score: 80, grade: "B", eligible: true, reasons: [] },
-    { funderId: "grade-c", rank: 3, score: 70, grade: "C", eligible: true, reasons: [] },
-    { funderId: "grade-d", rank: 4, score: 65, grade: "D", eligible: true, reasons: [] },
-    { funderId: "grade-f", rank: 5, score: 40, grade: "F", eligible: true, reasons: [] },
+    { funderId: "grade-a", rank: 1, score: 90, grade: "A", eligible: true, fitStatus: "matched", reasons: [] },
+    { funderId: "grade-b", rank: 2, score: 80, grade: "B", eligible: true, fitStatus: "matched", reasons: [] },
+    { funderId: "grade-c", rank: 3, score: 70, grade: "C", eligible: true, fitStatus: "matched", reasons: [] },
+    { funderId: "grade-d", rank: 4, score: 65, grade: "D", eligible: true, fitStatus: "matched", reasons: [] },
+    { funderId: "grade-f", rank: 5, score: 40, grade: "F", eligible: true, fitStatus: "matched", reasons: [] },
     { funderId: "grade-dq", rank: 6, score: 0, grade: "DQ", eligible: false, reasons: [] },
   ]
   assert.deepEqual(autoSelectableFunderIds(scored), ["grade-a", "grade-b", "grade-c"])
@@ -231,7 +233,7 @@ test("scoreDeal autoSelectableFunderIds requires send-gate ok", async () => {
   assert.deepEqual((await getDealScores(actor(workspaceId), deal.id)).autoSelectableFunderIds, [])
 })
 
-test("MIC-163 same inputs and policyVersion 2 produce identical scores and retry identity", async () => {
+test("MIC-163 same inputs and policyVersion 3 produce identical scores and retry identity", async () => {
   const workspaceId = `ws-score-repro-${newId().slice(0, 8)}`
   await addWorkspace(workspaceId)
   const deal = await merchantDeal(workspaceId, "repro")
@@ -239,7 +241,7 @@ test("MIC-163 same inputs and policyVersion 2 produce identical scores and retry
   const first = await scoreDeal(actor(workspaceId), deal.id)
   const second = await scoreDeal(actor(workspaceId), deal.id)
   assert.equal(first.snapshot.policyVersion, POLICY_VERSION)
-  assert.equal(first.snapshot.policyVersion, 2)
+  assert.equal(first.snapshot.policyVersion, POLICY_VERSION)
   assert.equal(second.snapshot.id, first.snapshot.id)
   assert.deepEqual(second.snapshot.scores, first.snapshot.scores)
   const listed = await getDealScores(actor(workspaceId), deal.id)
@@ -280,7 +282,7 @@ test("MIC-163 synthetic fit scenario ranks, grades, and describes fit not approv
   assert.deepEqual(autoSelectableFunderIds(ranked), ["harbor-fit"])
 })
 
-test("MIC-163 missing inputs are unknown, never a fake pass; unspecified rules are skipped", async () => {
+test("MIC-163 missing inputs are unknown, never a fake pass; unspecified rules require broker review", async () => {
   const workspaceId = "workspace-score-unk"
   const missingFico: ScoringInputs = { ...harborInputs, fico: undefined }
   const required = await evaluateFunderScore(actor(workspaceId), missingFico, funderRecord("need-fico", workspaceId, "Need FICO"), [
@@ -297,8 +299,8 @@ test("MIC-163 missing inputs are unknown, never a fake pass; unspecified rules a
   assert.equal(unknown?.result, "unknown")
   assert.notEqual(unknown?.result, "pass")
   assert.equal(open.reasons.some((reason) => reason.ruleId === "hard.fico"), false)
-  assert.equal(open.eligible, true)
-  assert.notEqual(open.grade, "DQ")
+  assert.equal(open.eligible, false)
+  assert.equal(open.fitStatus, "needs_review")
 })
 
 function assertHardDq(score: { eligible: boolean; grade: string; score: number; reasons: Array<{ ruleId: string; result: string }> }, ruleId: string, result: "fail" | "unknown" = "fail") {
@@ -448,7 +450,7 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
   await addKey(`score-read-${workspaceId}`, "score-read", ["deals:read"])
   await addKey(`score-write-${workspaceId}`, "score-write", ["deals:write"])
   await addKey(`score-intake-${workspaceId}`, "score-intake", ["intake:write"])
-  await addKey(`score-other-${otherId}`, "score-other", ["deals:write"], otherId)
+  await addKey(`score-other-${otherId}`, "score-other", ["deals:read", "deals:write"], otherId)
 
   const params = { params: Promise.resolve({ dealId: deal.id }) }
   const request = (secret: string, method = "GET", body?: string) => new Request(`http://localhost/api/mca/underwriting/scores/${deal.id}`, {
@@ -471,10 +473,25 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
   const posted = await postScores(request("score-write", "POST", "{}"), params)
   assert.equal(posted.status, 200)
   const postedBody = await posted.json() as { snapshot: { scores: Array<{ grade: string; eligible: boolean }>; policyVersion: number }; autoSelectableFunderIds: string[] }
-  assert.equal(postedBody.snapshot.policyVersion, 2)
+  assert.equal(postedBody.snapshot.policyVersion, POLICY_VERSION)
   assert.equal(postedBody.snapshot.scores.length > 0, true)
   assert.equal(postedBody.autoSelectableFunderIds.length, 1)
 
+  const countBefore = await getDatabase().prepare<{ count: string }>("SELECT count(*) AS count FROM mca_score_snapshots WHERE workspace_id = ? AND deal_id = ?").get(workspaceId, deal.id)
+  const fitResponse = await getFit(request("score-read"), params)
+  assert.equal(fitResponse.status, 200)
+  assert.equal(fitResponse.headers.get("cache-control"), "no-store")
+  const fitBody = await fitResponse.json() as { contractVersion: number; brokerSelectionRequired: boolean; lenders: Array<{status:string}> }
+  assert.equal(fitBody.contractVersion, 1)
+  assert.equal(fitBody.brokerSelectionRequired, true)
+  assert.equal(fitBody.lenders[0].status, "matched")
+  const countAfter = await getDatabase().prepare<{ count: string }>("SELECT count(*) AS count FROM mca_score_snapshots WHERE workspace_id = ? AND deal_id = ?").get(workspaceId, deal.id)
+  assert.deepEqual(countAfter,countBefore)
+  assert.equal((await getFit(request("score-intake"),params)).status,403)
+  assert.equal((await getFit(request("score-write"),params)).status,403)
+  assert.equal((await getFit(request("score-other"),params)).status,404)
+  const repActor = { ...actor(workspaceId), role: "rep" as const, membershipId: "unassigned-rep", userId: "unassigned-user" }
+  await assert.rejects(() => getLenderFit(repActor,deal.id),(error:{status?:number}) => error.status === 404 || error.status === 403)
   const other = await postScores(request("score-other", "POST", "{}"), params)
   assert.equal(other.status, 404)
   await assert.rejects(
@@ -667,4 +684,60 @@ test("scoreDeal loads latest DataMerch records for defaultFlag hard DQ", async (
   assert.equal(blocked.eligible, false)
   assert.equal(blocked.grade, "DQ")
   assert.equal(blocked.reasons.some((reason) => reason.ruleId === "hard.default_status" && reason.result === "fail"), true)
+})
+
+test("empty and unspecified criteria cannot be a configured match", async () => {
+  const lender=funderRecord("empty-fit", "w", "Synthetic")
+  const empty=await evaluateFunderScore({workspaceId:"w"} as DealActor,harborInputs,lender,[],"2026-10-01T00:00:00Z")
+  assert.equal(empty.fitStatus,"needs_review")
+  assert.equal(empty.eligible,false)
+  const unspecified=await evaluateFunderScore({workspaceId:"w"} as DealActor,harborInputs,lender,[{id:"u",funderId:lender.id,field:"fico",operator:"min",unit:"fico",value:null,unspecified:true}],"2026-10-01T00:00:00Z")
+  assert.equal(unspecified.fitStatus,"needs_review")
+  assert.equal(unspecified.eligible,false)
+})
+
+test("provenance, expiry and inactivity control suggested fits deterministically", async () => {
+  const lender=funderRecord("dated-fit", "w", "Synthetic")
+  const rule:EligibilityRule={id:"dated",funderId:lender.id,field:"fico",operator:"min",unit:"fico",value:600,unspecified:false,sourceText:"Synthetic policy",sourceAsOf:"2026-09-01",validUntil:"2026-10-01"}
+  const a={workspaceId:"w"} as DealActor
+  const matched=await evaluateFunderScore(a,harborInputs,lender,[rule],"2026-10-01T00:00:00Z")
+  assert.equal(matched.fitStatus,"matched")
+  assert.deepEqual(await evaluateFunderScore(a,harborInputs,lender,[rule],"2026-10-01T00:00:00Z"),matched)
+  assert.equal((await evaluateFunderScore(a,harborInputs,lender,[rule],"2026-10-02T00:00:00Z")).fitStatus,"stale_criteria")
+  assert.equal((await evaluateFunderScore(a,harborInputs,{...lender,active:false},[rule],"2026-10-01T00:00:00Z")).fitStatus,"inactive")
+  const unknown=await evaluateFunderScore(a,harborInputs,lender,[{...rule,sourceAsOf:undefined}],"2026-10-01T00:00:00Z")
+  assert.equal(unknown.fitStatus,"needs_review")
+  assert.deepEqual(autoSelectableFunderIds([{...unknown,rank:1,grade:"A"}]),[])
+})
+
+test("active changes invalidate snapshots and inactive lenders remain explained", async () => {
+  const ws=`ws-score-active-${newId().slice(0,8)}`
+  await addWorkspace(ws)
+  const deal=await merchantDeal(ws,"active-drift")
+  const id=await seedFunder(ws,"active-lender",fitRules())
+  await scoreDeal(actor(ws),deal.id)
+  await exec("UPDATE mca_funders SET active=0 WHERE workspace_id=? AND id=?",ws,id)
+  assert.equal((await getDealScores(actor(ws),deal.id)).stale,true)
+  assert.equal((await getLenderFit(actor(ws),deal.id)).lenders[0].status,"inactive")
+  const inactive=await scoreDeal(actor(ws),deal.id)
+  assert.equal(inactive.snapshot.scores[0].fitStatus,"inactive")
+  await exec("UPDATE mca_funders SET active=1 WHERE workspace_id=? AND id=?",ws,id)
+  assert.equal((await getDealScores(actor(ws),deal.id)).stale,true)
+  assert.equal((await getLenderFit(actor(ws),deal.id)).lenders[0].score,null)
+})
+
+test("configured expiry invalidates actionable snapshot reads without inserting another snapshot", async () => {
+  const ws=`ws-score-expiry-${newId().slice(0,8)}`
+  await addWorkspace(ws)
+  const deal=await merchantDeal(ws,"expiry-drift")
+  const id=await seedFunder(ws,"expiry-lender",fitRules())
+  const scored=await scoreDeal(actor(ws),deal.id)
+  // Model a date boundary passing after scoring; preserve criterion version as time alone would.
+  await exec("UPDATE mca_funder_criteria SET valid_until='2026-01-02' WHERE workspace_id=? AND funder_id=?",ws,id)
+  const read=await getLenderFit(actor(ws),deal.id)
+  assert.equal(read.snapshotId,scored.snapshot.id)
+  assert.equal(read.stale,true)
+  assert.equal(read.lenders[0].status,"stale_criteria")
+  assert.equal(read.lenders[0].score,null)
+  assert.deepEqual((await getDealScores(actor(ws),deal.id)).autoSelectableFunderIds,[])
 })
