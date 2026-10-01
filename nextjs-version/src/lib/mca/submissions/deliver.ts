@@ -9,9 +9,12 @@ import { sendSubmissionEmail } from "./email-templates"
 import { createPortalTask } from "./portal"
 import { deliverWebhook } from "./webhook"
 import { autoDeliveryBlockReason } from "./auto-delivery-gate"
+import { findAttempt } from "./repository"
+import { assertBrokerApprovedDelivery } from "./broker-approval"
 
 export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
   await assertCompanyOperational(job.workspaceId)
+  await assertBrokerApprovedDelivery(job)
   const autoBlock = await autoDeliveryBlockReason(job)
   if (autoBlock) return { ok: false, state: "skipped", correlationId: job.id, errorCode: "auto_submit_cancelled", errorMessage: autoBlock }
   if (isSandboxSubmissionJob(job)) {
@@ -22,7 +25,7 @@ export async function deliverSubmission(job: SubmissionJob, packaged: OutgoingDo
     case "email":
       return sendSubmissionEmail(job, packaged)
     case "api": {
-      const result = await submitViaAdapter(job)
+      const result = await submitViaAdapter(job, { correlationId: (await findAttempt(job.id, job.attemptKey))?.correlationId })
       return {
         ok: result.ok,
         state: result.ok ? "sent" : "failed",

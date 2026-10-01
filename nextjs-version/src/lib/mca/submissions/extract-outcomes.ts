@@ -195,6 +195,7 @@ export interface ExtractOfferView {
 export interface ExtractOutcomeView {
   state: "empty" | "preview" | "success" | "unmatched" | "ready"
   replyId: string
+  proposalKey?: string
   classification?: OutcomeClassification
   termsUnknown?: boolean
   requiresReview?: boolean
@@ -222,6 +223,7 @@ export interface ExtractListResult {
 }
 
 export interface ExtractCorrectionInput {
+  expectedProposalKey?: unknown
   classification?: unknown
   amount?: unknown
   rate?: unknown
@@ -240,6 +242,7 @@ export interface ExtractRunInput {
   replyId?: unknown
   confirm?: unknown
   expectedClassification?: unknown
+  expectedProposalKey?: unknown
 }
 
 const numberTermSchema = z.object({
@@ -733,6 +736,16 @@ function viewMessage(snapshot: ReplyExtractionSnapshot, persisted: boolean): str
   return "Approval extracted."
 }
 
+/** Pins the full reviewed terms/evidence/match; persistence bookkeeping is excluded. */
+export function replyProposalKey(snapshot: ReplyExtractionSnapshot): string {
+  const proposal = { ...snapshot }
+  delete (proposal as Partial<ReplyExtractionSnapshot>).preview
+  delete (proposal as Partial<ReplyExtractionSnapshot>).corrected
+  delete proposal.committedAt
+  delete proposal.offerId
+  return createHash("sha256").update(JSON.stringify(proposal)).digest("hex")
+}
+
 function viewFrom(input: {
   reply: FunderReply
   snapshot?: ReplyExtractionSnapshot
@@ -747,6 +760,7 @@ function viewFrom(input: {
   return {
     state: input.persisted ? (unmatched ? "unmatched" : "success") : "preview",
     replyId: input.reply.id,
+    proposalKey: replyProposalKey(input.snapshot),
     classification: input.snapshot.classification,
     termsUnknown: input.snapshot.termsUnknown,
     requiresReview: input.snapshot.requiresReview,
@@ -1030,7 +1044,9 @@ async function runExtract(actor: DealActor, replyId: string, options: {
   preview: boolean
   correction?: ExtractCorrectionInput
   expectedClassification?: OutcomeClassification
+  expectedProposalKey?: unknown
 }): Promise<ExtractOutcomeView> {
+  if (!options.preview && (actor.source !== "user" || !actor.userId)) throw new AppError(403, "broker_review_required", "A broker must review and confirm extracted terms.")
   const reply = await getReply(actor, replyId)
   if (reply.matchedDealId) await getDealForDocument(actor, reply.matchedDealId)
   const row = await loadReplyRow(actor.workspaceId, reply.id)
@@ -1042,6 +1058,10 @@ async function runExtract(actor: DealActor, replyId: string, options: {
   }
   if (!options.preview && !options.correction && previous?.classification !== options.expectedClassification) {
     throw new AppError(409, "proposal_changed", "The proposed outcome changed. Review it again before confirming.")
+  }
+  const expectedKey = options.correction?.expectedProposalKey ?? options.expectedProposalKey
+  if (!options.preview && (!previous || typeof expectedKey !== "string" || replyProposalKey(previous) !== expectedKey)) {
+    throw new AppError(409, "proposal_changed", "The proposed terms changed. Review the current proposal before confirming.")
   }
   const classifiedRaw = options.correction
     ? correctionToClassified(options.correction, previous)
@@ -1061,9 +1081,14 @@ async function runExtract(actor: DealActor, replyId: string, options: {
     previous,
   })
   return withImmediateTransaction(async () => {
+    await db().prepare("SELECT id FROM mca_funder_replies WHERE workspace_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, reply.id)
     const current = await loadReplyRow(actor.workspaceId, reply.id)
     if (!current) throw new AppError(404, "resource_not_found", "The requested resource was not found.")
-    const latestPrevious = extractionFromEvidence(current.match_evidence) ?? previous
+    const latestPrevious = extractionFromEvidence(current.match_evidence)
+    if (current.matched_deal_id !== (reply.matchedDealId ?? null) || current.matched_job_id !== (reply.matchedJobId ?? null)
+      || (!options.preview && (!latestPrevious || replyProposalKey(latestPrevious) !== expectedKey))) {
+      throw new AppError(409, "proposal_changed", "The reply match or proposed terms changed. Review it again before confirming.")
+    }
     let snapshot = snapshotOf({
       reply,
       classified: normalized.classified,
@@ -1149,7 +1174,7 @@ export async function persistReplyExtraction(actor: DealActor, input: ExtractRun
   if (input.confirm !== true || !asClassification(input.expectedClassification)) {
     throw new AppError(409, "review_required", "Review the proposed classification and explicitly confirm it before saving.")
   }
-  return runExtract(actor, replyId, { preview: false, expectedClassification: input.expectedClassification as OutcomeClassification })
+  return runExtract(actor, replyId, { preview: false, expectedClassification: input.expectedClassification as OutcomeClassification, expectedProposalKey: input.expectedProposalKey })
 }
 
 export async function correctReplyExtraction(actor: DealActor, replyId: string, input: ExtractCorrectionInput): Promise<ExtractOutcomeView> {
