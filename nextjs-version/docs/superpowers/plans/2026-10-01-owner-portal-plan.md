@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Node.js 24.x, pnpm 11.1.2, Next.js 16, React 19, TypeScript, Zod, `pg`, Drizzle migrations, Supabase Auth/Postgres/private Storage, Stripe and Twilio. Vercel hosts the app. No new queue, ORM or observability vendor is planned.
 
-**Spec:** [Owner portal design brief](2026-10-01-owner-portal-design.md). [Discovery/source evidence](2026-10-01-owner-portal-discovery.md). Read all three together.
+**Spec:** [Owner portal design brief](../specs/2026-10-01-owner-portal-design.md). [Discovery/source evidence](../specs/2026-10-01-owner-portal-discovery.md). Read all three together.
 
 ## Global constraints
 
