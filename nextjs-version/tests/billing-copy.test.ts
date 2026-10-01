@@ -8,7 +8,7 @@ import { cardRequiredTrial, isStripeCheckoutTrialConfigured } from "../src/lib/m
 
 const sourceRoot = join(import.meta.dirname, "../src")
 const copyPaths = [
-  "app/(auth)/onboarding/page.tsx",
+  "components/mca/auth/company-onboarding.tsx",
   "app/(dashboard)/pricing",
   "components/mca/billing-panel.tsx",
   "lib/mca/email.ts",
@@ -118,7 +118,7 @@ test("unconfigured Stripe keeps the no-card trial wording", () => {
     const faqs = pricingFaqCopy(false, 21)
     assert.equal(faqs.find(item => item.question === "Is there a free trial available?")?.answer, "Yes, all plans come with a 14-day free trial. No credit card is required to start your trial, and you can explore all features during this period.")
     assert.equal(faqs.find(item => item.question === "Can I cancel my subscription anytime?")?.answer, "Yes, you can cancel your subscription at any time from your account settings. You'll continue to have access to all features until the end of your current billing period.")
-    const onboarding = readFileSync(join(sourceRoot, "app/(auth)/onboarding/page.tsx"), "utf8")
+    const onboarding = readFileSync(join(sourceRoot, "components/mca/auth/company-onboarding.tsx"), "utf8")
     const panel = readFileSync(join(sourceRoot, "components/mca/billing-panel.tsx"), "utf8")
     assert.match(onboarding, /Start a 14-day trial with no card\. Trial access includes up to 5 users, even if you select more paid seats\. No automatic charge; subscribe when ready\./)
     assert.ok(panel.includes(unconfiguredCheckout))
@@ -144,7 +144,7 @@ test("configured Stripe Checkout discloses the card-required trial on onboarding
     assert.match(cancelFaq, /21-day trial/)
     assert.match(cancelFaq, /Plans & Billing/)
     assert.match(cancelFaq, /Stripe billing portal/)
-    const onboarding = readFileSync(join(sourceRoot, "app/(auth)/onboarding/page.tsx"), "utf8")
+    const onboarding = readFileSync(join(sourceRoot, "components/mca/auth/company-onboarding.tsx"), "utf8")
     assert.match(onboarding, /Enter a card at Stripe Checkout to start a \$\{account\.trialDays\}-day trial/)
     assert.match(onboarding, /automatically charges/)
     assert.match(onboarding, /licensed seats/)
@@ -164,7 +164,7 @@ test("unset lifecycle flag preserves origin/main FAQ and onboarding trial disclo
   try {
     assert.equal(pricingFaqCopy(true, 21).find(item => item.question === "Is there a free trial available?")?.answer,
       "Yes. Enter a card at Stripe Checkout to start a 21-day trial. Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.")
-    const onboarding = readFileSync(join(sourceRoot, "app/(auth)/onboarding/page.tsx"), "utf8")
+    const onboarding = readFileSync(join(sourceRoot, "components/mca/auth/company-onboarding.tsx"), "utf8")
     assert.match(onboarding, /Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal\./)
     assert.match(onboarding, /account\.trialLifecycleEnabled\?/)
   } finally { if (previous === undefined) delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED; else process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED = previous }
@@ -199,7 +199,7 @@ test("card-required flag removes reachable no-card copy with invalid Stripe sett
       const localEmail=renderBillingEmailContent({data:{kind:"trial_ending"},actionUrl:"https://app.example.test/settings/billing"})
       assert.match(localEmail.text,/Your existing trial is ending soon/)
       assert.doesNotMatch(localEmail.text+localEmail.html,/no.card/i)
-      const onboarding=readFileSync(join(sourceRoot,"app/(auth)/onboarding/page.tsx"),"utf8")
+      const onboarding=readFileSync(join(sourceRoot,"components/mca/auth/company-onboarding.tsx"),"utf8")
       const panel=readFileSync(join(sourceRoot,"components/mca/billing-panel.tsx"),"utf8")
       assert.match(onboarding,/account\.cardRequiredTrial\?.*:"Start a 14-day trial with no card/)
       assert.match(panel,/state\.cardRequiredTrial\?.*:" No card required; up to 5 trial users/)
