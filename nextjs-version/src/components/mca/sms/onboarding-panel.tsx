@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge"
 import { requestJson } from "@/lib/mca/client"
 import { smsChannelStatus } from "@/lib/mca/integrations/connection-status"
 import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
+import type { SmsReadiness } from "@/lib/mca/sms/contracts"
 type Status = {
   optOutReady: boolean
   emailVerified: boolean
@@ -33,6 +34,7 @@ type Status = {
     membership_id: string | null
     state: string
     monthly_cents: number
+    readiness: SmsReadiness
   }[]
   operations: {
     id: string
@@ -500,6 +502,9 @@ export function SmsOnboardingPanel() {
                       </Button>
                     )}
                   </div>
+                  <p className="text-sm text-muted-foreground" role="status">
+                    {n.readiness.ready ? "Ready for SMS when merchant consent is recorded." : n.readiness.blockers.map((b) => b.message).join(" ")}
+                  </p>
                   {n.state !== "released" && (
                     <Label className="block">
                       Assigned employee

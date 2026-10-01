@@ -12,7 +12,7 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 import type { SmsAccount, SmsMessage } from "@/lib/mca/sms/contracts"
 
 type ConsentState = "loading" | "unknown" | "opted_in" | "opted_out"
-type ComposerAccount = Pick<SmsAccount, "id" | "label" | "provider" | "senderMasked" | "providerConfigured" | "isDefault" | "state">
+type ComposerAccount = Pick<SmsAccount, "id" | "label" | "provider" | "senderMasked" | "providerConfigured" | "isDefault" | "state" | "readiness">
 type ComposerMessage = SmsMessage & { body: string }
 type ComposerContext = {
   dealId: string
@@ -70,7 +70,7 @@ export function smsComposerGate(input: {
   if (!input.body.trim()) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Enter the exact text the merchant will receive." }
   if (input.consent === "opted_out") return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: "This merchant opted out of text messages." }
   if (input.consent !== "opted_in") return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: "Record merchant SMS consent before sending." }
-  if (!selected.providerConfigured) return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: "The selected account is not ready. Ask an administrator to finish provider setup in Settings." }
+  if (!selected.providerConfigured) return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: selected.readiness?.blockers.map((b) => b.message).join(" ") || "The selected account is not ready. Ask an administrator to finish provider setup in Settings." }
   if (!input.previewed) return { phase: "validation", sendEnabled: false, previewEnabled: true, reason: "Preview the exact message before sending." }
   return { phase: "ready", sendEnabled: true, previewEnabled: true, reason: "Ready to send this exact text." }
 }
@@ -242,7 +242,7 @@ export function SmsComposerPanel({ dealId }: { dealId: string }) {
           <select className="h-9 rounded-md border bg-transparent px-3 text-sm" value={accountId} onChange={(event) => setAccountId(event.target.value)}>
             <option value="">Choose an assigned account</option>
             {payload.accounts.map((account) => <option key={account.id} value={account.id}>
-              {account.label} · {providerLabel[account.provider] ?? account.provider} · {account.senderMasked}{account.providerConfigured ? "" : " · credentials absent"}{account.isDefault ? " · default" : ""}
+              {account.label} · {providerLabel[account.provider] ?? account.provider} · {account.senderMasked}{account.providerConfigured ? "" : " · setup incomplete"}{account.isDefault ? " · default" : ""}
             </option>)}
           </select>
         </Label>
@@ -270,7 +270,7 @@ export function SmsComposerPanel({ dealId }: { dealId: string }) {
         {preview.block && <p className="mt-2 text-sm text-amber-700">{preview.block.message}</p>}
       </div>}
 
-      {selected && !selected.providerConfigured && <p className="text-sm text-amber-700">This account is marked credentials absent. Configure its workspace secret before sending.</p>}
+      {selected && !selected.providerConfigured && <p className="text-sm text-amber-700">{selected.readiness?.blockers.map((b) => b.message).join(" ") || "This account needs provider setup in Settings → Connections."}</p>}
 
       <div>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recent thread</p>
