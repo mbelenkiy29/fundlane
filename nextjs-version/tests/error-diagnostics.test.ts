@@ -48,3 +48,28 @@ test("apiError logs the redacted cause of an unexpected 500 without exposing it"
   assert.equal(logged[0].cause.errorCode, "E1")
   assert.equal(logged[0].cause.errorMessage, "bad [redacted]")
 })
+
+test("redacts OAuth, labeled credentials, Twilio secrets and bank/card numbers", () => {
+  const hex = "a1b2c3d4".repeat(4)
+  const cases = [
+    "ya29.synthetic-access_token", "1//synthetic-refresh_token",
+    "EwAsynthetic+access/token==", "EwBsynthetic+access/token==", "M.R3_synthetic.refresh-token",
+    "access_token=opaque-value", "refresh_token=opaque/value", "client_secret=opaque+value",
+    "api_key=opaque-value", "authorization: Basic c3ludGhldGljOnNlY3JldA==",
+    '"ACCESS_TOKEN": "opaque-value"', "authorization: custom-value",
+    `AC${hex}`, `SK${hex}`, `token ${hex}`, `secret=${hex}`, `auth token: ${hex}`,
+    "12345678", "1234 5678 9012 3456", "1234-5678-9012-3456", "1234 5678-9012 3456",
+  ]
+  for (const value of cases) {
+    const result = redactDiagnosticText(`Provider rejected ${value}; retry later`)
+    assert.equal(result.replaceAll('"', ""), `Provider rejected ${value.startsWith("auth ") ? "auth " : ""}[redacted]; retry later`, value)
+  }
+  assert.equal(redactDiagnosticText("code 1234567 param price_123 req_abc123"), "code 1234567 param price_123 req_abc123")
+})
+
+test("preserves custom constructor/name and token-shaped provider codes", () => {
+  class ProviderTimeout extends Error {}
+  assert.equal(describeUnexpectedError(new ProviderTimeout("try again")).errorClass, "ProviderTimeout")
+  const error = Object.assign(new Error("try again"), { name: "ProviderBusy", code: "new_provider_code", requestId: "req_retry-123", param: "line_items.0.price" })
+  assert.deepEqual(describeUnexpectedError(error), { errorClass: "ProviderBusy", errorMessage: "try again", errorCode: "new_provider_code", providerRequestId: "req_retry-123", providerParam: "line_items.0.price" })
+})

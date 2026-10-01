@@ -77,7 +77,8 @@ test("SMS ledger upgrade from main 0075 preserves voice, document notifications,
     assert.equal(applied.rows[0].count, 1)
     const history = (await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows
     assert.deepEqual(history.slice(0, appliedBefore.length), appliedBefore)
-    assert.equal(history.length, appliedBefore.length + 1)
+    // Later additive migrations may follow the ledger; every journal entry applies exactly once.
+    assert.equal(history.length, journal.entries.length)
     await migrate(drizzle(client), { migrationsFolder: "drizzle" })
     assert.deepEqual((await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows, history)
     for (const [i,t] of tables.entries()) assert.deepEqual((await client.query(`SELECT * FROM ${t}`)).rows, before[i].rows, t)

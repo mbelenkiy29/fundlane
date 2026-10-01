@@ -1,4 +1,5 @@
 import { renderEmailContent, requestSystemEmail, sendTransactionalWebhook, type SystemProvider, type TransactionalMessage } from "./email-transport"
+import { runtimeSignals } from "./runtime-signals"
 import {
   documentWorkerReady,
   incidentTransition,
@@ -26,6 +27,11 @@ export type MonitorConfig = {
   systemBaseUrl?: string
   recoveryAlerts?: boolean
   assistantEnabled?: boolean
+  emailRuntimeEnabled?: boolean
+  smsRuntimeEnabled?: boolean
+  calendarRuntimeEnabled?: boolean
+  privateEmailRuntimeEnabled?: boolean
+  notificationRuntimeEnabled?: boolean
   thresholds?: {
     workerSeconds: number
     queueSeconds: number
@@ -71,6 +77,15 @@ export function recoveryRules(metrics: Metrics, config: MonitorConfig): [string,
     ["billing_maintenance_failures", (metrics.billingMaintenanceFailures ?? 0) >= thresholds.billingFailures, 1],
   ]
   if (config.assistantEnabled) rules.push(["assistant_usage", (metrics.assistantRuns ?? 0) >= thresholds.assistantRuns, 1])
+  for (const [runtime, signal] of Object.entries(metrics.runtimeSignals ?? {})) {
+    if (signal.queueSeconds !== undefined) rules.push([`${runtime}_queue_age`, signal.queueSeconds > thresholds.queueSeconds, 3])
+    if (signal.failures !== undefined) rules.push([`${runtime}_provider_failures`, signal.failures >= thresholds.providerFailures, 1])
+    if (signal.staleSyncs !== undefined) rules.push([`${runtime}_stale_sync`, signal.staleSyncs > 0, 3])
+    if (signal.reconnect !== undefined) rules.push([`${runtime}_senders`, signal.reconnect >= thresholds.providerFailures, 1])
+    if (signal.expiredLeases !== undefined) rules.push([`${runtime}_expired_leases`, signal.expiredLeases > 0, 3])
+    // A bounded email tick can take 230 seconds; match sender readiness's ten-minute grace.
+    if ("heartbeatSeconds" in signal) rules.push([`${runtime}_worker`, signal.heartbeatSeconds == null || signal.heartbeatSeconds < 0 || signal.heartbeatSeconds > 600, 3])
+  }
   for (const [kind, age] of Object.entries(metrics.queueAgeByKind ?? {})) {
     if (/^[a-z_]{1,50}$/.test(kind) && Number.isFinite(age))
       rules.push([`queue_age_${kind}`, age > (thresholds.queueByKind?.[kind] ?? thresholds.queueSeconds), 3])
@@ -138,8 +153,10 @@ export async function runMonitor(
     let metrics: Metrics | null = null
     try {
       metrics = await queueMetrics(db, config.documentRuntimeEnabled)
+      if (config.recoveryAlerts) metrics.runtimeSignals = await runtimeSignals(db, config)
     } catch {
       /* A failed aggregate remains unavailable. */
+      metrics = null
     }
     await db.query(
       `INSERT INTO mca_private.ops_health(checked_at,website_ok,database_ok,website_ms,database_ms,deployment,metrics) SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE EXISTS(SELECT 1 FROM mca_private.ops_control WHERE lease_token=$8 AND lease_until>now())`,

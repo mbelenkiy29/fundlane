@@ -14,6 +14,13 @@ export interface ErrorDiagnostics {
 }
 
 const SECRET_PATTERNS: RegExp[] = [
+  // Labeled credentials, including quoted JSON and authorization schemes.
+  /\b(?:access_token|refresh_token|client_secret|api_key|authorization)["']?\s*[:=]\s*["']?(?:(?:Bearer|Basic)\s+)?[^\s"'&,;]+/gi,
+  /\b(?:ya29\.|1\/\/|Ew[AB]|M\.R3_)[A-Za-z0-9._~+\/=-]+/g,
+  /\b(?:AC|SK)[a-f0-9]{32}\b/gi,
+  /\b(?:token|secret)["']?\s*(?:[:=]\s*)?["']?[a-f0-9]{32}\b/gi,
+  // Account/card numbers, including common grouped display forms.
+  /\b\d(?:[ -]*\d){7,}\b/g,
   /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+/g,
   /\bwhsec_[A-Za-z0-9]+/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,

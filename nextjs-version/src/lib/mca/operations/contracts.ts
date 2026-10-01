@@ -1,3 +1,4 @@
+import type { RuntimeSignals } from "./runtime-signals"
 export type Window = "24h" | "7d" | "30d"
 export type Metrics = {
   queued: number
@@ -21,6 +22,7 @@ export type Metrics = {
   queueAgeByKind?: Record<string, number>
   billingMaintenanceFailures?: number
   assistantRuns?: number
+  runtimeSignals?: RuntimeSignals
 }
 export function documentWorkerReady(metrics: {
   documentWorkerHeartbeatAgeSeconds: number | null

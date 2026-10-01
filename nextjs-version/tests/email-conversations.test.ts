@@ -1039,3 +1039,24 @@ test("callback state consumption cannot leave an unlocked disconnect window", as
     assert.equal((await findSenderById(ws,id))?.credentialCipher,undefined)
   } finally { hook.mock.restore() }
 })
+
+test("sync failure timestamps are recorded by the worker and cleared on success", async () => {
+  const id = await sender(), q = await queueEmail(rep, input(id))
+  await runMessagingWorkerOnce()
+  await due()
+  setEmailProviderFetchForTests(async () => new Response("", { status: 503 }))
+  const started = Date.now()
+  await runMessagingWorkerOnce()
+  const failed = await db().prepare<{ sync_error: string | null; sync_error_at: string | null }>(
+    "SELECT sync_error,sync_error_at FROM mca_email_conversations WHERE id=?"
+  ).get(q.conversationId)
+  assert.ok(failed?.sync_error)
+  assert.ok(failed?.sync_error_at && new Date(failed.sync_error_at).getTime() >= started)
+  setEmailProviderFetchForTests(async () => Response.json({ messages: [] }))
+  await due()
+  await runMessagingWorkerOnce()
+  const recovered = await db().prepare<{ sync_error: string | null; sync_error_at: string | null }>(
+    "SELECT sync_error,sync_error_at FROM mca_email_conversations WHERE id=?"
+  ).get(q.conversationId)
+  assert.deepEqual(recovered, { sync_error: null, sync_error_at: null })
+})
