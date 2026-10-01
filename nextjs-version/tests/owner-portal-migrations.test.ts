@@ -14,7 +14,7 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 const run = promisify(execFile)
 const sql = (tag: string) => readFile(`drizzle/${tag}.sql`, "utf8")
 
-test("SMS ledger upgrade from main 0073 preserves voice, document notifications, company, audit and AI records; runtime privileges stay restricted", async () => {
+test("SMS ledger upgrade from main 0075 preserves voice, document notifications, company, audit and AI records; runtime privileges stay restricted", async () => {
   const fixture = await createPostgresTestDatabase("sms_credit_upgrade", { migrateSchema: false })
   const client = new Client(postgresConnection(fixture.databaseUrl))
   await client.connect()
@@ -26,13 +26,20 @@ test("SMS ledger upgrade from main 0073 preserves voice, document notifications,
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
     END $$`)
-    const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8")) as { entries: {tag: string; idx: number; when: number}[] }
-    const prior = journal.entries.filter(e => e.idx < 65)
-    assert.equal(prior.at(-1)?.tag, "0073_document_notification_discovery")
-    const ledger = journal.entries.find(e => e.tag === "0074_sms_credit_ledger")!
+    const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8")) as { entries: {tag: string; idx: number; when: number; version: string; breakpoints: boolean}[] }
+    const prior = journal.entries.filter(e => e.idx < 67)
+    assert.deepEqual(prior.slice(-5), [
+      { idx: 62, version: "7", when: 1790385600020, tag: "0071_notification_foundation", breakpoints: true },
+      { idx: 63, version: "7", when: 1790385600021, tag: "0072_browser_voice", breakpoints: true },
+      { idx: 64, version: "7", when: 1790819000072, tag: "0073_document_notification_discovery", breakpoints: true },
+      { idx: 65, version: "7", when: 1790819000073, tag: "0074_submission_previews", breakpoints: true },
+      { idx: 66, version: "7", when: 1790819000074, tag: "0075_lender_criteria_provenance", breakpoints: true },
+    ])
+    const ledger = journal.entries.find(e => e.tag === "0076_sms_credit_ledger")!
+    assert.deepEqual(ledger, { idx: 67, version: "7", when: 1790819000075, tag: "0076_sms_credit_ledger", breakpoints: true })
     assert.equal(new Set(journal.entries.map(e => e.idx)).size, journal.entries.length)
     assert.equal(new Set(journal.entries.map(e => e.tag)).size, journal.entries.length)
-    assert.ok(ledger.when > prior.at(-1)!.when, "ledger must execute after the exact main 0073 baseline")
+    assert.ok(ledger.when > prior.at(-1)!.when, "ledger must execute after the exact main 0075 baseline")
     assert.equal(new Set(journal.entries.map(e => e.when)).size, journal.entries.length)
     for (let i = 1; i < journal.entries.length; i++) {
       assert.ok(journal.entries[i].idx > journal.entries[i - 1].idx)
@@ -60,13 +67,17 @@ test("SMS ledger upgrade from main 0073 preserves voice, document notifications,
     const tables = ['workspaces','sms_companies','sms_numbers','sms_registrations','sms_meter_events','mca_credit_accounts','platform_admin_audit','mca_notification_preferences','voice_config','voice_calls','mca_document_notification_discovery']
     const before = []
     for (const table of tables) before.push(await client.query(`SELECT * FROM ${table}`))
-    assert.equal((await client.query("SELECT max(created_at)::text latest FROM drizzle.__drizzle_migrations")).rows[0].latest, "1790819000072")
+    const appliedBefore = (await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows
+    assert.equal(appliedBefore.length, prior.length)
+    assert.equal((await client.query("SELECT max(created_at)::text latest FROM drizzle.__drizzle_migrations")).rows[0].latest, "1790819000074")
     assert.equal((await client.query("SELECT to_regclass('sms_credit_accounts') ledger")).rows[0].ledger, null)
     await migrate(drizzle(client), { migrationsFolder: "drizzle" })
     assert.equal((await client.query("SELECT to_regclass('sms_credit_accounts') ledger")).rows[0].ledger, "sms_credit_accounts")
-    const applied = await client.query("SELECT count(*)::int count FROM drizzle.__drizzle_migrations WHERE created_at=1790819000073")
+    const applied = await client.query("SELECT count(*)::int count FROM drizzle.__drizzle_migrations WHERE created_at=1790819000075")
     assert.equal(applied.rows[0].count, 1)
     const history = (await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows
+    assert.deepEqual(history.slice(0, appliedBefore.length), appliedBefore)
+    assert.equal(history.length, appliedBefore.length + 1)
     await migrate(drizzle(client), { migrationsFolder: "drizzle" })
     assert.deepEqual((await client.query("SELECT * FROM drizzle.__drizzle_migrations ORDER BY id")).rows, history)
     for (const [i,t] of tables.entries()) assert.deepEqual((await client.query(`SELECT * FROM ${t}`)).rows, before[i].rows, t)
