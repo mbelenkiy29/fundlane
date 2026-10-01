@@ -33,6 +33,17 @@ export function PersonalEmailConnections({
     const timer = setInterval(refresh, 15000)
     return () => clearInterval(timer)
   }, [load])
+  async function disconnect(id: string) {
+    setBusy(true)
+    setError("")
+    try {
+      await requestJson(`/api/mca/senders/${id}/revoke`, { method: "POST" })
+      await load()
+      onChanged?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to disconnect email.")
+    } finally { setBusy(false) }
+  }
   async function connect(provider: "google" | "microsoft", id?: string) {
     setBusy(true)
     setError("")
@@ -135,6 +146,10 @@ export function PersonalEmailConnections({
           administrator.
         </p>
       )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        Disconnect stops new sends and reply sync. Conversation history stays in Fundlane.
+        Disconnecting here does not revoke consent in your provider account.
+      </p>
       <div className="mt-4 space-y-2">
         {payload?.senders
           .filter((s) => s.provider === "google" || s.provider === "microsoft")
@@ -151,6 +166,12 @@ export function PersonalEmailConnections({
                     : "Connection or additional permissions required"}
                 </p>
               </div>
+              {sender.state !== "revoked" && sender.canReconnect && (
+                <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => void disconnect(sender.id)}>
+                  Disconnect
+                </Button>
+              )}
               {!sender.conversationReady && sender.canReconnect && (
                 <Button
                   size="sm"

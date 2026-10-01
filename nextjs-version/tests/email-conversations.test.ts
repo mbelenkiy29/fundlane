@@ -1,5 +1,5 @@
 import "./helpers/business-auth"
-import test, { before, after, beforeEach } from "node:test"
+import test, { before, after, beforeEach, mock } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -45,7 +45,10 @@ import {
   setEmailProviderFetchForTests,
   type RemoteEmail,
   mimeEmail,
+  Mailbox,
 } from "../src/lib/mca/email-conversations/providers"
+import { getMailboxReadiness } from "../src/lib/mca/senders/readiness"
+import { GET as readinessGet } from "../src/app/api/mca/senders/readiness/route"
 import { POST as sendPost } from "../src/app/api/mca/email/messages/route"
 import { GET as contextGet } from "../src/app/api/mca/email/context/route"
 import { GET as cronGet } from "../src/app/api/cron/email-conversations/route"
@@ -890,4 +893,149 @@ test("conversation pagination follows recent activity without leaking denied dea
   await assert.rejects(() => listEmailConversations(rep, undefined, "bad"), {
     code: "email_cursor_invalid",
   })
+})
+
+
+test("mailbox readiness isolates merchant senders and distinguishes consumer activation", async () => {
+  const id = await sender()
+  const result = await getMailboxReadiness(rep)
+  assert.equal(result.senders.length, 1)
+  assert.equal(result.senders[0].connection, "connected")
+  assert.equal(result.consumer.state, "disabled")
+  assert.equal(result.ready, false)
+  assert.equal((await getMailboxReadiness(other)).senders.length, 0)
+  assert.equal((await getMailboxReadiness({ ...admin, workspaceId: "foreign-workspace" })).senders.length, 0)
+  process.env.MCA_EMAIL_CONVERSATIONS_RUNTIME = "vercel_cron"
+  assert.equal((await getMailboxReadiness(rep)).consumer.state, "missing")
+  await db().execute("INSERT INTO mca_email_runtime_lease(id,token,expires_at,last_started_at,last_completed_at) VALUES(1,'fixture',now(),now(),now())")
+  assert.equal((await getMailboxReadiness(rep)).ready, true)
+  await db().execute("UPDATE mca_email_runtime_lease SET last_completed_at=now()-interval '11 minutes'")
+  assert.equal((await getMailboxReadiness(rep)).consumer.state, "stale")
+  delete process.env.MCA_GOOGLE_SENDER_CLIENT_SECRET
+  assert.equal((await getMailboxReadiness(rep)).providers.google, false)
+  process.env.MCA_GOOGLE_SENDER_CLIENT_SECRET = "synthetic"
+  await db().prepare("UPDATE mca_email_senders SET purpose='submission' WHERE id=?").run(id)
+  assert.equal((await getMailboxReadiness(rep)).senders.length, 0)
+  const response = await readinessGet(request("/api/mca/senders/readiness"))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get("cache-control"), "no-store")
+  assert.equal((await readinessGet(new Request("https://app.example.test/api/mca/senders/readiness"))).status, 401)
+})
+
+test("disconnect clears OAuth grant and pending states but retains conversation identity", async () => {
+  const id = await sender()
+  const queued = await queueEmail(rep, input(id))
+  const pending = await startSenderOAuth(rep, id)
+  const state = new URL(pending.authorizationUrl).searchParams.get("state")!
+  await revokeSender(rep, id)
+  assert.equal((await findSenderById(ws,id))?.credentialCipher, undefined)
+  assert.equal((await getMailboxReadiness(rep)).senders[0].connection, "disconnected")
+  await assert.rejects(completeSenderOAuth(rep,{state,code:"synthetic"}), /expired or was already used/)
+  await runMessagingWorkerOnce()
+  assert.equal(calls,0)
+  assert.equal((await emailMessages(rep,queued.conversationId)).messages[0].id,queued.id)
+})
+
+test("disconnect during OAuth exchange cannot restore credentials", async () => {
+  const id = await sender()
+  const pending = await startSenderOAuth(rep, id)
+  const state = new URL(pending.authorizationUrl).searchParams.get("state")!
+  let release!:()=>void, began!:()=>void
+  const held = new Promise<void>(resolve=>{release=resolve})
+  const started = new Promise<void>(resolve=>{began=resolve})
+  setSenderOAuthFetchForTests(async url => {
+    if(String(url).includes("token")) {
+      began(); await held
+      return Response.json({access_token:"synthetic",refresh_token:"synthetic",expires_in:3600,scope:GOOGLE_SENDER_SCOPES.join(" ")})
+    }
+    return Response.json({email:from})
+  })
+  const completion = completeSenderOAuth(rep,{state,code:"synthetic"})
+  await started
+  await revokeSender(rep,id)
+  release()
+  await assert.rejects(completion,/connection changed/i)
+  assert.equal((await findSenderById(ws,id))?.state,"revoked")
+  assert.equal((await findSenderById(ws,id))?.credentialCipher,undefined)
+})
+
+
+test("a cached mailbox cannot dispatch after disconnect", async () => {
+  const id = await sender()
+  const saved = await findSenderById(ws,id)
+  const mailbox = new Mailbox(saved!)
+  await mailbox.connect()
+  await revokeSender(rep,id)
+  await assert.rejects(mailbox.send({id:"cached",internetId:"<cached@example.test>",to,subject:"Synthetic",body:"Synthetic"}),/connection changed/i)
+  assert.equal(calls,0)
+})
+
+
+test("readiness requires a session and reports shared, expired and refreshable grants", async () => {
+  const id = await sender("microsoft")
+  await updateSender(admin,id,{memberIds:["other"]})
+  let result = await getMailboxReadiness(other)
+  assert.equal(result.senders[0].provider,"microsoft")
+  assert.equal(result.senders[0].canReconnect,false)
+  assert.equal(result.senders[0].connection,"connected")
+  const saved = await findSenderById(ws,id)
+  await db().prepare("UPDATE mca_email_senders SET credential_cipher=? WHERE id=?").run(encryptSenderCredential(ws,{kind:"oauth",accessToken:"synthetic",refreshToken:"synthetic",email:from,scope:MICROSOFT_SENDER_SCOPES.join(" "),expiresAt:"2000-01-01T00:00:00Z"}),saved!.id)
+  assert.equal((await getMailboxReadiness(rep)).senders[0].connection,"connected")
+  await db().prepare("UPDATE mca_email_senders SET state='expired' WHERE id=?").run(id)
+  result=await getMailboxReadiness(rep)
+  assert.equal(result.senders[0].connection,"reconnect_required")
+  assert.equal(result.ready,false)
+  await db().prepare("INSERT INTO api_keys(id,workspace_id,name,prefix,secret_hash,scopes,rate_limit_per_minute,created_by,created_at) VALUES(?,?,'fixture','mca_test',?,'[\"deals:read\"]',60,'admin',?)").run(newId(),ws,hashOpaqueToken("mca_mailbox_key"),nowIso())
+  const response=await readinessGet(new Request("https://app.example.test/api/mca/senders/readiness",{headers:{authorization:"Bearer mca_mailbox_key"}}))
+  assert.equal(response.status,403)
+  assert.equal(JSON.stringify(result).includes("synthetic"),false)
+})
+
+
+test("OAuth initiation cannot save an authorization link from before disconnect", async () => {
+  const id = await sender()
+  const database = db(), original = database.prepare.bind(database)
+  let inject = true
+  const hook = mock.method(database,"prepare",(sql:string) => {
+    const statement = original(sql)
+    if(sql === "SELECT * FROM mca_email_senders WHERE workspace_id = ? AND id = ?") {
+      const get=statement.get.bind(statement)
+      statement.get=async(...args:Parameters<typeof get>) => {
+        const row=await get(...args)
+        if(inject) { inject=false; await revokeSender(rep,id) }
+        return row
+      }
+    }
+    return statement
+  })
+  try {
+    await assert.rejects(startSenderOAuth(rep,id),/connection changed/i)
+    assert.equal((await db().prepare<{count:string}>("SELECT count(*) FROM mca_email_oauth_states WHERE sender_id=?").get(id))?.count,"0")
+  } finally { hook.mock.restore() }
+})
+
+test("callback state consumption cannot leave an unlocked disconnect window", async () => {
+  const id=await sender(), pending=await startSenderOAuth(rep,id)
+  const state=new URL(pending.authorizationUrl).searchParams.get("state")!
+  const database=db(), original=database.prepare.bind(database)
+  let disconnected=false
+  const hook=mock.method(database,"prepare",(sql:string) => {
+    const statement=original(sql)
+    if(sql.startsWith("DELETE FROM mca_email_oauth_states") && sql.includes("RETURNING")) {
+      const get=statement.get.bind(statement)
+      statement.get=async(...args:Parameters<typeof get>) => {
+        const row=await get(...args)
+        disconnected=true
+        await revokeSender(rep,id)
+        return row
+      }
+    }
+    return statement
+  })
+  try {
+    await completeSenderOAuth(rep,{state,code:"synthetic"})
+    if(!disconnected) await revokeSender(rep,id)
+    assert.equal((await findSenderById(ws,id))?.state,"revoked")
+    assert.equal((await findSenderById(ws,id))?.credentialCipher,undefined)
+  } finally { hook.mock.restore() }
 })

@@ -4,6 +4,7 @@ import { AppError } from "../errors"
 import { refreshSenderCredential } from "../senders/oauth"
 import {
   decryptSenderCredential,
+  findSenderById,
   encryptSenderCredential,
   senderConversationReady,
   type StoredEmailSender,
@@ -254,6 +255,10 @@ export class Mailbox {
       parsed.password
     )
       throw new Error("Invalid email provider pagination URL.")
+    const current = await findSenderById(this.sender.workspaceId, this.sender.id)
+    if (!current || !senderConversationReady(current) || current.credentialCipher !== this.sender.credentialCipher) {
+      throw new AppError(409, "email_connection_changed", "Email connection changed; reconnect or reload the mailbox.")
+    }
     let response: Response
     await (await import("../company-access")).assertCompanyOperational(this.sender.workspaceId)
     if (sending) await (await import("../outbound-approval")).assertOutboundDispatch(this.sender.workspaceId, new Date().toISOString())
