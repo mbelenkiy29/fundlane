@@ -22,6 +22,7 @@ import { processJobDelivery } from "../src/lib/mca/submissions/outbox"
 import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
 import { checkCompleteness } from "../src/lib/mca/underwriting/completeness"
 import { runAnalysis } from "../src/lib/mca/underwriting/analysis"
+import { getDealScores } from "../src/lib/mca/underwriting/scoring"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const actor: DealActor = { workspaceId: newId(), userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId: newId() }
@@ -129,6 +130,19 @@ test("invalid selection, other workspace, expired approval and stale analysis fa
   await assert.rejects(()=>sendApplicationSubmission(actor,item.intakeId,preview.id),{code:"submission_preview_stale"})
   await getDatabase().prepare("UPDATE deals SET version=version+1 WHERE id=?").run(item.dealId)
   await assert.rejects(()=>prepareApplicationSubmission(actor,item.intakeId,[funderId]),{code:"submission_preview_stale"})
+  assert.equal((await listJobsForDeal(actor.workspaceId,item.dealId)).length,0)
+})
+
+test("missing criteria provenance blocks an eligible A-C fit at preview",async()=>{
+  const reviewFunderId=(await createFunder(actor,{idempotencyKey:newId(),legalName:"Unverified Capital",routes:[]})).funder.id
+  await publishFunderCriteria(actor,reviewFunderId,[{field:"requested_amount",operator:"max",unit:"usd",value:100000,sourceText:"Synthetic unverified policy",unspecified:false}])
+  const item=await readyApplication()
+  const scores=await getDealScores(actor,item.dealId)
+  const fit=scores.snapshot?.scores.find(score=>score.funderId===reviewFunderId)
+  assert.equal(fit?.eligible,true)
+  assert.ok(fit && ["A","B","C"].includes(fit.grade))
+  assert.equal(fit.fitStatus,"needs_review")
+  await assert.rejects(()=>prepareApplicationSubmission(actor,item.intakeId,[reviewFunderId]),{code:"funder_not_eligible"})
   assert.equal((await listJobsForDeal(actor.workspaceId,item.dealId)).length,0)
 })
 

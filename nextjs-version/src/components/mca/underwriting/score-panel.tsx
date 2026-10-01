@@ -17,19 +17,25 @@ const labels: Record<LenderFitStatus, string> = {
 }
 
 export function ScorePanel({ dealId }: { dealId: string }) {
-  const [payload, setPayload] = React.useState<LenderFitResponse>()
+  const [loaded, setLoaded] = React.useState<{ dealId: string; data: LenderFitResponse }>()
+  const payload = loaded?.dealId === dealId ? loaded.data : undefined
+  const requestId = React.useRef(0)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string>()
   const load = React.useCallback(async () => {
-    setLoading(true); setError(undefined)
-    try { setPayload(await requestJson<LenderFitResponse>(`/api/mca/underwriting/lender-fit/${encodeURIComponent(dealId)}`)) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Lender fit could not be loaded.") }
-    finally { setLoading(false) }
+    const currentRequest = ++requestId.current
+    setLoaded(undefined); setLoading(true); setError(undefined)
+    try {
+      const data = await requestJson<LenderFitResponse>(`/api/mca/underwriting/lender-fit/${encodeURIComponent(dealId)}`)
+      if (currentRequest === requestId.current) setLoaded({ dealId, data })
+    } catch (caught) {
+      if (currentRequest === requestId.current) setError(caught instanceof Error ? caught.message : "Lender fit could not be loaded.")
+    } finally { if (currentRequest === requestId.current) setLoading(false) }
   }, [dealId])
   React.useEffect(() => { void load() }, [load])
   async function reanalyze() {
-    setBusy(true); setError(undefined)
+    setLoaded(undefined); setBusy(true); setError(undefined)
     try {
       await requestJson(`/api/mca/underwriting/scores/${encodeURIComponent(dealId)}`, { method: "POST", body: "{}" })
       await load()

@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { criteriaReadiness } from "../src/lib/mca/funders/criteria-readiness"
 import { projectLenderFit } from "../src/lib/mca/underwriting/lender-fit-projection"
 import type { EligibilityRule, FunderRecord } from "../src/lib/mca/funders/contracts"
@@ -42,4 +43,12 @@ test("deterministic match includes actual versioned facts", () => {
   assert.deepEqual(projectLenderFit(base),result)
   const additional={...funder,id:"a"}
   assert.deepEqual(projectLenderFit({...base,funders:[funder,additional]}),projectLenderFit({...base,funders:[additional,funder]}))
+})
+
+test("score panel hides prior deal fits during loads and failed refreshes", () => {
+  const source = readFileSync(new URL("../src/components/mca/underwriting/score-panel.tsx", import.meta.url), "utf8")
+  assert.match(source, /loaded\?\.dealId === dealId \? loaded\.data : undefined/)
+  assert.match(source, /const load = React\.useCallback\(async \(\) => \{[\s\S]*?setLoaded\(undefined\); setLoading\(true\)/)
+  assert.match(source, /async function reanalyze\(\) \{\s*setLoaded\(undefined\)/)
+  assert.match(source, /if \(currentRequest === requestId\.current\) setLoaded\(\{ dealId, data \}\)/)
 })
