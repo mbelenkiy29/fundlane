@@ -47,12 +47,12 @@ test("migration comparison reports parity failures, duplicates, invalid journals
   assert.throws(() => compareMigrations([], {}), /expected an entries array/)
 })
 
-test("real migration fixture is consistent at 0068_sms_keyword_consent", async () => {
+test("real migration fixture is consistent at 0069_sms_company_provisioning", async () => {
   const files = await readdir(new URL("../drizzle/", import.meta.url))
   const journal = JSON.parse(await readFile(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"))
   const result = compareMigrations(files, journal)
   assert.equal(result.consistent, true)
-  assert.equal(result.journalHead, "0068_sms_keyword_consent")
+  assert.equal(result.journalHead, "0069_sms_company_provisioning")
 })
 
 test("cron validation covers routes, checked defaults, and schedule-free Vercel config", async () => {

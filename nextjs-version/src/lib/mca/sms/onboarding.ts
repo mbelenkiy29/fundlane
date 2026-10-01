@@ -5,6 +5,7 @@ import {
   withImmediateTransaction,
   nowIso,
   recordAuditEvent,
+  type DbExecutor,
 } from "../db"
 import {
   encryptSensitive,
@@ -78,6 +79,8 @@ export type Company = {
   number_limit: number
   monthly_limit_cents: number
   registration_limit_cents: number
+  provisioning_state: string
+  onboarding_exempt: number
   updated_at: string
 }
 export type ProviderConfig = {
@@ -163,12 +166,24 @@ export async function saveProvider(workspaceId: string, p: ProviderConfig) {
 }
 export async function ensureCompany(actor: DealActor) {
   admin(actor)
+  const exempt = await smsOnboardingExempt(getDatabase(), actor.workspaceId)
   await getDatabase()
     .prepare(
-      "INSERT INTO sms_companies (workspace_id,owner_user_id,created_at,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING"
+      "INSERT INTO sms_companies (workspace_id,owner_user_id,onboarding_exempt,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING"
     )
-    .run(actor.workspaceId, actor.userId, nowIso(), nowIso())
+    .run(actor.workspaceId, actor.userId, exempt ? 1 : 0, nowIso(), nowIso())
   return (await company(actor.workspaceId))!
+}
+const internalSmsWorkspaces = new Set([
+  "e533f62c-f92f-4367-990e-9e91c47c23bb", "c880cbaf-f18d-4050-beab-840220624406",
+  "5fbcdb18-9f64-48f1-99f5-4b5055262e8b", "7a0377b5-42d3-4939-a31b-11a75efc7710",
+  "8ecf9c6b-d269-4694-b016-ac48b5727c21",
+])
+export async function smsOnboardingExempt(db: DbExecutor, workspaceId: string): Promise<boolean> {
+  if (workspaceId === "a2672c56-c652-4eed-9243-bf2b760a384c") return false
+  if (internalSmsWorkspaces.has(workspaceId)) return true
+  const state = await db.prepare<{ state_kind: string }>("SELECT state_kind FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+  return state?.state_kind === "internal_demo" || state?.state_kind === "synthetic"
 }
 export async function signUp(
   input: z.infer<typeof signupSchema>,
@@ -200,11 +215,12 @@ export async function signUp(
       password: input.password,
       role: "admin",
     })
+    const exempt = await smsOnboardingExempt(db, created.workspaceId)
     await db
       .prepare(
-        "INSERT INTO sms_companies (workspace_id,owner_user_id,created_at,updated_at) VALUES (?,?,?,?)"
+        "INSERT INTO sms_companies (workspace_id,owner_user_id,onboarding_exempt,created_at,updated_at) VALUES (?,?,?,?,?)"
       )
-      .run(created.workspaceId, created.userId, nowIso(), nowIso())
+      .run(created.workspaceId, created.userId, exempt ? 1 : 0, nowIso(), nowIso())
     await recordAuditEvent({
       context: { workspaceId: created.workspaceId, userId: created.userId },
       action: "company.signup",
@@ -321,7 +337,7 @@ export async function onboardingStatus(actor: DealActor) {
     optOutReady: !!c?.opt_out_ready,
     numbers: manageable
       ? numbers
-      : numbers.filter((n) => n.membership_id === actor.membershipId),
+      : numbers.filter((n) => n.membership_id === null || n.membership_id === actor.membershipId),
     operations,
   }
 }

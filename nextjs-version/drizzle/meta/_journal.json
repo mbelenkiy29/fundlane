@@ -421,6 +421,13 @@
       "when": 1790385600017,
       "tag": "0068_sms_keyword_consent",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790385600018,
+      "tag": "0069_sms_company_provisioning",
+      "breakpoints": true
     }
   ]
 }
