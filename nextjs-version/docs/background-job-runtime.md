@@ -35,7 +35,7 @@ This is the source inventory as of 2026-10-01. The decision is **Vercel Cron + S
 
 ### Live production inventory — 2026-10-01, 12:35 PM ET (16:35 UTC)
 
-Read-only inventory of production Supabase **`drubsfvhlggmtyiigwxy`**, supplied by Michael for #35; transcribed here without making provider calls in this task:
+Read-only inventory of production Supabase **`drubsfvhlggmtyiigwxy`** (pg_cron `cron.job`/`cron.job_run_details` and the Edge Functions list), taken by the orchestrator for #35 with read-only queries:
 
 | Active pg_cron schedule | Cadence | Last 24 hours | Last run (2026-10-01 ET) |
 | --- | --- | --- | --- |
