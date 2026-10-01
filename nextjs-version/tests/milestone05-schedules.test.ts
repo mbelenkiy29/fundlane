@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -295,4 +296,24 @@ test("MIC-111 direct GET enforces the same payment permissions as the Payments U
   const body = await allowed.json() as { schedules: unknown[]; installments: unknown[] }
   assert.ok(Array.isArray(body.schedules))
   assert.ok(Array.isArray(body.installments))
+})
+
+test("pending shared recipients are masked in schedule list, exceptions, and paid/replayed installments", async () => {
+  const created = await createReverseConsolidation(actor, frozenInput("pending-profile-schedule"))
+  await runDistributionSchedules(actor, { scheduleId: created.schedule.id })
+  await assertPendingProfileHidden(ids.memberB, () => listReverseConsolidations(actor))
+  await assertPendingProfileHidden(ids.memberB, () => exceptOccurrence(actor, created.schedule.id, { occurrenceDate: FROZEN_DATES[3] }))
+  const installment = (await listReverseConsolidations(actor)).installments.find(i => i.scheduleId === created.schedule.id && i.recipientMembershipId === ids.memberB && i.occurrenceDate === FROZEN_DATES[0])!
+  assert.ok(installment)
+  for (const input of [
+    { installmentId: installment.id },
+    { occurrenceDate: FROZEN_DATES[0], recipientMembershipId: ids.memberB },
+  ]) await assertPendingProfileHidden(ids.memberB, async () => {
+    // Cover both the write response and the already-paid retry for each selector.
+    await getDatabase().prepare("UPDATE mca_scheduled_installments SET status='expected',paid_at=NULL WHERE id=?").run(installment.id)
+    const paid = await markInstallmentPaid(actor, created.schedule.id, input)
+    const replay = await markInstallmentPaid(actor, created.schedule.id, input)
+    assert.equal(paid.recipientName, replay.recipientName)
+    return [paid, replay]
+  })
 })

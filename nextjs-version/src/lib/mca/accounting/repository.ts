@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { getDatabase, newId, nowIso, parseJson, type DbExecutor } from "../db"
 import type { AccountingPayment, AccountingPaymentStatus, AccountingPaymentType, PaymentDistribution, SplitTemplateVersion } from "./contracts"
@@ -115,7 +116,7 @@ type DistributionRow = { id: string; payment_id: string; recipient_membership_id
   status: PaymentDistribution["status"]; expected_at: string | null; paid_at: string | null; snapshot_json: string }
 
 export async function listDistributionRows(workspaceId: string, paymentId?: string): Promise<PaymentDistribution[]> {
-  const rows = await getDatabase().prepare<DistributionRow>(`SELECT d.id,d.payment_id,d.recipient_membership_id,u.name recipient_name,
+  const rows = await getDatabase().prepare<DistributionRow>(`SELECT d.id,d.payment_id,d.recipient_membership_id,${membershipProfileNameSql} recipient_name,
     d.template_id,d.template_version,d.percentage_basis_points,d.amount_cents,d.status,d.expected_at,d.paid_at,d.snapshot_json
     FROM mca_payment_distributions d JOIN memberships m ON m.workspace_id=d.workspace_id AND m.id=d.recipient_membership_id
     JOIN users u ON u.id=m.user_id WHERE d.workspace_id=? AND (?::text IS NULL OR d.payment_id=?)
