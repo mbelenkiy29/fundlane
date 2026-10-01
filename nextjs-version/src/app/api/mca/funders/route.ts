@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   try {
     const actor = await actorForDeals(await requireWorkspaceAccess(request, { scopes: ["deals:read"] }))
     const includeInactive = new URL(request.url).searchParams.get("includeInactive") === "true"
-    return NextResponse.json({ funders: await listFunders(actor, { includeInactive }) }, { headers: noStore })
+    return NextResponse.json({ funders: await listFunders(actor, { includeInactive }), ...(process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED === "true" ? { providerReadinessEnabled: true } : {}) }, { headers: noStore })
   } catch (error) {
     return apiError(error)
   }

@@ -1,3 +1,4 @@
+import type { FunderRoute } from "../../funders/contracts"
 import type {
   AdapterCapabilities,
   AdapterEnvironment,
@@ -75,6 +76,7 @@ export interface AdapterFunderOption {
   name: string
   adapterSlug?: string
   configuredAdapterSlug?: string
+  routes?: FunderRoute[]
   hasApiRoute: boolean
 }
 
@@ -99,6 +101,7 @@ export interface AdapterInventory {
     name: string
     adapterSlug?: string
     routeActive: boolean
+    destinations: Array<{ kind: string; active: boolean; providerReadiness: string }>
     credentials: Array<{ adapterSlug: string; environment: AdapterEnvironment; present: boolean; active: boolean }>
     apiContract: string
     callback: string

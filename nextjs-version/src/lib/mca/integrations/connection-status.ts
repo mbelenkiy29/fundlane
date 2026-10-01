@@ -1,3 +1,4 @@
+import { FUNDER_VERIFICATION_SUMMARY } from "../submissions/provider-readiness"
 import type { SmsReadiness } from "../sms/contracts"
 
 export const CONNECTION_LABELS = [
@@ -206,6 +207,7 @@ export function smsChannelStatus(input: {
 }
 
 export function funderSubmissionChannelStatus(input: {
+  providerReadinessEnabled?: boolean
   funders?: FunderStatusInput[]
   credentials?: AdapterCredentialStatusInput[]
 }): ChannelStatus {
@@ -217,6 +219,9 @@ export function funderSubmissionChannelStatus(input: {
     funder.active === false ? [] : (funder.routes ?? []).filter((route) => route.active),
   )
   const readyCredential = credentials.some((credential) => credential.hasCredential && credential.active !== false)
+  if (input.providerReadinessEnabled && (activeRoutes.length || readyCredential)) {
+    return { channel: "funder", title, href, label: "Pending", ready: false, detail: FUNDER_VERIFICATION_SUMMARY }
+  }
   if (activeRoutes.length || readyCredential) {
     const kinds = [...new Set(activeRoutes.map((route) => route.kind))]
     return {

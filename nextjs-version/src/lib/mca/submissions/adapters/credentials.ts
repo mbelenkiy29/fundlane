@@ -1,5 +1,6 @@
 import "server-only"
 
+import { providerReadiness, providerReadinessLabel } from "../provider-readiness"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../../auth"
 import { decryptSensitive, encryptSensitive } from "../../crypto"
@@ -421,7 +422,7 @@ async function funderNameMap(actor: DealActor, includeInventory = false): Promis
       id: funder.id,
       name: funder.nickname?.trim() || funder.legalName,
       adapterSlug: apiRoute?.destination,
-      ...(includeInventory ? { configuredAdapterSlug: apiRoute?.destination ?? funder.routes.find((route) => route.kind === "api")?.destination } : {}),
+      ...(includeInventory ? { configuredAdapterSlug: apiRoute?.destination ?? funder.routes.find((route) => route.kind === "api")?.destination, routes: funder.routes } : {}),
       hasApiRoute: Boolean(apiRoute),
     })
   }
@@ -441,6 +442,7 @@ function buildInventory(funders: Map<string, AdapterFunderOption>, records: Stor
       name: funder.name,
       adapterSlug: slug,
       routeActive: funder.hasApiRoute,
+      destinations: (funder.routes ?? []).map(route => ({ kind: route.kind, active: route.active, providerReadiness: providerReadinessLabel(route) })),
       credentials: scoped.map((record) => ({
         adapterSlug: record.adapterSlug,
         environment: record.environment,
@@ -450,10 +452,10 @@ function buildInventory(funders: Map<string, AdapterFunderOption>, records: Stor
         })()),
         active: record.active,
       })),
-      apiContract: slug === "sandbox" ? "Local deterministic fixture" : "No verified provider API contract in repo",
+      apiContract: providerReadiness(slug ? { kind: "api", destination: slug } : null) === "sandbox verified" ? "Local deterministic fixture" : "No verified provider API contract in repo",
       callback: adapter?.capabilities.webhooks && adapter.parseWebhook ? "Handler in code; provider delivery unverified" : "No provider callback verified",
-      commercialAccess: slug === "sandbox" ? "Local test only" : "Provider authorization not evidenced",
-      readiness: slug === "sandbox" ? "sandbox verified" as const : "untested" as const,
+      commercialAccess: providerReadiness(slug ? { kind: "api", destination: slug } : null) === "sandbox verified" ? "Local test only" : "Provider authorization not evidenced",
+      readiness: providerReadiness(slug ? { kind: "api", destination: slug } : null),
     }
   })
   return {
@@ -461,10 +463,10 @@ function buildInventory(funders: Map<string, AdapterFunderOption>, records: Stor
     unassignedAdapters: listAdapters().filter((adapter) => !assigned.has(adapter.slug)).map((adapter) => ({
       slug: adapter.slug,
       credentialsPresent: false as const,
-      apiContract: adapter.slug === "sandbox" ? "Local deterministic fixture" : "No verified provider API contract in repo",
+      apiContract: providerReadiness({ kind: "api", destination: adapter.slug }) === "sandbox verified" ? "Local deterministic fixture" : "No verified provider API contract in repo",
       callback: adapter.capabilities.webhooks && adapter.parseWebhook ? "Handler in code; provider delivery unverified" : "No provider callback verified",
-      commercialAccess: adapter.slug === "sandbox" ? "Local test only" : "Provider authorization not evidenced",
-      readiness: adapter.slug === "sandbox" ? "sandbox verified" as const : "untested" as const,
+      commercialAccess: providerReadiness({ kind: "api", destination: adapter.slug }) === "sandbox verified" ? "Local test only" : "Provider authorization not evidenced",
+      readiness: providerReadiness({ kind: "api", destination: adapter.slug }),
     })),
   }
 }

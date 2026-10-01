@@ -1,3 +1,4 @@
+import { providerReadinessView } from "@/lib/mca/submissions/provider-readiness"
 import { NextResponse } from "next/server"
 import { requireWorkspaceAccess } from "@/lib/mca/auth"
 import { actorForDeals } from "@/lib/mca/deals/service"
@@ -15,7 +16,7 @@ export async function GET(request: Request) {
     const actor = await actorForDeals(await requireWorkspaceAccess(request, { roles: ["admin", "super_admin"], sessionOnly: true }))
     const settings = await getAutoSubmitSettings(actor.workspaceId)
     const funders = await listFunders(actor)
-    return NextResponse.json({ settings, funders: funders.filter(funder => funder.active).map(funder => ({ id: funder.id, name: funder.legalName })) }, { headers: noStore })
+    return NextResponse.json({ settings, funders: funders.filter(funder => funder.active).map(funder => ({ id: funder.id, name: funder.legalName, ...providerReadinessView(funder.routes.find(route => route.active)) })) }, { headers: noStore })
   } catch (error) { return apiError(error) }
 }
 

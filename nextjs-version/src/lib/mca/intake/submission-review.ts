@@ -1,5 +1,6 @@
 import "server-only"
 
+import { providerReadinessView } from "../submissions/provider-readiness"
 import { createHash } from "node:crypto"
 import { decryptSensitive, encryptSensitive } from "../crypto"
 import { getDatabase, newId, nowIso, withTransaction } from "../db"
@@ -93,7 +94,7 @@ type Snapshot = Awaited<ReturnType<typeof currentSnapshot>>
 
 function previewView(id: string, expiresAt: string, snapshot: Snapshot): ApplicationSubmissionPreview {
   return { id, expiresAt, destinations: snapshot.destinations.map(({ funderId, name, route, approved }) => ({
-    funderId, name, method: route.kind,
+    funderId, name, method: route.kind, ...providerReadinessView(route),
     // Webhook routes can contain credentials. Only show the destination's host/path.
     destination: route.kind === "custom_webhook" ? safeWebhookDestination(route.destination) : route.destination,
     documents: approved.documents.map((document) => ({ id: document.documentId, filename: snapshot.documents.find((original) => original.id === document.originalDocumentId)?.displayFilename ?? document.documentId })),

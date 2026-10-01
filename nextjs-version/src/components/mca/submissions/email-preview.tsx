@@ -50,6 +50,7 @@ type PreviewItem = {
 type PreviewPayload = {
   dealId: string
   delivery: "preview"
+  providerReadiness?: string
   sender: { id: string; fromName: string; fromAddress: string }
   previews: PreviewItem[]
   canManage: boolean
@@ -198,6 +199,7 @@ export function EmailPreview({ dealId }: { dealId?: string }) {
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {preview?.providerReadiness && <p className="text-sm text-muted-foreground">{preview.providerReadiness}</p>}
         {loading && <p role="status" className="text-sm text-muted-foreground">Loading submission email preview…</p>}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}

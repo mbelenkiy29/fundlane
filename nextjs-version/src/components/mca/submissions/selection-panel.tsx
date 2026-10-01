@@ -33,6 +33,7 @@ type SelectionFunder = {
   nickname?: string
   active: boolean
   route: { kind: RouteKind; label: string; destination: string; documentExceptions: string[]; active: boolean } | null
+  providerReadiness?: string
   preflightErrors: Array<{ field: string; message: string }>
   checklist: Array<{ documentId: string; filename: string; category: string; checksum: string; excluded: boolean }>
 }
@@ -72,7 +73,7 @@ type ConfirmPayload = {
 type BrokerPreview = {
   id: string
   expiresAt: string
-  destinations: Array<{ funderId: string; name: string; method: string; destination: string; errors: string[]; documents: Array<{ id: string; filename: string; checksum: string }>; email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string } }>
+  destinations: Array<{ funderId: string; name: string; method: string; destination: string; providerReadiness?: string; errors: string[]; documents: Array<{ id: string; filename: string; checksum: string }>; email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string } }>
 }
 
 type ProtectionPreview = {
@@ -285,6 +286,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
           <p className="font-medium">Review before sending</p>
           {brokerPreview.destinations.map(destination => <article key={destination.funderId} className="space-y-2 border-t pt-3 text-sm">
             <p className="font-medium">{destination.name} · {destination.method}</p><p className="break-words">Destination: {destination.destination}</p>
+            {destination.providerReadiness && <p className="text-muted-foreground">{destination.providerReadiness}</p>}
             {destination.errors.length > 0 && <p role="status">This destination will be rejected: {destination.errors.join(" ")}</p>}
             <ul>{destination.documents.map(document => <li key={document.id}>{document.filename} · {document.checksum.slice(0, 12)}</li>)}</ul>
             {destination.email && <div className="space-y-1"><p>From: {destination.email.from}</p><p>To: {destination.email.to.join(", ")}</p><p>Cc: {destination.email.cc.join(", ") || "None"}</p><p>Reply to: {destination.email.replyTo}</p><p>Subject: {destination.email.subject}</p><pre className="whitespace-pre-wrap font-sans">{destination.email.body}</pre></div>}
@@ -344,6 +346,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                           <Badge variant="destructive">No active route</Badge>
                         )}
                       </div>
+                      {funder.providerReadiness && <p className="text-sm text-muted-foreground">{funder.providerReadiness}</p>}
                       {funder.route && (
                         <p className="text-sm text-muted-foreground">{funder.route.label}: {funder.route.destination}</p>
                       )}
