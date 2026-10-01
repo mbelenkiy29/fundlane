@@ -1,0 +1,7 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import { assertVoiceActor,numberBlockers,terminalOutcome } from "../src/lib/mca/voice/policy"
+const actor={authType:"session",userId:"u",workspaceId:"w",membershipId:"m",role:"rep"}
+test("only active interactive tenant memberships can call",()=>{assert.doesNotThrow(()=>assertVoiceActor(actor));for(const patch of [{authType:"api_key"},{userId:null},{membershipId:null},{role:null},{role:"guest"}])assert.throws(()=>assertVoiceActor({...actor,...patch}));for(const role of ["manager","admin","super_admin"])assert.doesNotThrow(()=>assertVoiceActor({...actor,role}))})
+test("number readiness is independent of SMS registration but fails for release/suspension/foreign account",()=>{const n={state:"registering",companySuspended:false,providerConfigured:true,providerAccountSid:"AC1"};assert.deepEqual(numberBlockers(n,"AC1"),[]);assert.ok(numberBlockers({...n,state:"released"},"AC1").length);assert.ok(numberBlockers({...n,companySuspended:true},"AC1").length);assert.ok(numberBlockers(n,"AC2").length);assert.ok(numberBlockers(undefined,"AC1").length)})
+test("only authoritative terminal Dial outcomes determine missed calls",()=>{assert.equal(terminalOutcome("inbound","no-answer"),"missed");assert.equal(terminalOutcome("inbound","busy"),"missed");assert.equal(terminalOutcome("inbound","completed"),"completed");assert.equal(terminalOutcome("outbound","no-answer"),"no-answer");assert.throws(()=>terminalOutcome("inbound","ringing"));assert.throws(()=>terminalOutcome("inbound","forged"))})

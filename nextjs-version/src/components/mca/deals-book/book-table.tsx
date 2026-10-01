@@ -3,6 +3,7 @@
 import { Columns3, MessageSquare, Phone } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useVoiceReady } from "@/components/mca/voice/voice-launcher"
 import { Card } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -75,6 +76,7 @@ export function BookTable({ rows, visible, onOpen, onSms, onCall }: {
   onSms: (row: BookRow) => void
   onCall: (row: BookRow) => void
 }) {
+  const voiceReady = useVoiceReady()
   const show = (id: BookColumnId) => visible.has(id)
   return (
     <Card className="overflow-hidden">
@@ -125,7 +127,9 @@ export function BookTable({ rows, visible, onOpen, onSms, onCall }: {
                 {show("contact") && <TableCell>
                   <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
                     <Button size="icon" variant="outline" className="size-8" aria-label={`Text ${row.legalName}`} onClick={() => onSms(row)}><MessageSquare className="size-3.5" /></Button>
-                    <Button size="icon" variant="outline" className="size-8" aria-label={`Call ${row.legalName}`} onClick={() => onCall(row)} disabled={!row.contactPhone}><Phone className="size-3.5" /></Button>
+                    {!row.contactPhone ? <Button size="icon" variant="outline" className="size-8" aria-label={`Call ${row.legalName}`} disabled><Phone className="size-3.5" /></Button>
+                      : voiceReady ? <Button size="icon" variant="outline" className="size-8" aria-label={`Call ${row.legalName}`} onClick={() => onCall(row)}><Phone className="size-3.5" /></Button>
+                      : <Button size="icon" variant="outline" className="size-8" aria-label={`Call ${row.legalName}`} asChild><a href={`tel:${row.contactPhone}`}><Phone className="size-3.5" /></a></Button>}
                   </div>
                 </TableCell>}
               </TableRow>
