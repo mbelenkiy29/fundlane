@@ -160,10 +160,15 @@ test("real aggregates distinguish no history, health, errors and current queues"
     [randomUUID()]
   )
   assert.equal((await platformStatus("24h")).errors, 1)
-  assert.equal(
-    (await platformErrors(new Date(0).toISOString(), "api", null)).length,
-    1
-  )
+  const globalErrors = await platformErrors(new Date(0).toISOString(), "api", null)
+  assert.equal(globalErrors.length, 1)
+  assert.deepEqual(Object.keys(globalErrors[0]).sort(), [
+    "code", "component", "correlation_id", "deployment", "id", "occurred_at", "route",
+  ]) // Global telemetry has no verified company attribution or sensitive payload.
+  await database.query("UPDATE mca_private.ops_health SET checked_at=now()-interval '4 minutes'")
+  const stale = await platformStatus("24h")
+  assert.equal(stale.stale, true)
+  assert.equal(stale.latest?.database_ok, true) // A past success is retained as history, not current health.
   assert.equal(
     (await platformErrors(new Date(0).toISOString(), "worker", null)).length,
     0
