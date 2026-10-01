@@ -1,5 +1,6 @@
 # Fundlane Owner Portal Implementation Plan
 
+> Historical planning snapshot. The subsequent direct execution authorization and current scope are recorded in [owner portal decisions](../../acceptance/owner-portal-decisions.md); unanswered policy gates remain binding.
 > **For agentic workers:** REQUIRED SUB-SKILL at future execution: use Superpowers subagent-driven-development (recommended) or executing-plans task by task. This document is a review draft; it does not authorize execution. Resolve each task's decision gates first. Do not turn a proposed policy into a default because Mike has not answered it.
 
 **Goal:** Extend Fundlane's existing platform console into an equal-access owner portal for Mike and Ben, with company oversight, monitoring, reviewed Twilio onboarding, multiple assigned local numbers, pooled prepaid SMS segments, and audited sensitive support access.

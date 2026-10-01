@@ -9,3 +9,5 @@ Current scope: T1 owner parity and shell; T2 safe read-only company/review queue
 Use existing platform grants, verified identity and MFA. Do not seed grants, copy production environments, contact providers, alter production, or assume SMS eligibility. No sensitive content/support endpoints or additional recovery mutation policy in this batch.
 
 The native worktree tool returned “Managed worktrees require a local, SSH, or WSL task.” Use manual worktrees inside this separate task clone as fallback.
+
+Direct execution confirmation received in this task: “Execute the approved plan with Astra medium. Implement, test, and open draft PRs; keep unanswered decisions gated”. Actual product writes resumed after approval review accepted this confirmation. Latest integration baseline is main `bd9d85391858a7f918f16caff2c1eb6b15552165` (#223/#224/#210/#212 merged). Notification owns migration0071; the unpublished SMS ledger is allocated0072, subject to final journal recheck. No hosted migration has run.

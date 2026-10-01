@@ -26,3 +26,7 @@ D1/D4 block provider registration/review changes; D2 blocks commercial SMS integ
 ## Rollback and incident handling
 
 Removing a navigation link must not restore weaker authorization on legacy URLs. Keep provider callbacks and existing safe recovery behavior intact. Additive credit records must not be deleted to revert code; do not automatically release numbers, close subaccounts, refund money or rewrite balances. New commercial endpoints are absent from this batch. Production incident actions continue through the existing reviewed runbooks.
+
+## Migration coordination checkpoint
+
+Main `bd9d853` includes0071_notification_foundation. Open PR#213 uses0072_browser_voice and#219 uses0073_document_notification_discovery. The unpublished ledger uses0074_sms_credit_ledger to avoid filename collisions. Its journal position/timestamp must be rebuilt against the actual approved merge order before merging or applying the migration, with an exact-history upgrade test. Never overwrite another PR's journal entries or assume that a higher filename alone determines Drizzle execution order.
