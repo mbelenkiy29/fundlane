@@ -53,6 +53,11 @@ Deno.serve(async (request) => {
         billingReconciliationAlertsEnabled: env("MCA_BILLING_RECONCILIATION_ALERTS_ENABLED") === "true",
         recoveryAlerts: env("MCA_OPERATIONS_RECOVERY_ALERTS_ENABLED") === "true",
         assistantEnabled: env("MCA_ASSISTANT_ENABLED") === "true",
+        emailRuntimeEnabled: env("MCA_EMAIL_CONVERSATIONS_RUNTIME") === "vercel_cron",
+        smsRuntimeEnabled: env("MCA_SMS_CRON_ENABLED") === "true",
+        calendarRuntimeEnabled: env("MCA_CALENDAR_GOOGLE_ENABLED") === "true" && env("MCA_CALENDAR_RUNTIME") === "vercel_cron",
+        privateEmailRuntimeEnabled: env("MCA_PRIVATE_EMAIL_CRON_ENABLED") === "true" && env("MCA_PRIVATE_EMAIL_DELIVERY_ENABLED") === "true",
+        notificationRuntimeEnabled: env("MCA_NOTIFICATION_RUNTIME") === "enabled",
         thresholds: {
           workerSeconds: positiveThreshold(env("MCA_OPERATIONS_WORKER_STALE_SECONDS"), 90),
           queueSeconds: positiveThreshold(env("MCA_OPERATIONS_QUEUE_AGE_SECONDS"), 600),

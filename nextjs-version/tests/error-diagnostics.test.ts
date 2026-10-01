@@ -7,24 +7,24 @@ test("describes Stripe errors with safe provider metadata", () => {
   const error = new Stripe.errors.StripeInvalidRequestError({ type: "invalid_request_error", message: "No such price: 'price_123'; a similar object exists in live mode", code: "resource_missing", param: "price", requestId: "req_abc123", statusCode: 404 } as never)
   const d = describeUnexpectedError(error)
   assert.equal(d.errorClass, "StripeInvalidRequestError")
-  assert.match(d.errorMessage, /No such price: 'price_123'/)
+  assert.equal(d.errorMessage, "[excluded]")
   assert.equal(d.errorCode, "resource_missing")
   assert.equal(d.providerType, "invalid_request_error")
   assert.equal(d.providerStatus, 404)
-  assert.equal(d.providerRequestId, "req_abc123")
-  assert.equal(d.providerParam, "price")
+  assert.equal("providerRequestId" in d, false)
+  assert.equal("providerParam" in d, false)
 })
 
-test("redacts keys, tokens, credentials and emails and truncates", () => {
+test("excludes arbitrary diagnostic text, including keys, tokens and credentials", () => {
   const liveKey = ["sk", "live", "abcDEF123456"].join("_")
   const text = redactDiagnosticText(`Invalid API Key provided: ${liveKey} whsec_abc123 postgres://user:pw@db.example.com eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig for a@b.co`)
   assert.doesNotMatch(text, /abcDEF123456|whsec_abc|user:pw|eyJhbGci|a@b\.co/)
-  assert.equal(redactDiagnosticText("x".repeat(500)).length, 301)
+  assert.equal(redactDiagnosticText("x".repeat(500)), "[excluded]")
 })
 
 test("describes Postgres-style errors and non-errors", () => {
   const pg = Object.assign(new Error('column "foo" does not exist'), { code: "42703" })
-  assert.deepEqual(describeUnexpectedError(pg), { errorClass: "Error", errorMessage: 'column "foo" does not exist', errorCode: "42703" })
+  assert.deepEqual(describeUnexpectedError(pg), { errorClass: "Error", errorMessage: "[excluded]", errorCode: "42703" })
   assert.deepEqual(describeUnexpectedError("boom"), { errorClass: "string", errorMessage: "non-error value thrown" })
 })
 
@@ -45,6 +45,6 @@ test("apiError logs the redacted cause of an unexpected 500 without exposing it"
   assert.equal(logged.length, 2)
   assert.equal(logged[1].cause, undefined)
   assert.equal(logged[0].cause.errorClass, "TypeError")
-  assert.equal(logged[0].cause.errorCode, "E1")
-  assert.equal(logged[0].cause.errorMessage, "bad [redacted]")
+  assert.equal(logged[0].cause.errorCode, undefined)
+  assert.equal(logged[0].cause.errorMessage, "[excluded]")
 })

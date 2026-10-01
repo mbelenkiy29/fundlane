@@ -1,5 +1,5 @@
 import "server-only"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { Pool } from "pg"
 import { headers } from "next/headers"
 import { after } from "next/server"
@@ -8,6 +8,12 @@ import { safeIdentifier, safeRoute, isInteractiveApi } from "./contracts"
 import type { ErrorDiagnostics } from "../error-diagnostics"
 
 let pool: Pool | undefined
+const COMPONENTS = new Set(["application", "api", "worker", "email", "database", "billing"])
+const CODES = new Set([
+  "internal_error", "job_failed", "delivery_unknown", "delivery_failed", "idle_connection_lost",
+  "transaction_rollback_callback_failed", "transaction_rollback_failed", "reconciliation_failed",
+  "trial_resume_rollback_reconciliation_deferred", "card_required_trial_checkout_unconfigured", "immediate_reconciliation_failed",
+])
 function telemetryPool() {
   if (!pool) {
     pool = new Pool({
@@ -52,9 +58,10 @@ export function operationalEvent(
 ) {
   return {
     id: randomUUID(),
-    component: safeIdentifier(component) ?? "application",
-    code: safeIdentifier(code) ?? "internal_error",
-    correlationId: safeIdentifier(correlationId),
+    component: COMPONENTS.has(component) ? component : "application",
+    code: CODES.has(code) ? code : "internal_error",
+    // Request IDs can be supplied by clients; syntax validation alone is not redaction.
+    correlationId: safeIdentifier(correlationId) ? createHash("sha256").update(correlationId!).digest("hex") : null,
     route: route ? safeRoute(route) : null,
     deployment: safeIdentifier(process.env.VERCEL_DEPLOYMENT_ID),
   }

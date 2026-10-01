@@ -1,7 +1,6 @@
-/**
- * Secret-free summary of an unexpected (non-AppError) exception for native logs.
- * Only the class, a redacted and truncated message, and provider metadata that is
- * safe to share (Stripe type/code/status/request id/param, Postgres SQLSTATE) are kept.
+/** Native diagnostics intentionally exclude arbitrary exception text and properties.
+ * Regex redaction cannot identify unlabeled OAuth secrets, bank numbers or document
+ * excerpts echoed by a provider. Keep only known classes/codes and HTTP status.
  */
 export interface ErrorDiagnostics {
   errorClass: string
@@ -9,44 +8,31 @@ export interface ErrorDiagnostics {
   errorCode?: string
   providerType?: string
   providerStatus?: number
-  providerRequestId?: string
-  providerParam?: string
 }
 
-const SECRET_PATTERNS: RegExp[] = [
-  /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+/g,
-  /\bwhsec_[A-Za-z0-9]+/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]+@/gi,
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-]
+const ERROR_CLASSES = new Set([
+  "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "URIError", "AggregateError",
+  "StripeError", "StripeInvalidRequestError", "StripeAPIError", "StripeAuthenticationError",
+  "StripePermissionError", "StripeRateLimitError", "StripeConnectionError", "StripeCardError",
+  "StripeIdempotencyError", "StripeSignatureVerificationError",
+])
+const PROVIDER_TYPES = new Set(["api_error", "invalid_request_error", "authentication_error", "card_error", "idempotency_error", "rate_limit_error"])
+const PROVIDER_CODES = new Set(["resource_missing", "api_key_expired", "rate_limit", "parameter_missing", "parameter_invalid_empty", "idempotency_key_in_use"])
 
-export function redactDiagnosticText(value: string, max = 300) {
-  let text = value
-  for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "[redacted]")
-  text = text.replace(/\s+/g, " ").trim()
-  return text.length > max ? `${text.slice(0, max)}…` : text
+export function redactDiagnosticText(value: string) {
+  return value ? "[excluded]" : ""
 }
-
-const token = (value: unknown, max = 80) =>
-  typeof value === "string" && /^[A-Za-z0-9_.:-]{1,200}$/.test(value) ? value.slice(0, max) : undefined
 
 export function describeUnexpectedError(error: unknown): ErrorDiagnostics {
   if (!(error instanceof Error)) return { errorClass: typeof error, errorMessage: "non-error value thrown" }
-  const e = error as Error & { type?: unknown; rawType?: unknown; code?: unknown; statusCode?: unknown; requestId?: unknown; param?: unknown }
-  // Bundlers may minify constructor names; Stripe errors carry their class as a string literal in `type`.
-  const stripeClass = typeof e.type === "string" && e.type.startsWith("Stripe") ? token(e.type) : undefined
-  const errorClass = stripeClass ?? (e.name && e.name !== "Error" ? token(e.name) : undefined) ?? token(e.constructor?.name) ?? "Error"
+  const e = error as Error & { type?: unknown; rawType?: unknown; code?: unknown; statusCode?: unknown }
+  const stripeClass = typeof e.type === "string" && e.type.startsWith("Stripe") && ERROR_CLASSES.has(e.type) ? e.type : undefined
+  const errorClass = stripeClass ?? (ERROR_CLASSES.has(e.name) ? e.name : "Error")
   const out: ErrorDiagnostics = { errorClass, errorMessage: redactDiagnosticText(e.message ?? "") }
-  const code = token(e.code)
-  if (code) out.errorCode = code
-  const type = token(stripeClass ? e.rawType : e.type)
-  if (type && type !== errorClass) out.providerType = type
-  if (typeof e.statusCode === "number" && Number.isInteger(e.statusCode)) out.providerStatus = e.statusCode
-  const requestId = token(e.requestId)
-  if (requestId) out.providerRequestId = requestId
-  const param = token(e.param)
-  if (param) out.providerParam = param
+  // SQLSTATEs are fixed five-character codes. Do not accept arbitrary provider codes.
+  if (typeof e.code === "string" && (/^[0-9]{2}[A-Z0-9]{3}$/.test(e.code) || PROVIDER_CODES.has(e.code))) out.errorCode = e.code
+  const type = stripeClass ? e.rawType : e.type
+  if (typeof type === "string" && PROVIDER_TYPES.has(type)) out.providerType = type
+  if (typeof e.statusCode === "number" && Number.isInteger(e.statusCode) && e.statusCode >= 100 && e.statusCode <= 599) out.providerStatus = e.statusCode
   return out
 }
