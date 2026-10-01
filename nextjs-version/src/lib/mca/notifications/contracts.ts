@@ -39,6 +39,9 @@ export type NotificationMessage = NotificationContent & {
     senderId?: string;
     approvedAt: string;
     idempotencyKey: string;
+    /** Recheck live authorization immediately before provider IO. */
+    beforeSend: () => Promise<void>;
+    deadlineMs: number;
 };
 export type NotificationTransport = (message: NotificationMessage) => Promise<NotificationOutcome>;
 export type NotificationRow = {
@@ -68,4 +71,14 @@ export type NotificationRow = {
     error_code: string | null;
     created_at: string;
     updated_at: string;
+};
+export class NotificationDispatchBlocked extends Error {
+    constructor(public code: string) { super(code); }
+}
+export class NotificationDeadlineError extends Error {
+    constructor() { super('notification deadline exhausted before provider request'); }
+}
+export type NotificationLookupContext = {
+    deadlineMs: number;
+    now?: () => number;
 };
