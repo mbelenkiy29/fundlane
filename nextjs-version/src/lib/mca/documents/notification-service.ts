@@ -28,6 +28,10 @@ async function enqueueOnce(actor:DealActor,input:NotificationInput){
   if(!sameEvent(existing,input))throw new AppError(409,'notification_idempotency_conflict','This event was approved with a different template or sender.')
   return getNotification(actor,existing.id)
  }
+ if(input.eventKey.startsWith('document-auto:')){
+  const unknown=await getDatabase().prepare<{id:string}>(`SELECT id FROM mca_notifications WHERE workspace_id=? AND deal_id=? AND kind='document' AND audience=? AND state='uncertain' AND (audience='merchant' OR recipient_user_id=?) LIMIT 1`).get(actor.workspaceId,input.dealId,input.audience,input.recipientUserId??null)
+  if(unknown)throw new AppError(409,'document_notification_reconciliation_required','Reconcile the unknown document notification before another automatic reminder.')
+ }
  try{return await enqueueNotification(actor,input)}catch(error){
   // Concurrent producers can have distinct clocks. Return the first fenced event only.
   if(error instanceof AppError&&error.code==='notification_idempotency_conflict'){
@@ -37,21 +41,23 @@ async function enqueueOnce(actor:DealActor,input:NotificationInput){
   throw error
  }
 }
-export async function enqueueDocumentNotifications(actor:DealActor,raw:DocumentNotificationInput):Promise<DocumentNotificationResult>{
+export async function enqueueDocumentNotifications(actor:DealActor,raw:DocumentNotificationInput,options?:{occurrenceKey:string;automationVersion:number;broker?:boolean}):Promise<DocumentNotificationResult>{
  const input=documentNotificationInputSchema.parse(raw),live=await notificationActor(actor)
  registerDocumentNotificationCondition()
  const key={dealId:input.dealId,key:input.conditionKey},condition=await activeDocumentCondition(live,key)
  if(!condition)return{resolved:true}
- const eventKey=`document:${createHash('sha256').update(JSON.stringify(key)).digest('hex')}`
+ const eventPrefix=options?'document-auto':'document'
+ const eventIdentity=options?{...key,occurrenceKey:options.occurrenceKey,approvalVersion:options.automationVersion}:key
+ const eventKey=`${eventPrefix}:${createHash('sha256').update(JSON.stringify(eventIdentity)).digest('hex')}`
  const base={kind:'document' as const,dealId:input.dealId,scheduledFor:input.scheduledFor,approvedAt:input.approvedAt}
  const result:DocumentNotificationResult={}
  const recipientUserId=input.recipientUserId??live.userId!
- try{
- result.broker=await enqueueOnce(live,{...base,eventKey,channel:'email',audience:'broker',recipientUserId,condition:{type:'document',key:JSON.stringify(key),version:'1'},payload:{title:`Documents ${condition.reason}: ${condition.label}`,message:`${condition.label}${condition.requiredPeriod?` for ${condition.requiredPeriod} (completed UTC month)`:''} is ${condition.reason}. Review the document vault for this deal.`}})
+ if(options?.broker!==false)try{
+ result.broker=await enqueueOnce(live,{...base,eventKey,channel:'email',audience:'broker',recipientUserId,condition:{type:'document',key:JSON.stringify(options?{...key,automationVersion:options.automationVersion,audience:'broker',recipientUserId}:key),version:'1'},payload:{title:`Documents ${condition.reason}: ${condition.label}`,message:`${condition.label}${condition.requiredPeriod?` for ${condition.requiredPeriod} (completed UTC month)`:''} is ${condition.reason}. Review the document vault for this deal.`}})
  }catch(error){if(!(error instanceof AppError))throw error;result.broker={state:'blocked',errorCode:error.code}}
  if(input.merchant){
   try{
-   const merchant=input.merchant,merchantKey={...key,linkId:merchant.linkId}
+   const merchant=input.merchant,merchantKey={...key,linkId:merchant.linkId,...(options?{automationVersion:options.automationVersion,audience:'merchant' as const}:{})}
    await documentRequestValues(live,merchantKey)
    const template=await getPublishedMessageTemplate(live,merchant.templateId)
    if(!template.published)throw new AppError(422,'document_request_template_invalid','Choose a published document reminder template.')

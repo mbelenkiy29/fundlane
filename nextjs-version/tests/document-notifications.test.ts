@@ -1,4 +1,5 @@
 import './helpers/business-auth'
+import {Client} from 'pg'
 import test,{before,after,beforeEach} from 'node:test'
 import assert from 'node:assert/strict'
 import {createPostgresTestDatabase} from './helpers/postgres-test-db.mjs'
@@ -16,6 +17,9 @@ import {recordSmsConsent} from '../src/lib/mca/sms/service'
 import {registerNotificationCondition,checkNotificationCondition} from '../src/lib/mca/notifications/conditions'
 import {hashOpaqueToken} from '../src/lib/mca/crypto'
 import {GET as notificationsGet,POST as notificationsPost} from '../src/app/api/mca/documents/notifications/route'
+import {GET as automationGet,PUT as automationPut} from '../src/app/api/mca/documents/notifications/automation/route'
+import {readDocumentAutomation,saveDocumentAutomation} from '../src/lib/mca/documents/notification-automation'
+import {discoverDocumentNotifications,releaseDocumentDiscoveryLease} from '../src/lib/mca/documents/notification-discovery'
 const now=()=>new Date().toISOString()
 const actor=(workspaceId='docs-alert-a'):DealActor=>({workspaceId,userId:`${workspaceId}-user`,membershipId:`${workspaceId}-member`,role:'admin',source:'user',managedMembershipIds:[],activeMembershipIds:[`${workspaceId}-member`],correlationId:'doc-alert-test'})
 let cluster:Awaited<ReturnType<typeof createPostgresTestDatabase>>,dealId:string,templateId:string
@@ -32,7 +36,8 @@ before(async()=>{
 
 })
 beforeEach(async()=>{
- for(const table of ['mca_notification_receipts','mca_notifications','mca_notification_preferences','mca_notification_policies','mca_sms_consent_events','mca_merchant_upload_links','mca_closing_stipulations','mca_documents'])await getDatabase().prepare(`DELETE FROM ${table}`).run()
+ for(const table of ['mca_document_notification_discovery','mca_notification_receipts','mca_notifications','mca_notification_preferences','mca_notification_policies','mca_sms_consent_events','mca_merchant_upload_links','mca_closing_stipulations','mca_documents'])await getDatabase().prepare(`DELETE FROM ${table}`).run()
+ await getDatabase().prepare("UPDATE memberships SET role='admin',status='active' WHERE id IN ('docs-alert-a-member','docs-alert-b-member')").run()
  process.env.MCA_NOTIFICATION_RUNTIME='enabled';setNotificationTransportForTests(async()=>({state:'accepted'}))
 })
 after(async()=>{setNotificationTransportForTests();await closeDatabaseForTests();await cluster?.close()})
@@ -182,4 +187,157 @@ test('template changed after enqueue to legacy link is suppressed at dispatch',a
  await publishMessageTemplate(actor(),templateId)
  let sends=0;setNotificationTransportForTests(async message=>{if(message.audience==='merchant')sends++;return{state:'accepted'}})
  await runScheduledNotifications(now());assert.equal(sends,0);assert.equal((await getNotification(actor(),result.merchant!.id!)).state,'suppressed')
+})
+
+test('expiry and request resolution after queue suppress merchant sends',async()=>{
+ const {stip,link}=await requestLink();await setNotificationPolicy(actor(),{kind:'document',brokerEnabled:true,merchantEnabled:true})
+ await recordSmsConsent(actor(),{dealId,recipient:'+15551234567',state:'opted_in',evidence:'Synthetic optin',idempotencyKey:'t11-expiring-optin'})
+ const result=await enqueueDocumentNotifications(actor(),{...input(`requested:${stip.id}`),merchant:{channel:'sms',templateId,linkId:link.id}})
+ await getDatabase().prepare('UPDATE mca_merchant_upload_links SET expires_at=? WHERE id=?').run('2000-01-01T00:00:00Z',link.id)
+ let sends=0;setNotificationTransportForTests(async message=>{if(message.audience==='merchant')sends++;return{state:'accepted'}})
+ await runScheduledNotifications(now());assert.equal(sends,0);assert.equal((await getNotification(actor(),result.merchant!.id!)).state,'suppressed')
+})
+test('real foreign-company request link id denies reminder in current deal',async()=>{
+ const foreignDeal=(await createDeal(actor('docs-alert-b'),{idempotencyKey:'t11-foreign-link-deal',legalName:'Other synthetic company',assignments:[{membershipId:actor('docs-alert-b').membershipId!,kind:'originator',isPrimary:true}]})).deal.id
+ const foreignStip=await createStipulation(actor('docs-alert-b'),{dealId:foreignDeal,documentCategory:'other_stip',label:'Other request',idempotencyKey:'t11-foreign-stip'})
+ const foreignLink=await createMerchantUploadLink(actor('docs-alert-b'),{stipulationId:foreignStip.id,idempotencyKey:'t11-foreign-link',origin:'http://localhost:3000'})
+ const {stip}=await requestLink()
+ const result=await enqueueDocumentNotifications(actor(),{...input(`requested:${stip.id}`),merchant:{channel:'sms',templateId,linkId:foreignLink.id}})
+ assert.equal(result.merchant?.errorCode,'document_request_link_invalid')
+})
+
+test('dedicated automation opt-in is durable admin approval and existing defaults stay off',async()=>{
+ assert.equal((await readDocumentAutomation(actor())).enabled,false)
+ assert.equal((await discoverDocumentNotifications({clock:now()})).enqueued,0)
+ const config=await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing','requested','stale'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0,minute:0},channel:'sms'})
+ assert.equal(config.version,1);assert.equal(config.approvedByMembershipId,actor().membershipId);assert.ok(config.approvedAt)
+ await assert.rejects(saveDocumentAutomation({...actor(),userId:'t11-unassigned-user',membershipId:'t11-unassigned-member',role:'rep'}, {...config,enabled:true} as never))
+ const next=await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['requested'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ assert.equal(next.version,2)
+})
+test('automatic broker discovery is bounded resumes cursor and deduplicates concurrent ticks',async()=>{
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ for(let i=0;i<3;i++)await createDeal(actor(),{idempotencyKey:`t11-auto-${i}`,legalName:`Synthetic auto ${i}`,assignments:[{membershipId:actor().membershipId!,kind:'originator',isPrimary:true}]})
+ const first=await discoverDocumentNotifications({clock:now(),limit:2});assert.ok(first.enqueued<=2);assert.ok(first.enqueued>0)
+ const initial=(await getDatabase().prepare<{count:string}>("SELECT count(*) count FROM mca_notifications WHERE event_key LIKE 'document-auto:%'").get())!.count
+ await Promise.all([discoverDocumentNotifications({clock:now(),limit:2}),discoverDocumentNotifications({clock:now(),limit:2})])
+ const later=(await getDatabase().prepare<{count:string}>("SELECT count(*) count FROM mca_notifications WHERE event_key LIKE 'document-auto:%'").get())!.count
+ assert.ok(Number(later)>Number(initial));assert.ok(Number(later)<=Number(initial)+4)
+ for(let i=0;i<20;i++)await discoverDocumentNotifications({clock:now(),limit:10})
+ const rows=await getDatabase().prepare<{count:string;unique:string}>("SELECT count(*) count,count(DISTINCT event_key||recipient_key) AS unique FROM mca_notifications WHERE event_key LIKE 'document-auto:%'").get();assert.equal(rows!.count,rows!.unique)
+})
+test('automatic merchant uses dedicated configured policy consent and live request; generic followup is not opt-in',async()=>{
+ const {stip,link}=await requestLink()
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:false,merchantEnabled:true,reasons:['requested'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms',templateId})
+ await recordSmsConsent(actor(),{dealId,recipient:'+15551234567',state:'opted_in',evidence:'Synthetic automatic optin',idempotencyKey:'t11-auto-consent'})
+ const found=await discoverDocumentNotifications({clock:now(),limit:20});assert.equal(found.enqueued,1)
+ const rows=await getDatabase().prepare<{id:string;audience:string}>('SELECT id,audience FROM mca_notifications WHERE workspace_id=?').all(actor().workspaceId)
+ assert.equal(rows.length,1);assert.equal(rows[0].audience,'merchant')
+ await getDatabase().prepare('UPDATE mca_closing_stipulations SET status=? WHERE id=?').run('waived',stip.id)
+ let sends=0;setNotificationTransportForTests(async()=>{sends++;return{state:'accepted'}})
+ await runScheduledNotifications(now());assert.equal(sends,0);assert.equal((await getNotification(actor(),rows[0].id)).state,'suppressed')
+ assert.ok(link.id)
+})
+test('automatic settings version disable and shared deadline prevent unsafe work',async()=>{
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ assert.equal((await discoverDocumentNotifications({clock:now(),limit:20,deadlineMs:Date.now()-1})).enqueued,0)
+ await discoverDocumentNotifications({clock:now(),limit:20})
+ await saveDocumentAutomation(actor(),{enabled:false,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ let sends=0;setNotificationTransportForTests(async()=>{sends++;return{state:'accepted'}})
+ await runScheduledNotifications(now());assert.equal(sends,0)
+})
+
+test('automatic broker assignment is live at dispatch even for an administrator',async()=>{
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ await discoverDocumentNotifications({clock:now(),limit:100})
+ const rows=await getDatabase().prepare<{id:string}>('SELECT id FROM mca_notifications WHERE workspace_id=? AND deal_id=?').all(actor().workspaceId,dealId)
+ assert.ok(rows.length>0)
+ await getDatabase().prepare('DELETE FROM deal_assignments WHERE workspace_id=? AND deal_id=?').run(actor().workspaceId,dealId)
+ let sends=0;setNotificationTransportForTests(async message=>{if(message.dealId===dealId)sends++;return{state:'accepted'}})
+ try{await runScheduledNotifications(now());assert.equal(sends,0);for(const row of rows)assert.equal((await getNotification(actor(),row.id)).state,'suppressed')}
+ finally{await getDatabase().prepare("INSERT INTO deal_assignments(id,workspace_id,deal_id,membership_id,kind,is_primary,assigned_at) VALUES(?,?,?,?,'originator',1,?)").run('t11-restored-assignment',actor().workspaceId,dealId,actor().membershipId,now())}
+})
+test('automatic config API rejects forged approvals bad cadence and foreign origin',async()=>{
+ const base={enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['requested'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'}
+ const request=(wid='docs-alert-a',input?:unknown)=>new Request('http://localhost:3000/api/mca/documents/notifications/automation',{method:input?'PUT':'GET',headers:{cookie:`mca_session=${wid}-session`,origin:'http://localhost:3000','content-type':'application/json'},...(input?{body:JSON.stringify(input)}:{})})
+ assert.equal((await automationPut(request('docs-alert-a',{...base,approvedAt:'2020-01-01T00:00:00Z'}))).status,400)
+ assert.equal((await automationPut(request('docs-alert-a',{...base,localSchedule:{timezone:'wrong/timezone',frequency:'weekly',hour:0}}))).status,400)
+ const saved=await automationPut(request('docs-alert-a',base));assert.equal(saved.status,200)
+ const other=await automationGet(request('docs-alert-b'));assert.equal((await other.json()).version,0)
+ const hostile=request('docs-alert-a',base);hostile.headers.set('origin','https://foreign.test');assert.equal((await automationPut(hostile)).status,403)
+ await getDatabase().prepare("UPDATE memberships SET role='rep' WHERE id=?").run(actor().membershipId)
+ try{assert.equal((await automationPut(request('docs-alert-a',base))).status,403)}finally{await getDatabase().prepare("UPDATE memberships SET role='admin' WHERE id=?").run(actor().membershipId)}
+})
+test('missing assignments do not broadcast and other companies are cursor isolated',async()=>{
+ await saveDocumentAutomation(actor('docs-alert-b'),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ const foreign=(await createDeal(actor('docs-alert-b'),{idempotencyKey:'t11-unassigned-auto',legalName:'Synthetic unassigned'})).deal.id
+ await getDatabase().prepare('DELETE FROM deal_assignments WHERE workspace_id=? AND deal_id=?').run(actor('docs-alert-b').workspaceId,foreign)
+ await discoverDocumentNotifications({clock:now()})
+ assert.equal((await getDatabase().prepare<{count:string}>('SELECT count(*) count FROM mca_notifications WHERE workspace_id=? AND deal_id=?').get(actor('docs-alert-b').workspaceId,foreign))!.count,'0')
+ assert.equal((await readDocumentAutomation(actor())).version,0)
+})
+test('unknown automatic merchant outcome blocks new approval version until reconciliation',async()=>{
+ const {stip,link}=await requestLink()
+ const settings={enabled:true,brokerEnabled:false,merchantEnabled:true,reasons:['requested'] as const,localSchedule:{timezone:'UTC',frequency:'daily' as const,hour:0},channel:'sms' as const,templateId}
+ await saveDocumentAutomation(actor(),{...settings,reasons:[...settings.reasons]})
+ await recordSmsConsent(actor(),{dealId,recipient:'+15551234567',state:'opted_in',evidence:'Synthetic unknown optin',idempotencyKey:'t11-auto-unknown-consent'})
+ await discoverDocumentNotifications({clock:now()});setNotificationTransportForTests(async()=>({state:'uncertain',errorCode:'synthetic_unknown'}));await runScheduledNotifications(now())
+ const unknown=await getDatabase().prepare<{id:string}>("SELECT id FROM mca_notifications WHERE workspace_id=? AND state='uncertain'").get(actor().workspaceId);assert.ok(unknown)
+ await saveDocumentAutomation(actor(),{...settings,reasons:[...settings.reasons]})
+ const next=await discoverDocumentNotifications({clock:now()});assert.equal(next.enqueued,0);assert.ok(next.blocked)
+ assert.equal((await getDatabase().prepare<{count:string}>('SELECT count(*) count FROM mca_notifications WHERE workspace_id=?').get(actor().workspaceId))!.count,'1')
+ await reconcileNotification(actor(),unknown.id,{outcome:'failed',evidence:'Synthetic provider evidence confirmed no send'})
+ for(let i=0;i<3;i++)await discoverDocumentNotifications({clock:now()})
+ assert.equal((await getDatabase().prepare<{count:string}>('SELECT count(*) count FROM mca_notifications WHERE workspace_id=?').get(actor().workspaceId))!.count,'2');assert.ok(stip.id&&link.id)
+})
+
+test('locked cursor cleanup returns within bounded time and leaves recoverable lease',async()=>{
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ await getDatabase().prepare('UPDATE mca_document_notification_discovery SET lease_token=?,lease_until=? WHERE workspace_id=?').run('locked-cleanup',new Date(Date.now()+30000).toISOString(),actor().workspaceId)
+ const lock=new Client({connectionString:cluster.databaseUrl});await lock.connect();await lock.query('BEGIN');await lock.query('SELECT workspace_id FROM mca_document_notification_discovery WHERE workspace_id=$1 FOR UPDATE',[actor().workspaceId])
+ const watchdog=setTimeout(()=>{void lock.query('ROLLBACK')},2500)
+ try{
+  const started=Date.now();await releaseDocumentDiscoveryLease({workspaceId:actor().workspaceId,version:1,token:'locked-cleanup',lastDeal:'',activeDeal:null,lastItem:''});assert.ok(Date.now()-started<2000)
+ }finally{clearTimeout(watchdog);await lock.query('ROLLBACK');await lock.end()}
+ const lease=await getDatabase().prepare<{lease_token:string}>('SELECT lease_token FROM mca_document_notification_discovery WHERE workspace_id=?').get(actor().workspaceId);assert.equal(lease!.lease_token,'locked-cleanup')
+ await releaseDocumentDiscoveryLease({workspaceId:actor().workspaceId,version:1,token:'locked-cleanup',lastDeal:'',activeDeal:null,lastItem:''})
+ assert.equal((await getDatabase().prepare<{lease_token:string|null}>('SELECT lease_token FROM mca_document_notification_discovery WHERE workspace_id=?').get(actor().workspaceId))!.lease_token,null)
+})
+
+test('company leases are exclusive fenced and recover after expiry; another tenant makes progress',async()=>{
+ const settings={enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'] as const,localSchedule:{timezone:'UTC',frequency:'daily' as const,hour:0},channel:'sms' as const}
+ await saveDocumentAutomation(actor(),{...settings,reasons:[...settings.reasons]});await saveDocumentAutomation(actor('docs-alert-b'),{...settings,reasons:[...settings.reasons]})
+ await getDatabase().prepare('UPDATE mca_document_notification_discovery SET lease_token=?,lease_until=? WHERE workspace_id=?').run('running-pass',new Date(Date.now()+30000).toISOString(),actor().workspaceId)
+ await discoverDocumentNotifications({clock:now(),limit:2})
+ assert.equal((await getDatabase().prepare<{count:string}>('SELECT count(*) count FROM mca_notifications WHERE workspace_id=?').get(actor().workspaceId))!.count,'0')
+ assert.ok(Number((await getDatabase().prepare<{count:string}>('SELECT count(*) count FROM mca_notifications WHERE workspace_id=?').get(actor('docs-alert-b').workspaceId))!.count)>0)
+ await getDatabase().prepare('UPDATE mca_document_notification_discovery SET lease_until=? WHERE workspace_id=?').run('2000-01-01T00:00:00Z',actor().workspaceId)
+ assert.ok((await discoverDocumentNotifications({clock:now(),limit:2})).enqueued>0)
+ await saveDocumentAutomation(actor(),{...settings,reasons:[...settings.reasons]})
+ await getDatabase().prepare('UPDATE mca_document_notification_discovery SET lease_token=? WHERE workspace_id=?').run('new-pass',actor().workspaceId)
+ await releaseDocumentDiscoveryLease({workspaceId:actor().workspaceId,version:1,token:'running-pass',lastDeal:'old',activeDeal:null,lastItem:'old'})
+ const current=await getDatabase().prepare<{lease_token:string;last_deal_id:string}>('SELECT lease_token,last_deal_id FROM mca_document_notification_discovery WHERE workspace_id=?').get(actor().workspaceId);assert.equal(current!.lease_token,'new-pass');assert.equal(current!.last_deal_id,'')
+})
+test('runtime off and future local schedule produce no events; revoked approver fails closed',async()=>{
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:23,minute:59},channel:'sms'})
+ assert.equal((await discoverDocumentNotifications({clock:new Date().toISOString().slice(0,10)+'T00:00:00.000Z'})).enqueued,0)
+ process.env.MCA_NOTIFICATION_RUNTIME='disabled';assert.equal((await discoverDocumentNotifications({clock:now()})).companies,0)
+ process.env.MCA_NOTIFICATION_RUNTIME='enabled'
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:true,merchantEnabled:false,reasons:['missing'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms'})
+ await discoverDocumentNotifications({clock:now()})
+ await getDatabase().prepare("UPDATE memberships SET role='rep' WHERE id=?").run(actor().membershipId)
+ let sends=0;setNotificationTransportForTests(async()=>{sends++;return{state:'accepted'}})
+ try{await runScheduledNotifications(now());assert.equal(sends,0)}finally{await getDatabase().prepare("UPDATE memberships SET role='admin' WHERE id=?").run(actor().membershipId)}
+})
+
+test('unknown first cadence outcome suppresses another already queued automatic occurrence',async()=>{
+ const {stip,link}=await requestLink()
+ await saveDocumentAutomation(actor(),{enabled:true,brokerEnabled:false,merchantEnabled:true,reasons:['requested'],localSchedule:{timezone:'UTC',frequency:'daily',hour:0},channel:'sms',templateId})
+ await recordSmsConsent(actor(),{dealId,recipient:'+15551234567',state:'opted_in',evidence:'Synthetic backlog optin',idempotencyKey:'t11-backlog-consent'})
+ const raw={...input(`requested:${stip.id}`),merchant:{channel:'sms' as const,templateId,linkId:link.id}}
+ const first=await enqueueDocumentNotifications(actor(),raw,{occurrenceKey:'daily:previous',automationVersion:1,broker:false})
+ const second=await enqueueDocumentNotifications(actor(),raw,{occurrenceKey:'daily:current',automationVersion:1,broker:false});assert.equal(second.merchant?.state,'queued')
+ let sends=0;setNotificationTransportForTests(async()=>{sends++;return{state:'uncertain',errorCode:'synthetic_backlog_unknown'}})
+ await runScheduledNotifications(now());assert.equal(sends,1)
+ const states=await Promise.all([first.merchant!.id!,second.merchant!.id!].map(id=>getNotification(actor(),id)));assert.ok(states.every(row=>['uncertain','suppressed'].includes(row.state)));assert.ok(states.some(row=>row.state==='suppressed'));assert.equal((await getDatabase().prepare<{count:string}>("SELECT count(*) count FROM mca_notifications WHERE workspace_id=? AND state='uncertain'").get(actor().workspaceId))!.count,'1')
 })

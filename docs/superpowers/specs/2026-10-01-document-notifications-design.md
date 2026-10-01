@@ -1,6 +1,6 @@
 # Document notification design
 
-T11 produces company-scoped missing, requested and stale document events for brokers, with optional merchant reminders through the shared notification foundation. This implements the approved client feature design under the user's explicit plan-and-execute instruction. All work stays in this isolated worktree; no external sends, scheduler, transport, migrations, or edits to `documents/service.ts`.
+T11 produces company-scoped missing, requested and stale document events for brokers, with optional merchant reminders through the shared notification foundation. This implements the approved client feature design under the user's explicit plan-and-execute instruction. All work stays in this isolated worktree; no external sends, new scheduler, transport, or edits to `documents/service.ts`.
 
 ## Existing modules and decisions
 
@@ -17,3 +17,9 @@ Add a document alert panel alongside the vault showing missing/requested/stale c
 ## Dependencies and verification
 
 Foundation pin41a4264 initially; committed live guard contract and safe server-derived template values are required before dependent edits. T0 exclusively owns document integrity service. Tests use disposable Postgres port55481, synthetic companies/roles and overridden provider transport. Test readiness, current versions, month/year/leap/timezone boundaries, wrong-company/role access, live links, repeated events, resolution after enqueue, consent/optout, unknown-send reconciliation, and UI rendering. Parent coordinates final build/aggregate execution and independent review. Functional implementation remains distinct from hosted/provider activation.
+
+## Automatic discovery correction
+
+The parent clarified that automation is required, and reserved migration0072 for dedicated notification policy/cursor state. Existing generic follow-up rows are not opt-in. A company administrator can configure document automation, condition reason toggles, cadence (existing followup schedule contract), broker enablement and optional merchant channel/published template/sender. Save durable approver membership, original approved_at and monotonic approval version; config changes supersede queued old versions. Existing policies remain merchant-automation-off. Default settings are automation-off, broker-on within a configured enabled automation, merchant-off.
+
+One hook in the existing notification runtime calls bounded discovery. Settings rotate by checked_at/workspace; each has a durable keyset last_deal_id cursor. Per-run cap10deals/20events and shared runtime deadline; assigned active eligible originator/closer recipients only, no broadcast when assignment missing. Company/deal access and current condition checked before enqueue and dispatch; merchant requires current live persisted request link and all existing gates. Occurrence identity includes company config approval version, cadence occurrence, deal/condition/link and audience. Run restart/concurrency deduplicate; uncertainty is never rediscovered under a new key for the same occurrence.

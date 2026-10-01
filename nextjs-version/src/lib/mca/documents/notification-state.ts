@@ -9,7 +9,7 @@ import {AppError} from '../errors'
 import {decryptSensitive} from '../crypto'
 import {merchantUploadBinding} from '../closing/service'
 
-export const documentConditionKeySchema=z.object({dealId:z.string().min(1).max(80),key:z.string().min(1).max(200),linkId:z.string().min(1).max(80).optional()}).strict()
+export const documentConditionKeySchema=z.object({dealId:z.string().min(1).max(80),key:z.string().min(1).max(200),linkId:z.string().min(1).max(80).optional(),automationVersion:z.number().int().min(1).optional(),audience:z.enum(['broker','merchant']).optional(),recipientUserId:z.string().min(1).max(80).optional()}).strict()
 export type DocumentConditionKey=z.infer<typeof documentConditionKeySchema>
 export async function documentNotificationFacts(actor:DealActor,dealId:string,clock=nowIso()){
  const deal=await getDealForDocument(actor,dealId)

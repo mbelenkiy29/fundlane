@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-No transports, schedulers, migrations, external sends, production mutations or edits to documents/service.ts. Foundation41a4264 and subsequent parent-pinned contracts only. Clean scanned current versions only. Statement period is previous completed UTC month. Independent output/build worktree; disposable PG55481.
+No transports, new schedulers, external sends, production mutations or edits to documents/service.ts. Foundation exact1e56cc77b1ca5a5568e36cb4d7cd91e17a5fde27 and parent-authorized hooks only. Clean scanned current versions only. Statement period is previous completed UTC month. Independent output/build worktree; disposable PG55481.
 
 ## Review Focus
 
@@ -48,10 +48,19 @@ Consumes snapshot/producer; produces authenticated read/write route and accessib
 - [x] Implement panel and route with existing auth/client components; require explicit merchant action and published template/requestlink; preserve original approval across retries.
 - [x] Run targeted tests/typecheck/lint; expected green; commit.
 
+### Task 4: Configured bounded automatic discovery
+
+Files: create db/document-notifications.ts; migration0072 and own actual journal entry; documents/notification-automation.ts, notification-discovery.ts; API automation route and configuration UI. Modify guard key/live checks and one worker hook only.
+Consumes existing cadence helper/schema, foundation deadline, tenant deal/membership/link APIs. Produces discoverDocumentNotifications({clock,limit,deadlineMs}) and read/saveDocumentAutomation(actor,input).
+- [x] Write failing tests: absent/default config no merchant discovery; explicit reasons/schedule; durable approver/version; assigned eligible broker only; keyset page continuation/fairness/cap/deadline; concurrent/restarted occurrence dedup; tenant/role denial; config/pause/consent/link/resolution revocation suppresses.
+- [x] Implement reserved0072 dedicated config and cursor (journal next actual index60 after foundation0068; integration reindex documented), no fake entries0069-0071.
+- [x] Implement admin config API/UI and discovery hook into existing runtime; no generic followup opt-in inference or updated_at approval.
+- [x] Run focused tests/type/lint and independent review of added scope; expected green; commit.
+
 ### Final verification
 
 - [ ] Parent-coordinated full test/lint/build slot, unique outputs, Graphify refresh.
-- [ ] Independent review arranged by parent; fix important findings with red/green evidence.
+- [x] Independent review arranged within authorized local review; fix important findings with red/green evidence.
 - [ ] Draft PR, verify remote head/checks, report remaining hosted/provider/bootstrap gates. No merge.
 
-Self-review: scope and interfaces checked; unknown shared guard/template extension is a pinned dependency, not invented. All review-focus cases belong to tasks1/2. No migration required; existing requirements/links reused. Spec and plan executed under explicit user instruction.
+Self-review: scope and interfaces checked; unknown shared guard/template extension is a pinned dependency, not invented. All review-focus cases belong to tasks1/2. Reserved0072 stores only explicit automation policy/cursor/approval; existing requirements/links and consent semantics are reused. Spec and plan executed under explicit user instruction.

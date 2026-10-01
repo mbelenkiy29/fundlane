@@ -10,3 +10,9 @@ test('document alerts show explicit freshness, unresolved requests and delivery 
  assert.match(result.queued,/Queued/);assert.ok(!result.queued.includes('sent'))
  assert.match(result.uncertain,/unknown/);assert.match(result.blocked,/consent/)
 })
+
+test('automatic readiness distinguishes company approval runtime and live merchant prerequisites',()=>{
+ const script=`const React=require('react');const {renderToStaticMarkup}=require('react-dom/server');const {DocumentAutomationReadiness}=require('./src/components/mca/documents/document-automation');const config={enabled:false,merchantEnabled:false,runtimeReady:false};console.log(JSON.stringify({off:renderToStaticMarkup(React.createElement(DocumentAutomationReadiness,{configuration:config})),on:renderToStaticMarkup(React.createElement(DocumentAutomationReadiness,{configuration:{...config,enabled:true,merchantEnabled:true,version:3,approvedAt:'2026-10-01T00:00:00Z'}}))}));`
+ const child=spawnSync(process.execPath,['--import','tsx','-e',script],{encoding:'utf8',env:{...process.env,NODE_OPTIONS:''}});assert.equal(child.status,0,child.stderr)
+ const result=JSON.parse(child.stdout);assert.match(result.off,/are off/);assert.match(result.off,/requires operator activation/);assert.match(result.on,/current consent/);assert.match(result.on,/Approval version 3/);assert.match(result.on,/Unassigned deals do not broadcast/)
+})
