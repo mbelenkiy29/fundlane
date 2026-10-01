@@ -165,10 +165,8 @@ export async function inviteMember(
     const user = inserted
       ?? await database.prepare<{ id: string }>("SELECT id FROM users WHERE lower(email) = lower(?)").get(email);
     if (!user) throw new Error("Unable to resolve invited user account.");
-    if (!inserted) {
-      await database.prepare("UPDATE users SET name = ?, phone = ?, updated_at = ? WHERE id = ?")
-        .run(input.name, input.phone ?? null, timestamp, user.id);
-    }
+    // Users are shared across companies. An invitation may reserve a membership,
+    // but must not overwrite an existing account's profile before acceptance.
     const prior = await database.prepare<{ id: string; status: string }>("SELECT id, status FROM memberships WHERE workspace_id = ? AND user_id = ? FOR UPDATE")
       .get(context.workspaceId, user.id);
     if (billingSeatSyncEnabled() && prior?.status === "pending") {
