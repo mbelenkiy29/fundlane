@@ -60,6 +60,9 @@ export async function persistInbound(
     )
   const type = smsKeywordDirection(body, params.get("OptOutType"))
   await withImmediateTransaction(async (db) => {
+    // Lock before deduplication so concurrent replays cannot mutate consent twice.
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+      .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
     if (
       sid &&
       (await db
