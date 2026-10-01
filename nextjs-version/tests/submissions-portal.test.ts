@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth";
 import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before } from "node:test"
@@ -429,4 +430,14 @@ test("MIC-178 HTTP permissions: deals:read lists, intake and read keys cannot co
   assert.equal(forgedPost.status, 404)
   const localOnForeign = await portalGet(cookieRequest(`/api/mca/submissions/portal/${foreign.id}`, "admin-session-token"), params(foreign.id))
   assert.equal(localOnForeign.status, 404)
+})
+
+test("pending shared operators are masked on the submission portal board", async () => {
+  const { listPortalBoard } = await import("../src/lib/mca/submissions/portal")
+  const { deal } = await seedDeal()
+  const queued = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [portalFunderId], confirmationKey: "pending-profile-portal" })
+  assert.ok(queued.jobs.length)
+  // A previously active operator can be deactivated and re-invited while the job remains.
+  await getDatabase().prepare("UPDATE mca_submission_jobs SET created_by_user_id=? WHERE id=?").run(ids.repUser, queued.jobs[0].jobId)
+  await assertPendingProfileHidden(ids.repMember, () => listPortalBoard(actor(), deal.id))
 })

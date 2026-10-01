@@ -1,4 +1,5 @@
 import "server-only";
+import { membershipProfileNameSql, membershipProfilePhoneSql } from "./membership-profile";
 import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
 import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, licensedSeatCount, syncWorkspaceBilling, type StripeBillingClient } from "./billing";
 
@@ -54,16 +55,20 @@ function mapMembership(row: MembershipRow): MembershipSummary {
 }
 
 export async function listMemberships(workspaceId: string): Promise<MembershipSummary[]> {
-  return (await getDatabase().prepare<MembershipRow>(`SELECT m.*, u.name, u.email, u.phone, u.application_identifier,
+  return (await getDatabase().prepare<MembershipRow>(`SELECT m.*,
+      ${membershipProfileNameSql} AS name,
+      u.email, ${membershipProfilePhoneSql} AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status
     FROM memberships m JOIN users u ON u.id = m.user_id
-    WHERE m.workspace_id = ? ORDER BY lower(u.name)`).all(workspaceId)).map(mapMembership);
+    WHERE m.workspace_id = ? ORDER BY lower(${membershipProfileNameSql})`).all(workspaceId)).map(mapMembership);
 }
 
 export async function getMembership(workspaceId: string, membershipId: string): Promise<MembershipSummary> {
-  const row = await getDatabase().prepare<MembershipRow>(`SELECT m.*, u.name, u.email, u.phone, u.application_identifier,
+  const row = await getDatabase().prepare<MembershipRow>(`SELECT m.*,
+      ${membershipProfileNameSql} AS name,
+      u.email, ${membershipProfilePhoneSql} AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status

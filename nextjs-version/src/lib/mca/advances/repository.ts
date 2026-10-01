@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { getDatabase, newId, nowIso, type DbExecutor } from "../db"
 import type { AdvancePerformanceStatus } from "../accounting/contracts"
@@ -30,7 +31,7 @@ export async function listAdvanceRows(workspaceId: string): Promise<AdvanceRow[]
     a.payment_frequency, a.calendar_convention, a.status,
     COALESCE(NULLIF(d.dba_name,''), NULLIF(d.legal_name,''), d.display_id) business_name,
     o.funder_name, r.term_months,
-    COALESCE((SELECT string_agg(u.name || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
+    COALESCE((SELECT string_agg(${membershipProfileNameSql} || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
       FROM deal_assignments da JOIN memberships m ON m.id=da.membership_id AND m.workspace_id=da.workspace_id
       JOIN users u ON u.id=m.user_id WHERE da.workspace_id=a.workspace_id AND da.deal_id=a.deal_id), '') assigned_team
     FROM mca_advances a JOIN deals d ON d.workspace_id=a.workspace_id AND d.id=a.deal_id
@@ -45,7 +46,7 @@ export function findAdvanceRow(workspaceId: string, id: string, database: DbExec
     a.payment_frequency, a.calendar_convention, a.status,
     COALESCE(NULLIF(d.dba_name,''), NULLIF(d.legal_name,''), d.display_id) business_name,
     o.funder_name, r.term_months,
-    COALESCE((SELECT string_agg(u.name || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
+    COALESCE((SELECT string_agg(${membershipProfileNameSql} || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
       FROM deal_assignments da JOIN memberships m ON m.id=da.membership_id AND m.workspace_id=da.workspace_id
       JOIN users u ON u.id=m.user_id WHERE da.workspace_id=a.workspace_id AND da.deal_id=a.deal_id), '') assigned_team
     FROM mca_advances a JOIN deals d ON d.workspace_id=a.workspace_id AND d.id=a.deal_id
