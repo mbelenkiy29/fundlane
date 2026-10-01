@@ -1,6 +1,6 @@
 import "server-only"
 import { createHash } from "node:crypto"
-import { getDatabase, nowIso, type DbExecutor } from "../db"
+import { getDatabase, nowIso, withImmediateTransaction, type DbExecutor } from "../db"
 import { AppError } from "../errors"
 import {
   company,
@@ -59,7 +59,7 @@ export async function managedReady(
     return false
   return !!(await getDatabase()
     .prepare(
-      "SELECT n.id FROM sms_numbers n JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id WHERE n.workspace_id=? AND n.account_id=? AND n.state='active' AND m.status='active'"
+      "SELECT n.id FROM sms_numbers n JOIN mca_sms_accounts a ON a.id=n.account_id AND a.workspace_id=n.workspace_id LEFT JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id WHERE n.workspace_id=? AND n.account_id=? AND n.state='active' AND a.state='active' AND (a.shared=1 OR m.status='active')"
     )
     .get(workspaceId, accountId))
 }
@@ -105,7 +105,7 @@ export async function reserveManagedSend(
     throw new AppError(
       409,
       "sms_setup_incomplete",
-      "Company SMS is suspended or awaiting verification, registration, or an active employee."
+      "Company SMS is suspended or awaiting verification, registration, or an active number."
     )
   if (!/^\+1\d{10}$/.test(recipient))
     throw new AppError(
@@ -148,12 +148,11 @@ export async function suppress(
   recipient: string,
   state: "opted_out" | "opted_in"
 ) {
-  await getDatabase()
-    .prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
-    .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
-  await getDatabase()
-    .prepare(
+  await withImmediateTransaction(async (db) => {
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+      .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
+    await db.prepare(
       "INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,?,?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state=EXCLUDED.state,updated_at=EXCLUDED.updated_at"
-    )
-    .run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+    ).run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+  })
 }
