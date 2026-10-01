@@ -566,10 +566,10 @@ export async function processTwilioOptOut(accountId: string, params: URLSearchPa
   const canonicalUrl = `${config.publicBaseUrl}/api/mca/sms/webhooks/twilio/${encodeURIComponent(accountId)}/inbound`
   assertWebhookSignature(config, signature, canonicalUrl || requestUrl, params)
   assertWebhookAccount(config, params)
-  await persistInbound(workspaceId, accountId, params, String(row.sender_kind), decryptSensitive(String(row.sender_identity_cipher), workspaceId))
   const type = params.get("OptOutType")?.trim().toUpperCase()
+  if (type && !["STOP", "START", "HELP"].includes(type)) throw new AppError(422, "twilio_opt_out_invalid", "Unsupported Twilio opt-out event.")
+  await persistInbound(workspaceId, accountId, params, String(row.sender_kind), decryptSensitive(String(row.sender_identity_cipher), workspaceId))
   if (!type || type === "HELP") return { updated: 0, type: type ?? "none" }
-  if (!["STOP", "START"].includes(type)) throw new AppError(422, "twilio_opt_out_invalid", "Unsupported Twilio opt-out event.")
   const recipient = normalizeSmsRecipient(params.get("From") ?? ""), hash = recipientHash(workspaceId, recipient)
   const deals = await getDatabase().prepare<{ deal_id: string }>(`SELECT DISTINCT deal_id FROM (
     SELECT deal_id FROM mca_sms_messages WHERE workspace_id=? AND recipient_hash=?

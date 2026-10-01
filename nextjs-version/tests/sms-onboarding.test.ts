@@ -635,9 +635,9 @@ test("managed readiness reports malformed callback origins rather than rendering
 })
 
 test("number ownership is read-only, tenant scoped and independent of SMS registration", async () => {
-  const module = await import("../src/lib/mca/sms/number-ownership").catch(() => null)
-  assert.equal(typeof module?.getCompanyNumberOwnership, "function")
-  const lookup = module!.getCompanyNumberOwnership
+  const contract = await import("../src/lib/mca/sms/number-ownership").catch(() => null)
+  assert.equal(typeof contract?.getCompanyNumberOwnership, "function")
+  const lookup = contract!.getCompanyNumberOwnership
   const n = await getDatabase().prepare<{ id: string; account_id: string; provider_sid: string; phone: string }>("SELECT id,account_id,provider_sid,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
   assert.ok(n)
   assert.equal(await lookup("foreign-company", n.id), undefined)
@@ -655,4 +655,16 @@ test("number ownership is read-only, tenant scoped and independent of SMS regist
   } finally {
     await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',suspended=0 WHERE workspace_id=?").run(owner.workspaceId)
   }
+})
+
+test("unsupported signed opt-out events leave inbox and suppression unchanged", async () => {
+  const { processTwilioOptOut } = await import("../src/lib/mca/sms/service")
+  const n = await getDatabase().prepare<{ id: string; phone: string }>("SELECT id,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  const url = `https://crm.example.test/api/mca/sms/webhooks/twilio/${n!.id}/inbound`
+  const params = new URLSearchParams({ AccountSid: p.accountSid, From: "+12125550001", To: n!.phone,
+    MessageSid: `SM${"0".repeat(32)}`, Body: "STOP", OptOutType: "UNSUPPORTED" })
+  const signature = createHmac("sha1", p.authToken).update(url + [...params.keys()].sort().map(k => k + params.get(k)).join("")).digest("base64")
+  await assert.rejects(processTwilioOptOut(n!.id, params, signature, url), { code: "twilio_opt_out_invalid" })
+  const row = await getDatabase().prepare("SELECT id FROM sms_inbox_messages WHERE workspace_id=? AND provider_id=?").get(owner.workspaceId, params.get("MessageSid"))
+  assert.equal(row, undefined)
 })
