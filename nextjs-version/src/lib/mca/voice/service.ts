@@ -10,7 +10,7 @@ import { liveEmailActor } from "../email-conversations/service"
 import { consumeRequestRateLimit } from "../auth"
 import type { DealActor } from "../deals/schema"
 import { assertVoiceActor,terminalOutcome } from "./policy"
-import { readyVoice,resolveVoice } from "./readiness"
+import { readyVoice,resolveVoice,voiceOutcomeCredentials } from "./readiness"
 import { createVoiceToken,identityFor,verifyVoiceWebhook,normalizedPhone,inboundTwiml,outboundTwiml,hangupTwiml } from "./provider"
 import type { VoiceHistoryItem } from "./contracts"
 
@@ -53,7 +53,7 @@ export async function createDialIntent(actor:DealActor,dealId:string){
 }
 export async function cancelDialIntent(actor:DealActor,id:string){await activeActor(actor);await getDatabase().prepare("UPDATE voice_dial_intents SET canceled_at=? WHERE workspace_id=? AND membership_id=? AND id=? AND consumed_at IS NULL").run(nowIso(),actor.workspaceId,actor.membershipId,id);return {canceled:true}}
 const callbackUrl=(origin:string,workspaceId:string,kind:string)=>`${origin}/api/mca/voice/webhooks/${encodeURIComponent(workspaceId)}/${kind}`
-async function verified(request:Request,workspaceId:string,kind:string){const ready=await readyVoice(workspaceId);const params=await verifyVoiceWebhook(request,ready.credentials,callbackUrl(ready.credentials.publicOrigin,workspaceId,kind));return {...ready,params}}
+async function verified(request:Request,workspaceId:string,kind:string){await assertCompanyOperational(workspaceId);if(!(await getWorkspaceSettings(workspaceId)).pageVisibility.deals)throw new AppError(403,"page_disabled","Calling is disabled for this company.");const ready=await readyVoice(workspaceId);const params=await verifyVoiceWebhook(request,ready.credentials,callbackUrl(ready.credentials.publicOrigin,workspaceId,kind));return {...ready,params}}
 interface CallRow {id:string;workspace_id:string;number_id:string;account_sid:string;provider_call_sid:string;membership_id:string|null;recipient_memberships:string;deal_id:string|null;direction:"inbound"|"outbound";state:string;phone_cipher:string;company_phone_cipher:string;terminal_at:string|null;created_at:string}
 async function enqueueMissed(row:CallRow,db:DbExecutor){
  const ids=JSON.parse(row.recipient_memberships) as string[]
@@ -64,7 +64,7 @@ async function enqueueMissed(row:CallRow,db:DbExecutor){
   try{
    const actor=await liveEmailActor(row.workspace_id,membershipId)
    await enqueueNotification(actor,{eventKey:`voice-missed:${row.provider_call_sid}`,kind:"missed_call",audience:"broker",channel:"email",recipientUserId:member.user_id,scheduledFor:clock,approvedAt:clock,payload:{title:"Missed company call",message:`Missed call from ${decryptSensitive(row.phone_cipher,row.workspace_id)} to ${decryptSensitive(row.company_phone_cipher,row.workspace_id)}. Open Fundlane call history to follow up.`}},{executor:db})
-  }catch(error){if(!(error instanceof AppError)||!["notification_suppressed","notification_policy_disabled","notification_recipient_unavailable","email_member_inactive","page_disabled"].includes(error.code))throw error}
+  }catch(error){if(!(error instanceof AppError)||!["notification_suppressed","notification_policy_disabled","notification_recipient_unavailable","email_member_inactive","page_disabled","company_access_paused","company_paused"].includes(error.code))throw error}
  }
  await db.prepare("UPDATE voice_calls SET alert_pending=0 WHERE workspace_id=? AND id=?").run(row.workspace_id,row.id)
 }
@@ -101,20 +101,20 @@ export async function handleInbound(request:Request,workspaceId:string){
   const ids=row?JSON.parse(row.recipient_memberships) as string[]:[...recipients.map(r=>r.membership_id),...fallback.map(r=>r.id)]
   const identities=recipients.filter(r=>ids.includes(r.membership_id)).map(r=>r.identity)
   if(!row){await db.prepare("INSERT INTO voice_calls(id,workspace_id,number_id,account_sid,provider_call_sid,recipient_memberships,direction,state,phone_cipher,company_phone_cipher,terminal_at,alert_pending,created_at) VALUES (?,?,?,?,?,?,'inbound',?,?,?,?,?,?)").run(newId(),workspaceId,number.numberId,credentials.accountSid,callSid,JSON.stringify(ids),identities.length?"ringing":"missed",encryptSensitive(phone,workspaceId),encryptSensitive(number.phone,workspaceId),identities.length?null:nowIso(),identities.length?0:1,nowIso());row=await db.prepare<CallRow>("SELECT * FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(workspaceId,callSid)}
-  if(!identities.length && row)await enqueueMissed(row,db)
+  if(!identities.length && row){const clock=nowIso();await db.prepare("UPDATE voice_calls SET state='missed',terminal_at=?,alert_pending=1 WHERE workspace_id=? AND id=? AND terminal_at IS NULL").run(clock,workspaceId,row.id);await enqueueMissed({...row,state:"missed",terminal_at:clock},db)}
   return inboundTwiml(identities,callbackUrl(credentials.publicOrigin,workspaceId,"outcome"))
  })
 }
 export async function handleOutcome(request:Request,workspaceId:string){
- const {params,credentials}=await verified(request,workspaceId,"outcome")
+ const credentials=await voiceOutcomeCredentials(workspaceId),params=await verifyVoiceWebhook(request,credentials,callbackUrl(credentials.publicOrigin,workspaceId,"outcome"))
  return withImmediateTransaction(async db=>{
   const row=await db.prepare<CallRow>("SELECT * FROM voice_calls WHERE workspace_id=? AND provider_call_sid=? FOR UPDATE").get(workspaceId,params.get("CallSid"))
   if(!row || row.account_sid!==credentials.accountSid)throw new AppError(404,"voice_call_missing","Call history was not found.")
   if(row.direction==="inbound" && (params.get("To")!==decryptSensitive(row.company_phone_cipher,workspaceId)||params.get("From")!==decryptSensitive(row.phone_cipher,workspaceId)))throw new AppError(401,"voice_number_mismatch","Call endpoint mismatch.")
   if(row.direction==="outbound" && params.get("From")!==`client:${identityFor(workspaceId,row.membership_id!)}`)throw new AppError(401,"voice_identity_mismatch","Calling identity mismatch.")
   const state=terminalOutcome(row.direction,params.get("DialCallStatus")??"")
-  if(!row.terminal_at){await db.prepare("UPDATE voice_calls SET state=?,terminal_at=?,alert_pending=? WHERE workspace_id=? AND id=? AND terminal_at IS NULL").run(state,nowIso(),state==="missed"?1:0,workspaceId,row.id)
-   if(state==="missed")await enqueueMissed({...row,state,terminal_at:nowIso()},db)
+  if(!row.terminal_at){const clock=nowIso();await db.prepare("UPDATE voice_calls SET state=?,terminal_at=?,alert_pending=? WHERE workspace_id=? AND id=? AND terminal_at IS NULL").run(state,clock,state==="missed"?1:0,workspaceId,row.id)
+   if(state==="missed")await enqueueMissed({...row,state,terminal_at:clock},db)
   }
   return hangupTwiml
  })

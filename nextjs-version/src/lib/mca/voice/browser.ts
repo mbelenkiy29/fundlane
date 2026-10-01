@@ -39,7 +39,7 @@ export class BrowserVoice {
     }catch{if(generation===this.generation)await this.fail()}
   }
   private async refresh(generation:number){
-    try{const {token}=await this.deps.token();if(generation!==this.generation)return;this.device?.updateToken(token);await this.deps.presence(true)}catch{if(generation===this.generation)await this.fail()}
+    try{const {token}=await this.deps.token();if(generation!==this.generation)return;this.device?.updateToken(token);await this.deps.presence(true);if(generation!==this.generation)await this.deps.presence(false)}catch{if(generation===this.generation)await this.fail()}
   }
   private attach(call:VoiceCall){
     this.call=call

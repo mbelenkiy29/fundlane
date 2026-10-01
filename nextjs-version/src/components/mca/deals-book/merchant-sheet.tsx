@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useState } from "react"
-import { Phone } from "lucide-react"
+import { VoiceLauncher } from "@/components/mca/voice/voice-launcher"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -33,7 +33,7 @@ export function MerchantSheet({ detail, open, onOpenChange, focusSms }: {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{STATUS_LABEL[detail.servicingStatus]}</Badge>
               {detail.renewalEligible && <Badge>Renewal eligible</Badge>}
-              {detail.contactPhone && <Button size="sm" variant="outline" asChild><a href={`tel:${detail.contactPhone}`}><Phone className="size-3.5" />Call</a></Button>}
+              {detail.contactPhone && <VoiceLauncher dealId={detail.dealId} />}
               <Button size="sm" variant="outline" onClick={()=>{setChannel("sms");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Text</Button>
               <Button size="sm" variant="outline" onClick={()=>{setChannel("email");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Email</Button>
               <Button size="sm" variant="outline" asChild><Link href={`/pipeline?deal=${detail.dealId}`}>Full application</Link></Button>

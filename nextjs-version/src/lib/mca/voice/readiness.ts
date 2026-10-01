@@ -22,3 +22,12 @@ export async function resolveVoice(workspaceId:string){
  return {readiness,credentials,number,config}
 }
 export async function readyVoice(workspaceId:string){const result=await resolveVoice(workspaceId);if(!result.credentials||!result.number)throw new AppError(503,"voice_not_ready","Browser calling setup is incomplete.");return {...result,credentials:result.credentials,number:result.number}}
+
+/** Authenticate historical outcomes even when new-call readiness has been revoked. */
+export async function voiceOutcomeCredentials(workspaceId:string):Promise<VoiceCredentials>{
+ const c=await company(workspaceId),p=c?provider(c):undefined
+ let publicOrigin=""
+ try{const u=new URL(process.env.MCA_VOICE_PUBLIC_ORIGIN??process.env.MCA_APP_ORIGIN??"");if(u.protocol!=="https:"||u.username||u.password||u.pathname!=="/"||u.search||u.hash)throw Error();publicOrigin=u.origin}catch{throw new AppError(503,"voice_origin_invalid","Voice callback origin is unavailable.")}
+ if(!p?.accountSid||!p.authToken)throw new AppError(503,"voice_credentials_missing","Voice callback validation is unavailable.")
+ return {accountSid:p.accountSid,authToken:p.authToken,apiKeySid:p.apiKeySid??"",apiKeySecret:p.apiKeySecret??"",applicationSid:"",publicOrigin}
+}

@@ -22,30 +22,39 @@ No live calls/mic acceptance, provider data invention, provisioning, production 
 ### Task 1: Provider primitives
 Files: src/lib/mca/voice/provider.ts, contracts.ts; tests/voice-provider.test.ts.
 Interfaces: VoiceCredentials {accountSid,authToken,apiKeySid,apiKeySecret,applicationSid,publicOrigin}; identityFor(workspaceId,membershipId); createVoiceToken(credentials,identity,now); outboundTwiml(number,to,actionUrl); inboundTwiml(identities,actionUrl); verifyVoiceWebhook(request,credentials,canonicalUrl).
-- [ ] Write token grant/5-minute expiry, identity separation, XML escaping/recording-off, forged/duplicate/body-size/account tests.
-- [ ] Run focused tests; expect missing module failure.
-- [ ] Implement provider primitives using existing Twilio verifier and HMAC signing.
-- [ ] Run focused tests; expect all pass; commit.
+- [x] Write token grant/5-minute expiry, identity separation, XML escaping/recording-off, forged/duplicate/body-size/account tests.
+- [x] Run focused tests; expect missing module failure.
+- [x] Implement provider primitives using existing Twilio verifier and HMAC signing.
+- [x] Run focused tests; expect all pass; commit.
 
 ### Task 2: Authenticated service and persistence
 Files: voice/http.ts, service.ts, readiness.ts; voice API routes; db/voice.ts; centrally reserved migration/journal; tests/voice-service.test.ts.
 Consumes pinned SMS/notification modules and Task 1 primitives. Produces GET readiness/history, POST token/presence/dial-intent/cancel and signed inbound/outbound/action endpoints. Intent TTL 60 seconds, token/presence TTL 300 seconds; identity is tenant/member hash; active memberships and visible deal rechecked at dispatch. Missed alert eventKey includes workspaceId and parent CallSid.
-- [ ] Pin shared dependencies + migration slot before dependent edits.
-- [ ] Write focused service/auth/tenant/role/replay/order/missed-dedupe tests; run RED.
-- [ ] Implement encrypted phone history, transactional replay gates, opt-in presence lease and safe callback handling; run GREEN.
-- [ ] Commit implementation and evidence.
+- [x] Pin shared dependencies + migration slot before dependent edits.
+- [x] Write focused service/auth/tenant/role/replay/order/missed-dedupe tests; run RED.
+- [x] Implement encrypted phone history, transactional replay gates, opt-in presence lease and safe callback handling; run GREEN.
+- [x] Commit implementation and evidence.
 
 ### Task 3: Browser panel and integration
 Files: voice/browser.ts, voice-panel.tsx, voice-readiness.tsx; app layout mount and existing call entrypoints; package.json/pnpm-lock.yaml; tests/voice-browser.test.ts.
 Consumes Task 2 endpoints; exposes VoiceReadiness component and user action launcher.
-- [ ] Write mocked lifecycle tests for registration, incoming answer/reject, outgoing cancel/disconnect, async cancellation races, cleanup, token expiry and manual retry; run RED.
-- [ ] Add SDK dependency and adapter; build persistent opt-in panel, history and readiness view; replace tel actions after coordinating shared UI.
-- [ ] Run GREEN, typecheck and targeted lint; commit.
+- [x] Write mocked lifecycle tests for registration, incoming answer/reject, outgoing cancel/disconnect, async cancellation races, cleanup, token expiry and manual retry; run RED.
+- [x] Add SDK dependency and adapter; build persistent opt-in panel, history and readiness view; replace tel actions after coordinating shared UI.
+- [x] Run GREEN, typecheck and targeted lint; commit.
 
 ### Task 4: Review and publication
-- [ ] Self-review against spec/plan and run targeted checks.
-- [ ] Independent code review; resolve important findings with reproducing tests.
+- [x] Self-review against spec/plan and run targeted checks.
+- [x] Independent code review; resolve important findings with reproducing tests.
 - [ ] Parent-allocated build/aggregate checks; refresh Graphify; record actual evidence and external activation gates.
 - [ ] Push branch, create draft PR, attach artifact; verify remote head/check state. Never merge.
 
 Plan self-review: all scope maps to tasks; provider primitives are independent; shared contracts explicitly gate Task 2; failure cases map to service/browser tests. No conflicting ownership introduced.
+
+## Execution ledger
+
+Pre-flight: provider->service token/TwiML API consistent; service->browser endpoint names/intent semantics consistent; SMS ownership and notification enqueue were dependency gates, not duplicated tables/transports.
+Task 1: complete03dad6f; provider tests3/3 RED (missing module) -> GREEN.
+Task 2: completeeb77c22; disposable Postgres service4/4 including missed alert RED0!=1 -> GREEN after pinned41a4264.
+Task 3: completeeb77c22; browser/policy10 total focused checks GREEN, typecheck0 and targeted ESLint0 errors/warnings. CRM owner confirmed nonconflicting launcher insertions subsequently applied in Voice branch.
+Final independent review: local voice_review reviewedeb77c22, four important findings. All reproduced before fixes: dispatch permissions, historical terminal callback readiness, late refresh presence, replay rejection nonterminal. Fixed in one pass; focused provider/browser/policy11/11 and service7/7 GREEN. Type/lint rechecked. No deferred minor findings or spec rulings.
+Remaining: parent-allocated build/aggregate slot, publication/remote checks; activation remains external and documented.
