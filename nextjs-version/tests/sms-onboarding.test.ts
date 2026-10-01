@@ -906,6 +906,8 @@ test("signed consent keywords remain authoritative with unknown provider metadat
   const n = await getDatabase().prepare<{ id: string; phone: string }>("SELECT id,phone FROM sms_numbers WHERE workspace_id=? AND state='active'").get(owner.workspaceId)
   assert.ok(n)
   const url = `https://crm.example.test/api/mca/sms/webhooks/twilio/${n.id}/inbound`
+  const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
+  await recordSmsConsent(actor, {dealId:"managed-send-deal",recipient:"+12125550198",state:"opted_in",evidence:"Synthetic keyword regression consent",idempotencyKey:"unknown-metadata-consent"})
   const send = async (body: string, digit: string) => {
     const params = new URLSearchParams({AccountSid:p.accountSid,From:"+12125550198",To:n.phone,MessageSid:`SM${digit.repeat(32)}`,Body:body,OptOutType:"UNSUPPORTED"})
     const signature=createHmac("sha1",p.authToken).update(url+[...params.keys()].sort().map(k=>k+params.get(k)).join("")).digest("base64")
