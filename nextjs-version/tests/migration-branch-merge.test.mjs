@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
 
 const applicationReviewHash = "eace840adc50c0b66a4203414cd3c6e123474b4e4715cefe6e50e4028e98c49d";
@@ -51,10 +54,27 @@ async function revertLaterThanCatchup(fixture) {
 }
 
 async function withFixture(label, run) {
-  const fixture = await createPostgresTestDatabase(label);
-  const pool = new pg.Pool({ connectionString: fixture.databaseUrl, max: 1 });
-  try { await run(fixture, pool); }
-  finally { await pool.end(); await fixture.close(); }
+  const folder = await mkdtemp(join(tmpdir(), "fundlane-historical-migrations-"));
+  let fixture, pool;
+  try {
+    const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8"));
+    const entries = journal.entries.filter(entry => entry.when <= retentionHoldsTimestamp);
+    assert.equal(entries.at(-1).tag, "0067_retention_holds");
+    await mkdir(join(folder, "meta"));
+    await writeFile(join(folder, "meta/_journal.json"), JSON.stringify({ ...journal, entries }));
+    for (const entry of entries) await writeFile(join(folder, `${entry.tag}.sql`), await readFile(resolve("drizzle", `${entry.tag}.sql`)));
+    fixture = await createPostgresTestDatabase(label, { migrateSchema: false });
+    pool = new pg.Pool({ connectionString: fixture.databaseUrl, max: 1 });
+    await pool.query("CREATE SCHEMA IF NOT EXISTS mca_private");
+    await migrate(drizzle(pool), { migrationsFolder: folder });
+    await run(fixture, pool);
+  } finally {
+    try { await pool?.end(); }
+    finally {
+      try { await fixture?.close(); }
+      finally { await rm(folder, { recursive: true, force: true }); }
+    }
+  }
 }
 
 test("merged fresh schema includes both migration branches; catch-up does not replay application-review data updates", async () => {

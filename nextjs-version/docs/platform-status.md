@@ -4,7 +4,9 @@ When both `MCA_CALENDAR_GOOGLE_ENABLED=true` and `MCA_CALENDAR_RUNTIME=vercel_cr
 
 See [Operations recovery](operations-recovery.md) for additional default-off recovery alert thresholds, failed-job review, and hosted restore and worker drills.
 
-`/admin/status` is a separate owner console. Its API validates the live Supabase session and compares the immutable user ID to `MCA_PLATFORM_OWNER_USER_ID`. Company roles cannot grant access. The ordinary app header shows a link only for the configured owner; the link is not an authorization mechanism.
+`/platform/monitoring` is part of the shared owner portal. Both Mike and Ben require a confirmed Supabase identity, an unrevoked platform grant, the configured email ceiling, and same-session MFA. `/admin/status` performs the same page authorization before redirecting. Retained `/api/admin/status` and `/api/admin/status/errors` enforce the shared super-admin gate and reject API keys; company roles cannot grant access. The ordinary app header links to `/platform` only after the same authorization succeeds; the link is not an authorization mechanism. Machine monitoring still uses its existing monitor-token gate.
+
+See [platform super-admin access](platform-super-admin.md) for reviewed release instructions covering legacy narrowing configuration. No environment values or grants change automatically. `MCA_PLATFORM_OWNER_USER_ID` is obsolete for access; remove it only during the reviewed release. The original monitoring activation sequence below is historical deployment guidance; this portal change does not authorize deployment, new alerts, or provider actions.
 
 ## Metrics
 
@@ -20,11 +22,11 @@ Only allowlisted telemetry metadata is stored. Never pass exception messages, re
 
 ## Release order
 
-1. Confirm the existing owner's login email and alert/test recipient. Resolve `users.supabase_user_id` using a parameterized query for that exact email, verify the Auth identity is active, and configure the immutable ID. Never infer ownership from a company role or auto-promote an account.
+1. Confirm both owner identities, existing live platform grants, same-session MFA, and email ceilings using the reviewed super-admin runbook. Verify any alert/test recipient separately. Never infer ownership from a company role or auto-promote an account.
 2. Apply only migration 0037 using the guarded script, with a migration-role connection identifying the Fundlane project:
    `node --import tsx scripts/operations/apply-schema.mjs --expected-project-ref=drubsfvhlggmtyiigwxy`.
    It requires `NEXT_PUBLIC_SUPABASE_URL`, `DATABASE_URL_UNPOOLED`, and existing Drizzle history through 0036. It records the correct migration hash so ordinary subsequent migrations do not run it again.
-3. Set Vercel server-only `MCA_PLATFORM_OWNER_USER_ID`, `MCA_OPERATIONS_ENABLED=true` and a randomly generated 32-byte-or-longer `MCA_MONITOR_TOKEN`. Deploy the reviewed website revision. Confirm the owner page and 401/403 protections before activating monitoring.
+3. Review the shared owner ceilings, then set Vercel server-only `MCA_OPERATIONS_ENABLED=true` and a randomly generated 32-byte-or-longer `MCA_MONITOR_TOKEN`. Deploy the reviewed website revision. Confirm the owner page and 401/403 protections before activating monitoring.
 4. Store the same monitor token as a Supabase secret and as Vault secret `fundlane_monitor_token`. Add `MCA_MONITOR_DATABASE_URL` using restricted `mca_app` through the transaction pooler on port 6543, `MCA_APP_ORIGIN=https://fundlane.io`, and `MCA_OPERATIONS_ALERTS_ENABLED=false`. Do not copy the migration/admin connection into the function.
 5. Run `node scripts/operations/deploy-monitor.mjs --expected-project-ref=drubsfvhlggmtyiigwxy`. This deploys only `platform-monitor`; it does not prune Stripe functions or change schedules.
 6. Invoke manually with the dedicated secret. Verify a real website/database sample and queue aggregates in `mca_private.ops_health`. Verify a public project key is rejected.
@@ -39,7 +41,7 @@ Health/database failures need three consecutive checks. Queue age over ten minut
 
 A full Supabase outage can stop custom checks and alerts. Email outages can prevent notifications. Consult Vercel/Supabase directly when samples are stale or the app cannot authenticate. Unknown/rejected notification outcomes are visible separately from business email state.
 
-Disable only `fundlane-platform-monitor` with `cron.unschedule`, then set alerts and collection flags false and remove the platform owner setting if rolling back access. Retain all business records and additive operational tables. Native host logs remain available. No DNS or worker migration is part of this release.
+Disable only `fundlane-platform-monitor` with `cron.unschedule`, then set alerts and collection flags false and revoke the reviewed platform grant or narrow the super-admin ceiling if rolling back access. Retain all business records and additive operational tables. Native host logs remain available. No DNS or worker migration is part of this release.
 
 ## Verification
 

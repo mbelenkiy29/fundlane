@@ -60,8 +60,12 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         setNext(list.next)
         setError("")
       } catch (e) {
-        if (!signal?.aborted)
+        if (!signal?.aborted) {
+          setData(null)
+          setErrors([])
+          setNext(null)
           setError(e instanceof Error ? e.message : "Status unavailable")
+        }
       } finally {
         if (!signal?.aborted) setBusy(false)
       }
@@ -94,11 +98,11 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
     }
   }
   const latest = data?.latest,
-    metrics = latest?.metrics,
-    stale = data?.stale || Boolean(error)
+    stale = data?.stale || Boolean(error),
+    metrics = stale ? null : latest?.metrics
   const state =
     !latest || stale || !metrics
-      ? "Unknown"
+      ? "Unavailable"
       : latest.website_ok &&
           latest.database_ok &&
           !data?.incidents.some((i) => i.opened_at)
@@ -217,7 +221,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         <Metric
           title="Website response"
           value={
-            latest?.website_ok
+            !stale && latest?.website_ok && latest.website_ms != null
               ? `${number(latest.website_ms)} ms`
               : "Unavailable"
           }
@@ -226,11 +230,11 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         <Metric
           title="Database response"
           value={
-            latest?.database_ok
+            !stale && latest?.database_ok && latest.database_ms != null
               ? `${number(latest.database_ms)} ms`
               : "Unavailable"
           }
-          detail="Through the application connection"
+          detail={stale ? "Stale observation" : "Through the application connection"}
         />
         <Metric
           title="Recorded errors"
@@ -474,7 +478,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           </p>
         )}
       </Panel>
-      <Panel title="Recent errors" subtitle="Sanitized metadata only">
+      <Panel title="Recent errors" subtitle="Sanitized platform-wide metadata · company attribution unavailable">
         <label className="mb-4 block text-sm">
           Component{" "}
           <select
@@ -519,7 +523,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           </Table>
         {!errors.length && (
           <p className="py-4 text-sm text-muted-foreground">
-            {error
+            {error || !data
               ? "Error history unavailable."
               : "No recorded errors in this view."}
           </p>
