@@ -1,4 +1,5 @@
 import "./helpers/business-auth"
+import { queueWithSyntheticApproval as queueSubmissions, syntheticApprovedJob } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -18,7 +19,7 @@ import {
   setAdapterEnvironmentForTests,
   upsertAdapterCredential,
 } from "../src/lib/mca/submissions/adapters/credentials"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   WEBHOOK_SECRET_HEADER,
 } from "../src/lib/mca/submissions/webhooks"
@@ -320,7 +321,7 @@ test("deliverWebhook blocks RFC1918 / loopback / link-local / CGNAT / IPv6 ULA D
   }
   assert.equal(fetchCalls.length, 0)
 
-  const allowed = await deliverWebhook(webhookJob("https://token@public.example.test/hook"))
+  const allowed = await deliverWebhook(await syntheticApprovedJob(actor(), webhookJob("https://token@public.example.test/hook")))
   assert.equal(allowed.ok, true)
   assert.equal(allowed.state, "sent")
   assert.equal(fetchCalls.length, 1)
@@ -380,7 +381,7 @@ test("deliverWebhook does not follow a 302 to a private IP as success", async ()
     throw new Error(`unexpected fetch: ${url}`)
   })
 
-  const result = await deliverWebhook(webhookJob("https://token@public.example.test/hook"))
+  const result = await deliverWebhook(await syntheticApprovedJob(actor(), webhookJob("https://token@public.example.test/hook")))
   assert.equal(result.ok, false)
   assert.notEqual(result.state, "sent")
   assert.equal(fetchCalls.includes(privateUrl), false)

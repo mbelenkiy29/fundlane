@@ -3,6 +3,7 @@ import "server-only"
 import { lookup as dnsLookup } from "node:dns/promises"
 import { isIP } from "node:net"
 import { newId } from "../db"
+import { findAttempt } from "./repository"
 import type { DeliverResult, SubmissionJob } from "./contracts"
 
 type WebhookFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -209,12 +210,13 @@ function failed(correlationId: string, errorCode: string, errorMessage: string):
 }
 
 export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult> {
-  const correlationId = newId()
+  const correlationId = (await findAttempt(job.id, job.attemptKey))?.correlationId ?? newId()
   const resolved = resolveWebhookTarget(job.route.destination)
   if (!resolved.ok) return failed(correlationId, "provider_unavailable", resolved.message)
 
   const hostSafe = await assertSafeWebhookHost(new URL(resolved.target.url).hostname, resolver())
   if (!hostSafe.ok) return failed(correlationId, "provider_unavailable", hostSafe.message)
+  await (await import("./broker-approval")).assertBrokerApprovedDelivery(job)
   await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
   await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
 
@@ -235,7 +237,7 @@ export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult>
     if (!response.ok) {
       return failed(
         correlationId,
-        response.status >= 500 ? "provider_error" : "delivery_failed",
+        response.status === 408 || response.status >= 500 ? "delivery_uncertain" : "delivery_failed",
         `Webhook returned HTTP ${response.status}.`,
       )
     }
@@ -247,6 +249,6 @@ export async function deliverWebhook(job: SubmissionJob): Promise<DeliverResult>
       externalRef,
     }
   } catch {
-    return failed(correlationId, "provider_unavailable", "Webhook delivery failed.")
+    return failed(correlationId, "delivery_uncertain", "Webhook outcome is uncertain. Reconcile the receiver receipt before another send.")
   }
 }

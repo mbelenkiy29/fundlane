@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -15,7 +16,7 @@ import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { encryptSenderCredential } from "../src/lib/mca/senders/repository"
 import { setEmailProviderFetchForTests } from "../src/lib/mca/email-conversations/providers"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   REPLY_INGEST_INTERVAL_MS,
   setReplyMailboxForTests,

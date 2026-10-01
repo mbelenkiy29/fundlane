@@ -225,10 +225,7 @@ function submitErrorFromUnknown(error: unknown, runtime: AdapterRuntime): Adapte
   if (error instanceof AppError && error.code === "capability_unsupported") {
     return unsupported(runtime.correlationId, error.message)
   }
-  if (error instanceof AppError && error.code === "provider_unavailable") {
-    return unavailable(runtime.correlationId, error.message, flattenFields(error.fieldErrors))
-  }
-  return unavailable(runtime.correlationId, "The funder adapter failed.")
+  return { ok: false, correlationId: runtime.correlationId, externalRef: runtime.externalRef, errorCode: "delivery_uncertain", errorMessage: "The provider outcome is uncertain. Reconcile its receipt before another send." }
 }
 
 export async function submitViaAdapter(job: SubmissionJob, options: AdapterExecutionOptions = {}): Promise<AdapterSubmitResult> {
@@ -240,6 +237,7 @@ export async function submitViaAdapter(job: SubmissionJob, options: AdapterExecu
     return unavailable(correlationId, `No funder adapter is registered for ${job.displayFunderName}.`)
   }
   if (!adapter.capabilities.submit) return unsupported(correlationId, `${adapter.slug} cannot submit.`)
+  await (await import("../broker-approval")).assertBrokerApprovedDelivery(job)
   await (await import("../../company-access")).assertCompanyOperational(job.workspaceId)
   await (await import("../../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   try {
@@ -376,21 +374,6 @@ function lastActionFromView(view: AdapterActionView): AdapterLastAction {
   }
 }
 
-function viewFromSubmit(action: AdapterAction, credentialId: string, capabilities: AdapterCapabilities, result: AdapterSubmitResult & { rateLimit?: AdapterRateLimit }): AdapterActionView {
-  return {
-    ok: result.ok,
-    action,
-    credentialId,
-    correlationId: result.correlationId,
-    externalRef: result.externalRef,
-    errorCode: result.errorCode,
-    errorMessage: result.errorMessage,
-    fields: result.fields,
-    rateLimit: result.rateLimit ?? rateLimitFromFields(result.fields),
-    rawStatus: result.rawStatus,
-    capabilities,
-  }
-}
 
 async function requireCredential(actor: DealActor, credentialId: string) {
   const record = await findAdapterCredential(actor.workspaceId, credentialId)
@@ -456,40 +439,10 @@ export async function retryAdapterAction(
   credentialId: string,
   input: AdapterExecutionOptions & { action?: AdapterAction; job?: Partial<SubmissionJob> } = {},
 ): Promise<AdapterActionView> {
+  if (input.action === "submit") throw new AppError(409, "broker_approval_required", "Prepare and approve the exact package in this deal’s Submit to funders panel before resending.")
   const record = await requireCredential(actor, credentialId)
-  const action: AdapterAction = input.action === "submit" ? "submit" : "status"
   const correlationId = input.correlationId || record.lastAction?.correlationId || newId()
   const externalRef = input.externalRef || record.lastAction?.externalRef
-  const job = jobFromCredential(record, {
-    ...input.job,
-    attemptKey: input.job?.attemptKey ?? record.lastAction?.externalRef ?? record.id,
-  })
-  if (action === "status") {
-    return checkAdapterStatus(actor, credentialId, { ...input, correlationId, externalRef, job })
-  }
-  const result = await submitViaAdapter(job, {
-    environment: record.environment,
-    correlationId,
-    externalRef,
-  })
-  const capabilities = effectiveAdapterCapabilities(record.adapterSlug, record.capabilities)
-  const view = viewFromSubmit("submit", record.id, capabilities, result)
-  await recordAdapterLastAction(actor.workspaceId, record.id, lastActionFromView(view))
-  if (!result.ok && result.errorCode === "rate_limited") {
-    throw new AppError(429, "rate_limited", result.errorMessage ?? "The funder API rate-limited this request.", {
-      retryAt: view.rateLimit ? [view.rateLimit.retryAt] : [],
-      retryAfterSeconds: view.rateLimit ? [String(view.rateLimit.retryAfterSeconds)] : [],
-      ...(view.externalRef ? { externalRef: [view.externalRef] } : {}),
-      ...(result.fields ? Object.fromEntries(Object.entries(result.fields).map(([key, value]) => [key, [value]])) : {}),
-    })
-  }
-  if (!result.ok && result.errorCode === "provider_unavailable") {
-    throw new AppError(503, "provider_unavailable", result.errorMessage ?? "No credentials are configured for this funder adapter.", result.fields
-      ? Object.fromEntries(Object.entries(result.fields).map(([key, value]) => [key, [value]]))
-      : undefined)
-  }
-  if (!result.ok && result.errorCode === "capability_unsupported") {
-    throw new AppError(409, "capability_unsupported", result.errorMessage ?? "This adapter cannot perform that action.")
-  }
-  return view
+  const job = jobFromCredential(record, { ...input.job, attemptKey: input.job?.attemptKey ?? record.lastAction?.externalRef ?? record.id })
+  return checkAdapterStatus(actor, credentialId, { ...input, correlationId, externalRef, job })
 }

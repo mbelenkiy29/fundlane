@@ -1,4 +1,5 @@
 import test, { after, before } from "node:test"
+import { approvePersistedFixture, queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase, newId } from "../src/lib/mca/db"
 import { AppError } from "../src/lib/mca/errors"
@@ -14,11 +15,11 @@ import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef, setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
 import { assertProductionDeliveryNotPreview, processJobDelivery, reconcileUncertainEmailDelivery } from "../src/lib/mca/submissions/outbox"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   findJobById,
   insertAttempt,
-  persistNewDestination,
+  persistNewDestination as rawPersistNewDestination,
   updateJobRecord,
 } from "../src/lib/mca/submissions/repository"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -38,12 +39,12 @@ let deliveries = 0
 
 const actor = (): DealActor => ({
   workspaceId: "workspace-outbox",
-  userId: null,
+  userId: "outbox-fixture-broker",
   membershipId: null,
   role: "admin",
   managedMembershipIds: [],
   activeMembershipIds: [],
-  source: "system",
+  source: "user",
   correlationId: "corr-outbox",
 })
 
@@ -165,6 +166,7 @@ before(async () => {
     return new Response("accepted", { status: 202 })
   })
   await addWorkspace(actor().workspaceId)
+  await getDatabase().prepare("INSERT INTO users(id,email,password_hash,name,application_identifier,created_at,updated_at) VALUES (?,'outbox-broker@example.test',NULL,'Fixture','APP-OUTBOX',?,?)").run(actor().userId, new Date().toISOString(), new Date().toISOString())
   const sender = await createSender(actor(), {
     provider: "smtp",
     purpose: "submission",
@@ -209,6 +211,7 @@ test("processJobDelivery reconciles a sending attempt without repeating an ambig
     state: "sending",
     correlationId: newId(),
   })
+  await getDatabase().prepare("UPDATE mca_submission_attempts SET created_at=? WHERE job_id=?").run(new Date(Date.now() - 11 * 60_000).toISOString(), queued.id)
   const sending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
   deliveries = 0
   const priorRuntime = process.env.MCA_JOB_RUNTIME
@@ -232,7 +235,7 @@ test("processJobDelivery reconciles a sending attempt without repeating an ambig
   assert.equal(deliveries, 0)
 })
 
-test("unset kind list preserves legacy submission retry behavior", async () => {
+test("unset kind list observes approved reserved attempt without another send", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-legacy-retry")
   await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey,
@@ -249,8 +252,8 @@ test("unset kind list preserves legacy submission retry behavior", async () => {
     if (priorRuntime === undefined) delete process.env.MCA_JOB_RUNTIME; else process.env.MCA_JOB_RUNTIME = priorRuntime
     if (priorKinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS; else process.env.MCA_JOB_RUNTIME_KINDS = priorKinds
   }
-  assert.equal(saved.state, "sent")
-  assert.equal(deliveries, 1)
+  assert.equal(saved.state, "sending")
+  assert.equal(deliveries, 0)
 })
 
 test("gated API recovery leaves an interrupted send uncertain without submitting twice", async () => {
@@ -440,7 +443,7 @@ test("guarded concurrent email delivery does not call the relay twice", async ()
   }
 })
 
-test("completed attempt leaves job and cache unchanged with recovery unset", async () => {
+test("approved completed attempt recovers even with optional recovery unset", async () => {
   const { deal, document } = await seedDeal()
   const queued = await persistQueuedJob(deal.id, document, "outbox-terminal-default")
   await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey, transport: queued.routeKind, state: "sent", correlationId: newId() })
@@ -449,10 +452,10 @@ test("completed attempt leaves job and cache unchanged with recovery unset", asy
 
   const saved = await withCompletedAttemptRecovery(false, () => processJobDelivery(sending))
 
-  assert.equal(saved.state, "sending")
-  assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "sending")
+  assert.equal(saved.state, "sent")
+  assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, "sent")
   const cache = await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE workspace_id = ? AND job_id = ?").get(queued.workspaceId, queued.id)
-  assert.equal(cache?.status, "queued")
+  assert.equal(cache?.status, "sent")
   assert.ok(await outboxProcessedAt(queued.id))
   assert.equal(await attemptCount(queued.id), 1)
   assert.equal(deliveries, 0)
@@ -485,6 +488,51 @@ test("completed attempt recovery restores sent job without a second delivery", a
   assert.equal(attempt?.state, "sent")
   assert.equal((await processJobDelivery(saved)).state, "sent")
   assert.equal(deliveries, 0)
+})
+
+test("completed transport recovery preserves a later funded or declined lender outcome", async () => {
+  for (const lenderState of ["funded", "declined"] as const) {
+    const { deal, document } = await seedDeal()
+    const queued = await persistQueuedJob(deal.id, document, `late-${lenderState}-${deal.id}`)
+    await insertAttempt({ workspaceId: queued.workspaceId, jobId: queued.id, attemptKey: queued.attemptKey,
+      transport: queued.routeKind, state: "sent", correlationId: newId() })
+    const staleSending = await updateJobRecord(queued.workspaceId, queued.id, { state: "sending" })
+    await updateJobRecord(queued.workspaceId, queued.id, { state: lenderState })
+    await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, queued.id)
+    deliveries = 0
+
+    const recovered = await withCompletedAttemptRecovery(true, () => processJobDelivery(staleSending))
+
+    assert.equal(recovered.state, lenderState)
+    assert.equal((await findJobById(queued.workspaceId, queued.id))?.state, lenderState)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(queued.id))?.status, lenderState)
+    assert.ok(await outboxProcessedAt(queued.id))
+    assert.equal(deliveries, 0)
+  }
+})
+
+test("uncertain reconciliation preserves later lender outcomes and rejects contrary not-sent evidence", async () => {
+  for (const lenderState of ["funded", "declined"] as const) {
+    const { deal, document } = await seedDeal()
+    const job = await persistQueuedJob(deal.id, document, `reconcile-${lenderState}-${deal.id}`)
+    await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey,
+      transport: job.routeKind, state: "failed", correlationId: newId(), errorCode: "delivery_uncertain" })
+    await updateJobRecord(job.workspaceId, job.id, { state: lenderState })
+    await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, job.id)
+    await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "not_sent", evidence: "provider log" }), { code: "lender_evidence_exists" })
+    const accepted = await reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "accepted", evidence: "provider receipt" })
+    assert.equal(accepted.state, lenderState)
+    assert.equal((await findJobById(job.workspaceId, job.id))?.state, lenderState)
+    assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(job.id))?.status, lenderState)
+  }
+
+  const { deal, document } = await seedDeal()
+  const job = await persistQueuedJob(deal.id, document, `reconcile-provider-evidence-${deal.id}`)
+  await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: job.attemptKey,
+    transport: job.routeKind, state: "failed", correlationId: newId(), errorCode: "delivery_uncertain" })
+  await insertAttempt({ workspaceId: job.workspaceId, jobId: job.id, attemptKey: "provider-status-later",
+    transport: "api", state: "sent", correlationId: newId(), errorCode: "provider_status" })
+  await assert.rejects(() => reconcileUncertainEmailDelivery(actor(), job.id, { outcome: "not_sent", evidence: "provider log" }), { code: "lender_evidence_exists" })
 })
 
 test("processJobDelivery restores a saved failed attempt without sending again", async () => {
@@ -655,3 +703,8 @@ test("production preview refs are not recorded as sent", async () => {
     else process.env.MCA_EMAIL_WEBHOOK_URL = previousWebhook
   }
 })
+
+async function persistNewDestination(input: Parameters<typeof rawPersistNewDestination>[0]) {
+  const result = await rawPersistNewDestination(input)
+  return { ...result, job: await approvePersistedFixture(actor(), result.job) }
+}

@@ -12,8 +12,6 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 import { submissionConfirmGate } from "@/lib/mca/integrations/connection-status"
 import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
 import {
-  confirmationAttemptFingerprint,
-  confirmationKeyForAttempt,
   DUPLICATE_RULE_COPY,
 } from "@/lib/mca/submissions/duplicate-rules"
 
@@ -51,6 +49,7 @@ type JobView = {
   createdAt: string
   updatedAt: string
   autoSubmitted?: boolean
+  deliveryUncertain?: boolean
 }
 
 type SelectionPayload = {
@@ -59,6 +58,8 @@ type SelectionPayload = {
   documents: Array<{ id: string; filename: string; category: string; checksum: string; byteLength: number }>
   funders: SelectionFunder[]
   jobs: JobView[]
+  canReconcile?: boolean
+  replyMailboxReadiness?: { ready: boolean; consumer: { state: string } }
   autoDecisions?: Array<{ funder_id: string; score: number; outcome: string; reason: string; submission_job_id: string | null; created_at: string }>
 }
 
@@ -66,6 +67,12 @@ type ConfirmPayload = {
   ok: true
   confirmationKey: string
   jobs: Array<{ jobId: string; funderId: string; state: JobState; reason?: string; eligibleAt?: string }>
+}
+
+type BrokerPreview = {
+  id: string
+  expiresAt: string
+  destinations: Array<{ funderId: string; name: string; method: string; destination: string; errors: string[]; documents: Array<{ id: string; filename: string; checksum: string }>; email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string } }>
 }
 
 type ProtectionPreview = {
@@ -107,6 +114,31 @@ function funderTitle(funder: SelectionFunder): string {
   return funder.nickname || funder.legalName
 }
 
+function ReconcileDelivery({ jobId, onSaved }: { jobId: string; onSaved: () => Promise<void> }) {
+  const [outcome, setOutcome] = React.useState("")
+  const [evidence, setEvidence] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string>()
+  async function save() {
+    setBusy(true); setError(undefined)
+    try {
+      await requestJson("/api/mca/submissions/reconcile", { method: "POST", body: JSON.stringify({ jobId, outcome, evidence }) })
+      await onSaved()
+    } catch (caught) { setError(errorMessage(caught, "Delivery could not be reconciled.")) }
+    finally { setBusy(false) }
+  }
+  return <div className="w-full space-y-2 rounded border p-3">
+    <p className="text-sm">Confirm the provider receipt before another send.</p>
+    <Label htmlFor={`outcome-${jobId}`}>Provider outcome</Label>
+    <select id={`outcome-${jobId}`} className="block rounded border p-2 text-sm" value={outcome} onChange={event => setOutcome(event.target.value)} disabled={busy}>
+      <option value="">Choose confirmed outcome</option><option value="accepted">Provider accepted the submission</option><option value="not_sent">Provider confirms it was not sent</option>
+    </select>
+    <Textarea aria-label="Provider receipt or not-sent evidence" maxLength={500} value={evidence} onChange={event => setEvidence(event.target.value)} disabled={busy} placeholder="Record the provider receipt or confirmation" />
+    <Button size="sm" disabled={busy || !outcome || !evidence.trim()} onClick={() => void save()}>Record reconciliation</Button>
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+  </div>
+}
+
 export function SelectionPanel({ dealId }: { dealId: string }) {
   const [payload, setPayload] = React.useState<SelectionPayload>()
   const [selected, setSelected] = React.useState<string[]>([])
@@ -119,7 +151,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   const [overrideReason, setOverrideReason] = React.useState("")
   const [previewBusy, setPreviewBusy] = React.useState<string>()
   const [previewNote, setPreviewNote] = React.useState<string>()
-  const pendingConfirmation = React.useRef<{ fingerprint: string; key: string } | null>(null)
+  const [brokerPreview, setBrokerPreview] = React.useState<BrokerPreview>()
 
   const load = React.useCallback(async () => {
     setError(undefined)
@@ -137,6 +169,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
   React.useEffect(() => { void load() }, [load])
 
   function toggle(id: string, checked: boolean | "indeterminate") {
+    setBrokerPreview(undefined)
     setSelected((current) => {
       if (checked === true) return current.includes(id) ? current : [...current, id]
       return current.filter((item) => item !== id)
@@ -157,27 +190,22 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
       setBusy(false)
       return
     }
-    const pending = confirmationKeyForAttempt(
-      pendingConfirmation.current,
-      confirmationAttemptFingerprint({
-        funderIds: selected,
-        override24h,
-        overrideReason,
-      }),
-      () => crypto.randomUUID(),
-    )
-    pendingConfirmation.current = pending
     try {
+      if (!brokerPreview) {
+        const preview = await requestJson<BrokerPreview>(`/api/mca/submissions/${encodeURIComponent(dealId)}`, { method: "POST", body: JSON.stringify({ action: "preview", funderIds: selected }) })
+        setBrokerPreview(preview)
+        return
+      }
       const next = await requestJson<ConfirmPayload>(`/api/mca/submissions/${encodeURIComponent(dealId)}`, {
         method: "POST",
         body: JSON.stringify({
           funderIds: selected,
-          confirmationKey: pending.key,
+          previewId: brokerPreview.id,
           privilegedRetry: override24h,
           privilegedReason: override24h ? overrideReason.trim() : undefined,
         }),
       })
-      pendingConfirmation.current = null
+      setBrokerPreview(undefined)
       setResults(next.jobs)
       const failed = next.jobs.filter((job) => job.state === "failed" || job.state === "preflight_failed" || job.state === "blocked_duplicate").length
       const ok = next.jobs.length - failed
@@ -189,6 +217,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
       await load()
     } catch (caught) {
       setError(errorMessage(caught, "Submissions could not be confirmed."))
+      if (caught instanceof RequestError && caught.status === 409) setBrokerPreview(undefined)
     } finally {
       setBusy(false)
     }
@@ -226,6 +255,8 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
     }
   }
 
+  async function reconciled() { setResults(undefined); await load() }
+
   const funders = payload?.funders ?? []
   const jobs = payload?.jobs ?? []
   const gate = submissionConfirmGate({ loading, selectedIds: selected, funders })
@@ -236,12 +267,12 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         <div>
           <CardTitle className="flex items-center gap-2"><Send className="size-5" />Submit to funders</CardTitle>
           <CardDescription>
-            Confirming freezes deal version {payload?.dealVersion ?? "—"} and document checksums. Each funder is queued independently. {DUPLICATE_RULE_COPY.summary}
+            Review the exact destination, attachments and email before sending deal version {payload?.dealVersion ?? "—"}. Each funder is queued independently. {DUPLICATE_RULE_COPY.summary}
           </CardDescription>
         </div>
-        <Button onClick={() => void confirm()} disabled={!gate.enabled || busy} aria-label="Confirm submissions">
+        <Button onClick={() => void confirm()} disabled={!gate.enabled || busy} aria-label={brokerPreview ? "Approve and send submissions" : "Prepare submission preview"}>
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-          {busy ? "Confirming…" : "Confirm submissions"}
+          {busy ? "Preparing…" : brokerPreview ? "Approve and send" : "Prepare preview"}
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -249,13 +280,25 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
         {!loading && <MissingPrerequisites missing={gate.missing} />}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}
+        {payload?.replyMailboxReadiness && !payload.replyMailboxReadiness.ready && <p className="text-sm text-muted-foreground">Automatic reply ingestion is unavailable (mailbox consumer: {payload.replyMailboxReadiness.consumer.state}). Review lender replies manually until the company mailbox is ready.</p>}
+        {brokerPreview && <section className="space-y-3 rounded-lg border p-4" aria-label="Exact submission preview">
+          <p className="font-medium">Review before sending</p>
+          {brokerPreview.destinations.map(destination => <article key={destination.funderId} className="space-y-2 border-t pt-3 text-sm">
+            <p className="font-medium">{destination.name} · {destination.method}</p><p className="break-words">Destination: {destination.destination}</p>
+            {destination.errors.length > 0 && <p role="status">This destination will be rejected: {destination.errors.join(" ")}</p>}
+            <ul>{destination.documents.map(document => <li key={document.id}>{document.filename} · {document.checksum.slice(0, 12)}</li>)}</ul>
+            {destination.email && <div className="space-y-1"><p>From: {destination.email.from}</p><p>To: {destination.email.to.join(", ")}</p><p>Cc: {destination.email.cc.join(", ") || "None"}</p><p>Reply to: {destination.email.replyTo}</p><p>Subject: {destination.email.subject}</p><pre className="whitespace-pre-wrap font-sans">{destination.email.body}</pre></div>}
+          </article>)}
+          <p className="text-xs text-muted-foreground">Expires {new Date(brokerPreview.expiresAt).toLocaleString()}.</p>
+          <Button variant="outline" disabled={busy} onClick={() => setBrokerPreview(undefined)}>Discard preview</Button>
+        </section>}
         {previewNote && <p role="status" className="text-sm text-muted-foreground">{previewNote}</p>}
         <div className="space-y-2 rounded-lg border p-3">
           <div className="flex items-start gap-3">
             <Checkbox
               id="submission-override-24h"
               checked={override24h}
-              onCheckedChange={(value) => setOverride24h(value === true)}
+              onCheckedChange={(value) => { setOverride24h(value === true); setBrokerPreview(undefined) }}
               aria-label="Override the 24-hour same-funder rule"
             />
             <div className="min-w-0 flex-1 space-y-2">
@@ -264,7 +307,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                 <Textarea
                   id="submission-override-reason"
                   value={overrideReason}
-                  onChange={(event) => setOverrideReason(event.target.value)}
+                  onChange={(event) => { setOverrideReason(event.target.value); setBrokerPreview(undefined) }}
                   maxLength={500}
                   aria-label="24-hour override reason"
                   placeholder="Why this deal should be sent to the same funder again"
@@ -357,6 +400,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                   <Badge variant={stateVariant(job.state)}>{stateLabel(job.state)}</Badge>
                   <span>{funders.find((item) => item.id === job.funderId)?.legalName ?? job.funderId}</span>
                   {job.reason ? <span className="text-muted-foreground">{job.reason}</span> : null}
+                  {payload?.canReconcile && jobs.find(existing => existing.jobId === job.jobId)?.deliveryUncertain && <ReconcileDelivery jobId={job.jobId} onSaved={reconciled} />}
                 </li>
               ))}
             </ul>
@@ -373,6 +417,7 @@ export function SelectionPanel({ dealId }: { dealId: string }) {
                   <span>{job.displayFunderName}</span>
                   {job.autoSubmitted && <Badge variant="secondary">Auto-submitted</Badge>}
                   {job.reason ? <span className="text-muted-foreground">{job.reason}</span> : null}
+                  {payload?.canReconcile && job.deliveryUncertain && <ReconcileDelivery jobId={job.jobId} onSaved={reconciled} />}
                 </li>
               ))}
             </ul>

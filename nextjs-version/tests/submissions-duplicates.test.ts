@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions, brokerConfirmHttp } from "./helpers/broker-submission-preview"
 import test, { after, afterEach, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -16,10 +17,9 @@ import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setClock } from "../src/lib/mca/submissions/clock"
 import { packageFingerprint, submissionMerchantIdentityKey } from "../src/lib/mca/submissions/identity"
 import { assertDuplicatePolicy } from "../src/lib/mca/submissions/duplicate-policy"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { setEmailDeliveryFetchForTests } from "../src/lib/mca/submissions/email-templates"
-import { POST as submissionsPost } from "../src/app/api/mca/submissions/[dealId]/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
@@ -164,7 +164,7 @@ before(async () => {
   })
   await testSend(actor(), sender.id, { to: "ops@example.test" })
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://email-duplicates.example.test/deliver"
-  setEmailDeliveryFetchForTests(async () => new Response("Fixture provider failure", { status: 503 }))
+  setEmailDeliveryFetchForTests(async () => new Response("Fixture provider failure", { status: 400 }))
   emailFunderId = (await createFunder(actor(), {
     idempotencyKey: "email-funder",
     legalName: "Email Capital LLC",
@@ -512,7 +512,7 @@ test("reps and API keys that can already submit may override the 24-hour rule", 
   const dealForHttp = await seedDeal({ actor: actor(ids.workspace, "rep") })
   await enqueue(dealForHttp.id, [portalFunderId])
   setClock(() => plus(T0, TWO_MIN_MS * 3))
-  const repHttp = await submissionsPost(cookieRequest(`/api/mca/submissions/${dealForHttp.id}`, "rep-session-token", {
+  const repHttp = await brokerConfirmHttp(cookieRequest(`/api/mca/submissions/${dealForHttp.id}`, "rep-session-token", {
     method: "POST",
     body: JSON.stringify({
       funderIds: [portalFunderId],
@@ -527,7 +527,7 @@ test("reps and API keys that can already submit may override the 24-hour rule", 
   assertNoSecret(repBody)
 
   setClock(() => plus(T0, TWO_MIN_MS * 4))
-  const apiHttp = await submissionsPost(bearerRequest(`/api/mca/submissions/${dealForHttp.id}`, "write-secret", {
+  const apiHttp = await brokerConfirmHttp(bearerRequest(`/api/mca/submissions/${dealForHttp.id}`, "write-secret", {
     method: "POST",
     body: JSON.stringify({
       funderIds: [portalFunderId],
@@ -536,12 +536,10 @@ test("reps and API keys that can already submit may override the 24-hour rule", 
       privilegedReason: "API key HTTP override",
     }),
   }), params(dealForHttp.id))
-  assert.equal(apiHttp.status, 200)
-  const apiBody = await apiHttp.json() as { ok: true; jobs: Array<{ state: string; reason?: string }> }
-  assert.equal(apiBody.jobs[0]?.state, "pending_portal", apiBody.jobs[0]?.reason ?? JSON.stringify(apiBody))
-  assertNoSecret(apiBody)
+  assert.equal(apiHttp.status, 403)
+  assertNoSecret(await apiHttp.json())
   assert.ok(await privilegedAuditCount(deal.id) >= 2)
-  assert.ok(await privilegedAuditCount(dealForHttp.id) >= 2)
+  assert.ok(await privilegedAuditCount(dealForHttp.id) >= 1)
 })
 
 test("other funders stay independent and HTTP uses the same deal-and-funder policy", async () => {
@@ -562,14 +560,14 @@ test("other funders stay independent and HTTP uses the same deal-and-funder poli
   assert.equal(duplicateSame.jobs[0]?.state, "blocked_duplicate")
   assert.match(duplicateSame.jobs[0]?.reason ?? "", /2 minutes/)
 
-  const intake = await submissionsPost(bearerRequest(`/api/mca/submissions/${deal.id}`, "intake-secret", {
+  const intake = await brokerConfirmHttp(bearerRequest(`/api/mca/submissions/${deal.id}`, "intake-secret", {
     method: "POST",
     body: JSON.stringify({ funderIds: [portalFunderId], confirmationKey: confirmationKey("http-intake"), privilegedRetry: true, privilegedReason: "nope" }),
   }), params(deal.id))
   assert.equal(intake.status, 403)
   assertNoSecret(await intake.json())
 
-  const http = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
+  const http = await brokerConfirmHttp(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
     method: "POST",
     body: JSON.stringify({ funderIds: [portalFunderId], confirmationKey: confirmationKey("http-dup") }),
   }), params(deal.id))
@@ -582,7 +580,7 @@ test("other funders stay independent and HTTP uses the same deal-and-funder poli
   assert.equal(body.jobs[0]?.reason?.includes(pdfChecksum), false)
 
   setClock(() => plus(T0, TWO_MIN_MS))
-  const adminOverride = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
+  const adminOverride = await brokerConfirmHttp(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
     method: "POST",
     body: JSON.stringify({
       funderIds: [portalFunderId],

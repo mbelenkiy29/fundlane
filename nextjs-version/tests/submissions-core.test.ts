@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { brokerConfirmHttp as submissionsPost } from "./helpers/broker-submission-preview"
 import test, { after, afterEach, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -24,7 +25,7 @@ import {
 } from "../src/lib/mca/submissions/queue"
 import { closedLookbackMonths } from "../src/lib/mca/underwriting/lookback"
 import { queueSubmissions } from "../src/lib/mca/underwriting/submission-port"
-import { GET as submissionsGet, POST as submissionsPost } from "../src/app/api/mca/submissions/[dealId]/route"
+import { GET as submissionsGet } from "../src/app/api/mca/submissions/[dealId]/route"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
@@ -437,7 +438,7 @@ test("MIC-166 HTTP confirmation is idempotent and mixed destinations stay indepe
   }
   assertNoSecret(firstBody)
   assert.equal(firstBody.ok, true)
-  assert.equal(firstBody.confirmationKey, confirmationKey)
+  assert.notEqual(firstBody.confirmationKey, confirmationKey)
   const emailJob = firstBody.jobs.find((item) => item.funderId === emailFunderId)
   const brokenJob = firstBody.jobs.find((item) => item.funderId === brokenFunderId)
   assert.ok(emailJob)
@@ -447,7 +448,7 @@ test("MIC-166 HTTP confirmation is idempotent and mixed destinations stay indepe
 
   const second = await submissionsPost(cookieRequest(`/api/mca/submissions/${deal.id}`, "admin-session-token", {
     method: "POST",
-    body: JSON.stringify({ funderIds: [emailFunderId, brokenFunderId], confirmationKey }),
+    body: JSON.stringify({ previewId: firstBody.confirmationKey }),
   }), params(deal.id))
   assert.equal(second.status, 200)
   const secondBody = await second.json() as { jobs: Array<{ jobId: string; funderId: string }> }
@@ -528,8 +529,7 @@ test("MIC-166 permissions: deals:read lists, intake and read keys cannot confirm
     method: "POST",
     body: JSON.stringify({ funderIds: [brokenFunderId], confirmationKey: "write-allowed" }),
   }), params(deal.id))
-  assert.equal(writeOk.status, 200)
-  assert.equal((await writeOk.json() as { ok: boolean }).ok, true)
+  assert.equal(writeOk.status, 403)
 
   const forgedGet = await submissionsGet(cookieRequest(`/api/mca/submissions/${deal.id}`, "other-session-token"), params(deal.id))
   assert.equal(forgedGet.status, 404)

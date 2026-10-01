@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -13,7 +14,7 @@ import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
   setReplyMailboxForTests,
   type MailboxMessage,
@@ -377,10 +378,10 @@ async function persistExtract(replyId: string) {
     method: "POST", body: JSON.stringify({ replyId }),
   }))
   assert.equal(preview.status, 200)
-  const proposed = await preview.json() as { classification: string }
+  const proposed = await preview.json() as { classification: string; proposalKey: string }
   const extracted = await extractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", {
     method: "POST",
-    body: JSON.stringify({ replyId, confirm: true, expectedClassification: proposed.classification }),
+    body: JSON.stringify({ replyId, confirm: true, expectedClassification: proposed.classification, expectedProposalKey: proposed.proposalKey }),
   }))
   assert.equal(extracted.status, 200)
   return await extracted.json() as { offer?: { id: string; amount: number | null; termsUnknown: boolean; source: string; offerLink?: string | null }; termsUnknown?: boolean }
