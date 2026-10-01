@@ -10,7 +10,7 @@ import type { PerformanceMoney, PerformanceMoneyRecord, PerformanceReport } from
 export const PERFORMANCE_DEFINITIONS = {
   leads: "Created deals (lead intake): unique deal IDs created in the selected local calendar window.",
   pipeline: "Current pipeline status for the creation-date cohort; this is a current snapshot, not historical pipeline.",
-  stages: "Submitted and offered/approved evidence count unique deals once per stage. Dates use the first recorded stage event. Five lender submissions remain one deal.",
+  stages: "Submitted and offered/approved evidence count unique deals once per stage. Created/submitted/offered dates use the first recorded stage event. Funded deals count once per window with any committed funding event in that window; a deal can reappear in later windows. Five lender submissions remain one deal.",
   basis: "Event compares activity in the local date window; its ratios can exceed 100%. Cohort selects created deals and observes recorded outcomes as of generation; numerator intersects denominator deal IDs. Zero denominator is N/A.",
   attribution: "Current originator/closer assignments receive full deal credit; company totals stay unique. Paid broker commissions filter by recipient membership. Assignments are not historical ownership.",
   fundedVolume: "Sum committed funding-event IDs, each on its own funded date (event) or created-deal cohort (cohort). Reversed/corrected events are excluded; this is a current restatement.",
@@ -71,13 +71,14 @@ export async function getPerformanceReport(actor: DealActor, filters: ReportFilt
   const reversed = funding.filter((row) => row.state !== "committed" && row.reversed_at && matches(row.deal_id) && matchesFunder(row.offer_id) && dateIncluded(row.deal_id, row.reversed_at))
   const selectedByDeal = new Map<string, typeof selections>()
   for (const row of selections) {
-    if (!matches(row.deal_id) || !matchesFunder(row.offer_id) || !dateIncluded(row.deal_id, row.effective_at)) continue
     if (row.state !== "active" || (row.expires_at && row.expires_at <= generatedAt) || committed.some((item) => item.deal_id === row.deal_id)) continue
     selectedByDeal.set(row.deal_id, [...(selectedByDeal.get(row.deal_id) ?? []), row])
   }
   const estimates: PerformanceMoneyRecord[] = []
   for (const [dealId, rows] of selectedByDeal) {
-    const row = rows[0]
+    if (!matches(dealId)) continue
+    const row = rows.find((item) => matchesFunder(item.offer_id) && dateIncluded(dealId, item.effective_at))
+    if (!row) continue
     let incomplete = true
     try { const parsed: unknown = JSON.parse(row.incomplete_fields_json); incomplete = !Array.isArray(parsed) || parsed.includes("commissionCents") } catch { /* Corrupt source snapshot is unknown. */ }
     estimates.push(record(rows.length === 1 ? row.id : `ambiguous:${dealId}`, dealId, row.effective_at, rows.length === 1 && !incomplete ? row.commission_cents : null))
