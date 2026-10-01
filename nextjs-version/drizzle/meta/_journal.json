@@ -414,6 +414,13 @@
       "when": 1790385600016,
       "tag": "0067_retention_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790385600017,
+      "tag": "0068_sms_keyword_consent",
+      "breakpoints": true
     }
   ]
 }

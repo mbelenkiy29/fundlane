@@ -78,6 +78,7 @@ export type Company = {
   number_limit: number
   monthly_limit_cents: number
   registration_limit_cents: number
+  updated_at: string
 }
 export type ProviderConfig = {
   accountSid: string
@@ -128,22 +129,13 @@ export function platformReady(): boolean {
   )
 }
 export function publicOrigin(): string {
-  const u = new URL(
-    process.env.MCA_SMS_PUBLIC_BASE_URL ?? process.env.MCA_APP_ORIGIN ?? ""
-  )
-  if (
-    u.protocol !== "https:" ||
-    u.username ||
-    u.password ||
-    u.pathname !== "/" ||
-    u.search ||
-    u.hash
-  )
-    throw new AppError(
-      503,
-      "sms_origin_required",
-      "Configure the public HTTPS origin."
-    )
+  // Blank values count as unset; a non-blank but invalid value fails closed
+  // instead of silently falling back to a different origin.
+  const value = process.env.MCA_SMS_PUBLIC_BASE_URL?.trim() || process.env.MCA_APP_ORIGIN?.trim()
+  let u: URL | undefined
+  try { u = value ? new URL(value) : undefined } catch { u = undefined }
+  if (!u || u.protocol !== "https:" || u.username || u.password || u.pathname !== "/" || u.search || u.hash)
+    throw new AppError(503, "sms_public_url_unconfigured", "Configure the public HTTPS origin.")
   return u.origin
 }
 export async function company(

@@ -10,6 +10,7 @@ import type { TwilioSmsTransport } from "../src/lib/mca/sms/twilio"
 import { createTwilioSmsTransport, validateTwilioFormSignature } from "../src/lib/mca/sms/twilio"
 import { createSmsAccount, deliverClosingSms, getSmsConsent, processTwilioOptOut, processTwilioStatus, recordSmsConsent, resolveSmsRoute, updateSmsAccount } from "../src/lib/mca/sms/service"
 import { POST as createAccountRoute } from "../src/app/api/mca/sms/accounts/route"
+import { POST as inboundRoute } from "../src/app/api/mca/sms/webhooks/twilio/[accountId]/inbound/route"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const priorEnv = {
@@ -249,6 +250,15 @@ test("signed Advanced Opt-Out STOP appends consent and blocks subsequent sends",
   assert.equal(result.updated, 1)
   assert.equal((await getSmsConsent(adminA, ids.dealA, phone)).state, "opted_out")
   await assert.rejects(() => deliverClosingSms(adminA, { dealId: ids.dealA, recipient: phone, body: "Must be blocked", idempotencyKey: "sms-provider-stop", correlationId: "corr-provider-stop", payloadHash: payloadHash("Must be blocked"), deliveryMode: "never_attempted" }), /opted out/)
+})
+
+test("signed inbound route returns empty TwiML Response", async () => {
+  const url = `https://sms.example.test/api/mca/sms/webhooks/twilio/${accountAId}/inbound`
+  const params = new URLSearchParams({ AccountSid: twilio.accountSid, MessageSid: `SM${"e".repeat(32)}`, From: phone, To: sender, Body: "Synthetic reply" })
+  const response = await inboundRoute(new Request(url, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-twilio-signature": sign(url, params, twilio.authToken) }, body: params }), { params: Promise.resolve({ accountId: accountAId }) })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get("content-type"), "text/xml; charset=utf-8")
+  assert.equal(await response.text(), '<?xml version="1.0" encoding="UTF-8"?><Response/>')
 })
 
 test("SMS account mutation API rejects a directly authenticated non-admin session", async () => {

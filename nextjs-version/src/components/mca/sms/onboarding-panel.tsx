@@ -469,7 +469,6 @@ export function SmsOnboardingPanel() {
                             phone: purchase.phone,
                             membershipId: employee,
                             maxMonthlyCents: purchase.monthlyCents,
-                            idempotencyKey: `buy:${purchase.phone}:${employee}`,
                           })
                           setPurchase(null)
                           setAvailable([])

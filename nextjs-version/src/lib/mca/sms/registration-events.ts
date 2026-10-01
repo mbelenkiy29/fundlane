@@ -5,22 +5,19 @@ import { company, provider, publicOrigin } from "./onboarding"
 import { withImmediateTransaction, nowIso } from "../db"
 import { AppError } from "../errors"
 import { validateTwilioFormSignature } from "./twilio"
-const eventSchema = z
-  .array(
-    z.object({
-      id: z.string().min(1).max(100),
-      type: z.string(),
-      time: z.iso.datetime(),
-      data: z.object({
-        accountsid: z.string(),
-        phonenumbersid: z.string(),
-        messagingservicesid: z.string(),
-        externalstatus: z.string(),
-        updateddate: z.number().optional(),
-      }),
-    })
-  )
-  .max(1000)
+const envelopeSchema = z.object({
+  id: z.string().min(1).max(100),
+  type: z.string(),
+  time: z.iso.datetime(),
+  data: z.unknown(),
+})
+const dataSchema = z.object({
+  accountsid: z.string(),
+  phonenumbersid: z.string(),
+  messagingservicesid: z.string(),
+  externalstatus: z.string(),
+  updateddate: z.number().optional(),
+})
 export async function registrationEvents(
   workspaceId: string,
   request: Request
@@ -53,14 +50,24 @@ export async function registrationEvents(
       "twilio_signature_invalid",
       "Invalid event signature."
     )
-  const parsed = eventSchema.safeParse(JSON.parse(raw))
-  if (!parsed.success)
-    throw new AppError(422, "event_invalid", "Invalid registration event.")
+  let rawEvents: unknown
+  try { rawEvents = JSON.parse(raw) } catch { throw new AppError(422, "event_invalid", "Invalid registration event.") }
+  const parsed = z.array(envelopeSchema).max(1000).safeParse(Array.isArray(rawEvents) ? rawEvents : [rawEvents])
+  if (!parsed.success) throw new AppError(422, "event_invalid", "Invalid registration event.")
+  let received = false
   await withImmediateTransaction(async (db) => {
     for (const event of parsed.data) {
+      if (!event.type.startsWith("com.twilio.messaging.compliance.number-registration.")) continue
+      let rawData = event.data
+      if (typeof rawData === "string") {
+        try { rawData = JSON.parse(rawData) } catch { throw new AppError(422, "event_invalid", "Invalid registration event.") }
+      }
+      const valid = dataSchema.safeParse(rawData)
+      if (!valid.success) throw new AppError(422, "event_invalid", "Invalid registration event.")
+      const data = valid.data
       if (
-        event.data.accountsid !== p.accountSid ||
-        event.data.messagingservicesid !== p.serviceSid
+        data.accountsid !== p.accountSid ||
+        data.messagingservicesid !== p.serviceSid
       )
         throw new AppError(
           401,
@@ -74,15 +81,10 @@ export async function registrationEvents(
         unregistered: "registering",
         pending_deregistration: "registering",
       }
-      if (
-        !event.type.startsWith(
-          "com.twilio.messaging.compliance.number-registration."
-        ) ||
-        !states[event.data.externalstatus]
-      )
-        continue
-      const time = event.data.updateddate
-        ? new Date(event.data.updateddate).toISOString()
+      if (!states[data.externalstatus]) continue
+      received = true
+      const time = data.updateddate
+        ? new Date(data.updateddate).toISOString()
         : event.time
       const inserted = await db
         .prepare(
@@ -91,8 +93,8 @@ export async function registrationEvents(
         .get(
           event.id,
           workspaceId,
-          event.data.phonenumbersid,
-          states[event.data.externalstatus],
+          data.phonenumbersid,
+          states[data.externalstatus],
           time,
           nowIso()
         )
@@ -100,15 +102,15 @@ export async function registrationEvents(
         const latest = await db
           .prepare<{
             state: string
-          }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY provider_time DESC,id DESC LIMIT 1")
-          .get(workspaceId, event.data.phonenumbersid)
+          }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY (id LIKE 'assumed:%') ASC,provider_time DESC,id DESC LIMIT 1")
+          .get(workspaceId, data.phonenumbersid)
         await db
           .prepare(
             "UPDATE sms_numbers SET state=?,updated_at=? WHERE workspace_id=? AND provider_sid=? AND state NOT IN ('released','releasing')"
           )
-          .run(latest!.state, nowIso(), workspaceId, event.data.phonenumbersid)
+          .run(latest!.state, nowIso(), workspaceId, data.phonenumbersid)
       }
     }
   })
-  return { received: true }
+  return { received }
 }

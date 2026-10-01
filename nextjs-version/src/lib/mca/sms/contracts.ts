@@ -77,6 +77,7 @@ export interface SmsDeliveryResult {
 
 export interface SmsAdapterSendInput {
   account: SmsAccount
+  idempotencyKey: string
   senderKind: SmsSenderKind
   senderIdentity: string
   recipient: string
