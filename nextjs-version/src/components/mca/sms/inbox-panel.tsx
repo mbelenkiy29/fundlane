@@ -126,6 +126,7 @@ export function SmsInboxPanel({ dealId }: { dealId?: string }) {
         method: "POST",
         body: JSON.stringify({
           dealId: target.dealId,
+          conversationId: target.id,
           recipient: target.recipient,
           body: reserved.body,
           senderAccountId: target.accountId,
@@ -185,7 +186,7 @@ export function SmsInboxPanel({ dealId }: { dealId?: string }) {
       <div className="grid min-h-96 overflow-hidden rounded-lg border md:grid-cols-[260px_1fr]">
         <aside className="border-r bg-muted/20 p-3">
           <p className="mb-3 text-xs text-muted-foreground">
-            Employee numbers and authorized deals
+            Company SMS and authorized deals
           </p>
           {!threads.length && (
             <p className="text-sm">

@@ -64,9 +64,9 @@ export function smsComposerGate(input: {
 }): { phase: "loading" | "empty" | "blocked" | "validation" | "ready"; sendEnabled: boolean; previewEnabled: boolean; reason: string } {
   if (input.loading) return { phase: "loading", sendEnabled: false, previewEnabled: false, reason: "Loading SMS composer…" }
   if (!input.recipient) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "Save a merchant mobile number on this deal before sending a text." }
-  if (!input.accounts.length) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "Not connected. No assigned text account is available. Ask an administrator to assign one in Settings → Connections." }
+  if (!input.accounts.length) return { phase: "empty", sendEnabled: false, previewEnabled: false, reason: "Not connected. No text account is available. Ask an administrator to configure one in Settings → Connections." }
   const selected = input.accounts.find((account) => account.id === input.selectedAccountId)
-  if (!selected) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Choose an assigned text account." }
+  if (!selected) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Choose a text account." }
   if (!input.body.trim()) return { phase: "validation", sendEnabled: false, previewEnabled: false, reason: "Enter the exact text the merchant will receive." }
   if (input.consent === "opted_out") return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: "This merchant opted out of text messages." }
   if (input.consent !== "opted_in") return { phase: "blocked", sendEnabled: false, previewEnabled: true, reason: "Record merchant SMS consent before sending." }
@@ -205,7 +205,7 @@ export function SmsComposerPanel({ dealId }: { dealId: string }) {
         <div className="rounded-md bg-muted p-2"><MessageSquareText className="size-5" /></div>
         <div>
           <CardTitle>Text the merchant</CardTitle>
-          <CardDescription>Send from an assigned account to the mobile number saved on this deal. Consent is checked again before every send.</CardDescription>
+          <CardDescription>Send from an available account to the mobile number saved on this deal. Consent is checked again before every send.</CardDescription>
         </div>
       </div>
     </CardHeader>
@@ -240,7 +240,7 @@ export function SmsComposerPanel({ dealId }: { dealId: string }) {
       {payload?.accounts.length ? <div className="grid gap-4">
         <Label className="grid gap-2">Assigned text account
           <select className="h-9 rounded-md border bg-transparent px-3 text-sm" value={accountId} onChange={(event) => setAccountId(event.target.value)}>
-            <option value="">Choose an assigned account</option>
+            <option value="">Choose an account</option>
             {payload.accounts.map((account) => <option key={account.id} value={account.id}>
               {account.label} · {providerLabel[account.provider] ?? account.provider} · {account.senderMasked}{account.providerConfigured ? "" : " · setup incomplete"}{account.isDefault ? " · default" : ""}
             </option>)}

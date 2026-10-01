@@ -171,15 +171,9 @@ async function visible(actor: DealActor, c: Conversation): Promise<boolean> {
   const administrative =
     actor.source === "user" &&
     ["admin", "super_admin"].includes(actor.role ?? "")
-  if (
-    !administrative &&
-    !(await getDatabase()
-      .prepare(
-        "SELECT am.account_id FROM mca_sms_account_members am JOIN memberships m ON m.id=am.membership_id AND m.workspace_id=am.workspace_id WHERE am.workspace_id=? AND am.account_id=? AND am.membership_id=? AND m.status='active'"
-      )
-      .get(actor.workspaceId, c.account_id, actor.membershipId))
-  )
-    return false
+  if (!administrative && !(await getDatabase().prepare(
+    "SELECT a.id FROM mca_sms_accounts a JOIN memberships m ON m.workspace_id=a.workspace_id AND m.id=? AND m.status='active' WHERE a.workspace_id=? AND a.id=? AND (a.shared=1 OR EXISTS (SELECT 1 FROM mca_sms_account_members am WHERE am.workspace_id=a.workspace_id AND am.account_id=a.id AND am.membership_id=m.id))"
+  ).get(actor.membershipId, actor.workspaceId, c.account_id))) return false
   if (!c.deal_id) return administrative
   try {
     await getDealForDocument(actor, c.deal_id)
@@ -189,6 +183,12 @@ async function visible(actor: DealActor, c: Conversation): Promise<boolean> {
       return false
     throw error
   }
+}
+export async function assertConversationReply(actor: DealActor, id: string, dealId: string, accountId: string, recipient: string): Promise<void> {
+  const c = await getDatabase().prepare<Conversation>("SELECT * FROM sms_conversations WHERE workspace_id=? AND id=?").get(actor.workspaceId, id)
+  if (!c || !c.deal_id || c.deal_id !== dealId || c.account_id !== accountId ||
+    smsRecipientHash(actor.workspaceId, recipient) !== c.recipient_hash || !(await visible(actor, c)))
+    throw new AppError(404, "conversation_missing", "Conversation not found.")
 }
 export async function listConversations(actor: DealActor, dealId?: string) {
   if (dealId) await getDealForDocument(actor, dealId)

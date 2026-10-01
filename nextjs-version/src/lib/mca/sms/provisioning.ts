@@ -82,7 +82,7 @@ export const provisionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("purchase"),
     idempotencyKey: idKey.optional(),
     phone: z.string().regex(/^\+1\d{10}$/),
-    membershipId: z.string().min(1),
+    membershipId: z.string().min(1).optional(),
     maxMonthlyCents: z.number().int().positive().max(10000),
   }),
   z.object({
@@ -183,12 +183,12 @@ export async function requestProvisioning(
     let encoded: string
     if (input.kind === "purchase") {
       const previous = await db.prepare<Operation>("SELECT * FROM sms_operations WHERE workspace_id=? AND kind='purchase' ORDER BY created_at DESC,id DESC").all(actor.workspaceId)
-      const intent = { kind: input.kind, phone: input.phone, membershipId: input.membershipId, maxMonthlyCents: input.maxMonthlyCents }
+      const intent = { kind: input.kind, phone: input.phone, maxMonthlyCents: input.maxMonthlyCents }
       for (const operation of previous) {
         const stored = JSON.parse(decryptSensitive(operation.payload_cipher, actor.workspaceId)) as typeof intent
-        if (stored.phone !== intent.phone || stored.membershipId !== intent.membershipId || stored.maxMonthlyCents !== intent.maxMonthlyCents) continue
+        if (stored.phone !== intent.phone || stored.maxMonthlyCents !== intent.maxMonthlyCents) continue
         if (["queued", "running", "needs_review"].includes(operation.state)) return { id: operation.id, state: operation.state }
-        if (operation.state === "complete" && await db.prepare("SELECT id FROM sms_numbers WHERE workspace_id=? AND phone=? AND membership_id=? AND state<>'released'").get(actor.workspaceId, input.phone, input.membershipId)) return { id: operation.id, state: operation.state }
+        if (operation.state === "complete" && await db.prepare("SELECT id FROM sms_numbers WHERE workspace_id=? AND phone=? AND state<>'released'").get(actor.workspaceId, input.phone)) return { id: operation.id, state: operation.state }
       }
       requestKey = `buy:${actor.workspaceId}:${previous.length + 1}`
       encoded = JSON.stringify({ ...intent, idempotencyKey: requestKey })
@@ -238,36 +238,18 @@ export async function requestProvisioning(
       await reserveUsage(db, c, id, "registration", fee)
     }
     if (input.kind === "purchase") {
-      if (
-        !(await db
-          .prepare(
-            "SELECT id FROM memberships WHERE workspace_id=? AND id=? AND status='active'"
-          )
-          .get(actor.workspaceId, input.membershipId))
-      )
-        throw new AppError(422, "member_invalid", "Select an active employee.")
       const count = await db
         .prepare<{
           n: number
         }>("SELECT count(*)::int n FROM sms_numbers WHERE workspace_id=? AND state<>'released'")
         .get(actor.workspaceId)
+      if ((count?.n ?? 0) > 0)
+        throw new AppError(409, "company_number_exists", "This company already has a live SMS number.")
       if ((count?.n ?? 0) >= c.number_limit)
         throw new AppError(
           409,
           "number_limit",
           "The company number allowance is exhausted."
-        )
-      if (
-        await db
-          .prepare(
-            "SELECT id FROM sms_numbers WHERE workspace_id=? AND membership_id=? AND state<>'released'"
-          )
-          .get(actor.workspaceId, input.membershipId)
-      )
-        throw new AppError(
-          409,
-          "employee_has_number",
-          "This employee already has a number."
         )
       await reserveUsage(db, c, id, "number_rental", input.maxMonthlyCents)
     }
@@ -711,20 +693,9 @@ export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
     }
     if (input.kind === "purchase") {
       p = provider(c)!
-      if (
-        !(await getDatabase()
-          .prepare(
-            "SELECT id FROM memberships WHERE id=? AND workspace_id=? AND status='active'"
-          )
-          .get(input.membershipId, c.workspace_id))
-      )
-        throw new AppError(
-          409,
-          "employee_inactive",
-          "The employee is no longer active."
-        )
       if (!results.purchase) {
         const count = await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM sms_numbers WHERE workspace_id=? AND state<>'released'").get(c.workspace_id)
+        if ((count?.n ?? 0) > 0) throw new AppError(409,"company_number_exists","This company already has a live SMS number.")
         const reserved = await getDatabase().prepare<{n:string}>("SELECT COALESCE(sum(estimated_cents),0)::text n FROM sms_usage WHERE workspace_id=? AND period=?").get(c.workspace_id,nowIso().slice(0,7))
         if ((count?.n??0)>=c.number_limit || Number(reserved?.n??0)>c.monthly_limit_cents) throw new AppError(409,"sms_allowance_changed","The operator reduced the company allowance. Review limits before purchasing.")
         const price = await api(p, "pricing", "/v1/PhoneNumbers/Countries/US"),
@@ -770,38 +741,21 @@ export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
             id,
             String(number.sid),
             input.phone,
-            input.membershipId,
+            null,
             input.maxMonthlyCents,
             nowIso(),
             nowIso()
           )
         await db
           .prepare(
-            "INSERT INTO mca_sms_accounts (id,workspace_id,provider,label,sender_kind,sender_identity_cipher,credential_ref,state,is_default,created_at,updated_at) VALUES (?,?,'twilio',?,'phone_number',?,'MANAGED','active',0,?,?) ON CONFLICT (id) DO NOTHING"
+            "INSERT INTO mca_sms_accounts (id,workspace_id,provider,label,sender_kind,sender_identity_cipher,credential_ref,state,is_default,shared,created_at,updated_at) VALUES (?,?,'twilio',?,'phone_number',?,'MANAGED','active',1,1,?,?) ON CONFLICT (id) DO NOTHING"
           )
           .run(
             id,
             c.workspace_id,
-            `Employee ${input.phone}`,
+            `Company ${input.phone}`,
             encryptSensitive(input.phone, c.workspace_id),
             nowIso(),
-            nowIso()
-          )
-        await db
-          .prepare(
-            "INSERT INTO mca_sms_account_members (workspace_id,account_id,membership_id,assigned_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING"
-          )
-          .run(c.workspace_id, id, input.membershipId, nowIso())
-        await db
-          .prepare(
-            "INSERT INTO sms_number_assignments (id,workspace_id,number_id,membership_id,actor_user_id,created_at) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING"
-          )
-          .run(
-            id,
-            c.workspace_id,
-            id,
-            input.membershipId,
-            c.owner_user_id,
             nowIso()
           )
       })
@@ -865,13 +819,14 @@ export async function runProvisioning(id: string, api: TwilioApi = twilioApi) {
         step: string | null
       }>("SELECT step FROM sms_operations WHERE id=?")
       .get(id)
+    const numberConflict = input.kind === "purchase" && (error as { code?: string; constraint?: string }).code === "23505" && (error as { constraint?: string }).constraint === "sms_company_number"
     await getDatabase()
       .prepare(
         "UPDATE sms_operations SET state=?,error_code=?,lease_until=NULL,updated_at=? WHERE id=?"
       )
       .run(
-        current?.step ? "needs_review" : "failed",
-        error instanceof AppError ? error.code : "provider_outcome_unknown",
+        current?.step || (input.kind === "purchase" && !!results.purchase) ? "needs_review" : "failed",
+        numberConflict ? "company_number_exists" : error instanceof AppError ? error.code : "provider_outcome_unknown",
         nowIso(),
         id
       )
@@ -931,6 +886,8 @@ export async function assignNumber(
       }>("SELECT account_id FROM sms_numbers WHERE workspace_id=? AND id=? AND state IN ('active','registering') FOR UPDATE")
       .get(actor.workspaceId, numberId)
     if (!n) throw new AppError(404, "number_missing", "Number not found.")
+    const shared = await db.prepare<{ shared: number }>("SELECT shared FROM mca_sms_accounts WHERE workspace_id=? AND id=?").get(actor.workspaceId, n.account_id)
+    if (shared?.shared === 1) throw new AppError(409, "managed_number_settings", "A company SMS number cannot be assigned to an employee.")
     if (
       !(await db
         .prepare(
