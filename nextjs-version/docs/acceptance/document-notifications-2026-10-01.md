@@ -8,7 +8,7 @@ A bounded company lease and keyset cursor retain partial deal/item progress and 
 
 ## Verification
 
-- Final focused run: `MCA_TEST_DATABASE_ADMIN_URL=postgresql://mbele@127.0.0.1:55481/postgres node --experimental-test-module-mocks --conditions=react-server --import tsx --test tests/document-notifications.test.ts tests/document-notification-facts.test.ts tests/document-notification-ui.test.ts tests/notifications.test.ts tests/milestone06-templates.test.ts tests/documents-core.test.ts` — **82/82 passed,0failed,0skipped**. Fresh disposable databases replayed reserved0072 with foundation0068; synthetic fixtures only.
+- Final focused run: `MCA_TEST_DATABASE_ADMIN_URL=postgresql://mbele@127.0.0.1:55481/postgres node --experimental-test-module-mocks --conditions=react-server --import tsx --test tests/document-notifications.test.ts tests/document-notification-facts.test.ts tests/document-notification-ui.test.ts tests/notifications.test.ts tests/milestone06-templates.test.ts tests/documents-core.test.ts` — **82/82 passed,0failed,0skipped**. Fresh disposable databases and synthetic fixtures only.
 - `node node_modules/typescript/bin/tsc --noEmit` — exit0. Shared dependency symlink retained rather than allowing pnpm to replace another task's modules.
 - `node node_modules/eslint/bin/eslint.js .` — exit0,0errors/16existingwarnings.
 - Graphify AST refresh and cluster-only completed:14898nodes/46977edges,719communities.31unsupported/empty sources noted; HTML skipped at configured5000node limit. Outputs preserved under `/tmp/fundlane-t11-final-graph` without broad generated changes in the PR.
@@ -21,6 +21,6 @@ Covered: UTC month/year/leap/timezone boundaries; scan safety/latest lineage; wr
 
 Exact foundation pin `1e56cc77b1ca5a5568e36cb4d7cd91e17a5fde27`, draft PR212. T11 owns the sole document guard registration and discovery call in the worker plus fixed2field document template extension. No documents/service.ts edits.
 
-Reserved0072 journals only its actual entry at index60 after foundation0068/index59. Integration must reindex all actual entries from combined feature branches and regenerate the combined snapshot as needed; no placeholders for0069-0071 were added.
+Reserved `0073_document_notification_discovery.sql` is journaled at index 64 (`when` 1790819000072) after notification foundation `0071` at index 62 (`when` 1790385600020, PR #212). Browser voice `0072` is on separate PR #213; integration must reconcile its journal entry at index 63 (`when` 1790385600021) before production applies `0071`, `0072`, then `0073`.
 
 Aggregate tests and production build remain queued for the parent's exclusive slot and are not claimed from targeted tests. Parent status messages were attempted but the desktop bridge returned an error; final task handoff carries this evidence. Remote draft head/checks are recorded in the task handoff. Hosted synthetic Auth/Storage, hosted migration, safe application origin, sender/provider readiness, actual consent and runtime activation remain release gates. No external activation, production mutation, live communication or merge occurred.
