@@ -78,6 +78,7 @@ export type Company = {
   number_limit: number
   monthly_limit_cents: number
   registration_limit_cents: number
+  updated_at: string
 }
 export type ProviderConfig = {
   accountSid: string

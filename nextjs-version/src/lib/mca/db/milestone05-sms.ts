@@ -30,7 +30,7 @@ export const mca_sms_consent_events = pgTable("mca_sms_consent_events", {
   unique("mca_sms_consent_events_idempotency_key").on(table.workspace_id, table.idempotency_key),
   index("mca_sms_consent_events_current_idx").on(table.workspace_id, table.deal_id, table.recipient_hash, table.effective_at),
   check("mca_sms_consent_events_state_check", sql`state = ANY (ARRAY['opted_in'::text, 'opted_out'::text])`),
-  check("mca_sms_consent_events_source_check", sql`source = ANY (ARRAY['manual'::text, 'provider_webhook'::text])`),
+  check("mca_sms_consent_events_source_check", sql`source = ANY (ARRAY['manual'::text, 'provider_webhook'::text, 'keyword'::text])`),
 ])
 
 export const mca_sms_messages = pgTable("mca_sms_messages", {

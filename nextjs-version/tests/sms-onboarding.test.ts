@@ -662,3 +662,142 @@ test("company registration checkpoints the complete ISV workflow without sharing
  await refreshCompany(newOwner.workspaceId,api)
  assert.equal((await getDatabase().prepare<{registration_state:string}>("SELECT registration_state FROM sms_companies WHERE workspace_id=?").get(newOwner.workspaceId))?.registration_state,"approved")
 })
+
+test("default opt-out keywords and opt-in keywords update suppression with whitespace and case", async () => {
+  const from = "+12125559001", to = "+12125552222"
+  let sequence = 100
+  const send = async (body: string, optOutType?: string) => {
+    const params = new URLSearchParams({ From: from, To: to, Body: body, MessageSid: `SM${(sequence++).toString(16).padStart(32, "0")}` })
+    if (optOutType) params.set("OptOutType", optOutType)
+    await persistInbound(owner.workspaceId, "synthetic-keyword-route", params, "phone_number", to)
+  }
+  for (const word of ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "REVOKE", "OPTOUT"]) {
+    await send(`  ${word.toLowerCase()}  `)
+    await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from)), { code: "sms_recipient_opted_out" })
+    await send("  yes  ")
+    await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
+  }
+  for (const word of ["START", "UNSTOP", "YES"]) {
+    await send(" stop ")
+    await send(` ${word.toLowerCase()} `)
+    await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
+  }
+  await send("ordinary text", "STOP")
+  await send("ordinary text", "START")
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
+})
+
+test("manual evidence clears an earlier STOP but replayed evidence does not undo a later STOP", async () => {
+  const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
+  const dealId = "manual-reoptin-deal", recipient = "+12125559002", to = "+12125552222"
+  await getDatabase().prepare("INSERT INTO deals (id,workspace_id,display_id,legal_name,contact_phone_cipher,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at) VALUES (?,?,?,'Synthetic application',?,'offer',1,'submission_ready','[]','{}',1,?,?)").run(dealId, owner.workspaceId, "SMS-REOPTIN", encryptSensitive(recipient, owner.workspaceId), nowIso(), nowIso())
+  const stop = async (digit: string) => persistInbound(owner.workspaceId, "synthetic-keyword-route", new URLSearchParams({ From: recipient, To: to, Body: "STOP", MessageSid: `SM${digit.repeat(32)}` }), "phone_number", to)
+  await stop("a")
+  const input = { dealId, recipient, state: "opted_in" as const, evidence: "Owner directly confirmed consent", idempotencyKey: "manual-reoptin" }
+  assert.equal((await recordSmsConsent(actor, input)).created, true)
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient))
+  await stop("b")
+  assert.equal((await recordSmsConsent(actor, input)).created, false)
+  await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient)), { code: "sms_recipient_opted_out" })
+})
+
+test("backdated manual opt-in does not clear a later STOP", async () => {
+  const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
+  const dealId = "backdated-reoptin-deal", recipient = "+12125559003", to = "+12125552222"
+  await getDatabase().prepare("INSERT INTO deals (id,workspace_id,display_id,legal_name,contact_phone_cipher,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at) VALUES (?,?,?,'Synthetic application',?,'offer',1,'submission_ready','[]','{}',1,?,?)").run(dealId, owner.workspaceId, "SMS-BACKDATED", encryptSensitive(recipient, owner.workspaceId), nowIso(), nowIso())
+  await persistInbound(owner.workspaceId, "synthetic-keyword-route", new URLSearchParams({ From: recipient, To: to, Body: "STOP", MessageSid: `SM${"c".repeat(32)}` }), "phone_number", to)
+  const beforeStop = new Date(Date.now() - 86400000).toISOString()
+  await recordSmsConsent(actor, { dealId, recipient, state: "opted_in", evidence: "Older signed form", effectiveAt: beforeStop, idempotencyKey: "backdated-reoptin" })
+  await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient)), { code: "sms_recipient_opted_out" })
+  await recordSmsConsent(actor, { dealId, recipient, state: "opted_in", evidence: "Owner confirmed consent again", effectiveAt: new Date().toISOString(), idempotencyKey: "current-reoptin" })
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient))
+})
+
+test("registration route accepts object and string data and ignores irrelevant events", async () => {
+  const { POST } = await import("../src/app/api/mca/sms/webhooks/registration/[workspaceId]/route")
+  const number = await getDatabase().prepare<{ provider_sid: string }>("SELECT provider_sid FROM sms_numbers WHERE workspace_id=? LIMIT 1").get(owner.workspaceId)
+  assert.ok(number)
+  const data = { accountsid: p.accountSid, messagingservicesid: p.serviceSid, phonenumbersid: number.provider_sid, externalstatus: "registered" }
+  let sequence = 0
+  const send = async (type: string, value: unknown, array = false, valid = true) => {
+    const envelope = { id: `route-event-${++sequence}`, type, time: new Date().toISOString(), data: value }
+    const raw = JSON.stringify(array ? [envelope] : envelope)
+    const hash = createHash("sha256").update(raw).digest("hex")
+    const url = `https://crm.example.test/api/mca/sms/webhooks/registration/${owner.workspaceId}?bodySHA256=${hash}`
+    const signature = createHmac("sha1", p.authToken).update(url).digest("base64")
+    return POST(new Request(url, { method: "POST", headers: { "x-twilio-signature": valid ? signature : "bad" }, body: raw }), { params: Promise.resolve({ workspaceId: owner.workspaceId }) })
+  }
+  const type = "com.twilio.messaging.compliance.number-registration.successful"
+  assert.equal((await send(type, data)).status, 200)
+  assert.equal((await send(type, JSON.stringify(data), true)).status, 200)
+  assert.equal((await send("unrelated", data)).status, 204)
+  assert.equal((await send(type, { ...data, externalstatus: "future_status" })).status, 204)
+  assert.equal((await send(type, "{broken")).status, 422)
+  assert.equal((await send(type, { ...data, accountsid: "wrong" })).status, 401)
+  assert.equal((await send(type, data, false, false)).status, 401)
+})
+
+test("Twilio 21610 suppresses a recipient after a failed send", async () => {
+  const { recordSmsConsent, deliverClosingSms } = await import("../src/lib/mca/sms/service")
+  const recipient = "+12125557777", dealId = "managed-send-deal"
+  const account = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=? AND state='active' LIMIT 1").get(owner.workspaceId)
+  assert.ok(account)
+  await recordSmsConsent(actor, { dealId, recipient, state: "opted_in", evidence: "Owner reconfirmed consent", idempotencyKey: "retry-after-stop" })
+  const body = "Synthetic delivery error test", payloadHash = createHash("sha256").update(body).digest("hex")
+  const input = { dealId, recipient, body, senderAccountId: account.id, idempotencyKey: "sms-21610-one", correlationId: "sms-21610", payloadHash, deliveryMode: "never_attempted" as const }
+  const result = await deliverClosingSms(actor, input, { send: async () => ({ state: "failed", errorCode: "twilio_21610", errorMessage: "Recipient unsubscribed" }) })
+  assert.equal(result.errorCode, "twilio_21610")
+  await assert.rejects(deliverClosingSms(actor, { ...input, idempotencyKey: "sms-21610-two" }, { send: async () => { throw new Error("must not send") } }), { code: "sms_recipient_opted_out" })
+  const { processTwilioOptOut } = await import("../src/lib/mca/sms/service")
+  const number = await getDatabase().prepare<{ phone: string }>("SELECT phone FROM sms_numbers WHERE id=?").get(account.id)
+  const params = new URLSearchParams({ AccountSid: p.accountSid, From: recipient, To: number!.phone, Body: "  yes  ", MessageSid: `SM${"e".repeat(32)}` })
+  const url = `https://crm.example.test/api/mca/sms/webhooks/twilio/${account.id}/inbound`
+  const signature = createHmac("sha1", p.authToken).update(url + [...params.keys()].sort().map(key => key + params.get(key)).join("")).digest("base64")
+  assert.equal((await processTwilioOptOut(account.id, params, signature, url)).updated, 1)
+  const consent = await getDatabase().prepare<{ source: string; state: string }>("SELECT source,state FROM mca_sms_consent_events WHERE workspace_id=? AND deal_id=? AND source='keyword' ORDER BY created_at DESC LIMIT 1").get(owner.workspaceId, dealId)
+  assert.equal(consent?.source, "keyword")
+  assert.equal(consent?.state, "opted_in")
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient))
+})
+
+test("purchase attempt keys dedupe a double submit and advance after failure or release", async () => {
+  await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',opt_out_ready=1,monthly_limit_cents=10000 WHERE workspace_id=?").run(owner.workspaceId)
+  await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE workspace_id=? AND state NOT IN ('complete','failed')").run(owner.workspaceId)
+  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=? AND membership_id=?").run(owner.workspaceId, owner.membershipId)
+  const firstInput = { kind: "purchase" as const, phone: "+12125559003", membershipId: owner.membershipId, maxMonthlyCents: 115 }
+  const [first, duplicate] = await Promise.all([requestProvisioning(actor, firstInput), requestProvisioning(actor, firstInput)])
+  assert.equal(first.id, duplicate.id)
+  const firstKey = await getDatabase().prepare<{ request_key: string }>("SELECT request_key FROM sms_operations WHERE id=?").get(first.id)
+  assert.match(firstKey!.request_key, new RegExp(`^buy:${owner.workspaceId}:\\d+$`))
+  await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(first.id)
+  const retry = await requestProvisioning(actor, firstInput)
+  assert.notEqual(retry.id, first.id)
+  const retryKey = await getDatabase().prepare<{ request_key: string }>("SELECT request_key FROM sms_operations WHERE id=?").get(retry.id)
+  assert.notEqual(retryKey!.request_key, firstKey!.request_key)
+  await getDatabase().prepare("UPDATE sms_operations SET state='complete' WHERE id=?").run(retry.id)
+  await getDatabase().prepare("UPDATE sms_numbers SET state='active',phone=?,membership_id=? WHERE id=(SELECT id FROM sms_numbers WHERE workspace_id=? AND state='released' LIMIT 1)").run(firstInput.phone, owner.membershipId, owner.workspaceId)
+  assert.equal((await requestProvisioning(actor, firstInput)).id, retry.id)
+  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=? AND membership_id=?").run(owner.workspaceId, owner.membershipId)
+  const rebuy = await requestProvisioning(actor, firstInput)
+  assert.notEqual(rebuy.id, retry.id)
+  await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(rebuy.id)
+  const otherUser = "purchase-second-user", otherMember = "purchase-second-member", now = nowIso()
+  await getDatabase().prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(otherUser, "purchase-second@example.test", "Second employee", otherUser, now, now)
+  await getDatabase().prepare("INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,? ,?,'rep','active',?,?)").run(otherMember, owner.workspaceId, otherUser, now, now)
+  const other = await requestProvisioning(actor, { ...firstInput, membershipId: otherMember })
+  assert.notEqual(other.id, rebuy.id)
+  await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(other.id)
+})
+
+test("SMS account listing degrades gracefully when the legacy public origin is misconfigured", async () => {
+  const previous = process.env.MCA_SMS_PUBLIC_BASE_URL
+  try {
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "not-a-url"
+    assert.equal((await listSmsAccounts(actor)).publicOrigin, null)
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "https://fundlane.io"
+    assert.equal((await listSmsAccounts(actor)).publicOrigin, "https://fundlane.io")
+  } finally {
+    if (previous === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL
+    else process.env.MCA_SMS_PUBLIC_BASE_URL = previous
+  }
+})
