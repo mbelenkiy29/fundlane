@@ -1,6 +1,6 @@
 import 'server-only'
 import {createHash} from 'node:crypto'
-import {getDatabase,newId,nowIso,recordAuditEvent} from '../db'
+import {getDatabase,newId,nowIso,recordAuditEvent,type DbExecutor} from '../db'
 import {encryptSensitive,decryptSensitive,hmacScopedToken} from '../crypto'
 import {getDealForDocument} from '../deals/service'
 import type {DealActor} from '../deals/schema'
@@ -21,21 +21,23 @@ export async function notificationActor(actor:DealActor){
  if(live.userId!==actor.userId)throw new AppError(403,'notification_member_required','An active company member is required.')
  return live
 }
-export async function setNotificationPolicy(actor:DealActor,input:{kind:'document'|'renewal';brokerEnabled:boolean;merchantEnabled:boolean}){
+export async function setNotificationPolicy(actor:DealActor,input:{kind:'document'|'renewal'|'missed_call';brokerEnabled:boolean;merchantEnabled:boolean}){
  const live=await notificationActor(actor);requireNotificationAdmin(live)
  const kind=notificationInputSchema.shape.kind.parse(input.kind)
  await getDatabase().prepare(`INSERT INTO mca_notification_policies(workspace_id,kind,broker_enabled,merchant_enabled,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,kind) DO UPDATE SET broker_enabled=excluded.broker_enabled,merchant_enabled=excluded.merchant_enabled,updated_at=excluded.updated_at`).run(live.workspaceId,kind,input.brokerEnabled?1:0,input.merchantEnabled?1:0,nowIso())
  await recordAuditEvent({context:live,action:'notification.policy_updated',resourceType:'notification_policy',resourceId:kind,metadata:{brokerEnabled:input.brokerEnabled,merchantEnabled:input.merchantEnabled}})
 }
 async function resolveRecipient(actor:DealActor,input:Pick<NotificationInput,'dealId'|'audience'|'channel'|'recipientUserId'>){
- const deal=await getDealForDocument(actor,input.dealId)
+ const deal=input.dealId?await getDealForDocument(actor,input.dealId):undefined
  if(input.audience==='broker'){
   if(input.channel!=='email')throw new AppError(409,'broker_sms_unavailable','Staff SMS requires an approved consent transport.')
   const member=await getDatabase().prepare<{id:string;email:string}>(`SELECT m.id,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? AND m.user_id=? AND m.status='active'`).get(actor.workspaceId,input.recipientUserId??'')
   if(!member)throw new AppError(404,'notification_recipient_unavailable','The company recipient is unavailable.')
-  await getDealForDocument(await liveEmailActor(actor.workspaceId,member.id),input.dealId)
+  const recipientActor=await liveEmailActor(actor.workspaceId,member.id)
+  if(input.dealId)await getDealForDocument(recipientActor,input.dealId)
   return member.email.trim().toLowerCase()
  }
+ if(!deal)throw new AppError(422,'notification_deal_required','Merchant messages require a company deal.')
  if(input.recipientUserId)throw new AppError(422,'notification_recipient_invalid','Merchant recipients resolve from the deal contact.')
  const raw=input.channel==='email'?deal.contactEmail:deal.contactPhone
  if(!raw)throw new AppError(409,'notification_recipient_unavailable','The deal contact is unavailable.')
@@ -60,23 +62,23 @@ export async function notificationPreflight(actor:DealActor,input:NotificationIn
  await assertOutboundDispatch(actor.workspaceId,input.approvedAt)
  if(input.payload)throw new AppError(422,'notification_payload_invalid','Merchant messages require a published template.')
  if(input.channel==='email'&&!preference?.consented)throw new AppError(409,'notification_consent_required','Record recipient email notification consent first.')
- if(input.channel==='sms'&&(await getSmsConsent(actor,input.dealId,recipient)).state!=='opted_in')throw new AppError(409,'notification_consent_required','Record recipient SMS consent first.')
+ if(input.channel==='sms'&&(await getSmsConsent(actor,input.dealId!,recipient)).state!=='opted_in')throw new AppError(409,'notification_consent_required','Record recipient SMS consent first.')
  const template=await getPublishedMessageTemplate(actor,input.templateId??'')
  if(template.channel!==input.channel||!['merchant','followup','request_info'].includes(template.scope))throw new AppError(422,'notification_template_invalid','Choose a published merchant template for this channel.')
  if(input.channel==='email')await emailSender(actor,input.senderId??'',true)
- const rendered=await renderPublishedMessageTemplate(actor,{templateId:template.id,dealId:input.dealId,origin:process.env.MCA_APP_ORIGIN??'http://localhost:3000'})
+ const rendered=await renderPublishedMessageTemplate(actor,{templateId:template.id,dealId:input.dealId!,origin:process.env.MCA_APP_ORIGIN??'http://localhost:3000'})
  if(rendered.publishBlocked||rendered.unknownVariables.length||rendered.forbiddenVariables.length)throw new AppError(422,'notification_template_invalid','The template is not safe to send.')
  if(input.channel==='sms'&&rendered.text.length>1600)throw new AppError(422,'notification_template_invalid','SMS text must fit 1600 characters.')
  return {recipient,subject:rendered.subject,text:rendered.text}
 }
-export async function enqueueNotification(actor:DealActor,raw:NotificationInput):Promise<NotificationView>{
- const input=notificationInputSchema.parse(raw),live=await notificationActor(actor)
+export async function enqueueNotification(actor:DealActor,raw:NotificationInput,options?:{executor?:DbExecutor}):Promise<NotificationView>{
+ const input=notificationInputSchema.parse(raw),live=await notificationActor(actor),db=options?.executor??getDatabase()
  if(Date.parse(input.approvedAt)>Date.now())throw new AppError(422,'notification_approval_invalid','Approval cannot be in the future.')
  const content=await notificationPreflight(live,input),hash=createHash('sha256').update(JSON.stringify(input)).digest('hex')
  const recipientKey=input.audience==='broker'?input.recipientUserId!:'merchant'
  const clock=nowIso(),id=newId()
- const row=await getDatabase().prepare<NotificationRow>(`INSERT INTO mca_notifications(id,workspace_id,deal_id,event_key,kind,audience,channel,recipient_key,recipient_user_id,actor_membership_id,template_id,sender_id,approved_at,scheduled_for,payload_cipher,recipient_hash,payload_hash,state,attempts,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',0,?,?,?) ON CONFLICT(workspace_id,event_key,audience,channel,recipient_key) DO NOTHING RETURNING *`).get(id,live.workspaceId,input.dealId,input.eventKey,input.kind,input.audience,input.channel,recipientKey,input.recipientUserId??null,live.membershipId,input.templateId??null,input.senderId??null,input.approvedAt,input.scheduledFor,encryptSensitive(JSON.stringify(input),live.workspaceId),notificationRecipientHash(live.workspaceId,input.channel,content.recipient),hash,input.scheduledFor,clock,clock)
- const saved=row??await getDatabase().prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE workspace_id=? AND event_key=? AND audience=? AND channel=? AND recipient_key=?`).get(live.workspaceId,input.eventKey,input.audience,input.channel,recipientKey)
+ const row=await db.prepare<NotificationRow>(`INSERT INTO mca_notifications(id,workspace_id,deal_id,event_key,kind,audience,channel,recipient_key,recipient_user_id,actor_membership_id,template_id,sender_id,approved_at,scheduled_for,payload_cipher,recipient_hash,payload_hash,state,attempts,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',0,?,?,?) ON CONFLICT(workspace_id,event_key,audience,channel,recipient_key) DO NOTHING RETURNING *`).get(id,live.workspaceId,input.dealId??null,input.eventKey,input.kind,input.audience,input.channel,recipientKey,input.recipientUserId??null,live.membershipId,input.templateId??null,input.senderId??null,input.approvedAt,input.scheduledFor,encryptSensitive(JSON.stringify(input),live.workspaceId),notificationRecipientHash(live.workspaceId,input.channel,content.recipient),hash,input.scheduledFor,clock,clock)
+ const saved=row??await db.prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE workspace_id=? AND event_key=? AND audience=? AND channel=? AND recipient_key=?`).get(live.workspaceId,input.eventKey,input.audience,input.channel,recipientKey)
  if(!saved)throw new Error('Notification enqueue did not return a row.')
  if(saved.payload_hash!==hash)throw new AppError(409,'notification_idempotency_conflict','That event already identifies different notification content.')
  return notificationView(saved)
@@ -84,7 +86,7 @@ export async function enqueueNotification(actor:DealActor,raw:NotificationInput)
 export async function getNotification(actor:DealActor,id:string):Promise<NotificationView>{
  const live=await notificationActor(actor),row=await getDatabase().prepare<NotificationRow>('SELECT * FROM mca_notifications WHERE workspace_id=? AND id=?').get(live.workspaceId,id)
  if(!row)throw new AppError(404,'notification_not_found','The notification was not found.')
- await getDealForDocument(live,row.deal_id)
+ if(row.deal_id)await getDealForDocument(live,row.deal_id)
  return notificationView(row)
 }
 export const notificationInput=(row:NotificationRow)=>notificationInputSchema.parse(JSON.parse(decryptSensitive(row.payload_cipher,row.workspace_id)))

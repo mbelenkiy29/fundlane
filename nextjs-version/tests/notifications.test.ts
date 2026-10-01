@@ -7,6 +7,8 @@ import {createDeal} from '../src/lib/mca/deals/service'
 import type {DealActor} from '../src/lib/mca/deals/schema'
 import {enqueueNotification,getNotification,setNotificationPolicy,setNotificationConsent,suppressNotificationRecipient} from '../src/lib/mca/notifications/service'
 
+import {runScheduledNotifications,setNotificationTransportForTests,reconcileNotification,recordNotificationOutcome} from '../src/lib/mca/notifications/worker'
+
 let cluster: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let dealId:string
 const actor = (workspaceId='notify-a'):DealActor => ({workspaceId,userId:`${workspaceId}-user`,membershipId:`${workspaceId}-member`,role:'admin',source:'user',managedMembershipIds:[],activeMembershipIds:[`${workspaceId}-member`],correlationId:'notification-test'})
@@ -22,7 +24,7 @@ before(async()=>{
  }
  dealId=(await createDeal(actor(),{idempotencyKey:'notification-deal',legalName:'Synthetic Notification LLC',contactEmail:'merchant@example.test',contactPhone:'+15551234567',owners:[{firstName:'Pat',lastName:'Test',isPrimary:true}],assignments:[{membershipId:'notify-a-member',kind:'originator',isPrimary:true}]})).deal.id
 })
-beforeEach(async()=>{await getDatabase().prepare('DELETE FROM mca_notification_preferences').run();await getDatabase().prepare('DELETE FROM mca_notification_policies').run()})
+beforeEach(async()=>{process.env.MCA_NOTIFICATION_RUNTIME='enabled';await getDatabase().prepare('DELETE FROM mca_notification_receipts').run();await getDatabase().prepare('DELETE FROM mca_notifications').run();await getDatabase().prepare('DELETE FROM mca_notification_preferences').run();await getDatabase().prepare('DELETE FROM mca_notification_policies').run()})
 after(async()=>{await closeDatabaseForTests();await cluster?.close()})
 test('tenant references, broker recipient membership and reads are scoped',async()=>{
  await assert.rejects(enqueueNotification(actor('notify-b'),event('foreign-deal')))
@@ -50,4 +52,61 @@ test('suppression prevents broker disclosure and admin settings reject reps',asy
  await getDatabase().prepare("UPDATE memberships SET role='admin' WHERE id='notify-a-member'").run()
  await suppressNotificationRecipient(actor(),{dealId,channel:'email',audience:'broker',recipientUserId:'notify-a-user'})
  await assert.rejects(enqueueNotification(actor(),event('suppressed')),/suppressed/)
+})
+
+test('runtime defaults off and concurrent ticks dispatch an event once',async()=>{
+ const row=await enqueueNotification(actor(),event('claim-once'))
+ let calls=0;setNotificationTransportForTests(async()=>{calls++;return{state:'accepted',providerMessageId:'provider-claim'}})
+ delete process.env.MCA_NOTIFICATION_RUNTIME
+ assert.equal((await runScheduledNotifications(now)).attempted,0)
+ process.env.MCA_NOTIFICATION_RUNTIME='enabled'
+ await Promise.all([runScheduledNotifications(now),runScheduledNotifications(now)])
+ assert.equal(calls,1);assert.equal((await getNotification(actor(),row.id)).state,'accepted')
+})
+test('unknown sends and killed claims stay durable, reconcile without replay',async()=>{
+ const row=await enqueueNotification(actor(),event('unknown-send'))
+ let calls=0;setNotificationTransportForTests(async()=>{calls++;throw new Error('secret-provider-detail')})
+ await runScheduledNotifications(now)
+ assert.equal((await getNotification(actor(),row.id)).state,'uncertain')
+ await runScheduledNotifications('2026-10-01T01:00:00.000Z');assert.equal(calls,1)
+ await assert.rejects(reconcileNotification(actor('notify-b'),row.id,{outcome:'delivered',evidence:'checked receipt'}))
+ await assert.rejects(reconcileNotification(actor(),row.id,{outcome:'delivered',evidence:''}))
+ await reconcileNotification(actor(),row.id,{outcome:'delivered',evidence:'Provider receipt reviewed by company owner'})
+ assert.equal((await getNotification(actor(),row.id)).state,'delivered');assert.equal(calls,1)
+ const killed=await enqueueNotification(actor(),event('killed-send'))
+ await getDatabase().prepare("UPDATE mca_notifications SET state='sending',claim_token='stale-token',lease_until=?,attempts=1 WHERE id=?").run(now,killed.id)
+ await runScheduledNotifications('2026-10-01T01:00:00.000Z')
+ assert.equal((await getNotification(actor(),killed.id)).state,'uncertain');assert.equal(calls,1)
+ assert.equal(await recordNotificationOutcome('notify-a',killed.id,'stale-token',{state:'accepted',providerMessageId:'too-late'},now),false)
+})
+test('only proven rejection retries, three attempts and frozen content',async()=>{
+ const row=await enqueueNotification(actor(),event('bounded-retry'))
+ const messages:string[]=[];setNotificationTransportForTests(async m=>{messages.push(m.text);return{state:'retry',errorCode:'rate_limited'}})
+ await runScheduledNotifications(now);await runScheduledNotifications(now);assert.equal(messages.length,1)
+ await runScheduledNotifications('2026-10-01T00:15:00.000Z');assert.equal(messages.length,2)
+ await runScheduledNotifications('2026-10-01T00:45:00.000Z');assert.equal(messages.length,3)
+ await runScheduledNotifications('2026-10-02T00:00:00.000Z');assert.equal(messages.length,3)
+ const view=await getNotification(actor(),row.id);assert.equal(view.state,'failed');assert.equal(view.attempts,3)
+ assert.equal(new Set(messages).size,1)
+})
+test('live member access, policy revocation and suppression prevent dispatch',async()=>{
+ const row=await enqueueNotification(actor(),event('revoked-policy'))
+ let calls=0;setNotificationTransportForTests(async()=>{calls++;return{state:'accepted'}})
+ await setNotificationPolicy(actor(),{kind:'document',brokerEnabled:false,merchantEnabled:false})
+ await runScheduledNotifications(now)
+ assert.equal(calls,0);assert.equal((await getNotification(actor(),row.id)).state,'suppressed')
+ await setNotificationPolicy(actor(),{kind:'document',brokerEnabled:true,merchantEnabled:false})
+ const gone=await enqueueNotification(actor(),event('inactive-member'))
+ await getDatabase().prepare("UPDATE memberships SET status='deactivated' WHERE id='notify-a-member'").run()
+ await runScheduledNotifications(now);assert.equal(calls,0)
+ await getDatabase().prepare("UPDATE memberships SET status='active' WHERE id='notify-a-member'").run()
+ assert.equal((await getNotification(actor(),gone.id)).state,'suppressed')
+})
+
+test('broker events without a deal are tenant resolved and transactional',async()=>{
+ const input={...event('missed-call'),kind:'missed_call' as const,dealId:undefined}
+ const row=await enqueueNotification(actor(),input)
+ assert.equal(row.state,'queued')
+ await assert.rejects(enqueueNotification(actor(),{...input,eventKey:'foreign-call',recipientUserId:'notify-b-user'}))
+ await assert.rejects(enqueueNotification(actor(),{...input,eventKey:'merchant-no-deal',audience:'merchant',recipientUserId:undefined}))
 })

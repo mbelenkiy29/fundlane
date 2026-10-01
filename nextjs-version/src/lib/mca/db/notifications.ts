@@ -10,7 +10,7 @@ export const mca_notification_policies=pgTable("mca_notification_policies",{
  updated_at:text().notNull(),
 },t=>[
  primaryKey({columns:[t.workspace_id,t.kind]}),
- check("mca_notification_policies_kind_check",sql`kind IN ('document','renewal')`),
+ check("mca_notification_policies_kind_check",sql`kind IN ('document','renewal','missed_call')`),
  check("mca_notification_policies_broker_enabled_check",sql`broker_enabled IN (0,1)`),
  check("mca_notification_policies_merchant_enabled_check",sql`merchant_enabled IN (0,1)`),
 ])
@@ -32,7 +32,7 @@ export const mca_notification_preferences=pgTable("mca_notification_preferences"
 export const mca_notifications=pgTable("mca_notifications",{
  id:text().primaryKey(),
  workspace_id:text().notNull().references(()=>workspaces.id),
- deal_id:text().notNull(),
+ deal_id:text(),
  event_key:text().notNull(),
  kind:text().notNull(),
  audience:text().notNull(),
@@ -64,7 +64,7 @@ export const mca_notifications=pgTable("mca_notifications",{
  foreignKey({columns:[t.workspace_id,t.deal_id],foreignColumns:[deals.workspace_id,deals.id]}),
  foreignKey({columns:[t.workspace_id,t.actor_membership_id],foreignColumns:[memberships.workspace_id,memberships.id]}),
  index("mca_notifications_due_idx").on(t.state,t.next_attempt_at),
- check("mca_notifications_kind_check",sql`kind IN ('document','renewal')`),
+ check("mca_notifications_kind_check",sql`kind IN ('document','renewal','missed_call')`),
  check("mca_notifications_audience_check",sql`audience IN ('broker','merchant')`),
  check("mca_notifications_channel_check",sql`channel IN ('email','sms')`),
  check("mca_notifications_state_check",sql`state IN ('queued','sending','retry','accepted','delivered','suppressed','failed','uncertain')`),

@@ -2,7 +2,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS deals_workspace_id_id_unique ON deals(workspac
 --> statement-breakpoint
 CREATE TABLE mca_notification_policies (
   workspace_id text NOT NULL REFERENCES workspaces(id),
-  kind text NOT NULL CHECK(kind IN ('document','renewal')),
+  kind text NOT NULL CHECK(kind IN ('document','renewal','missed_call')),
   broker_enabled integer NOT NULL DEFAULT 1 CHECK(broker_enabled IN (0,1)),
   merchant_enabled integer NOT NULL DEFAULT 0 CHECK(merchant_enabled IN (0,1)),
   updated_at text NOT NULL,
@@ -46,9 +46,9 @@ END $grants$;
 CREATE TABLE mca_notifications (
   id text PRIMARY KEY,
   workspace_id text NOT NULL REFERENCES workspaces(id),
-  deal_id text NOT NULL,
+  deal_id text,
   event_key text NOT NULL,
-  kind text NOT NULL CHECK(kind IN ('document','renewal')),
+  kind text NOT NULL CHECK(kind IN ('document','renewal','missed_call')),
   audience text NOT NULL CHECK(audience IN ('broker','merchant')),
   channel text NOT NULL CHECK(channel IN ('email','sms')),
   recipient_key text NOT NULL,
