@@ -43,6 +43,15 @@ export function emailInCeiling(email: string, list: string): boolean {
   return list.split(",").some(value => value.trim().toLowerCase() === email.trim().toLowerCase())
 }
 
+/** Navigation only: the destination still enforces requireSuperAdmin and same-session MFA. */
+export async function superAdminContinuation(): Promise<"/platform" | null> {
+  const identity = await supabaseIdentity()
+  if (!identity || !emailInCeiling(identity.email, process.env.MCA_SUPER_ADMIN_EMAILS ?? DEFAULT_SUPER_ADMIN_EMAILS)) return null
+  const grant = await getDatabase().prepare<{ user_id: string }>(`SELECT g.user_id FROM platform_admin_grants g
+    JOIN users u ON u.id=g.user_id WHERE u.supabase_user_id=? AND g.revoked_at IS NULL`).get(identity.user.id)
+  return grant ? "/platform" : null
+}
+
 /** A confirmed provider email limits an existing grant; it cannot create one. */
 export async function requireSuperAdmin(request?: Request) {
   if (request?.headers.get("authorization")?.startsWith("Bearer mca_"))

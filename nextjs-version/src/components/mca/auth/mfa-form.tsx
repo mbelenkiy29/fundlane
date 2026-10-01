@@ -15,11 +15,13 @@ type Security = {
   enrollmentRequired: boolean
   challengeRequired: boolean
   sessionVerified: boolean
+  platformVerified: boolean
   factors: { id: string; name: string; status: string }[]
   verified: boolean
 }
 
-export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "enroll" }) {
+export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?: "manage" | "challenge" | "enroll"; continueTo?: "/onboarding" | "/platform" }) {
+  const continuationLabel = continueTo === "/platform" ? "Continue to platform administration" : "Continue to your workspace"
   const [state, setState] = useState<Security | null>(null)
   const [enrollment, setEnrollment] = useState<{ secret: string; qrCode: string } | null>(null)
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null)
@@ -51,7 +53,8 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
   if (!state && !error) return <p>Loading account security…</p>
 
   const appTotp = Boolean(state?.available)
-  const challenge = Boolean(appTotp && state?.enrolled && !state.sessionVerified && (mode === "challenge" || state.challengeRequired))
+  const sessionVerified = continueTo === "/platform" ? state?.platformVerified : state?.sessionVerified
+  const challenge = Boolean(appTotp && state?.enrolled && !sessionVerified && (mode === "challenge" || state.challengeRequired))
   const mustEnroll = Boolean(appTotp && (mode === "enroll" || state?.enrollmentRequired) && !state?.enrolled)
   const showLegacy = Boolean(factorId && state?.factors.length && (!state.enrolled || !state.available))
 
@@ -60,7 +63,7 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
     {state && !state.available && <p role="status">Application authenticator enrollment is unavailable on this deployment. Ask an operator to configure the existing data encryption key. An existing platform authenticator can still be verified below.</p>}
     {mustEnroll && <p role="status">Your company requires an authenticator app before you can use the workspace.</p>}
     {challenge && <p role="status">Enter an authenticator or recovery code to finish signing in.</p>}
-    {state?.sessionVerified && mode === "challenge" && !challenge && <p role="status">Authenticator verification is complete. Continue to your workspace.</p>}
+    {sessionVerified && mode === "challenge" && !challenge && <p role="status">Authenticator verification is complete. {continuationLabel}.</p>}
     {appTotp && state?.enrolled && !recoveryCodes && !challenge && <p role="status">Authenticator-app two-factor authentication is on. {state.recoveryRemaining} unused recovery codes remain.</p>}
     {recoveryCodes && <div className="space-y-3">
       <p>Store these single-use recovery codes now. They will not be shown again.</p>
@@ -121,6 +124,6 @@ export function MfaForm({ mode = "manage" }: { mode?: "manage" | "challenge" | "
       <Label className="grid gap-2">Authenticator code<Input value={code} onChange={e => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" minLength={6} maxLength={6} required /></Label>
       <Button disabled={busy}>{busy ? "Verifying…" : "Verify authenticator"}</Button>
     </form> : null}
-    <Button asChild variant="outline"><a href="/onboarding">Continue to your workspace</a></Button>
+    <Button asChild variant="outline"><a href={continueTo}>{continuationLabel}</a></Button>
   </div>
 }
