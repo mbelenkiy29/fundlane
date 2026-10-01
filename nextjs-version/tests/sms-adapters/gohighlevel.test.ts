@@ -33,7 +33,6 @@ import {
   gohighlevelSmsAdapter,
   gohighlevelStatusCallbackFixture,
   mapGhlSendBody,
-  resetGohighlevelAdapterState,
   resetGohighlevelFixtures,
   validateGhlWebhookSignature,
 } from "../../src/lib/mca/sms/adapters/gohighlevel"
@@ -63,6 +62,7 @@ function account(overrides: Partial<SmsAccount> = {}): SmsAccount {
 function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSendInput {
   return {
     account: account(),
+    idempotencyKey: "sms-row-gohighlevel",
     senderKind: "phone_number",
     senderIdentity: GOHIGHLEVEL_FIXTURE_SENDER,
     recipient: GOHIGHLEVEL_FIXTURE_ACCEPTED_RECIPIENT,
@@ -82,7 +82,6 @@ function assertNoSecrets(value: unknown) {
 }
 
 beforeEach(() => {
-  resetGohighlevelAdapterState()
   resetGohighlevelFixtures()
 })
 
@@ -160,7 +159,7 @@ test("timeout and unconfigured credential fail closed without inventing an exter
   const timeoutReplay = await gohighlevelSmsAdapter.send(sendInput({
     recipient: GOHIGHLEVEL_FIXTURE_TIMEOUT_RECIPIENT,
     correlationId: "corr-ghl-timeout",
-    body: "Must not create a second GoHighLevel message",
+    body: "A second GoHighLevel message",
   }))
   assert.deepEqual(timeoutReplay, timeout)
   assert.equal(timeoutReplay.externalId, undefined)
@@ -176,7 +175,8 @@ test("timeout and unconfigured credential fail closed without inventing an exter
     correlationId: "corr-ghl-unconfigured",
     credentials: { ...GOHIGHLEVEL_FIXTURE_CREDENTIALS },
   }))
-  assert.deepEqual(unconfiguredReplay, unconfigured)
+  assert.equal(unconfiguredReplay.state, "accepted")
+  assert.ok(unconfiguredReplay.externalId)
 
   assert.deepEqual(await gohighlevelSmsAdapter.testConnection(account()), { ok: true })
   assert.deepEqual(await gohighlevelSmsAdapter.testConnection(account({ providerConfigured: false })), { ok: false, code: "gohighlevel_unconfigured" })

@@ -1,6 +1,6 @@
 import "server-only"
-import { managedConfig, managedReady, reserveManagedSend, smsRecipientHash } from "./managed"
-import { persistInbound, rememberOutbound } from "./inbox"
+import { managedConfig, managedReady, reserveManagedSend, smsRecipientHash, suppress } from "./managed"
+import { persistInbound, rememberOutbound, smsKeywordDirection } from "./inbox"
 
 import { createHash } from "node:crypto"
 import { AppError } from "../errors"
@@ -11,6 +11,7 @@ import type { DealActor } from "../deals/schema"
 import type { SmsAccount, SmsAccountState, SmsDeliveryResult, SmsMessage, SmsMessageState, SmsProvider, SmsRoute, SmsSenderKind } from "./contracts"
 import { SMS_PROVIDERS } from "./contracts"
 import { getSmsAdapter } from "./adapters/registry"
+import { publicOrigin } from "./onboarding"
 import { type TwilioSmsTransport, validateTwilioFormSignature } from "./twilio"
 
 type Row = Record<string, string | number | null>
@@ -161,6 +162,7 @@ async function dispatchOutboundSms(input: {
   await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   return getSmsAdapter(provider).send({
     account: senderAccount,
+    idempotencyKey: input.messageId,
     senderKind: input.route.senderKind,
     senderIdentity: input.route.senderIdentity,
     recipient: input.recipient,
@@ -231,17 +233,21 @@ async function assertMembers(database: DbExecutor, workspaceId: string, memberId
   if (rows.length !== unique.length) throw new AppError(422, "sms_member_invalid", "Every assigned SMS user must be an active workspace member.")
 }
 
-export async function listSmsAccounts(actor: DealActor): Promise<{ accounts: SmsAccount[]; canManage: boolean }> {
+export async function listSmsAccounts(actor: DealActor): Promise<{ accounts: SmsAccount[]; canManage: boolean; publicOrigin: string | null }> {
   const administrative = actor.source === "user" && ["admin", "super_admin"].includes(actor.role ?? "")
   const rows = administrative
     ? await getDatabase().prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? ORDER BY is_default DESC,lower(label),id").all(actor.workspaceId)
-    : actor.membershipId ? await getDatabase().prepare<Row>(`SELECT a.* FROM mca_sms_accounts a JOIN mca_sms_account_members am ON am.workspace_id=a.workspace_id AND am.account_id=a.id
-      WHERE a.workspace_id=? AND a.state='active' AND am.membership_id=? ORDER BY a.is_default DESC,lower(a.label),a.id`).all(actor.workspaceId, actor.membershipId) : []
+    : actor.membershipId ? await getDatabase().prepare<Row>(`SELECT a.* FROM mca_sms_accounts a JOIN memberships ms ON ms.workspace_id=a.workspace_id AND ms.id=? AND ms.status='active'
+      WHERE a.workspace_id=? AND a.state='active' AND (a.shared=1 OR EXISTS (SELECT 1 FROM mca_sms_account_members am WHERE am.workspace_id=a.workspace_id AND am.account_id=a.id AND am.membership_id=ms.id)) ORDER BY a.is_default DESC,lower(a.label),a.id`).all(actor.membershipId, actor.workspaceId) : []
   const members = rows.length ? await getDatabase().prepare<{ account_id: string; membership_id: string }>("SELECT account_id,membership_id FROM mca_sms_account_members WHERE workspace_id=? AND account_id=ANY(?::text[]) ORDER BY membership_id").all(actor.workspaceId, rows.map((row) => String(row.id))) : []
   const structured = rows.some((row) => String(row.provider) !== "twilio")
     ? new Set((await getDatabase().prepare<{ provider: string }>("SELECT DISTINCT provider FROM mca_sms_adapter_credentials WHERE workspace_id=? AND environment=?").all(actor.workspaceId, adapterEnvironment())).map((item) => String(item.provider)))
     : new Set<string>()
-  return { accounts: await Promise.all(rows.map((row) => account(row, members.filter((item) => item.account_id === row.id).map((item) => item.membership_id), structured.has(String(row.provider))))), canManage: administrative }
+  let origin: string | null = null
+  if (process.env.MCA_SMS_PUBLIC_BASE_URL?.trim()) {
+    try { origin = publicOrigin() } catch { origin = null }
+  }
+  return { accounts: await Promise.all(rows.map((row) => account(row, members.filter((item) => item.account_id === row.id).map((item) => item.membership_id), structured.has(String(row.provider))))), canManage: administrative, publicOrigin: origin }
 }
 
 export async function createSmsAccount(actor: DealActor, input: { label: string; senderKind: SmsSenderKind; senderIdentity: string; credentialRef: string; memberIds: string[]; isDefault?: boolean }): Promise<SmsAccount> {
@@ -274,7 +280,7 @@ export async function updateSmsAccount(actor: DealActor, id: string, input: { me
   return withImmediateTransaction(async (database) => {
     const existing = await database.prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, id)
     if (!existing) throw new AppError(404, "sms_account_not_found", "The SMS account was not found.")
-    if (existing.credential_ref === "MANAGED" && (input.memberIds || input.state)) throw new AppError(409,"managed_number_settings","Use company number management to reassign or release this sender.")
+    if (existing.credential_ref === "MANAGED" && (input.memberIds || input.state)) throw new AppError(409,"managed_number_settings","Use company number management to release this sender.")
     if (input.memberIds) await assertMembers(database, actor.workspaceId, input.memberIds)
     const now = nowIso(), nextState = input.state ?? String(existing.state)
     const nextDefault = nextState === "revoked" ? false : input.isDefault ?? Number(existing.is_default) === 1
@@ -297,20 +303,21 @@ export async function resolveSmsRoute(actor: DealActor, input: { dealId: string;
   if (input.senderAccountId) {
     row = await getDatabase().prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? AND id=? AND state='active'").get(actor.workspaceId, input.senderAccountId)
     if (!row) throw new AppError(404, "sms_account_not_found", "The selected SMS account is unavailable.")
-    if (!administrative) {
+    if (!administrative && Number(row.shared) !== 1) {
       const assignment = actor.membershipId ? await getDatabase().prepare<Row>("SELECT account_id FROM mca_sms_account_members WHERE workspace_id=? AND account_id=? AND membership_id=?").get(actor.workspaceId, row.id, actor.membershipId) : undefined
       if (!assignment) throw new AppError(403, "sms_account_not_assigned", "You cannot send through an unassigned SMS account.")
     }
   } else if (administrative) {
     row = await getDatabase().prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? AND state='active' ORDER BY is_default DESC,lower(label),id LIMIT 1").get(actor.workspaceId)
   } else if (actor.membershipId) {
-    row = await getDatabase().prepare<Row>(`SELECT a.* FROM mca_sms_accounts a JOIN mca_sms_account_members am ON am.workspace_id=a.workspace_id AND am.account_id=a.id
-      WHERE a.workspace_id=? AND a.state='active' AND am.membership_id=? ORDER BY a.is_default DESC,lower(a.label),a.id LIMIT 1`).get(actor.workspaceId, actor.membershipId)
+    row = await getDatabase().prepare<Row>(`SELECT a.* FROM mca_sms_accounts a JOIN memberships ms ON ms.workspace_id=a.workspace_id AND ms.id=? AND ms.status='active'
+      WHERE a.workspace_id=? AND a.state='active' AND (a.shared=1 OR EXISTS (SELECT 1 FROM mca_sms_account_members am WHERE am.workspace_id=a.workspace_id AND am.account_id=a.id AND am.membership_id=ms.id)) ORDER BY a.is_default DESC,lower(a.label),a.id LIMIT 1`).get(actor.membershipId, actor.workspaceId)
   }
-  if (!row) throw new AppError(409, "sms_route_unavailable", "No assigned SMS account is available. Ask an administrator to assign one in Settings.")
+  if (!row) throw new AppError(409, "sms_route_unavailable", "No SMS account is available. Ask an administrator to configure one in Settings.")
+  if (!administrative && Number(row.shared) === 1 && !(await getDatabase().prepare("SELECT id FROM memberships WHERE id=? AND workspace_id=? AND user_id=? AND status='active'").get(actor.membershipId,actor.workspaceId,actor.userId))) throw new AppError(403,"employee_inactive","Your employee account is inactive.")
   const provider = asSmsProvider(row.provider)
   const senderIdentity = decryptSensitive(String(row.sender_identity_cipher), actor.workspaceId)
-  if (row.credential_ref === "MANAGED" && !await managedReady(actor.workspaceId, String(row.id))) throw new AppError(409,"sms_setup_incomplete","SMS is awaiting company or carrier approval, or an active employee number.")
+  if (row.credential_ref === "MANAGED" && !await managedReady(actor.workspaceId, String(row.id))) throw new AppError(409,"sms_setup_incomplete","SMS is awaiting company or carrier approval, or an active company number.")
   const structuredReady = provider !== "twilio" && Object.keys(await structuredAdapterCredentials(actor.workspaceId, provider)).length > 0
   return { accountId: String(row.id), provider, senderKind: String(row.sender_kind) as SmsSenderKind, senderIdentity, providerConfigured: await isAccountConfigured(actor.workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady) }
 }
@@ -335,13 +342,22 @@ export async function recordSmsConsent(actor: DealActor, input: { dealId: string
   const recipient = await assertRecipient(actor, input.dealId, input.recipient, { matchDealContact }), evidence = required(input.evidence, "evidence", 500), key = stableKey(input.idempotencyKey)
   const effectiveAt = input.effectiveAt ?? nowIso()
   if (!Number.isFinite(Date.parse(effectiveAt))) throw new AppError(422, "consent_date_invalid", "Enter a valid consent date and time.")
-  const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient)
-  const inserted = await getDatabase().prepare<Row>(`INSERT INTO mca_sms_consent_events
+  const normalizedEffectiveAt = new Date(effectiveAt).toISOString()
+  const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient), suppressionHash = smsRecipientHash(actor.workspaceId, recipient)
+  const { row, inserted } = await withImmediateTransaction(async (db) => {
+    if (input.state === "opted_in") await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-consent:${suppressionHash}`)
+    const inserted = await db.prepare<Row>(`INSERT INTO mca_sms_consent_events
     (id,workspace_id,deal_id,recipient_hash,recipient_cipher,state,source,evidence,idempotency_key,actor_user_id,effective_at,created_at)
-    VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, effectiveAt, createdAt)
-  const row = inserted ?? await getDatabase().prepare<Row>("SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
-  if (!row || row.deal_id !== input.dealId || row.recipient_hash !== hash || row.state !== input.state || row.evidence !== evidence) throw new AppError(409, "idempotency_conflict", "That retry key already identifies different SMS consent evidence.")
-  if (inserted) await recordAuditEvent({ context: actor, action: `sms.consent_${input.state}`, resourceType: "deal", resourceId: input.dealId, metadata: { source: "manual", recipientMasked: maskPhone(recipient), effectiveAt, matchDealContact }, correlationId: actor.correlationId })
+    VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, normalizedEffectiveAt, createdAt)
+    const row = inserted ?? await db.prepare<Row>("SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
+    if (!row || row.deal_id !== input.dealId || row.recipient_hash !== hash || row.state !== input.state || row.evidence !== evidence) throw new AppError(409, "idempotency_conflict", "That retry key already identifies different SMS consent evidence.")
+    if (inserted && input.state === "opted_in") {
+      const suppression = await db.prepare<{ updated_at: string }>("SELECT updated_at FROM sms_suppressions WHERE workspace_id=? AND recipient_hash=?").get(actor.workspaceId, suppressionHash)
+      if (!suppression || normalizedEffectiveAt >= suppression.updated_at) await db.prepare("INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,'opted_in',?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state='opted_in',updated_at=EXCLUDED.updated_at").run(actor.workspaceId, suppressionHash, nowIso())
+    }
+    if (inserted) await recordAuditEvent({ context: actor, action: `sms.consent_${input.state}`, resourceType: "deal", resourceId: input.dealId, metadata: { source: "manual", recipientMasked: maskPhone(recipient), effectiveAt, matchDealContact }, correlationId: actor.correlationId, executor: db })
+    return { row, inserted }
+  })
   return { id: String(row.id), dealId: input.dealId, state: String(row.state), recipientMasked: maskPhone(recipient), evidence: String(row.evidence), effectiveAt: String(row.effective_at), created: Boolean(inserted) }
 }
 
@@ -387,7 +403,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
     const accountRow = await database.prepare<Row>("SELECT * FROM mca_sms_accounts WHERE workspace_id=? AND id=? AND state='active' FOR UPDATE").get(actor.workspaceId, route.accountId)
     if (!accountRow) throw new AppError(409, "sms_route_unavailable", "The selected SMS account became unavailable.")
     const administrative = actor.source === "user" && ["admin", "super_admin"].includes(actor.role ?? "")
-    if (!administrative) {
+    if (!administrative && Number(accountRow.shared) !== 1) {
       const assignment = actor.membershipId ? await database.prepare<Row>("SELECT account_id FROM mca_sms_account_members WHERE workspace_id=? AND account_id=? AND membership_id=?").get(actor.workspaceId, route.accountId, actor.membershipId) : undefined
       if (!assignment) throw new AppError(403, "sms_account_not_assigned", "You cannot send through an unassigned SMS account.")
     }
@@ -405,6 +421,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
   if (!prepared.created) return storedResult(prepared.row)
   await rememberOutbound(actor.workspaceId,route.accountId,input.dealId,recipient)
   const result = await dispatchOutboundSms({ actor, accountRow: prepared.accountRow!, route, messageId: String(prepared.row.id), approvedAt, recipient, body, correlationId: input.correlationId, transport })
+  if (result.state === "failed" && result.errorCode === "twilio_21610") await suppress(actor.workspaceId, recipient, "opted_out")
   const now = nowIso()
   const saved = await getDatabase().prepare<Row>(`UPDATE mca_sms_messages SET state=?,provider_message_id=?,provider_status=?,error_code=?,error_message=?,accepted_at=?,updated_at=?
     WHERE workspace_id=? AND id=? AND state='pending' RETURNING *`).get(result.state, result.externalId ?? null, result.providerStatus ?? null, result.errorCode ?? null, result.errorMessage ?? null, result.state === "accepted" ? now : null, now, actor.workspaceId, prepared.row.id)
@@ -415,7 +432,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
 
 export async function listSmsMessages(actor: DealActor, dealId: string): Promise<SmsMessage[]> {
   await getDealForDocument(actor, dealId)
-  const rows = await getDatabase().prepare<Row>("SELECT m.* FROM mca_sms_messages m WHERE m.workspace_id=? AND m.deal_id=? AND (?::boolean OR EXISTS (SELECT 1 FROM mca_sms_account_members am JOIN memberships ms ON ms.id=am.membership_id AND ms.workspace_id=am.workspace_id WHERE am.workspace_id=m.workspace_id AND am.account_id=m.account_id AND am.membership_id=? AND ms.status='active')) ORDER BY m.created_at DESC,m.id DESC LIMIT 50").all(actor.workspaceId, dealId, actor.source === "user" && ["admin","super_admin"].includes(actor.role ?? ""), actor.membershipId)
+  const rows = await getDatabase().prepare<Row>("SELECT m.* FROM mca_sms_messages m JOIN mca_sms_accounts a ON a.id=m.account_id AND a.workspace_id=m.workspace_id WHERE m.workspace_id=? AND m.deal_id=? AND (?::boolean OR (EXISTS (SELECT 1 FROM memberships ms WHERE ms.id=? AND ms.workspace_id=m.workspace_id AND ms.status='active') AND (a.shared=1 OR EXISTS (SELECT 1 FROM mca_sms_account_members am WHERE am.workspace_id=m.workspace_id AND am.account_id=m.account_id AND am.membership_id=?)))) ORDER BY m.created_at DESC,m.id DESC LIMIT 50").all(actor.workspaceId, dealId, actor.source === "user" && ["admin","super_admin"].includes(actor.role ?? ""), actor.membershipId, actor.membershipId)
   return rows.map(message)
 }
 
@@ -464,7 +481,7 @@ export async function getSmsComposerContext(actor: DealActor, dealId: string): P
   const listed = await listSmsAccounts(actor)
   const accounts = listed.accounts.filter((item) => item.state === "active")
   const consent = mobile ? await getSmsConsent(actor, dealId, mobile.recipient) : { state: "unknown" as const, recipientMasked: undefined }
-  const rows = await getDatabase().prepare<Row>("SELECT m.* FROM mca_sms_messages m WHERE m.workspace_id=? AND m.deal_id=? AND (?::boolean OR EXISTS (SELECT 1 FROM mca_sms_account_members am JOIN memberships ms ON ms.id=am.membership_id AND ms.workspace_id=am.workspace_id WHERE am.workspace_id=m.workspace_id AND am.account_id=m.account_id AND am.membership_id=? AND ms.status='active')) ORDER BY m.created_at DESC,m.id DESC LIMIT 50").all(actor.workspaceId, dealId, actor.source === "user" && ["admin","super_admin"].includes(actor.role ?? ""), actor.membershipId)
+  const rows = await getDatabase().prepare<Row>("SELECT m.* FROM mca_sms_messages m JOIN mca_sms_accounts a ON a.id=m.account_id AND a.workspace_id=m.workspace_id WHERE m.workspace_id=? AND m.deal_id=? AND (?::boolean OR (EXISTS (SELECT 1 FROM memberships ms WHERE ms.id=? AND ms.workspace_id=m.workspace_id AND ms.status='active') AND (a.shared=1 OR EXISTS (SELECT 1 FROM mca_sms_account_members am WHERE am.workspace_id=m.workspace_id AND am.account_id=m.account_id AND am.membership_id=?)))) ORDER BY m.created_at DESC,m.id DESC LIMIT 50").all(actor.workspaceId, dealId, actor.source === "user" && ["admin","super_admin"].includes(actor.role ?? ""), actor.membershipId, actor.membershipId)
   return {
     dealId,
     merchantName: deal.dbaName || deal.legalName || deal.displayId,
@@ -566,9 +583,9 @@ export async function processTwilioOptOut(accountId: string, params: URLSearchPa
   assertWebhookSignature(config, signature, canonicalUrl || requestUrl, params)
   assertWebhookAccount(config, params)
   await persistInbound(workspaceId, accountId, params, String(row.sender_kind), decryptSensitive(String(row.sender_identity_cipher), workspaceId))
-  const type = params.get("OptOutType")?.trim().toUpperCase()
-  if (!type || type === "HELP") return { updated: 0, type: type ?? "none" }
-  if (!["STOP", "START"].includes(type)) throw new AppError(422, "twilio_opt_out_invalid", "Unsupported Twilio opt-out event.")
+  const providerType = params.get("OptOutType")?.trim().toUpperCase()
+  const type = smsKeywordDirection(params.get("Body") ?? "", providerType)
+  if (!type) return { updated: 0, type: providerType ?? "none" }
   const recipient = normalizeSmsRecipient(params.get("From") ?? ""), hash = recipientHash(workspaceId, recipient)
   const deals = await getDatabase().prepare<{ deal_id: string }>(`SELECT DISTINCT deal_id FROM (
     SELECT deal_id FROM mca_sms_messages WHERE workspace_id=? AND recipient_hash=?
@@ -576,12 +593,13 @@ export async function processTwilioOptOut(accountId: string, params: URLSearchPa
   ) routes ORDER BY deal_id`).all(workspaceId, hash, workspaceId, hash)
   const providerId = params.get("MessageSid")?.trim() || contentHash([...params.entries()].sort(([a], [b]) => a.localeCompare(b)))
   const now = nowIso(), state = type === "STOP" ? "opted_out" : "opted_in"
+  const source = providerType === type ? "provider_webhook" : "keyword"
   let updated = 0
   for (const deal of deals) {
     const key = `twilio:${accountId}:${providerId}:${type}:${deal.deal_id}`.slice(0, 160)
     const inserted = await getDatabase().prepare<Row>(`INSERT INTO mca_sms_consent_events
       (id,workspace_id,deal_id,recipient_hash,recipient_cipher,state,source,evidence,idempotency_key,actor_user_id,effective_at,created_at)
-      VALUES (?,?,?,?,?,?,'provider_webhook',?,?,NULL,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING id`).get(newId(), workspaceId, deal.deal_id, hash, encryptSensitive(recipient, workspaceId), state, `Twilio Advanced Opt-Out ${type}`, key, now, now)
+      VALUES (?,?,?,?,?,?,?,?,?,NULL,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING id`).get(newId(), workspaceId, deal.deal_id, hash, encryptSensitive(recipient, workspaceId), state, source, `Twilio ${source} ${type}`, key, now, now)
     if (inserted) updated += 1
   }
   if (updated) await recordAuditEvent({ context: { workspaceId, userId: null, source: "system" }, action: `sms.consent_${state}`, resourceType: "sms_account", resourceId: accountId, metadata: { provider: "twilio", affectedDeals: updated }, correlationId: providerId })

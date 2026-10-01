@@ -1,4 +1,4 @@
-import test, { before, after } from "node:test"
+import test, { before, after, mock } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -8,7 +8,20 @@ import { failedJobs, recoverFailedJob } from "../src/lib/mca/operations/job-reco
 import { recoveryRules, workerHeartbeatStale } from "../src/lib/mca/operations/monitor"
 import { operationalEvent } from "../src/lib/mca/operations/telemetry"
 import type { Metrics } from "../src/lib/mca/operations/contracts"
-import { GET as recoveryGet } from "../src/app/api/platform/companies/[id]/failed-jobs/route"
+
+const providerId = randomUUID(), sessionId = randomUUID()
+let signedIn = false
+mock.module(new URL("../src/lib/mca/supabase-auth.ts", import.meta.url).href, { namedExports: {
+  supabaseIdentity: async () => signedIn ? { user: { id: providerId, email: "mike@sentineltechsolutions.io", email_confirmed_at: nowIso() }, email: "mike@sentineltechsolutions.io", sessionId } : null,
+} })
+mock.module(new URL("../src/lib/supabase/server.ts", import.meta.url).href, { namedExports: {
+  createSupabaseServerClient: async () => ({ auth: {
+    getClaims: async () => ({ data: { claims: { sub: providerId, session_id: sessionId, aal: "aal2" } }, error: null }),
+    getUser: async () => ({ data: { user: signedIn ? { id: providerId, email: "mike@sentineltechsolutions.io", email_confirmed_at: nowIso() } : null }, error: null }),
+  } }),
+} })
+const recoveryGet = async (request: Request, context: { params: Promise<{ id: string }> }) =>
+  (await import("../src/app/api/platform/companies/[id]/failed-jobs/route")).GET(request, context)
 
 const metrics: Metrics = { queued: 0, running: 0, failed: 0, retrying: 0, billingRetrying: 0, expired: 0, oldestSeconds: 0, emailQueued: 0, emailAccepted: 0, emailFailed: 0, emailBlocked: 0, emailUnknown: 0, reconnect: 2, recentEmailFailures: 2, recentErrors: 0, documentWorkerHeartbeatAgeSeconds: 91, documentFailed: 0, scannerUnavailable: 0, queueAgeByKind: { document_scan: 700, export: 200 }, billingMaintenanceFailures: 2, assistantRuns: 101 }
 const config = { origin: "https://fundlane.io", token: "x".repeat(40), alerts: true, recoveryAlerts: true, assistantEnabled: true, thresholds: { workerSeconds: 90, queueSeconds: 600, queueByKind: { export: 100 }, providerFailures: 2, billingFailures: 2, assistantRuns: 100 } }
@@ -28,11 +41,6 @@ test("diagnostic events discard credentials, bank content and document paths", (
   for (const secret of ["secret-key", "123456789", "private-statement.pdf"]) assert.equal(encoded.includes(secret), false)
   assert.equal(event.route, "/api/documents/*")
 })
-test("recovery endpoint is unavailable while its flag is unset", async () => {
-  delete process.env.MCA_JOB_RECOVERY_ENABLED
-  const response = await recoveryGet(new Request("https://fundlane.io/api/platform/companies/test/failed-jobs"), { params: Promise.resolve({ id: "test" }) })
-  assert.equal(response.status, 404)
-})
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 let workspaceId: string
@@ -43,6 +51,22 @@ before(async () => {
   const workspace = await createWorkspaceWithAdmin({ workspaceName: "Recovery fixture", adminName: "Operator", adminEmail: `${randomUUID()}@example.test`, password: "Fixture password 99!", role: "admin" })
   workspaceId = workspace.workspaceId
   userId = workspace.userId
+})
+
+test("recovery endpoint authorizes before revealing that its flag is unset", async () => {
+  delete process.env.MCA_JOB_RECOVERY_ENABLED
+  const request = () => new Request("https://fundlane.io/api/platform/companies/test/failed-jobs")
+  signedIn = false
+  assert.equal((await recoveryGet(request(), { params: Promise.resolve({ id: "test" }) })).status, 401)
+  signedIn = true
+  await getDatabase().prepare("UPDATE users SET supabase_user_id=? WHERE id=?").run(providerId, userId)
+  await getDatabase().prepare("INSERT INTO platform_admin_grants (user_id,granted_at,granted_by,reason) VALUES (?,?,?,?)").run(userId, nowIso(), userId, "recovery flag test")
+  try {
+    assert.equal((await recoveryGet(request(), { params: Promise.resolve({ id: "test" }) })).status, 404)
+  } finally {
+    signedIn = false
+    await getDatabase().prepare("DELETE FROM platform_admin_grants WHERE user_id=?").run(userId)
+  }
 })
 after(async () => { await closeDatabaseForTests(); await database?.close() })
 

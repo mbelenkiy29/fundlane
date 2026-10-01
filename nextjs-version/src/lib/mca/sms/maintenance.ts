@@ -16,6 +16,7 @@ import { decryptSensitive, encryptSensitive } from "../crypto"
 import { AppError } from "../errors"
 import type { AuthContext } from "../types"
 import { executionShouldStop } from "../jobs/execution"
+import { insertSuperAdminAudit } from "../platform-audit"
 export async function reconcileUsage(
   workspaceId: string,
   api: TwilioApi = twilioApi
@@ -141,11 +142,12 @@ export async function usageRows(workspaceId: string) {
 // Recovery never asks the browser to provide provider secrets. Read-only remote lookup
 // verifies the deterministic identity before an interrupted purchase/account creation resumes.
 export async function reconcileOperation(
-  context: AuthContext,
+  context: AuthContext | null,
   id: string,
-  api: TwilioApi = twilioApi
+  api: TwilioApi = twilioApi,
+  request?: Request,
 ) {
-  operator(context)
+  const actor = await operator(context)
   const op = await getDatabase()
     .prepare<{
       workspace_id: string
@@ -204,8 +206,11 @@ export async function reconcileOperation(
     } catch(error) {
       // A definitive 404 proves this non-purchasing attachment can be retried.
       if (!(error instanceof AppError) || error.code !== "twilio_20404") throw error
-      await getDatabase().prepare("UPDATE sms_operations SET state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='needs_review'").run(nowIso(),id)
-      await recordAuditEvent({context:{workspaceId:op.workspace_id,userId:context.userId},action:"sms.attachment_retry_authorized",resourceType:"sms_operation",resourceId:id})
+      await withImmediateTransaction(async db => {
+        await db.prepare("UPDATE sms_operations SET state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='needs_review'").run(nowIso(),id)
+        await recordAuditEvent({context:{workspaceId:op.workspace_id,userId:actor.userId},action:"sms.attachment_retry_authorized",resourceType:"sms_operation",resourceId:id,executor:db})
+        await insertSuperAdminAudit({actor,action:"sms.attachment_retry_authorized",workspaceId:op.workspace_id,targetType:"sms_operation",targetId:id,request},db)
+      })
       return {reconciled:true}
     }
   }
@@ -216,20 +221,11 @@ export async function reconcileOperation(
       "The remote outcome could not be uniquely verified. Inspect the provider operation before any retry; no second resource was created."
     )
   results[op.step] = recovered
-  await getDatabase()
-    .prepare(
-      "UPDATE sms_operations SET result_cipher=?,state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='needs_review'"
-    )
-    .run(
-      encryptSensitive(JSON.stringify(results), op.workspace_id),
-      nowIso(),
-      id
-    )
-  await recordAuditEvent({
-    context: { workspaceId: op.workspace_id, userId: context.userId },
-    action: "sms.operation_reconciled",
-    resourceType: "sms_operation",
-    resourceId: id,
+  await withImmediateTransaction(async db => {
+    await db.prepare("UPDATE sms_operations SET result_cipher=?,state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='needs_review'")
+      .run(encryptSensitive(JSON.stringify(results), op.workspace_id),nowIso(),id)
+    await recordAuditEvent({context:{workspaceId:op.workspace_id,userId:actor.userId},action:"sms.operation_reconciled",resourceType:"sms_operation",resourceId:id,executor:db})
+    await insertSuperAdminAudit({actor,action:"sms.operation_reconciled",workspaceId:op.workspace_id,targetType:"sms_operation",targetId:id,request},db)
   })
   return { reconciled: true }
 }
