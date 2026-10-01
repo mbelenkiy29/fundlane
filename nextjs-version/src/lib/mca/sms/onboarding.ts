@@ -18,6 +18,9 @@ import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import type { DealActor } from "../deals/schema"
 import type { AuthContext } from "../types"
+import { requireSuperAdmin, requireSmsApprover } from "../platform-auth"
+import { requirePlatformStepUp } from "../platform-step-up"
+import { insertSuperAdminAudit, withSuperAdminAction } from "../platform-audit"
 
 export const signupSchema = z
   .object({
@@ -106,23 +109,24 @@ export function admin(actor: DealActor) {
       "A company administrator is required."
     )
 }
-export function isPlatformOperator(userId: string | null): boolean {
-  return (
-    !!userId &&
-    (process.env.MCA_PLATFORM_OPERATOR_USER_IDS ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .includes(userId)
-  )
+export async function isPlatformOperator(userId: string | null): Promise<boolean> {
+  if (!userId) return false
+  try {
+    const actor = await requireSuperAdmin()
+    const narrowed = process.env.MCA_PLATFORM_OPERATOR_USER_IDS
+    return actor.userId === userId && (narrowed === undefined || narrowed.split(",").map(value => value.trim()).includes(userId))
+  } catch { return false }
 }
-export function operator(context: AuthContext) {
-  if (context.authType !== "session" || !isPlatformOperator(context.userId))
-    throw new AppError(
-      403,
-      "platform_operator_required",
-      "Platform operator access is required."
-    )
+export async function operator(context?: AuthContext | null) {
+  if (context && context.authType !== "session")
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  const actor = await requireSuperAdmin()
+  if (context && (context.userId !== actor.userId || context.sessionId !== actor.sessionId))
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  const narrowed = process.env.MCA_PLATFORM_OPERATOR_USER_IDS
+  if (narrowed !== undefined && !await isPlatformOperator(actor.userId))
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  return actor
 }
 export function platformReady(): boolean {
   return (
@@ -324,7 +328,7 @@ export async function onboardingStatus(actor: DealActor) {
     suspended: !!c?.suspended,
     platformReady: platformReady(),
     canManage: manageable,
-    isOperator: isPlatformOperator(actor.userId),
+    isOperator: await isPlatformOperator(actor.userId),
     profile:
       manageable && c?.profile_cipher
         ? JSON.parse(decryptSensitive(c.profile_cipher, actor.workspaceId))
@@ -399,10 +403,16 @@ export const reviewSchema = z
   })
   .strict()
 export async function reviewCompany(
-  context: AuthContext,
-  input: z.infer<typeof reviewSchema>
+  context: AuthContext | null,
+  input: z.infer<typeof reviewSchema>,
+  request?: Request,
 ) {
-  operator(context)
+  const actor = await operator(context)
+  let stepUpAt: string | undefined
+  if (input.decision === "approved" || input.decision === "rejected") {
+    requireSmsApprover(actor)
+    stepUpAt = await requirePlatformStepUp(actor)
+  }
   await withImmediateTransaction(async (db) => {
     const c = await db
       .prepare<Company>(
@@ -441,7 +451,7 @@ export async function reviewCompany(
       .run(
         review,
         input.note,
-        context.userId,
+        actor.userId,
         input.optOutConfirmed === undefined
           ? c.opt_out_ready
           : input.optOutConfirmed
@@ -455,42 +465,45 @@ export async function reviewCompany(
         input.workspaceId
       )
     await recordAuditEvent({
-      context: { workspaceId: input.workspaceId, userId: context.userId },
+      context: { workspaceId: input.workspaceId, userId: actor.userId },
       action: `company.${input.decision}`,
       resourceType: "workspace",
       resourceId: input.workspaceId,
       metadata: {
-        note: input.note,
         numberLimit: input.numberLimit,
         monthlyLimitCents: input.monthlyLimitCents,
       },
+      executor: db,
     })
+    await insertSuperAdminAudit({actor,action:`sms.${input.decision}`,workspaceId:input.workspaceId,targetType:"workspace",targetId:input.workspaceId,reason:input.decision,stepUpAt,request},db)
   })
   return { updated: true }
 }
-export async function reviewQueue(context: AuthContext) {
-  operator(context)
-  const rows = await getDatabase()
-    .prepare<
-      Company & { name: string }
-    >("SELECT c.*,w.name FROM sms_companies c JOIN workspaces w ON w.id=c.workspace_id ORDER BY c.updated_at DESC LIMIT 100")
-    .all()
-  return {
-    companies: rows.map((c) => ({
-      workspaceId: c.workspace_id,
-      name: c.name,
-      emailVerified: !!c.email_verified_at,
-      reviewState: c.review_state,
-      registrationState: c.registration_state,
-      suspended: !!c.suspended,
-      optOutReady: !!c.opt_out_ready,
-      note: c.review_note,
-      numberLimit: c.number_limit,
-      monthlyLimitCents: c.monthly_limit_cents,
-      registrationLimitCents: c.registration_limit_cents,
-      profile: c.profile_cipher
-        ? JSON.parse(decryptSensitive(c.profile_cipher, c.workspace_id))
-        : null,
-    })),
-  }
+export async function reviewQueue(context: AuthContext | null, request?: Request) {
+  const actor = await operator(context)
+  return withSuperAdminAction({actor,action:"sms.queue_viewed",request},async db => {
+    const rows = await db
+      .prepare<
+        Company & { name: string }
+      >("SELECT c.*,w.name FROM sms_companies c JOIN workspaces w ON w.id=c.workspace_id ORDER BY c.updated_at DESC LIMIT 100")
+      .all()
+    return {
+      companies: rows.map((c) => ({
+        workspaceId: c.workspace_id,
+        name: c.name,
+        emailVerified: !!c.email_verified_at,
+        reviewState: c.review_state,
+        registrationState: c.registration_state,
+        suspended: !!c.suspended,
+        optOutReady: !!c.opt_out_ready,
+        note: c.review_note,
+        numberLimit: c.number_limit,
+        monthlyLimitCents: c.monthly_limit_cents,
+        registrationLimitCents: c.registration_limit_cents,
+        profile: c.profile_cipher
+          ? {...JSON.parse(decryptSensitive(c.profile_cipher, c.workspace_id)),ein:"••-•••••••"}
+          : null,
+      })),
+    }
+  })
 }

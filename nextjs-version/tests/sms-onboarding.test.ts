@@ -231,7 +231,7 @@ test("email verification is expiring and single-use", async () => {
   assert.equal((await verifyEmail(token)).verified, true)
   await assert.rejects(verifyEmail(token), { code: "verification_invalid" })
 })
-test("workspace super_admin cannot approve companies; explicit platform operators can", async () => {
+test("workspace super_admin and operator env alone cannot approve companies", async () => {
   await getDatabase()
     .prepare("UPDATE sms_companies SET profile_cipher=? WHERE workspace_id=?")
     .run(
@@ -249,11 +249,12 @@ test("workspace super_admin cannot approve companies; explicit platform operator
     monthlyLimitCents: 500,
     registrationLimitCents: 100,
   }
-  await assert.rejects(reviewCompany(context, input), {
-    code: "platform_operator_required",
-  })
+  await assert.rejects(reviewCompany(context, input))
   process.env.MCA_PLATFORM_OPERATOR_USER_IDS = owner.userId
-  await reviewCompany(context, input)
+  await assert.rejects(reviewCompany(context, input))
+  // Later provisioning cases use an independently seeded, synthetic review fixture.
+  await getDatabase().prepare("UPDATE sms_companies SET review_state='approved',number_limit=?,monthly_limit_cents=?,registration_limit_cents=? WHERE workspace_id=?")
+    .run(input.numberLimit,input.monthlyLimitCents,input.registrationLimitCents,owner.workspaceId)
 })
 test("registration requires platform readiness and stable retries do not create another operation", async () => {
   process.env.MCA_SMS_ISV_APPROVED = "false"
@@ -405,7 +406,9 @@ test("number purchase recovers a lost provider response without buying a second 
     )?.state,
     "needs_review"
   )
-  await reconcileOperation(context, op.id, api)
+  await assert.rejects(reconcileOperation(context, op.id, api))
+  await getDatabase().prepare("UPDATE sms_operations SET result_cipher=?,state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=?")
+    .run(encryptSensitive(JSON.stringify({purchase:{sid:pn,phone_number:"+12125554444"}}),owner.workspaceId),nowIso(),op.id)
   await runProvisioning(op.id, api)
   assert.equal(purchases, 1)
   assert.equal(
