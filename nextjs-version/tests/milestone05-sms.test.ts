@@ -192,7 +192,7 @@ test("reassignment and opt-out are rechecked before a message is reserved, and u
 })
 
 test("signed callbacks verify Twilio identity, preserve monotonic delivered state, dedupe events, and reject unsupported states", async () => {
-  await recordSmsConsent(adminA, { dealId: ids.dealA, recipient: phone, state: "opted_in", evidence: "Merchant sent START in synthetic fixture", effectiveAt: "2026-09-08T14:00:00.000Z", idempotencyKey: "sms-optin-again" })
+  await recordSmsConsent(adminA, { dealId: ids.dealA, recipient: phone, state: "opted_in", evidence: "Merchant sent START in synthetic fixture", effectiveAt: new Date().toISOString(), idempotencyKey: "sms-optin-again" })
   const secondSid = `SM${"d".repeat(32)}`
   await deliverClosingSms(adminA, { dealId: ids.dealA, recipient: phone, body: "Callback state fixture", senderAccountId: accountAId, idempotencyKey: "sms-callback", correlationId: "corr-callback", payloadHash: payloadHash("Callback state fixture"), deliveryMode: "never_attempted" }, { send: async () => ({ state: "accepted", externalId: secondSid, providerStatus: "queued" }) })
   const message = await fixture.query("SELECT id FROM mca_sms_messages WHERE provider_message_id=$1", [secondSid])

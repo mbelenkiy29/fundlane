@@ -181,7 +181,7 @@ test("rep cannot send or preview through an unassigned account, and opt-out plus
   assert.equal(previewOptOut.canSend, false)
   assert.equal(previewOptOut.block?.code, "sms_recipient_opted_out")
 
-  await recordSmsConsent(admin, { dealId: ids.deal, recipient: phone, state: "opted_in", evidence: "Merchant sent START in synthetic composer fixture", effectiveAt: "2026-09-08T18:00:00.000Z", idempotencyKey: "m6-consent-in-again" })
+  await recordSmsConsent(admin, { dealId: ids.deal, recipient: phone, state: "opted_in", evidence: "Merchant sent START in synthetic composer fixture", effectiveAt: new Date().toISOString(), idempotencyKey: "m6-consent-in-again" })
   const mismatch = await deliverClosingSms(rep, { dealId: ids.deal, recipient: "+12125550000", body: "Wrong number", senderAccountId: assignedId, idempotencyKey: "m6-mismatch", correlationId: "corr-mismatch", payloadHash: payloadHash("Wrong number"), deliveryMode: "never_attempted" }).then(() => null, (error) => error)
   assert.equal((mismatch as AppError).code, "recipient_deal_mismatch")
 })
