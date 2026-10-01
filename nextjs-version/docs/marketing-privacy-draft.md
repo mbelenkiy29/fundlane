@@ -1,5 +1,7 @@
 # Fundlane website and demo privacy notice — approved September 11, 2026
 
+> Historical notice retained for reference. Its Render/Neon/Clerk provider description is not the current runtime: Fundlane uses Vercel and Supabase; Render is historical only. This annotation does not publish revised legal copy.
+
 Operator: **Sentinel Tech Solutions LLC**
 Privacy contact: **ben@sentineltechsolutions.io**
 Effective date: **September 11, 2026**
