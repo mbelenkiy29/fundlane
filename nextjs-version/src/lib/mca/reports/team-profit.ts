@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { getDatabase } from "../db"
 import type { DealActor } from "../deals/schema"
@@ -297,7 +298,7 @@ export async function getTeamProfitReport(
        WHERE ir.workspace_id = ? AND ir.deal_id IS NOT NULL`,
     ).all(actor.workspaceId),
     db.prepare<{ id: string; role: string; manager_membership_id: string | null; name: string }>(
-      "SELECT m.id, m.role, m.manager_membership_id, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?",
+      `SELECT m.id, m.role, m.manager_membership_id, ${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?`,
     ).all(actor.workspaceId),
     permission.paymentsVisible
       ? db.prepare<{

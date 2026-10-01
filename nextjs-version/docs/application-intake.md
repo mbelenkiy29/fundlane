@@ -30,7 +30,7 @@ Clean scans must successfully promote objects into private clean storage before 
 
 ## Worker and staging activation
 
-The active runtime is Supabase Postgres, Auth, and private Storage. Apply additive migrations with the normal release process before starting the worker. `pnpm documents:worker` starts the durable loop; `pnpm documents:worker --once` executes one tick. `pnpm documents:worker:build` bundles the worker. `Dockerfile.worker` installs ClamAV and PDF tooling, refreshes signatures before startup, and runs without root privileges. The Render blueprint includes `fundlane-document-worker` with automatic deployment off.
+The active runtime is Supabase Postgres, Auth, and private Storage. Apply additive migrations with the normal release process before starting the worker. `pnpm documents:worker` starts the durable loop; `pnpm documents:worker --once` executes one tick. `pnpm documents:worker:build` bundles the worker. `Dockerfile.worker` installs ClamAV and PDF tooling, refreshes signatures before startup, and runs without root privileges. The Render blueprint and `fundlane-document-worker` entry are historical only. The selected gated Vercel consumer and native executor acceptance are in [background job runtime](background-job-runtime.md).
 
 Configure the same database, encryption key, Supabase service credentials, and storage buckets as the web app, plus OpenAI extraction credentials/model and the app origin. The worker image selects Supabase storage and ClamAV; missing provider or scanner configuration fails closed. Secrets are supplied through deployment environment settings, never connection activity responses.
 

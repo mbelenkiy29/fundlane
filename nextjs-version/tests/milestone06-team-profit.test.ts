@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth";
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -432,4 +433,9 @@ test("MIC-101 UI states cover loading empty validation success and failure", () 
   assert.match(source, /Managers/)
   assert.match(source, /Excluded from gross contribution/)
   assert.match(source, /id="mca-reports-team-profit"/)
+})
+
+test("pending shared names are masked in rep funnel and team profit reports", async () => {
+  await assertPendingProfileHidden(ids.ada, () => getRepFunnelReport(adminActor, { basis: "cohort" }, asOf))
+  await assertPendingProfileHidden(ids.manager, () => getTeamProfitReport(adminActor, { basis: "cohort" }, asOf))
 })
