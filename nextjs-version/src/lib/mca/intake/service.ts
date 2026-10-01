@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { createHash } from "node:crypto"
 import { lookup } from "node:dns/promises"
@@ -208,7 +209,7 @@ export interface IntakeListItem {
 
 export async function listIntakeSummaries(actor: DealActor): Promise<IntakeListItem[]> {
   const output: IntakeListItem[] = []
-  const members = await getDatabase().prepare<{ id: string; name: string }>("SELECT m.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?").all(actor.workspaceId)
+  const members = await getDatabase().prepare<{ id: string; name: string }>(`SELECT m.id,${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?`).all(actor.workspaceId)
   for (const record of await listIntakes(actor.workspaceId)) {
     let deal: DealDetail | undefined
     if (record.dealId) {

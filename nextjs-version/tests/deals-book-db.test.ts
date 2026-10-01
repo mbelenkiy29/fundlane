@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
@@ -337,4 +338,25 @@ test("managers can void receipts, replay is ok, and reps are forbidden", async (
     body: JSON.stringify({ status: "void", reason: "Bank return", idempotencyKey: "void-http-1" }),
   }), { params: Promise.resolve({ advanceId: ids.advance, receiptId: replacement.id }) })
   assert.equal(managerResponse.status, 200)
+})
+
+test("pending shared profiles are masked in advance list/detail and deal book list/detail", async () => {
+  const { listAdvanceRows, findAdvanceRow } = await import("../src/lib/mca/advances/repository")
+  for (const read of [
+    () => listAdvanceRows(ids.workspace),
+    () => findAdvanceRow(ids.workspace, ids.advance),
+    () => listDealBook(actor),
+    () => getDealBookRow(actor, ids.advance),
+  ]) {
+    await assertPendingProfileHidden(ids.managerMember, read)
+    await assertPendingProfileHidden(ids.member, read)
+  }
+})
+
+test("pending shared originators are masked in submission dashboards and the all-deals/owners export", async () => {
+  const { listVisibleSubmissionRows } = await import("../src/lib/mca/submissions/dashboard")
+  const { captureExportSnapshot } = await import("../src/lib/mca/exports/query")
+  await getDatabase().prepare("INSERT INTO deal_submissions (id,workspace_id,deal_id,funder_name,status) VALUES ('profile-submission',?,?,'Synthetic funder','sent')").run(ids.workspace, ids.deal)
+  await assertPendingProfileHidden(ids.member, () => listVisibleSubmissionRows(actor))
+  await assertPendingProfileHidden(ids.member, () => captureExportSnapshot(actor, "all_deals_owners", {}, now))
 })

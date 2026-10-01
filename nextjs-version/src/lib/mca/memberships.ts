@@ -1,4 +1,5 @@
 import "server-only";
+import { membershipProfileNameSql, membershipProfilePhoneSql } from "./membership-profile";
 import { deliverSupabaseInvitation, syncSupabaseMember } from "./supabase-team";
 import { assertBillingCapacity, billingSeatSyncEnabled, seatsCountPendingInvites, ensureSyncedSeatCapacity, licensedSeatCount, syncWorkspaceBilling, type StripeBillingClient } from "./billing";
 
@@ -53,28 +54,21 @@ function mapMembership(row: MembershipRow): MembershipSummary {
   };
 }
 
-// A pending member may be a shared account owned by another workspace. Only a
-// fresh invitation placeholder can expose its stored profile before acceptance.
-const pendingSharedProfile = `m.status = 'pending' AND (u.supabase_user_id IS NOT NULL
-  OR u.password_hash IS NOT NULL OR EXISTS (
-    SELECT 1 FROM memberships other WHERE other.user_id = m.user_id AND other.id <> m.id
-  ))`;
-
 export async function listMemberships(workspaceId: string): Promise<MembershipSummary[]> {
   return (await getDatabase().prepare<MembershipRow>(`SELECT m.*,
-      CASE WHEN ${pendingSharedProfile} THEN u.email ELSE u.name END AS name,
-      u.email, CASE WHEN ${pendingSharedProfile} THEN NULL ELSE u.phone END AS phone, u.application_identifier,
+      ${membershipProfileNameSql} AS name,
+      u.email, ${membershipProfilePhoneSql} AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status
     FROM memberships m JOIN users u ON u.id = m.user_id
-    WHERE m.workspace_id = ? ORDER BY lower(u.name)`).all(workspaceId)).map(mapMembership);
+    WHERE m.workspace_id = ? ORDER BY lower(${membershipProfileNameSql})`).all(workspaceId)).map(mapMembership);
 }
 
 export async function getMembership(workspaceId: string, membershipId: string): Promise<MembershipSummary> {
   const row = await getDatabase().prepare<MembershipRow>(`SELECT m.*,
-      CASE WHEN ${pendingSharedProfile} THEN u.email ELSE u.name END AS name,
-      u.email, CASE WHEN ${pendingSharedProfile} THEN NULL ELSE u.phone END AS phone, u.application_identifier,
+      ${membershipProfileNameSql} AS name,
+      u.email, ${membershipProfilePhoneSql} AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status

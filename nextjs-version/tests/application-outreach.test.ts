@@ -1,3 +1,4 @@
+import { assertPendingProfileHidden } from "./helpers/pending-profile"
 import "./helpers/business-auth"
 import test, { before, after } from "node:test"
 import assert from "node:assert/strict"
@@ -921,3 +922,11 @@ for (const runtime of ["private_email", "vercel_cron"] as const) {
     })
   }
 }
+
+test("pending shared profiles are masked in outreach employee rosters and historical invitations", async () => {
+  await invite(ada)
+  const { getApplicationOutreachReport } = await import("../src/lib/mca/applications/report")
+  const { listApplicationInvitations } = await import("../src/lib/mca/applications/service")
+  await assertPendingProfileHidden(ada.membershipId!, () => listApplicationInvitations(admin))
+  await assertPendingProfileHidden(ada.membershipId!, () => getApplicationOutreachReport(admin))
+})

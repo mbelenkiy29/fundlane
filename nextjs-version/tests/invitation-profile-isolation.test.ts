@@ -76,3 +76,32 @@ test("a new invited account retains its submitted name and phone without later i
   assert.equal(secondDetail.phone, null)
   assert.equal((await db.prepare<{ status: string }>("SELECT status FROM invitations WHERE id=?").get(invitation.id))?.status, "pending")
 })
+
+test("each sharing signal independently masks pending profiles and active memberships reveal the profile", async () => {
+  for (const signal of ["supabase", "password", "membership"] as const) {
+    const inviter = await company(), db = getDatabase()
+    const email = `zz-${randomUUID()}@example.test`
+    const invitation = await inviteMember(inviter, { email, name: "Private account name", phone: "+12025550102", role: "rep" }, "https://fixture.example.test")
+    if (signal === "membership") {
+      const other = await company()
+      await inviteMember(other, { email, name: "Other invitation", role: "rep" }, "https://fixture.example.test")
+    } else {
+      await db.prepare(signal === "supabase"
+        ? "UPDATE users SET supabase_user_id=? WHERE email=?"
+        : "UPDATE users SET password_hash=? WHERE email=?").run(randomUUID(), email)
+    }
+    for (const member of [await getMembership(inviter.workspaceId, invitation.membershipId),
+      (await listMemberships(inviter.workspaceId)).find(m => m.id === invitation.membershipId)!]) {
+      assert.equal(member.name, email, signal)
+      assert.equal(member.phone, null, signal)
+    }
+    const names = (await listMemberships(inviter.workspaceId)).map(member => member.name.toLowerCase())
+    assert.deepEqual(names, [...names].sort(), "sort by visible names, not hidden profiles")
+    await db.prepare("UPDATE memberships SET status='active' WHERE id=?").run(invitation.membershipId)
+    for (const member of [await getMembership(inviter.workspaceId, invitation.membershipId),
+      (await listMemberships(inviter.workspaceId)).find(m => m.id === invitation.membershipId)!]) {
+      assert.equal(member.name, "Private account name", signal)
+      assert.equal(member.phone, "+12025550102", signal)
+    }
+  }
+})
