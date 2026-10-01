@@ -50,6 +50,12 @@ All paths below are relative to `nextjs-version/`.
 
 The app uses Supabase Postgres, Supabase Auth, and private Supabase Storage. The authoritative project is `drubsfvhlggmtyiigwxy` (`fundlane`). See `nextjs-version/README.md` and `nextjs-version/docs/supabase-vercel-migration.md`. SQLite, Neon, Clerk, and filesystem document storage are historical or isolated-test paths. Local runtime data and environment files are excluded from Graphify.
 
+## Supabase agent plugin
+
+The repo's `.agents/plugins/marketplace.json` registers `supabase-community/supabase-plugin` at a pinned upstream commit; `.codex/config.toml` enables `supabase@fundlane` for this trusted project. Restart Codex to discover the Fundlane marketplace. For CLI installation, run `codex plugin marketplace add .` and then `codex plugin add supabase@fundlane` from the workspace root. Supabase authentication remains personal and is never committed. Follow `nextjs-version/docs/agent-task-workflow.md` when choosing a nonproduction project; installing the plugin does not authorize production access or hosted migrations.
+
+The upstream quick installer is `npx plugins add supabase-community/supabase-plugin --target codex --scope project --yes`. Its current Codex adapter writes user-wide configuration even with `--scope project`; the checked-in marketplace and config provide the project scope. See [Supabase plugin documentation](https://supabase.com/docs/guides/ai-tools/plugins) and [Codex plugin packaging](https://developers.openai.com/plugins/build/plugins).
+
 ## Graphify setup and refresh
 
 Supabase Auth owns browser identity through `src/proxy.ts`, `src/lib/mca/supabase-auth.ts`, and `src/lib/supabase/`. Application tables remain authoritative for companies, memberships, roles, and financial permissions. Team invitations are application-issued tokens that require a matching verified Supabase email. The old Clerk webhook returns HTTP 410. Legacy password/session HTTP issuance returns 410; API keys retain their existing gateway. See `nextjs-version/docs/supabase-auth.md`.

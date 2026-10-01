@@ -1,0 +1,2 @@
+[plugins."supabase@fundlane"]
+enabled = true
