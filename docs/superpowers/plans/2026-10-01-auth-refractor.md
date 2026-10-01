@@ -34,7 +34,7 @@
 
 Current main was fetched before planning: `2d6b5ea4a2eb48fcf2f8857a6a578c0c6ade48f3`, including PR #233 and #234. Worktree: `/Users/mbele/Documents/Codex/2026-10-01/task-6/implementation`, branch `codex/auth-refractor`. The approved spec travels with this branch. Tasks execute sequentially with a fresh implementer and task-scoped independent review; source research and environment preparation may run in parallel. Run the aggregate suite once against the integrated branch, then repeat only for new changes/failures.
 
-Paths below are relative to `nextjs-version/` unless prefixed `../`. The test command prefix is `node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1`. Database tests receive only the task-owned loopback `MCA_TEST_DATABASE_ADMIN_URL`; tests mock every external provider. Existing source contracts are recorded in task-6 `research/plan-*-contracts.md` and must be verified against the actual worktree.
+Paths below are relative to `nextjs-version/` unless prefixed `../`. The test command prefix is `node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1`. Use installed Node24.18.0 at `/opt/homebrew/opt/node@24/bin/node` for verification; baseline Node24.7 lacks the module-mock API used by some existing tests. Database tests receive only the task-owned loopback `MCA_TEST_DATABASE_ADMIN_URL`; tests mock every external provider. Existing source contracts are recorded in task-6 `research/plan-*-contracts.md` and must be verified against the actual worktree.
 
 ### Task 1: Durable enrollment, email intents and business-profile storage
 
@@ -139,7 +139,6 @@ Paths below are relative to `nextjs-version/` unless prefixed `../`. The test co
 **Files:**
 - Create: pricing page/components using actual marketing route group; `src/app/(auth)/enrollment/page.tsx`, enrollment completion/auth client components; `tests/onboarding-navigation.test.ts`.
 - Modify: marketing navigation/footer/CTA modules, sign-in form/page, sign-up routing, owner-safe onboarding continuation, CRM dashboard/setup placement and relevant auth UI tests.
-- Repair baseline test fixtures in `tests/legal-drafts.test.ts`, `marketing-site.test.ts`, `public-roadmap-page.test.mjs`, `public-roadmap.test.mjs`, `public-status-page.test.mjs`, `public-status-probe.test.mjs`: replace unsupported `mock.module` `exports` options with supported `namedExports`/`defaultExport`, preserving behavior assertions.
 
 **Interfaces:**
 - Consume Task 3's route response types and Task 5's readiness/profile endpoints. Only allowed enrollment destinations are CRM, business details and enrollment billing recovery. Email locators are navigation hints, never authority.
@@ -184,4 +183,4 @@ Inline self-review completed: scope, task steps, interface names/types, the five
 
 Hosted gates remain explicit: approved nonproduction Supabase Auth/Google/MFA callback and email-template verification, controlled Stripe Checkout and invoice/renewal timing, both controlled own-address emails with actual receipt evidence, interruption recovery, exact scheduler ownership, restricted DB grants and approved preview configuration. This coding instruction authorizes mocks/local tests and PR publication, not those live/provider actions.
 
-Baseline evidence: Node24.7/pnpm11.1.2 on unchanged application source produced 1,912 passed, six failed and one skipped tests. The six failures are unsupported `mock.module(..., { exports: ... })` fixture options, not application failures. Task6 corrects these options without weakening assertions. Baseline typecheck passed; lint had zero errors/16 warnings; default build was interrupted after5m17 with no compiler diagnostic. Final checks must report their own actual outcomes.
+Baseline evidence: Node24.7/pnpm11.1.2 on unchanged application source produced 1,912 passed, six failed and one skipped tests. The six failures are a module-mock API mismatch with that older Node minor version. The six unchanged files pass on installed Node24.18.0: 21 tests/21 passed/zero failed. No fixture changes are needed. Baseline typecheck passed; lint had zero errors/16 warnings; default build was interrupted after5m17 with no compiler diagnostic. Final checks use Node24.18 and must report their own actual outcomes.
