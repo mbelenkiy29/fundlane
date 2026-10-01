@@ -317,3 +317,15 @@ test("MIC-170 HTTP publish, permissions, and cross-workspace isolation", async (
   const removed = await aliasDelete(cookieRequest(`/api/mca/funders/criteria/aliases/${alias.id}`, "admin-session-token", { method: "DELETE" }), params(alias.id))
   assert.equal(removed.status, 200)
 })
+
+test("source dates are validated, persisted and versioned without inventing dates", async () => {
+  const created = (await createFunder(actor(), { idempotencyKey: "dated-criteria", legalName: "Dated Fixture" })).funder
+  const draft = { field: "fico", operator: "min", unit: "fico", value: 600, sourceText: "Synthetic policy", sourceAsOf: "2026-09-01", validUntil: "2026-10-01" }
+  await assert.rejects(() => publishFunderCriteria(actor(),created.id,[{...draft,sourceAsOf:"2026-02-30"}]),(error: {status?:number}) => error.status === 422)
+  await assert.rejects(() => publishFunderCriteria(actor(),created.id,[{...draft,validUntil:"2026-08-01"}]),(error: {status?:number}) => error.status === 422)
+  const saved=await publishFunderCriteria(actor(),created.id,[draft])
+  assert.equal((await listFunderCriteria(actor(),created.id)).rules[0].sourceAsOf,"2026-09-01")
+  assert.equal((await listFunderCriteria(actor(),created.id)).rules[0].validUntil,"2026-10-01")
+  assert.equal((await publishFunderCriteria(actor(),created.id,[draft])).criteriaVersion,saved.criteriaVersion)
+  assert.equal((await publishFunderCriteria(actor(),created.id,[{...draft,validUntil:"2026-11-01"}])).criteriaVersion,saved.criteriaVersion+1)
+})

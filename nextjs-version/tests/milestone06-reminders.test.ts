@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -23,7 +24,7 @@ import {
   type ReminderDeliveryMessage,
 } from "../src/lib/mca/comms/reminders"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { insertJob } from "../src/lib/mca/submissions/repository"
 import { setWebhookFetchForTests, setWebhookLookupForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as remindersGet, POST as remindersPost } from "../src/app/api/mca/comms/reminders/route"
@@ -298,7 +299,7 @@ async function seedDeal() {
 }
 
 async function queueEmail(dealId: string) {
-  const queued = await queueSubmissions({
+  const queued = await queueWithSyntheticApproval({
     actor: actor(),
     dealId,
     funderIds: [emailFunderId],
@@ -311,13 +312,13 @@ async function queueEmail(dealId: string) {
 }
 
 async function queuePortalAndWebhook(dealId: string) {
-  const portal = await queueSubmissions({
+  const portal = await queueWithSyntheticApproval({
     actor: actor(),
     dealId,
     funderIds: [portalFunderId],
     confirmationKey: `remind-portal-${dealCounter}`,
   })
-  const webhook = await queueSubmissions({
+  const webhook = await queueWithSyntheticApproval({
     actor: actor(),
     dealId,
     funderIds: [webhookFunderId],

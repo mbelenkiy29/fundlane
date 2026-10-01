@@ -17,6 +17,7 @@ import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
+import type { SubmissionJob } from "../src/lib/mca/submissions/contracts"
 import { insertAttempt, persistNewDestination, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
@@ -268,19 +269,25 @@ test("guarded API worker retry settles uncertain delivery after deferral, expiry
   const previousGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
   process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
   try {
-    for (const scenario of ["ordinary", "expired", "paused"] as const) await t.test(scenario, async () => {
+    for (const scenario of ["ordinary", "expired", "paused", "approved_email", "approved_api", "approved_webhook", "approved_email_paused"] as const) await t.test(scenario, async () => {
+      const approved = scenario.startsWith("approved_")
+      if (approved) delete process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
+      else process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+      const routeKind = scenario.startsWith("approved_email") ? "email" : scenario === "approved_webhook" ? "custom_webhook" : "api"
+      const route: SubmissionJob["route"] = { id: "guarded-route", kind: routeKind, label: "Controlled", destination: routeKind === "email" ? "fixture@example.test" : routeKind === "custom_webhook" ? "https://fixture.example.test" : "unused-synthetic-adapter", documentExceptions: [], active: true }
       const funder = (await createFunder(actor(), {
         idempotencyKey: `jobs-guarded-api-funder-${scenario}`,
         legalName: `Guarded API Capital ${scenario} LLC`,
-        routes: [{ kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true }],
+        routes: [route],
       })).funder
       const submission = (await persistNewDestination({
         workspaceId: actor().workspaceId,
         dealId,
         funderId: funder.id,
         displayFunderName: funder.legalName,
-        routeKind: "api",
-        route: { id: "guarded-api", kind: "api", label: "Controlled", destination: "unused-synthetic-adapter", documentExceptions: [], active: true },
+        routeKind,
+        route: { ...route, documentExceptions: [] },
+        ...(approved ? { approvedPackage: { route: { ...route, documentExceptions: [] }, originalVersions: [], documents: [], filenames: {} } } : {}),
         state: "queued",
         confirmationKey: `jobs-guarded-api-send-${scenario}`,
         attemptKey: `jobs-guarded-api-send-${scenario}`,
@@ -294,7 +301,7 @@ test("guarded API worker retry settles uncertain delivery after deferral, expiry
         actor: actor(),
       })).job
       await insertAttempt({ workspaceId: submission.workspaceId, jobId: submission.id, attemptKey: submission.attemptKey,
-        transport: "api", state: "sending", correlationId: newId() })
+        transport: routeKind, state: "sending", correlationId: newId() })
       await updateJobRecord(submission.workspaceId, submission.id, { state: "sending" })
       assert.equal(await recoverSubmissionOutbox(), 1)
       if (scenario === "expired") {
@@ -318,7 +325,7 @@ test("guarded API worker retry settles uncertain delivery after deferral, expiry
         await getDatabase().prepare("UPDATE mca_background_jobs SET created_at=? WHERE id=?")
           .run(new Date(Date.now() - 24 * 60 * 60_000 - 1_000).toISOString(), waiting!.id)
       }
-      if (scenario === "paused") {
+      if (scenario.includes("paused")) {
         await getDatabase().prepare(`INSERT INTO company_subscription_state (workspace_id,legacy_exempt,manual_paused,updated_at)
           VALUES (?,?,1,?) ON CONFLICT (workspace_id) DO UPDATE SET manual_paused=1,updated_at=EXCLUDED.updated_at`)
           .run(actor().workspaceId, 1, new Date().toISOString())

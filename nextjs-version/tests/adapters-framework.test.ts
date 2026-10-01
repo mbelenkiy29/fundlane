@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { syntheticApprovedJob } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -291,7 +292,7 @@ test("sandbox adapter submits and polls with workspace config and no network cre
   assert.equal(saved.hasCredential, true)
   assert.deepEqual((await resolveAdapterSecrets({ workspaceId: ids.workspace, funderId: sandboxFunderId, environment: "development", adapterSlug: "sandbox" }))?.secrets, {})
   assert.equal(await resolveAdapterSecrets({ workspaceId: ids.otherWorkspace, funderId: sandboxFunderId, environment: "development" }), undefined)
-  const job = jobFor(sandboxFunderId, "sandbox", { attemptKey: "sandbox-attempt" })
+  const job = await syntheticApprovedJob(actor(), jobFor(sandboxFunderId, "sandbox", { attemptKey: "sandbox-attempt" }))
   const result = await submitViaAdapter(job, { environment: "development" })
   assert.equal(result.ok, true)
   assert.match(result.externalRef ?? "", /^sandbox-/)
@@ -369,9 +370,9 @@ test("controlled adapter timeout returns an unknown provider outcome without exp
     environment: "development",
     secrets: { apiKey: TIMEOUT_SECRET },
   })
-  const result = await submitViaAdapter(jobFor(statusFunderId, "fixture-status", { attemptKey: "timeout-controlled" }), { environment: "development" })
+  const result = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(statusFunderId, "fixture-status", { attemptKey: "timeout-controlled" })), { environment: "development" })
   assert.equal(result.ok, false)
-  assert.equal(result.errorCode, "provider_unavailable")
+  assert.equal(result.errorCode, "delivery_uncertain")
   assert.ok(result.correlationId)
   assertNoSecret(result)
   assert.deepEqual(seenSecrets, [TIMEOUT_SECRET])
@@ -413,7 +414,7 @@ test("MIC-124: submit-only adapter cannot status-check", async () => {
     (error: { status?: number; code?: string }) => error.status === 409 && error.code === "capability_unsupported",
   )
 
-  const submitted = await submitViaAdapter(jobFor(submitFunderId, "fixture-submit-only"), { environment: "development" })
+  const submitted = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(submitFunderId, "fixture-submit-only")), { environment: "development" })
   assert.equal(submitted.ok, true)
   assert.equal(submitted.externalRef, "ext-attempt-adapter-1")
   assert.deepEqual(seenSecrets, [DEV_SECRET])
@@ -431,7 +432,7 @@ test("MIC-124: production environment does not read the development cipher", asy
   assertNoSecret(development)
 
   setAdapterEnvironmentForTests("production")
-  const missingProduction = await submitViaAdapter(jobFor(submitFunderId, "fixture-submit-only"))
+  const missingProduction = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(submitFunderId, "fixture-submit-only")))
   assert.equal(missingProduction.ok, false)
   assert.equal(missingProduction.errorCode, "provider_unavailable")
   assert.match(missingProduction.errorMessage ?? "", /production credentials/i)
@@ -476,7 +477,7 @@ test("MIC-124: production environment does not read the development cipher", asy
     adapterSlug: "fixture-submit-only",
   })
   assert.equal(copied, undefined)
-  const copiedSubmit = await submitViaAdapter(jobFor(submitFunderId, "fixture-submit-only"), { environment: "production" })
+  const copiedSubmit = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(submitFunderId, "fixture-submit-only")), { environment: "production" })
   assert.equal(copiedSubmit.ok, false)
   assert.equal(copiedSubmit.errorCode, "provider_unavailable")
   assert.deepEqual(seenSecrets, [])
@@ -488,10 +489,10 @@ test("MIC-124: production environment does not read the development cipher", asy
     secrets: { apiKey: PROD_SECRET, baseUrl: "https://api.fixture-adapter.test" },
   })
   assert.equal(production.id, "copied-dev-cipher")
-  const produced = await submitViaAdapter(jobFor(submitFunderId, "fixture-submit-only"), { environment: "production" })
+  const produced = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(submitFunderId, "fixture-submit-only")), { environment: "production" })
   assert.equal(produced.ok, true)
   assert.deepEqual(seenSecrets, [PROD_SECRET])
-  const developed = await submitViaAdapter(jobFor(submitFunderId, "fixture-submit-only"), { environment: "development" })
+  const developed = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(submitFunderId, "fixture-submit-only")), { environment: "development" })
   assert.equal(developed.ok, true)
   assert.deepEqual(seenSecrets, [PROD_SECRET, DEV_SECRET])
 
@@ -501,7 +502,7 @@ test("MIC-124: production environment does not read the development cipher", asy
     environment: "production",
     secrets: { apiKey: OTHER_SECRET, baseUrl: "https://api.other-tenant.test" },
   })
-  const otherSubmit = await submitViaAdapter(jobFor(otherFunderId, "fixture-submit-only", { workspaceId: ids.otherWorkspace }), { environment: "production" })
+  const otherSubmit = await submitViaAdapter(await syntheticApprovedJob(actor(ids.otherWorkspace), jobFor(otherFunderId, "fixture-submit-only", { workspaceId: ids.otherWorkspace, attemptKey: "other-tenant-submit" })), { environment: "production" })
   assert.equal(otherSubmit.ok, true)
   assert.equal(seenSecrets.at(-1), OTHER_SECRET)
   const cross = await resolveAdapterSecrets({
@@ -517,7 +518,7 @@ test("MIC-124: production environment does not read the development cipher", asy
 })
 
 test("MIC-124: missing credential returns provider_unavailable", async () => {
-  const result = await submitViaAdapter(jobFor(statusFunderId, "fixture-status"), { environment: "production" })
+  const result = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(statusFunderId, "fixture-status")), { environment: "production" })
   assert.equal(result.ok, false)
   assert.equal(result.errorCode, "provider_unavailable")
   assert.match(result.errorMessage ?? "", /production credentials/i)
@@ -531,7 +532,7 @@ test("MIC-124: missing credential returns provider_unavailable", async () => {
     environment: "development",
     secrets: { apiKey: DEV_SECRET },
   })
-  const stillMissing = await submitViaAdapter(jobFor(statusFunderId, "fixture-status"), { environment: "production" })
+  const stillMissing = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(statusFunderId, "fixture-status")), { environment: "production" })
   assert.equal(stillMissing.ok, false)
   assert.equal(stillMissing.errorCode, "provider_unavailable")
   assert.deepEqual(seenSecrets, [])
@@ -633,7 +634,7 @@ test("MIC-124: rate-limit retry preserves identity and redacts secrets", async (
   const credential = await created.json() as { id: string; capabilities: { statusPoll: boolean } }
   assert.equal(credential.capabilities.statusPoll, true)
 
-  const limited = await submitViaAdapter(jobFor(statusFunderId, "fixture-status", { attemptKey: "attempt-retry" }), {
+  const limited = await submitViaAdapter(await syntheticApprovedJob(actor(), jobFor(statusFunderId, "fixture-status", { attemptKey: "attempt-retry" })), {
     environment: "development",
     correlationId: "corr-retry-1",
   })
@@ -652,12 +653,9 @@ test("MIC-124: rate-limit retry preserves identity and redacts secrets", async (
       job: { attemptKey: "attempt-retry", dealId: "deal-adapter-1" },
     }),
   }), params(credential.id))
-  assert.equal(retried.status, 200)
-  const retryBody = await retried.json() as { ok: boolean; credentialId: string; correlationId: string; externalRef?: string }
-  assert.equal(retryBody.ok, true)
-  assert.equal(retryBody.credentialId, credential.id)
-  assert.equal(retryBody.correlationId, "corr-retry-1")
-  assert.equal(retryBody.externalRef, "ext-attempt-retry")
+  assert.equal(retried.status, 409)
+  const retryBody = await retried.json() as { error: { code: string } }
+  assert.equal(retryBody.error.code, "broker_approval_required")
   assertNoSecret(retryBody)
 
   const statusOk = await statusPost(cookieRequest(`/api/mca/adapters/${credential.id}/status`, "admin-session-token", {

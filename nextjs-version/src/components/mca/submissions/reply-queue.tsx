@@ -68,6 +68,7 @@ type QueuePayload = {
 }
 
 type Proposal = {
+  proposalKey: string
   state: "empty" | "preview" | "success" | "unmatched"
   classification: "approval" | "decline" | "pending" | "unparseable" | "unrelated"
   requiresReview: boolean
@@ -158,7 +159,8 @@ function ReplyProposal({ reply, onSaved }: { reply: FunderReply; onSaved: () => 
           classification, amount: numeric(amount), rate: numeric(rate), term: numeric(term),
           paymentAmount: numeric(paymentAmount), frequency, declineReason,
           stipulations: stipulations.split("\n").map((text) => text.trim()).filter(Boolean).map((text) => ({ text })),
-        } : { replyId: reply.id, confirm: true, expectedClassification: proposal.classification }),
+          expectedProposalKey: proposal.proposalKey,
+        } : { replyId: reply.id, confirm: true, expectedClassification: proposal.classification, expectedProposalKey: proposal.proposalKey }),
       })
       setSaved(true)
       await onSaved()

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import { CRITERIA_OPERATORS, CRITERIA_UNITS, type CriteriaOperator, type CriteriaUnit, type EligibilityRule } from "@/lib/mca/funders/contracts"
+import { sourceDraft, sourcePayload } from "@/lib/mca/funders/criteria-source-draft"
 import type { SessionResponse } from "@/lib/mca/types"
 
 const FIELDS = [
@@ -64,11 +65,13 @@ type RuleDraft = {
   unit: CriteriaUnit
   value: string
   sourceText: string
+  sourceAsOf: string
+  validUntil: string
   unspecified: boolean
 }
 
 function emptyRule(): RuleDraft {
-  return { key: crypto.randomUUID(), field: "revenue", operator: "min", unit: "usd_monthly", value: "", sourceText: "", unspecified: false }
+  return { key: crypto.randomUUID(), field: "revenue", operator: "min", unit: "usd_monthly", value: "", sourceText: "", sourceAsOf: "", validUntil: "", unspecified: false }
 }
 
 function formatValue(value: EligibilityRule["value"]): string {
@@ -86,7 +89,7 @@ function fromRule(rule: EligibilityRule): RuleDraft {
     operator: rule.operator,
     unit: rule.unit,
     value: formatValue(rule.value),
-    sourceText: rule.sourceText ?? "",
+    ...sourceDraft(rule),
     unspecified: rule.unspecified,
   }
 }
@@ -160,7 +163,7 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
             operator: rule.operator,
             unit: rule.unit,
             value: payloadValue(rule),
-            sourceText: rule.sourceText || undefined,
+            ...sourcePayload(rule),
             unspecified: rule.unspecified,
           })),
         }),
@@ -200,7 +203,7 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">Eligibility rules {payload && <Badge variant="outline">v{payload.criteriaVersion}</Badge>}</CardTitle>
         <CardDescription>
-          Typed thresholds with units. Unspecified stays empty — never a sentinel number. Yearly revenue converts to monthly at annual / 12.
+          Configured criteria support broker review, not approval decisions. Missing sources and source dates remain unknown. Valid until is inclusive; no expiry is assumed when empty. Yearly revenue converts to monthly at annual / 12.
           {payload?.publishedAt ? ` Last published ${new Date(payload.publishedAt).toLocaleString()}.` : " No rules published yet."}
         </CardDescription>
       </CardHeader>
@@ -223,7 +226,14 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
               <Input aria-label={`Rule ${index + 1} value`} value={rule.unspecified ? "" : rule.value} disabled={!canManage || rule.unspecified} placeholder={rule.operator === "in" || rule.operator === "not_in" ? "Comma-separated values" : "Value"} onChange={(event) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, value: event.target.value } : item))} />
               {canManage && <Button type="button" variant="ghost" size="icon" aria-label={`Remove rule ${index + 1}`} onClick={() => setRules((current) => current.filter((item) => item.key !== rule.key))}><Trash2 /></Button>}
             </div>
-            <Input aria-label={`Rule ${index + 1} source`} value={rule.sourceText} disabled={!canManage} placeholder="Source text / policy date" onChange={(event) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, sourceText: event.target.value } : item))} />
+            <Input aria-label={`Rule ${index + 1} source`} value={rule.sourceText} disabled={!canManage} placeholder="Criterion source / policy reference" onChange={(event) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, sourceText: event.target.value } : item))} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(["sourceAsOf", "validUntil"] as const).map((field) => <label key={field} className="space-y-1 text-sm">
+                <span>{field === "sourceAsOf" ? "Source as of" : "Valid until (optional)"}</span>
+                <Input type="date" aria-label={`Rule ${index + 1} ${field}`} disabled={!canManage} value={rule[field]} onChange={(event) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, [field]: event.target.value } : item))} />
+                {fieldErrors[`rules.${index}.${field}`]?.[0] && <p className="text-xs text-destructive">{fieldErrors[`rules.${index}.${field}`][0]}</p>}
+              </label>)}
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <label className="flex items-center gap-2 text-sm">
                 <Switch checked={rule.unspecified} disabled={!canManage} onCheckedChange={(unspecified) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, unspecified, value: unspecified ? "" : item.value } : item))} />

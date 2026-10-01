@@ -10,6 +10,7 @@ import { requestCorrelationId } from "../http"
 import type { ApiKeyScope, AuthContext } from "../types"
 import { convertRevenueThreshold, listFunderCriteria, resolveIndustry } from "../funders/criteria"
 import { getFunder, listFunders } from "../funders/directory"
+import { criteriaReadiness } from "../funders/criteria-readiness"
 import type { EligibilityRule, FunderRecord } from "../funders/contracts"
 import type { CompletenessResult, ExistingPositionCandidate, FunderScore, MetricEvidence, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { getCompleteness } from "./completeness"
@@ -169,7 +170,7 @@ export async function requireScoreActor(request: Request, mode: "read" | "write"
 export function autoSelectableFunderIds(scores: FunderScore[]): string[] {
   const allowed = new Set<string>(AUTO_SELECT_GRADES)
   return [...scores]
-    .filter((score) => score.eligible && allowed.has(score.grade))
+    .filter((score) => score.eligible && score.fitStatus === "matched" && allowed.has(score.grade))
     .sort((left, right) => left.rank - right.rank || left.funderId.localeCompare(right.funderId))
     .map((score) => score.funderId)
 }
@@ -544,7 +545,7 @@ function softReasonsAndScore(inputs: ScoringInputs, rules: EligibilityRule[]): {
   return { score: clamp(Math.round(weighted), 0, 100), reasons }
 }
 
-export async function evaluateFunderScore(actor: DealActor, inputs: ScoringInputs, funder: FunderRecord, rules: EligibilityRule[]): Promise<FunderScore> {
+export async function evaluateFunderScore(actor: DealActor, inputs: ScoringInputs, funder: FunderRecord, rules: EligibilityRule[], asOf = nowIso()): Promise<FunderScore> {
   if (!funder.active) {
     return {
       funderId: funder.id,
@@ -552,11 +553,21 @@ export async function evaluateFunderScore(actor: DealActor, inputs: ScoringInput
       score: 0,
       grade: "DQ",
       eligible: false,
+      fitStatus: "inactive",
       reasons: [{ ruleId: "funder.active", result: "fail", detail: "Inactive funders cannot be selected." }],
       ...(inputs.dataAge ? { dataAge: inputs.dataAge } : {}),
     }
   }
+  const readiness = criteriaReadiness(rules, asOf)
   const hard = await evaluateHardRules(actor, inputs, rules)
+  if (!rules.length || rules.some((rule) => rule.unspecified || rule.value === null) || readiness.status === "stale_criteria") {
+    return {
+      funderId: funder.id, rank: 0, score: 0, grade: "DQ", eligible: false,
+      fitStatus: readiness.status === "stale_criteria" ? "stale_criteria" : "needs_review",
+      reasons: [...hard, ...readiness.reasons.map((detail) => ({ ruleId: "criteria.readiness", result: "unknown" as const, detail }))],
+      ...(inputs.dataAge ? { dataAge: inputs.dataAge } : {}),
+    }
+  }
   const blocked = hard.some((reason) => reason.result !== "pass")
   if (blocked) {
     return {
@@ -565,6 +576,7 @@ export async function evaluateFunderScore(actor: DealActor, inputs: ScoringInput
       score: 0,
       grade: "DQ",
       eligible: false,
+      fitStatus: hard.some((reason) => reason.result === "fail") ? "excluded" : "needs_review",
       reasons: hard,
       ...(inputs.dataAge ? { dataAge: inputs.dataAge } : {}),
     }
@@ -576,7 +588,8 @@ export async function evaluateFunderScore(actor: DealActor, inputs: ScoringInput
     score: soft.score,
     grade: gradeFromScore(soft.score, true),
     eligible: true,
-    reasons: [...hard, ...soft.reasons],
+    fitStatus: readiness.status === "ready" && !soft.reasons.some((reason) => reason.result === "unknown") ? "matched" : "needs_review",
+    reasons: [...hard, ...soft.reasons, ...readiness.reasons.map((detail) => ({ ruleId: "criteria.readiness", result: "unknown" as const, detail }))],
     ...(inputs.dataAge ? { dataAge: inputs.dataAge } : {}),
   }
 }
@@ -621,7 +634,7 @@ function staleReasonsFor(
 
 async function loadFunders(actor: DealActor): Promise<FunderRecord[]> {
   try {
-    const rows = await resolved(listFunders(actor))
+    const rows = await resolved(listFunders(actor, { includeInactive: true }))
     if (Array.isArray(rows) && rows.every((row) => row && typeof row.id === "string")) return rows
   } catch { /* directory still expects synchronous SQLite exec during migration */ }
   try {
@@ -629,7 +642,7 @@ async function loadFunders(actor: DealActor): Promise<FunderRecord[]> {
       id: string; workspace_id: string; legal_name: string; nickname: string | null; website: string | null
       domains: string; products: string; active: number | boolean; contacts: string; routes: string
       criteria_version: number; profile_version: number; created_at: string; updated_at: string
-    }>(`SELECT * FROM mca_funders WHERE workspace_id = ? AND active = TRUE ORDER BY lower(legal_name), created_at`).all(actor.workspaceId)
+    }>(`SELECT * FROM mca_funders WHERE workspace_id = ? ORDER BY lower(legal_name), created_at`).all(actor.workspaceId)
     return rows.map((row) => ({
       id: String(row.id),
       workspaceId: String(row.workspace_id),
@@ -667,7 +680,7 @@ async function loadCriteria(actor: DealActor, funder: FunderRecord): Promise<Eli
   try {
     const rows = await getDatabase().prepare<{
       id: string; funder_id: string; field: string; operator: string; unit: string
-      value_json: string | null; source_text: string | null; unspecified: number | boolean
+      value_json: string | null; source_text: string | null; source_as_of: string | null; valid_until: string | null; unspecified: number | boolean
     }>(`SELECT * FROM mca_funder_criteria WHERE workspace_id = ? AND funder_id = ? ORDER BY position ASC`).all(actor.workspaceId, funder.id)
     return rows.map((row) => {
       const unspecified = Boolean(row.unspecified)
@@ -679,6 +692,8 @@ async function loadCriteria(actor: DealActor, funder: FunderRecord): Promise<Eli
         unit: row.unit as EligibilityRule["unit"],
         value: unspecified ? null : parseJson<EligibilityRule["value"]>(row.value_json, null),
         ...(row.source_text ? { sourceText: String(row.source_text) } : {}),
+        ...(row.source_as_of ? { sourceAsOf: String(row.source_as_of) } : {}),
+        ...(row.valid_until ? { validUntil: String(row.valid_until) } : {}),
         unspecified,
       }
     })
@@ -857,13 +872,23 @@ export async function getDealScores(actor: DealActor, dealId: string): Promise<D
   const versions = await currentVersions(actor, deal, funders, aggregate)
   const reasons = staleReasonsFor(snapshot, versions)
   const stale = Boolean(snapshot) && reasons.length > 0
-  const scores = snapshot && !stale ? snapshot.scores : snapshot?.scores ?? []
+  const scores = snapshot?.scores ?? []
+  if (snapshot) {
+    for (const funder of funders) {
+      const prior = scores.find((score) => score.funderId === funder.id)
+      if (prior && (prior.fitStatus === "inactive") !== !funder.active) reasons.push("lender active status changed")
+      const readiness = criteriaReadiness(await loadCriteria(actor, funder), nowIso())
+      if (prior && readiness.status === "stale_criteria" && prior.fitStatus !== "stale_criteria") reasons.push("lender criteria expired")
+      if (prior && readiness.status === "needs_review" && prior.fitStatus === "matched") reasons.push("lender criteria require review")
+    }
+  }
+  const currentStale = stale || reasons.length > 0
   return {
     snapshot: snapshot ? toAnalysisSnapshot(snapshot) : null,
-    stale,
-    staleReasons: reasons,
+    stale: currentStale,
+    staleReasons: [...new Set(reasons)],
     disclaimer: SCORE_FIT_DISCLAIMER,
-    autoSelectableFunderIds: stale ? [] : await gatedAutoSelectableFunderIds(actor, deal.id, scores),
+    autoSelectableFunderIds: currentStale ? [] : await gatedAutoSelectableFunderIds(actor, deal.id, scores),
     funders: funderSummaries(funders),
   }
 }
@@ -881,11 +906,12 @@ export async function scoreDeal(actor: DealActor, dealId: string, options?: { mo
   const previous = await findLatestScoreSnapshot(actor.workspaceId, deal.id)
   const reasons = staleReasonsFor(previous, versions)
 
+  const scoringAsOf = nowIso()
   const evaluated: FunderScore[] = []
   for (const funder of funders) {
     const record = await loadFunder(actor, funder.id) ?? funder
     const rules = await loadCriteria(actor, record)
-    evaluated.push(await evaluateFunderScore(actor, inputs, record, rules))
+    evaluated.push(await evaluateFunderScore(actor, inputs, record, rules, scoringAsOf))
   }
   const scores = rankScores(evaluated)
   const next: StoredScoreSnapshot = {

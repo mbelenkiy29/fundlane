@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -19,7 +20,7 @@ import {
   setAdapterEnvironmentForTests,
   upsertAdapterCredential,
 } from "../src/lib/mca/submissions/adapters/credentials"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { WEBHOOK_SECRET_HEADER } from "../src/lib/mca/submissions/webhooks"
 import { POST as webhookPost } from "../src/app/api/mca/submissions/webhooks/[slug]/route"
 import { GET as refreshGet, POST as refreshPost } from "../src/app/api/mca/submissions/webhooks/refresh/route"
