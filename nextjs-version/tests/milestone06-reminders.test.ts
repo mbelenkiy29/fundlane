@@ -24,7 +24,7 @@ import {
   type ReminderDeliveryMessage,
 } from "../src/lib/mca/comms/reminders"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { insertJob } from "../src/lib/mca/submissions/repository"
 import { setWebhookFetchForTests, setWebhookLookupForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as remindersGet, POST as remindersPost } from "../src/app/api/mca/comms/reminders/route"
