@@ -1,5 +1,5 @@
 import "server-only"
-import { managedConfig, managedReady, reserveManagedSend, smsRecipientHash, suppress } from "./managed"
+import { managedConfig, managedReady, managedReadiness, reserveManagedSend, smsRecipientHash, suppress } from "./managed"
 import { persistInbound, rememberOutbound, smsKeywordDirection } from "./inbox"
 
 import { createHash } from "node:crypto"
@@ -201,11 +201,12 @@ async function account(row: Row, memberIds: string[], structuredReady = false): 
   const provider = asSmsProvider(row.provider)
   const kind = String(row.sender_kind) as SmsSenderKind
   const senderIdentity = decryptSensitive(String(row.sender_identity_cipher), workspaceId)
+  const readiness = row.credential_ref === "MANAGED" ? await managedReadiness(workspaceId, String(row.id)) : undefined
   return {
     id: String(row.id), workspaceId, provider, label: String(row.label), senderKind: kind,
     senderMasked: maskSender(senderIdentity, kind), credentialRef: String(row.credential_ref),
     state: String(row.state) as SmsAccountState, isDefault: Number(row.is_default) === 1, memberIds,
-    providerConfigured: row.credential_ref === "MANAGED" ? await managedReady(workspaceId, String(row.id)) : await isAccountConfigured(workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    readiness, providerConfigured: readiness ? readiness.ready : await isAccountConfigured(workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   }
 }
 
@@ -395,6 +396,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
   const route = await resolveSmsRoute(actor, { dealId: input.dealId, senderAccountId: input.senderAccountId })
   const hash = contentHash({ dealId: input.dealId, accountId: route.accountId, recipient, body, payloadHash: input.payloadHash })
   const prepared = await withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-send:${actor.workspaceId}:${key}`)
     const existing = await database.prepare<Row>("SELECT * FROM mca_sms_messages WHERE workspace_id=? AND idempotency_key=? FOR UPDATE").get(actor.workspaceId, key)
     if (existing) {
       if (existing.content_hash !== hash) throw new AppError(409, "idempotency_conflict", "That retry key already identifies a different text message.")
