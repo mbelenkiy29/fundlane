@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { requireMembershipAccess } from "../auth"
 import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken } from "../crypto"
@@ -25,7 +26,7 @@ export interface InvitationRecord {
   last_step: string | null; last_activity_at: string | null; reminder_count: number; reminded_at: string | null
   business_name: string | null
 }
-const selection = `SELECT a.*, i.form_id AS current_form_id, i.display_name AS form_name, i.enabled, i.provider, u.name AS employee_name,
+const selection = `SELECT a.*, i.form_id AS current_form_id, i.display_name AS form_name, i.enabled, i.provider, ${membershipProfileNameSql} AS employee_name,
   m.status AS member_status, e.error_message AS intake_error FROM mca_application_invitations a
   JOIN intake_integrations i ON i.id=a.integration_id AND i.workspace_id=a.workspace_id
   JOIN memberships m ON m.id=a.membership_id AND m.workspace_id=a.workspace_id

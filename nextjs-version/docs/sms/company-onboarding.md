@@ -44,6 +44,8 @@ Reservations are serialized against the company row. Costs use a conservative UT
 
 No numbers are moved from legacy accounts; no brands/campaigns are shared across companies. Managed numbers cannot be reassigned or revoked through the legacy account endpoint.
 
+STOP is enforced at reservation and again at provider dispatch. Inbound START/YES/UNSTOP is retained as evidence but cannot clear a prior STOP because these callbacks have no reliable event ordering; record fresh manual opt-in evidence before resuming. Legacy closing SMS webhook delivery is disabled. See the [issue #42 suppression audit](stop-suppression-audit.md) for every send path and regression evidence.
+
 ## Verification
 
 Run from `nextjs-version/`:

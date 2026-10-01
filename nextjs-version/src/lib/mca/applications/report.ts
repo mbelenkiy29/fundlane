@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { z } from "zod"
 import { getDatabase } from "../db"
@@ -16,7 +17,7 @@ export async function getApplicationOutreachReport(actor: DealActor, search = ne
   const from = search.get("from") || new Date(Date.parse(`${today}T12:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10)
   const to = search.get("to") || today
   if (!z.iso.date().safeParse(from).success || !z.iso.date().safeParse(to).success || from > to || to > today) throw new AppError(422, "invalid_period", "Choose a valid date range ending today or earlier.")
-  const employees = await getDatabase().prepare<{ id: string; name: string }>("SELECT m.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? ORDER BY u.name,m.id").all(actor.workspaceId)
+  const employees = await getDatabase().prepare<{ id: string; name: string }>(`SELECT m.id,${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? ORDER BY name,m.id`).all(actor.workspaceId)
   const membershipId = search.get("membershipId") || undefined
   if (membershipId && !employees.some(employee => employee.id === membershipId)) throw new AppError(422, "invalid_employee", "Choose an employee in this company.")
   // Use the existing outcome facts, but join through immutable acquisition attribution, never current assignments.

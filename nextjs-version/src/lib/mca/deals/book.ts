@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { AppError } from "../errors"
 import { getDatabase } from "../db"
@@ -86,10 +87,10 @@ async function loadAdvances(workspaceId: string): Promise<AdvanceBookRow[]> {
     a.periodic_payment_cents, a.payment_count, a.payment_frequency, a.calendar_convention, a.created_at,
     d.display_id, d.legal_name, d.dba_name, d.ein_cipher, d.contact_phone_cipher,
     o.funder_name, r.term_months, r.factor_rate_millionths,
-    COALESCE((SELECT string_agg(u.name || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
+    COALESCE((SELECT string_agg(${membershipProfileNameSql} || ' (' || da.kind || ')', ', ' ORDER BY da.is_primary DESC, da.assigned_at)
       FROM deal_assignments da JOIN memberships m ON m.id=da.membership_id AND m.workspace_id=da.workspace_id
       JOIN users u ON u.id=m.user_id WHERE da.workspace_id=a.workspace_id AND da.deal_id=a.deal_id), '') assigned_team,
-    (SELECT u.name FROM deal_assignments da JOIN memberships m ON m.id=da.membership_id AND m.workspace_id=da.workspace_id
+    (SELECT ${membershipProfileNameSql} AS name FROM deal_assignments da JOIN memberships m ON m.id=da.membership_id AND m.workspace_id=da.workspace_id
       JOIN users u ON u.id=m.user_id WHERE da.workspace_id=a.workspace_id AND da.deal_id=a.deal_id AND da.kind='originator'
       ORDER BY da.is_primary DESC, da.assigned_at LIMIT 1) assigned_rep
     FROM mca_advances a

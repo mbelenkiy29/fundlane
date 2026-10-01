@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 import { getDatabase } from "../db"
 import { canActorAccessDeal } from "../deals/access-policy"
 import type { DealActor, DealAssignment } from "../deals/schema"
@@ -129,7 +130,7 @@ async function visibleRows(actor: DealActor): Promise<SubmissionRow[]> {
         .prepare<{
           id: string
           name: string
-        }>("SELECT m.id, u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?")
+        }>(`SELECT m.id, ${membershipProfileNameSql} AS name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?`)
         .all(actor.workspaceId)
     ).map((row) => [row.id, row.name])
   )

@@ -1,4 +1,5 @@
 import "server-only"
+import { membershipProfileNameSql } from "../membership-profile"
 
 import { createHash } from "node:crypto"
 import { getOutgoingDocumentBytes } from "./compress"
@@ -146,9 +147,10 @@ async function operatorsByJob(workspaceId: string, dealId: string): Promise<Map<
     created_by_user_id: string | null
     name: string | null
     email: string | null
-  }>(`SELECT j.id, j.created_by_user_id, u.name, u.email
+  }>(`SELECT j.id, j.created_by_user_id, ${membershipProfileNameSql} AS name, u.email
       FROM mca_submission_jobs j
-      LEFT JOIN users u ON u.id = j.created_by_user_id
+      LEFT JOIN memberships m ON m.user_id = j.created_by_user_id AND m.workspace_id = j.workspace_id
+      LEFT JOIN users u ON u.id = m.user_id
       WHERE j.workspace_id = ? AND j.deal_id = ?`).all(workspaceId, dealId)
   const next = new Map<string, PortalOperator>()
   for (const row of rows) {

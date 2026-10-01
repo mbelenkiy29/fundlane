@@ -37,10 +37,10 @@ Durable work is already stored. A stored outbox or digest subscription is **not*
 
 `GET /api/cron/comms` uses the same `Authorization: Bearer ${CRON_SECRET}` contract as billing. It processes pending webhook outbox rows and due digest subscriptions across companies. Admins can also run `POST /api/mca/comms/jobs/run` for the current workspace.
 
-What still depends on the background-runtime choice in #35:
+The selected runtime is Vercel Cron + Supabase. Remaining activation gates in #35:
 
-- Who invokes `/api/cron/comms` on a clock (Vercel Cron, Supabase `pg_net` + `pg_cron`, or another host). This repo does **not** add a Render cron or worker for communications.
+- Verify hosted scheduler ownership and staging acceptance before installing the five-minute `/api/cron/comms` schedule from [the runtime inventory](background-job-runtime.md). Render is historical only; this repository installs no crons.
 - Live mailbox delivery still needs `MCA_EMAIL_WEBHOOK_URL` (or a verified sender) in the selected environment.
 - Reachable customer HTTPS destinations and stored signing secrets.
 
-Do not treat the document worker on Render as the permanent comms runtime. Webhook HTTP is kicked with Next.js `after()` when a request context exists; retries and daily reports still need the chosen scheduler to call the cron route.
+The historical Render document worker is not the selected comms runtime. Webhook HTTP is kicked with Next.js `after()` when a request context exists; retries and daily reports still need the chosen scheduler to call the cron route.
