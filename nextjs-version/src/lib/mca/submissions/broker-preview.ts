@@ -71,6 +71,18 @@ export async function prepareDealSubmission(actor: DealActor, dealId: string, fu
   await recordAuditEvent({ context: actor, action: "submission.package_previewed", resourceType: "submission_preview", resourceId: id, metadata: { dealId, funderIds: snapshot.destinations.map(d => d.funderId) }, correlationId: actor.correlationId })
   return previewView(id, expiresAt, snapshot)
 }
+/** Revalidate the already displayed durable package; never create a replacement approval. */
+export async function readDealSubmissionPreview(actor: DealActor, dealId: string, previewId: unknown): Promise<BrokerSubmissionPreview> {
+  assertBroker(actor)
+  if (typeof previewId !== "string" || !previewId.trim() || previewId.length > 128) throw new AppError(409, "broker_approval_required", "Prepare a new exact submission preview before approving.")
+  await getDealForDocument(actor, dealId)
+  const row = await getDatabase().prepare<{snapshot_cipher:string;fingerprint:string;expires_at:string}>("SELECT snapshot_cipher,fingerprint,expires_at FROM intake_submission_previews WHERE id=? AND workspace_id=? AND deal_id=? AND intake_id IS NULL").get(previewId,actor.workspaceId,dealId)
+  if (!row) throw new AppError(404,"preview_not_found","The requested submission preview was not found.")
+  if (Date.parse(row.expires_at) <= Date.now()) stale()
+  const snapshot=JSON.parse(decryptSensitive(row.snapshot_cipher,actor.workspaceId)) as Snapshot
+  if (hash(snapshot)!==row.fingerprint || hash(await snapshotFor(actor,dealId,snapshot.destinations.map(d=>d.funderId)))!==row.fingerprint) stale()
+  return previewView(previewId,row.expires_at,snapshot)
+}
 export async function confirmDealSubmission(actor: DealActor, dealId: string, input: { previewId?: unknown; privilegedRetry?: unknown; privilegedReason?: unknown }) {
   assertBroker(actor)
   if (typeof input.previewId !== "string" || !input.previewId.trim() || input.previewId.length > 128) throw new AppError(409, "broker_approval_required", "Prepare and review the exact submission preview first.")

@@ -665,7 +665,7 @@ test("analysis tool overrides automatic-send workspace settings", async () => {
   )
 })
 
-test("funder submission and reminder approvals show exact content and use existing services", async () => {
+for (const outcome of ["success","expired","legacy"] as const) test(`durable funder submission approval handles ${outcome} without replacing its preview`, async () => {
   const f = await setup("Submit to the selected funder")
   const documentBytes = async (label: string) => {
     const pdf = await PDFDocument.create()
@@ -716,7 +716,7 @@ test("funder submission and reminder approvals show exact content and use existi
   const funder = (
     await createFunder(f.actor, {
       idempotencyKey: newId(),
-      legalName: "Synthetic Capital",
+      legalName: `Synthetic Capital ${outcome}`,
       routes: [
         {
           kind: "email",
@@ -750,11 +750,16 @@ test("funder submission and reminder approvals show exact content and use existi
     JSON.stringify(events)
   )
   const approvalId = await latestApproval(f.c)
+  const storedPayload = unseal<{previewId:string;funderIds:string[]}>(workspace,(await approvalForRun(f.run.id,approvalId)).payload_cipher)
+  assert.equal(typeof storedPayload.previewId,"string")
+  const beforePreviewCount = (await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM intake_submission_previews WHERE workspace_id=? AND deal_id=?").get(workspace,f.deal.id))!.n
   const preview = (await conversationView(f.c)).approvals[0].preview
   assert.ok(
     preview.details.some((d) => d.value.includes("funder@example.test"))
   )
   assert.ok(preview.details.some((d) => d.label === "Message"))
+  if (outcome === "expired") await sql("UPDATE intake_submission_previews SET expires_at=? WHERE id=? AND workspace_id=?","2000-01-01T00:00:00.000Z",storedPayload.previewId,workspace)
+  if (outcome === "legacy") await sql("UPDATE mca_assistant_approvals SET payload_cipher=? WHERE id=?",seal(workspace,{funderIds:[funder.id]}),approvalId)
   await runDealAgent(
     f.ctx,
     await decideApproval(f.c, approvalId, true),
@@ -763,7 +768,17 @@ test("funder submission and reminder approvals show exact content and use existi
     model([() => outputText("Submission processed in synthetic preview mode.")])
   )
   const sent = await approvalForRun(f.run.id, approvalId)
+  if (outcome !== "success") {
+    assert.equal(sent.status,"stale",JSON.stringify(events))
+    assert.equal(sent.result_cipher,null)
+    assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM intake_submission_previews WHERE workspace_id=? AND deal_id=?").get(workspace,f.deal.id))!.n,beforePreviewCount)
+    assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM mca_submission_jobs WHERE workspace_id=? AND deal_id=?").get(workspace,f.deal.id))!.n,0)
+    await assert.rejects(executeAction(f.ctx,approvalId),{code:"run_stopped"})
+    return
+  }
   assert.equal(sent.status, "executed", JSON.stringify(events))
+  assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM intake_submission_previews WHERE workspace_id=? AND deal_id=?").get(workspace,f.deal.id))!.n,beforePreviewCount)
+  assert.ok((await getDatabase().prepare<{confirmed_at:string|null}>("SELECT confirmed_at FROM intake_submission_previews WHERE id=? AND workspace_id=?").get(storedPayload.previewId,workspace))?.confirmed_at)
   const result = unseal<{ jobs: Array<{ jobId: string; state: string }> }>(
     workspace,
     sent.result_cipher!
