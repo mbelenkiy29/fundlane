@@ -36,6 +36,7 @@ export interface ScheduledCommsJobsResult {
   followups: RunCommsJobsResult["followups"]
   digests: RunCommsJobsResult["digests"]
   webhooks: RunCommsJobsResult["webhooks"]
+  notifications?: Awaited<ReturnType<typeof import("../notifications/worker").runScheduledNotifications>>
 }
 
 /** Runtime-agnostic tick for signed webhook retries and due daily report emails. */
@@ -70,6 +71,10 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
       digests: addCounts(result.digests, next.digests),
       webhooks: addCounts(result.webhooks, next.webhooks),
     }
+  }
+  if(process.env.MCA_NOTIFICATION_RUNTIME === "enabled") {
+    const {runScheduledNotifications}=await import("../notifications/worker")
+    result.notifications=await runScheduledNotifications(nowIsoValue)
   }
   return result
 }
