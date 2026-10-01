@@ -7,7 +7,11 @@ let denial:AppError|null=new AppError(403,"platform_admin_required","Platform ac
 let reads=0,mutations=0,originChecks=0
 let demoReads=0
 let recoveryReads=0,recoveryDecisions=0
-mock.module(new URL("../src/lib/mca/platform-auth.ts",import.meta.url).href,{namedExports:{requirePlatformAdmin:async()=>{if(denial)throw denial;return {userId:"operator"}}}})
+mock.module(new URL("../src/lib/mca/platform-auth.ts",import.meta.url).href,{namedExports:{requireSuperAdmin:async()=>{if(denial)throw denial;return {userId:"operator",email:"mike@sentineltechsolutions.io",sessionId:"session"}}}})
+mock.module(new URL("../src/lib/mca/platform-audit.ts",import.meta.url).href,{namedExports:{
+  assertStrictPlatformMutation:(request:Request)=>{if(!request.headers.get("origin"))throw new AppError(403,"untrusted_origin","Origin required.")},
+  withSuperAdminAction:async(_input:unknown,action:()=>Promise<unknown>)=>action(),
+}})
 mock.module(new URL("../src/lib/mca/auth.ts",import.meta.url).href,{namedExports:{assertTrustedMutation:(request:Request)=>{originChecks++;if(request.headers.get("origin")!=="https://app.example")throw new AppError(403,"untrusted_origin","Untrusted origin.")},consumeRequestRateLimit:async()=>{}}})
 mock.module(new URL("../src/lib/mca/operations/job-recovery.ts",import.meta.url).href,{namedExports:{
   recoveryActionSchema:z.object({action:z.enum(["replay","external_effect_confirmed","external_effect_absent"])}),

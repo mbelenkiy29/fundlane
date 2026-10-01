@@ -1,4 +1,4 @@
-import test, { beforeEach } from "node:test"
+import test from "node:test"
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
 import { AppError } from "../../src/lib/mca/errors"
@@ -26,7 +26,6 @@ import {
   openphoneResultContainsSecret,
   openphoneSmsAdapter,
   openphoneStatusCallbackFixture,
-  resetOpenPhoneAdapterState,
   validateOpenPhoneSignature,
 } from "../../src/lib/mca/sms/adapters/openphone"
 
@@ -55,6 +54,7 @@ function account(overrides: Partial<SmsAccount> = {}): SmsAccount {
 function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSendInput {
   return {
     account: account(),
+    idempotencyKey: "sms-row-openphone",
     senderKind: "phone_number",
     senderIdentity: OPENPHONE_FIXTURE_SENDER,
     recipient: OPENPHONE_FIXTURE_ACCEPTED_RECIPIENT,
@@ -65,10 +65,6 @@ function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSend
     ...overrides,
   }
 }
-
-beforeEach(() => {
-  resetOpenPhoneAdapterState()
-})
 
 test("required-field rejection covers API key, user, and sending number", () => {
   const empty = openphoneSmsAdapter.validate({})
@@ -154,7 +150,7 @@ test("timeout and unconfigured credential fail closed without inventing an exter
   const timeoutReplay = await openphoneSmsAdapter.send(sendInput({
     recipient: OPENPHONE_FIXTURE_TIMEOUT_RECIPIENT,
     correlationId: "corr-openphone-timeout",
-    body: "Must not create a second OpenPhone message",
+    body: "A second OpenPhone message",
   }))
   assert.deepEqual(timeoutReplay, timeout)
   assert.equal(timeoutReplay.externalId, undefined)
@@ -170,7 +166,8 @@ test("timeout and unconfigured credential fail closed without inventing an exter
     correlationId: "corr-openphone-unconfigured",
     credentials: { apiKey: OPENPHONE_FIXTURE_API_KEY, user: OPENPHONE_FIXTURE_USER, sendingNumber: OPENPHONE_FIXTURE_SENDER },
   }))
-  assert.deepEqual(unconfiguredReplay, unconfigured)
+  assert.equal(unconfiguredReplay.state, "accepted")
+  assert.ok(unconfiguredReplay.externalId)
 
   assert.deepEqual(await openphoneSmsAdapter.testConnection(account()), { ok: true })
   assert.deepEqual(await openphoneSmsAdapter.testConnection(account({ providerConfigured: false })), { ok: false, code: "openphone_unconfigured" })

@@ -660,7 +660,7 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
             body: args.body,
             senderAccountId: args.senderAccountId ?? undefined,
             idempotencyKey: approvalId,
-            correlationId: ctx.runId,
+            correlationId: `${ctx.runId}:${approvalId}`,
             payloadHash: hashOpaqueToken(args.body),
             deliveryMode: "never_attempted"
           },

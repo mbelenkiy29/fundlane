@@ -6,9 +6,8 @@ export async function POST(
   context: { params: Promise<{ workspaceId: string }> }
 ) {
   try {
-    return NextResponse.json(
-      await registrationEvents((await context.params).workspaceId, request)
-    )
+    const result = await registrationEvents((await context.params).workspaceId, request)
+    return result.received ? NextResponse.json(result) : new Response(null, { status: 204 })
   } catch (e) {
     return apiError(e)
   }
