@@ -24,7 +24,8 @@ export default function SmsReview() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
-    [operation, setOperation] = useState("")
+    [operation, setOperation] = useState(""),
+    [stepUpCode, setStepUpCode] = useState("")
   async function load() {
     setCompanies(
       (await requestJson<{ companies: Company[] }>("/api/mca/sms/operator"))
@@ -47,6 +48,45 @@ export default function SmsReview() {
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
+      <div className="space-y-3 rounded border p-4">
+        <h2 className="font-medium">Verify before approving or rejecting</h2>
+        <p className="text-sm text-muted-foreground">
+          Approve and reject decisions require a fresh authenticator code from
+          this session. Verification lasts a few minutes.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Input
+            aria-label="Authenticator code"
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            className="w-48"
+            value={stepUpCode}
+            onChange={(e) => setStepUpCode(e.target.value)}
+          />
+          <Button
+            type="button"
+            disabled={busy || !stepUpCode}
+            onClick={async () => {
+              setBusy(true)
+              setError("")
+              try {
+                await requestJson("/api/platform/step-up", {
+                  method: "POST",
+                  body: JSON.stringify({ code: stepUpCode }),
+                })
+                setStepUpCode("")
+                setNotice("Authenticator verified for this session.")
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Verification failed")
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            Verify code
+          </Button>
+        </div>
+      </div>
       {companies.map((c) => (
         <form
           key={c.workspaceId}
