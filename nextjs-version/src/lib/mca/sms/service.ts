@@ -380,6 +380,7 @@ export async function deliverClosingSms(actor: DealActor, input: { dealId: strin
   const route = await resolveSmsRoute(actor, { dealId: input.dealId, senderAccountId: input.senderAccountId })
   const hash = contentHash({ dealId: input.dealId, accountId: route.accountId, recipient, body, payloadHash: input.payloadHash })
   const prepared = await withImmediateTransaction(async (database) => {
+    await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-send:${actor.workspaceId}:${key}`)
     const existing = await database.prepare<Row>("SELECT * FROM mca_sms_messages WHERE workspace_id=? AND idempotency_key=? FOR UPDATE").get(actor.workspaceId, key)
     if (existing) {
       if (existing.content_hash !== hash) throw new AppError(409, "idempotency_conflict", "That retry key already identifies a different text message.")

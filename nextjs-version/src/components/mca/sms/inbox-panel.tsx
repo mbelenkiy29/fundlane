@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
-import { requestJson } from "@/lib/mca/client"
-import { editSmsReplyDraft, reserveSmsReplyDraft, settleSmsReplyDraft, type SmsReplyDraft } from "@/lib/mca/sms/reply-draft"
+import { RequestError, requestJson } from "@/lib/mca/client"
+import { editSmsReplyDraft, reserveSmsReplyDraft, settleSmsReplyDraft, rejectSmsReplyDraft, type SmsReplyDraft } from "@/lib/mca/sms/reply-draft"
+import { refreshSmsConversation } from "@/lib/mca/sms/inbox-refresh"
 type Thread = {
   id: string
   accountId: string
@@ -56,25 +57,27 @@ export function SmsInboxPanel({ dealId }: { dealId?: string }) {
   const open = useCallback(
     async (id: string) => {
       const sequence = ++requestSequence.current
-      const d = await requestJson<Detail>(
-        `/api/mca/sms/conversations?id=${encodeURIComponent(id)}`
-      )
-      if (selectedRef.current !== id || sequence !== requestSequence.current) return
-      setDetail(d)
-      const attemptId = attempts.current.get(id)
-      const outcome = d.messages.find(m => m.id === attemptId)?.state
-      if (outcome && drafts.current.get(id)?.idempotencyKey) {
-        const next = settleSmsReplyDraft(drafts.current.get(id)!, outcome)
-        drafts.current.set(id, next)
-        setDraft(next)
-        if (!next.idempotencyKey) { attempts.current.delete(id); failures.current.delete(id); setFailedAttempt(false); setPreview(undefined) }
-        if (outcome === "failed") { failures.current.add(id); setFailedAttempt(true) }
-      }
-      await requestJson("/api/mca/sms/conversations", {
-        method: "POST",
-        body: JSON.stringify({ id }),
+      await refreshSmsConversation({
+        read: () => requestJson<Detail>(`/api/mca/sms/conversations?id=${encodeURIComponent(id)}`),
+        isCurrent: () => selectedRef.current === id && sequence === requestSequence.current,
+        show: (d) => {
+          setDetail(d)
+          const attemptId = attempts.current.get(id)
+          const outcome = d.messages.find(m => m.id === attemptId)?.state
+          if (outcome && drafts.current.get(id)?.idempotencyKey) {
+            const next = settleSmsReplyDraft(drafts.current.get(id)!, outcome)
+            drafts.current.set(id, next)
+            setDraft(next)
+            if (!next.idempotencyKey) { attempts.current.delete(id); failures.current.delete(id); setFailedAttempt(false); setPreview(undefined) }
+            if (outcome === "failed") { failures.current.add(id); setFailedAttempt(true) }
+          }
+        },
+        acknowledge: () => requestJson("/api/mca/sms/conversations", {
+          method: "POST",
+          body: JSON.stringify({ id }),
+        }),
+        refreshList: load,
       })
-      await load()
     },
     [load]
   )
@@ -152,6 +155,12 @@ export function SmsInboxPanel({ dealId }: { dealId?: string }) {
         await open(target.id)
       }
     } catch (e) {
+      if (!isPreview && e instanceof RequestError) {
+        const next = rejectSmsReplyDraft(reserved, e.code, !!draft.idempotencyKey)
+        drafts.current.set(target.id, next)
+        setDraft(next)
+        if (!next.idempotencyKey) setPreview(undefined)
+      }
       setError(e instanceof Error ? e.message : "Message failed")
     } finally {
       setBusy(false)
