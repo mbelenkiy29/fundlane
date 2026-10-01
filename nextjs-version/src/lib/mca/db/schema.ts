@@ -421,6 +421,7 @@ export const deals = pgTable("deals", {
 	created_at: text().notNull(),
 	updated_at: text().notNull(),
 }, (table) => [
+	uniqueIndex("deals_workspace_id_id_unique").on(table.workspace_id, table.id),
 	index("deals_workspace_status_idx").using("btree", table.workspace_id.asc().nullsLast(), table.status.asc().nullsLast(), table.updated_at.desc().nullsFirst()),
 	index("deals_merchant_id_idx").on(table.merchant_id),
 	index("deals_workspace_ein_lookup_hash_idx").on(table.workspace_id, table.ein_lookup_hash).where(sql`${table.ein_lookup_hash} IS NOT NULL`),
