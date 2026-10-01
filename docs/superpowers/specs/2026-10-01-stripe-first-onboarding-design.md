@@ -1,6 +1,6 @@
 # Fundlane Stripe-first onboarding design
 
-**Status:** Written specification for user review. Conversational design and writing this document were approved on October 1, 2026 at 21:59 UTC. The written specification itself, implementation plan, product changes, PR, release, and provider configuration are **not yet approved**.
+**Status:** Written specification approved on October 1, 2026 at 22:29 UTC. The user explicitly directed planning and execution into a PR titled `auth-refractor`. Release, merge, manual production deployment, live trial/charge/email activity and provider configuration remain outside that coding authorization. The original conversational design was approved at 21:59 UTC.
 
 **Source baseline:** `2d6b5ea4a2eb48fcf2f8857a6a578c0c6ade48f3`, isolated local branch `codex/onboarding-stripe-first-design`. This includes PR #233's owner handoff and PR #234's repository tooling/documentation changes. No application code or hosted configuration was changed to produce this specification.
 
