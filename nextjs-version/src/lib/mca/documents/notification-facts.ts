@@ -46,7 +46,7 @@ export function deriveDocumentConditions(facts: DocumentNotificationFacts): Docu
   }
   for (const stipulation of facts.stipulations) {
     if (!['open', 'received'].includes(stipulation.status)) continue
-    if (stipulation.linkedDocumentId && clean.some(document => document.id === stipulation.linkedDocumentId)) continue
+    if (stipulation.linkedDocumentId && clean.some(document => document.id === stipulation.linkedDocumentId && document.category === stipulation.category)) continue
     conditions.push({ key: `requested:${stipulation.id}`, reason: 'requested', category: stipulation.category, label: stipulation.label, stipulationId: stipulation.id })
   }
   return conditions

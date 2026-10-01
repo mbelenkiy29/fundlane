@@ -1,3 +1,4 @@
+import { registerDocumentNotificationCondition } from '../documents/notification-condition';
 import 'server-only';
 import { z } from 'zod';
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from '../db';
@@ -57,6 +58,7 @@ export async function runScheduledNotifications(clock = nowIso(), limit = 25) {
         return result;
     if (!Number.isFinite(Date.parse(clock)) || !Number.isInteger(limit) || limit < 1 || limit > 100)
         throw new AppError(422, 'notification_clock_invalid', 'Use a valid clock and a limit between 1 and 100.');
+    registerDocumentNotificationCondition();
     await expireClaims(clock);
     if (!transportOverride)
         await reconcileNotificationProviders(clock);

@@ -29,3 +29,8 @@ test('requests require clean linked document or verified/waived status',()=>{
  for(const status of ['verified','waived'] as const)assert.ok(!deriveDocumentConditions(facts({stipulations:[{id:'stip',category:'other_stip',label:'Tax return',status}]})).some(item=>item.reason==='requested'))
 })
 test('closed and funded deals suppress document alerts',()=>{for(const status of ['closed','funded'])assert.deepEqual(deriveDocumentConditions(facts({status})),[])})
+
+test('category changes on linked clean document leave requested condition unresolved',()=>{
+ const conditions=deriveDocumentConditions(facts({documents:[document('linked','clean','voided_check')],stipulations:[{id:'request-statement',category:'statement',label:'September statement',status:'received',linkedDocumentId:'linked'}]}))
+ assert.ok(conditions.some(condition=>condition.stipulationId==='request-statement'))
+})
