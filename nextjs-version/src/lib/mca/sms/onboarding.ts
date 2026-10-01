@@ -5,6 +5,7 @@ import {
   withImmediateTransaction,
   nowIso,
   recordAuditEvent,
+  type DbExecutor,
 } from "../db"
 import {
   encryptSensitive,
@@ -17,6 +18,9 @@ import { deliverEmail, assertEmailDeliveryConfigured } from "../email"
 import { AppError } from "../errors"
 import type { DealActor } from "../deals/schema"
 import type { AuthContext } from "../types"
+import { requireSuperAdmin, requireSmsApprover } from "../platform-auth"
+import { requirePlatformStepUp } from "../platform-step-up"
+import { insertSuperAdminAudit, withSuperAdminAction } from "../platform-audit"
 
 export const signupSchema = z
   .object({
@@ -78,6 +82,9 @@ export type Company = {
   number_limit: number
   monthly_limit_cents: number
   registration_limit_cents: number
+  provisioning_state: string
+  onboarding_exempt: number
+  updated_at: string
 }
 export type ProviderConfig = {
   accountSid: string
@@ -102,23 +109,24 @@ export function admin(actor: DealActor) {
       "A company administrator is required."
     )
 }
-export function isPlatformOperator(userId: string | null): boolean {
-  return (
-    !!userId &&
-    (process.env.MCA_PLATFORM_OPERATOR_USER_IDS ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .includes(userId)
-  )
+export async function isPlatformOperator(userId: string | null): Promise<boolean> {
+  if (!userId) return false
+  try {
+    const actor = await requireSuperAdmin()
+    const narrowed = process.env.MCA_PLATFORM_OPERATOR_USER_IDS
+    return actor.userId === userId && (narrowed === undefined || narrowed.split(",").map(value => value.trim()).includes(userId))
+  } catch { return false }
 }
-export function operator(context: AuthContext) {
-  if (context.authType !== "session" || !isPlatformOperator(context.userId))
-    throw new AppError(
-      403,
-      "platform_operator_required",
-      "Platform operator access is required."
-    )
+export async function operator(context?: AuthContext | null) {
+  if (context && context.authType !== "session")
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  const actor = await requireSuperAdmin()
+  if (context && (context.userId !== actor.userId || context.sessionId !== actor.sessionId))
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  const narrowed = process.env.MCA_PLATFORM_OPERATOR_USER_IDS
+  if (narrowed !== undefined && !await isPlatformOperator(actor.userId))
+    throw new AppError(403,"platform_operator_required","Platform operator access is required.")
+  return actor
 }
 export function platformReady(): boolean {
   return (
@@ -128,22 +136,13 @@ export function platformReady(): boolean {
   )
 }
 export function publicOrigin(): string {
-  const u = new URL(
-    process.env.MCA_SMS_PUBLIC_BASE_URL ?? process.env.MCA_APP_ORIGIN ?? ""
-  )
-  if (
-    u.protocol !== "https:" ||
-    u.username ||
-    u.password ||
-    u.pathname !== "/" ||
-    u.search ||
-    u.hash
-  )
-    throw new AppError(
-      503,
-      "sms_origin_required",
-      "Configure the public HTTPS origin."
-    )
+  // Blank values count as unset; a non-blank but invalid value fails closed
+  // instead of silently falling back to a different origin.
+  const value = process.env.MCA_SMS_PUBLIC_BASE_URL?.trim() || process.env.MCA_APP_ORIGIN?.trim()
+  let u: URL | undefined
+  try { u = value ? new URL(value) : undefined } catch { u = undefined }
+  if (!u || u.protocol !== "https:" || u.username || u.password || u.pathname !== "/" || u.search || u.hash)
+    throw new AppError(503, "sms_public_url_unconfigured", "Configure the public HTTPS origin.")
   return u.origin
 }
 export async function company(
@@ -171,12 +170,24 @@ export async function saveProvider(workspaceId: string, p: ProviderConfig) {
 }
 export async function ensureCompany(actor: DealActor) {
   admin(actor)
+  const exempt = await smsOnboardingExempt(getDatabase(), actor.workspaceId)
   await getDatabase()
     .prepare(
-      "INSERT INTO sms_companies (workspace_id,owner_user_id,created_at,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING"
+      "INSERT INTO sms_companies (workspace_id,owner_user_id,onboarding_exempt,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING"
     )
-    .run(actor.workspaceId, actor.userId, nowIso(), nowIso())
+    .run(actor.workspaceId, actor.userId, exempt ? 1 : 0, nowIso(), nowIso())
   return (await company(actor.workspaceId))!
+}
+const internalSmsWorkspaces = new Set([
+  "e533f62c-f92f-4367-990e-9e91c47c23bb", "c880cbaf-f18d-4050-beab-840220624406",
+  "5fbcdb18-9f64-48f1-99f5-4b5055262e8b", "7a0377b5-42d3-4939-a31b-11a75efc7710",
+  "8ecf9c6b-d269-4694-b016-ac48b5727c21",
+])
+export async function smsOnboardingExempt(db: DbExecutor, workspaceId: string): Promise<boolean> {
+  if (workspaceId === "a2672c56-c652-4eed-9243-bf2b760a384c") return false
+  if (internalSmsWorkspaces.has(workspaceId)) return true
+  const state = await db.prepare<{ state_kind: string }>("SELECT state_kind FROM company_subscription_state WHERE workspace_id=?").get(workspaceId)
+  return state?.state_kind === "internal_demo" || state?.state_kind === "synthetic"
 }
 export async function signUp(
   input: z.infer<typeof signupSchema>,
@@ -208,11 +219,12 @@ export async function signUp(
       password: input.password,
       role: "admin",
     })
+    const exempt = await smsOnboardingExempt(db, created.workspaceId)
     await db
       .prepare(
-        "INSERT INTO sms_companies (workspace_id,owner_user_id,created_at,updated_at) VALUES (?,?,?,?)"
+        "INSERT INTO sms_companies (workspace_id,owner_user_id,onboarding_exempt,created_at,updated_at) VALUES (?,?,?,?,?)"
       )
-      .run(created.workspaceId, created.userId, nowIso(), nowIso())
+      .run(created.workspaceId, created.userId, exempt ? 1 : 0, nowIso(), nowIso())
     await recordAuditEvent({
       context: { workspaceId: created.workspaceId, userId: created.userId },
       action: "company.signup",
@@ -309,7 +321,7 @@ export async function onboardingStatus(actor: DealActor) {
         .all(actor.workspaceId)
     : []
   const { managedReadiness } = await import("./managed")
-  const visibleNumbers = manageable ? numbers : numbers.filter((n) => n.membership_id === actor.membershipId)
+  const visibleNumbers = manageable ? numbers : numbers.filter((n) => n.membership_id === null || n.membership_id === actor.membershipId)
   const readyNumbers = await Promise.all(visibleNumbers.map(async (n) => ({ ...n, readiness: await managedReadiness(actor.workspaceId, String(n.account_id)) })))
   return {
     emailVerified: !!c?.email_verified_at,
@@ -319,7 +331,7 @@ export async function onboardingStatus(actor: DealActor) {
     suspended: !!c?.suspended,
     platformReady: platformReady(),
     canManage: manageable,
-    isOperator: isPlatformOperator(actor.userId),
+    isOperator: await isPlatformOperator(actor.userId),
     profile:
       manageable && c?.profile_cipher
         ? JSON.parse(decryptSensitive(c.profile_cipher, actor.workspaceId))
@@ -392,10 +404,16 @@ export const reviewSchema = z
   })
   .strict()
 export async function reviewCompany(
-  context: AuthContext,
-  input: z.infer<typeof reviewSchema>
+  context: AuthContext | null,
+  input: z.infer<typeof reviewSchema>,
+  request?: Request,
 ) {
-  operator(context)
+  const actor = await operator(context)
+  let stepUpAt: string | undefined
+  if (input.decision === "approved" || input.decision === "rejected") {
+    requireSmsApprover(actor)
+    stepUpAt = await requirePlatformStepUp(actor)
+  }
   await withImmediateTransaction(async (db) => {
     const c = await db
       .prepare<Company>(
@@ -434,7 +452,7 @@ export async function reviewCompany(
       .run(
         review,
         input.note,
-        context.userId,
+        actor.userId,
         input.optOutConfirmed === undefined
           ? c.opt_out_ready
           : input.optOutConfirmed
@@ -448,42 +466,45 @@ export async function reviewCompany(
         input.workspaceId
       )
     await recordAuditEvent({
-      context: { workspaceId: input.workspaceId, userId: context.userId },
+      context: { workspaceId: input.workspaceId, userId: actor.userId },
       action: `company.${input.decision}`,
       resourceType: "workspace",
       resourceId: input.workspaceId,
       metadata: {
-        note: input.note,
         numberLimit: input.numberLimit,
         monthlyLimitCents: input.monthlyLimitCents,
       },
+      executor: db,
     })
+    await insertSuperAdminAudit({actor,action:`sms.${input.decision}`,workspaceId:input.workspaceId,targetType:"workspace",targetId:input.workspaceId,reason:input.decision,stepUpAt,request},db)
   })
   return { updated: true }
 }
-export async function reviewQueue(context: AuthContext) {
-  operator(context)
-  const rows = await getDatabase()
-    .prepare<
-      Company & { name: string }
-    >("SELECT c.*,w.name FROM sms_companies c JOIN workspaces w ON w.id=c.workspace_id ORDER BY c.updated_at DESC LIMIT 100")
-    .all()
-  return {
-    companies: rows.map((c) => ({
-      workspaceId: c.workspace_id,
-      name: c.name,
-      emailVerified: !!c.email_verified_at,
-      reviewState: c.review_state,
-      registrationState: c.registration_state,
-      suspended: !!c.suspended,
-      optOutReady: !!c.opt_out_ready,
-      note: c.review_note,
-      numberLimit: c.number_limit,
-      monthlyLimitCents: c.monthly_limit_cents,
-      registrationLimitCents: c.registration_limit_cents,
-      profile: c.profile_cipher
-        ? JSON.parse(decryptSensitive(c.profile_cipher, c.workspace_id))
-        : null,
-    })),
-  }
+export async function reviewQueue(context: AuthContext | null, request?: Request) {
+  const actor = await operator(context)
+  return withSuperAdminAction({actor,action:"sms.queue_viewed",request},async db => {
+    const rows = await db
+      .prepare<
+        Company & { name: string }
+      >("SELECT c.*,w.name FROM sms_companies c JOIN workspaces w ON w.id=c.workspace_id ORDER BY c.updated_at DESC LIMIT 100")
+      .all()
+    return {
+      companies: rows.map((c) => ({
+        workspaceId: c.workspace_id,
+        name: c.name,
+        emailVerified: !!c.email_verified_at,
+        reviewState: c.review_state,
+        registrationState: c.registration_state,
+        suspended: !!c.suspended,
+        optOutReady: !!c.opt_out_ready,
+        note: c.review_note,
+        numberLimit: c.number_limit,
+        monthlyLimitCents: c.monthly_limit_cents,
+        registrationLimitCents: c.registration_limit_cents,
+        profile: c.profile_cipher
+          ? {...JSON.parse(decryptSensitive(c.profile_cipher, c.workspace_id)),ein:"••-•••••••"}
+          : null,
+      })),
+    }
+  })
 }

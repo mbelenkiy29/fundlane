@@ -1,6 +1,6 @@
 # Shared scheduled notifications
 
-Foundation for document, renewal and internal missed-call events. Producers call the server-only API; they do not send mail/text themselves. Default runtime is inert. The existing `/api/cron/comms` tick consumes notifications only with `MCA_NOTIFICATION_RUNTIME=enabled`. No schedule or provider configuration is installed by this PR.
+Foundation for document, renewal and internal missed-call events. Producers call the server-only API; they do not send mail/text themselves. Default runtime is inert. The existing `/api/cron/comms` tick consumes notifications only with `MCA_NOTIFICATION_RUNTIME=enabled`. No schedule or provider configuration is installed by this PR. The notification budget is measured from the original comms tick start; exhausted ticks leave events queued, with room reserved for bounded provider calls.
 
 ## Producer contract
 
@@ -47,3 +47,5 @@ Migration `0068_notification_foundation`, journal idx59/version7/when17903856000
 Apply checked migrations and restricted role grants through the existing human-reviewed release flow. Never use hosted migration as build/setup. Enable runtime only after synthetic nonproduction provider tests, sender scopes/number readiness, existing comms scheduler ownership and restricted role validation. Verify company pause/reapproval, opt-out between enqueue/send, disconnect, callback receipts, killed send, duplicate events and bounded cron duration with the deployed head. No new cron is declared in `vercel.json`; do not create a second consumer/schedule. Disable `MCA_NOTIFICATION_RUNTIME` to stop dispatch without deleting pending/uncertain rows.
 
 Local proof uses disposable PostgreSQL and mocked transports. It does not prove hosted credentials, provider delivery, unsubscribe email rendering, number provisioning, A2P approval, Vercel scheduler ownership or preview environment isolation. No live sends, provider provisioning, production data or security settings were used.
+
+Claim leases use fresh operation time inside each claim transaction. A tick shares one deadline across reconciliation and dispatch. Receipt lookups pass this deadline into the mailbox heartbeat, which requires enough time for the existing15-second provider request before every page or refresh. The default delivery adapter invokes a worker-supplied live eligibility callback after connect and immediately before provider IO, so consent, recipient/access, approval and registered conditions are rechecked after OAuth awaits. A refused pre-send check suppresses the row; a deadline refusal before IO is safely bounded by the normal retry limit. Network outcomes remain uncertain and are never replayed automatically.

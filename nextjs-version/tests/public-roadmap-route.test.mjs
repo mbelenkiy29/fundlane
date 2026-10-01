@@ -9,12 +9,20 @@ test("operator roadmap routes gate flag, authority, MFA, origin, and input befor
     mock.module("server-only", { exports: {} });
     const { AppError } = require("./src/lib/mca/errors.ts");
     let mode = "anonymous";
-    mock.module("./src/lib/mca/platform-auth.ts", { namedExports: { requirePlatformAdmin: async () => {
+    mock.module("./src/lib/mca/platform-auth.ts", { namedExports: { requireSuperAdmin: async () => {
       if (mode === "anonymous") throw new AppError(401, "authentication_required", "Sign in.");
       if (mode === "nonoperator") throw new AppError(403, "platform_admin_required", "Forbidden.");
       if (mode === "mfa") throw new AppError(403, "mfa_required", "MFA required.");
-      return { userId: "operator" };
+      return { userId: "operator", email: "mike@sentineltechsolutions.io", sessionId: "session" };
     } } });
+    mock.module("./src/lib/mca/platform-audit.ts", { namedExports: {
+      assertStrictPlatformMutation: request => { if (!request.headers.get("origin")) throw new AppError(403,"untrusted_origin","Origin required."); },
+      withSuperAdminAction: async (_input, action) => action(),
+    } });
+    mock.module("./src/lib/mca/auth.ts", { namedExports: {
+      assertTrustedMutation: request => { if (request.headers.get("origin") !== new URL(request.url).origin) throw new AppError(403,"untrusted_origin","Origin denied."); },
+      consumeRequestRateLimit: async () => {},
+    } });
     const route = require("./src/app/api/platform/roadmap/route.ts");
     const item = require("./src/app/api/platform/roadmap/[id]/route.ts");
     const base = "https://app.example.test/api/platform/roadmap";
@@ -30,12 +38,12 @@ test("operator roadmap routes gate flag, authority, MFA, origin, and input befor
       mode = "mfa"; out.push((await route.POST(request("POST", {}))).status);
       mode = "operator";
       out.push((await route.POST(request("POST", {}, "https://evil.example.test"))).status);
-      out.push((await route.POST(request("POST", { title: "", summary: "", status: "bad", sort_order: -1 }))).status);
-      out.push((await item.PUT(request("PUT", { updated_at: "bad" }), { params: Promise.resolve({ id: "valid-but-no-db" }) })).status);
+      out.push((await route.POST(request("POST", { title: "", summary: "", status: "bad", sort_order: -1 }, "https://app.example.test"))).status);
+      out.push((await item.PUT(request("PUT", { updated_at: "bad" }, "https://app.example.test"), { params: Promise.resolve({ id: "valid-but-no-db" }) })).status);
       console.log(JSON.stringify(out));
     })().catch(error => { console.error(error); process.exitCode = 1 });
   `;
   const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], { cwd: resolve(import.meta.dirname, ".."), encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), [404, 404, 401, 403, 403, 403, 400, 400]);
+  assert.deepEqual(JSON.parse(result.stdout), [401, 401, 401, 403, 403, 403, 400, 400]);
 });

@@ -18,6 +18,8 @@ import {
   resolveSmsRoute,
 } from "../src/lib/mca/sms/service"
 import { GET as messagesGet, POST as messagesPost } from "../src/app/api/mca/sms/messages/route"
+import { GET as conversationsGet, POST as conversationsPost } from "../src/app/api/mca/sms/conversations/route"
+import { smsRecipientHash } from "../src/lib/mca/sms/managed"
 import { smsComposerGate } from "../src/components/mca/sms/composer-panel"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -278,13 +280,46 @@ test("composer panel source includes loading, empty, validation, success, and fa
   const source = readFileSync(new URL("../src/components/mca/sms/composer-panel.tsx", import.meta.url), "utf8")
   assert.match(source, /Loading SMS composer/)
   assert.match(source, /Save a merchant mobile number/)
-  assert.match(source, /No assigned text account is available/)
+  assert.match(source, /No text account is available/)
   assert.match(source, /Enter the exact text the merchant will receive/)
   assert.match(source, /Preview the exact message before sending/)
   assert.match(source, /role="alert"/)
   assert.match(source, /role="status"/)
   assert.match(source, /Text accepted/)
   assert.match(source, /idempotencyKey: sendKey.current/)
+})
+
+test("shared company inbox follows deal access and binds replies to their thread", async () => {
+  const db = getDatabase(), shared = "m6-shared-account", otherDeal = "m6-other-deal", otherPhone = "+12125550888"
+  await db.prepare("INSERT INTO mca_sms_accounts (id,workspace_id,provider,label,sender_kind,sender_identity_cipher,credential_ref,state,is_default,shared,created_at,updated_at) VALUES (?,?,'twilio','Shared Company','phone_number',?,'DEFAULT','active',0,1,?,?)").run(shared, ids.workspace, encryptSensitive(sender, ids.workspace), now, now)
+  await db.prepare("INSERT INTO deals (id,workspace_id,display_id,legal_name,contact_phone_cipher,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at) VALUES (?,?,?,'Other Merchant',?,'offer',1,'submission_ready','[]','{}',1,?,?)").run(otherDeal, ids.workspace, "MCA-M6-B", encryptSensitive(otherPhone, ids.workspace), now, now)
+  await db.prepare("INSERT INTO deal_assignments (id,workspace_id,deal_id,membership_id,kind,is_primary,assigned_at,assigned_by_user_id) VALUES ('m6-only-other',?,?,?,'originator',1,?,?)").run(ids.workspace, otherDeal, ids.other, now, ids.adminUser)
+  for (const [id, recipient, dealId] of [["m6-thread-a", phone, ids.deal], ["m6-thread-b", otherPhone, otherDeal], ["m6-thread-unmatched", "+12125550777", null]] as const) {
+    await db.prepare("INSERT INTO sms_conversations (id,workspace_id,account_id,recipient_hash,recipient_cipher,deal_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(id, ids.workspace, shared, smsRecipientHash(ids.workspace, recipient), encryptSensitive(recipient, ids.workspace), dealId, now, now)
+  }
+  const inbox = async (cookie: string, id?: string) => json(await conversationsGet(request(`/api/mca/sms/conversations${id ? `?id=${id}` : ""}`, { cookie })))
+  const repList = await inbox("m6-rep-session")
+  assert.equal(repList.status, 200)
+  assert.deepEqual((repList.body as {conversations:{id:string}[]}).conversations.filter(c => c.id.startsWith("m6-thread")).map(c => c.id), ["m6-thread-a"])
+  assert.equal((await inbox("m6-rep-session", "m6-thread-b")).status, 404)
+  assert.equal((await inbox("m6-rep-session", "m6-thread-unmatched")).status, 404)
+  assert.equal((await inbox("m6-other-session", "m6-thread-b")).status, 200)
+  const adminList = await inbox("m6-admin-session")
+  assert.equal((adminList.body as {conversations:{id:string}[]}).conversations.filter(c => c.id.startsWith("m6-thread")).length, 3)
+  assert.equal((await inbox("m6-admin-session", "m6-thread-b")).status, 200)
+  assert.equal((await inbox("m6-admin-session", "m6-thread-unmatched")).status, 200)
+  const reply = async (cookie: string, conversationId: string, dealId: string, recipient: string, senderAccountId = shared) => json(await messagesPost(request("/api/mca/sms/messages", {
+    method: "POST", cookie, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId, dealId, recipient, senderAccountId, body: "Synthetic preview", idempotencyKey: `m6-${conversationId}`, preview: true }),
+  })))
+  assert.equal((await reply("m6-rep-session", "m6-thread-b", otherDeal, otherPhone)).status, 404)
+  assert.equal((await reply("m6-rep-session", "m6-thread-a", otherDeal, phone)).status, 404)
+  assert.equal((await reply("m6-rep-session", "m6-thread-a", ids.deal, phone, assignedId)).status, 404)
+  assert.equal((await reply("m6-rep-session", "m6-thread-unmatched", ids.deal, "+12125550777")).status, 404)
+  assert.equal((await reply("m6-rep-session", "m6-thread-a", ids.deal, phone)).status, 200)
+  assert.equal((await reply("m6-admin-session", "m6-thread-b", otherDeal, otherPhone)).status, 200)
+  const readDenied = await json(await conversationsPost(request("/api/mca/sms/conversations", { method: "POST", cookie: "m6-rep-session", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "m6-thread-b" }) })))
+  assert.equal(readDenied.status, 404)
 })
 
 test("concurrent retries reserve one message and never reject with a database uniqueness failure", async () => {

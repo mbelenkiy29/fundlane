@@ -2,7 +2,7 @@ import "server-only"
 import type { SmsReadiness } from "./contracts"
 import { decryptSensitive } from "../crypto"
 import { createHash } from "node:crypto"
-import { getDatabase, nowIso, type DbExecutor } from "../db"
+import { getDatabase, nowIso, withImmediateTransaction, type DbExecutor } from "../db"
 import { AppError } from "../errors"
 import {
   company,
@@ -58,16 +58,16 @@ export async function managedReadiness(
   try { publicOrigin() } catch { block("callback_origin_missing", "SMS callback origin needs operator configuration.") }
   const n = await getDatabase().prepare<{
     phone: string; state: string; membership_id: string | null; membership_status: string | null
-    sender_kind: string | null; sender_identity_cipher: string | null; account_state: string | null; credential_ref: string | null
+    sender_kind: string | null; sender_identity_cipher: string | null; account_state: string | null; shared: number | null; credential_ref: string | null
   }>(`SELECT n.phone,n.state,n.membership_id,m.status AS membership_status,
-    a.sender_kind,a.sender_identity_cipher,a.state AS account_state,a.credential_ref
+    a.sender_kind,a.sender_identity_cipher,a.state AS account_state,a.shared,a.credential_ref
     FROM sms_numbers n LEFT JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id
     LEFT JOIN mca_sms_accounts a ON a.id=n.account_id AND a.workspace_id=n.workspace_id
     WHERE n.workspace_id=? AND n.account_id=?`).get(workspaceId, accountId)
   if (!n) block("number_missing", "No company number is connected to this text sender.")
   else {
     if (n.state !== "active") block("number_inactive", "This number is awaiting carrier activation or is unavailable.")
-    if (n.membership_status !== "active") block("assignment_inactive", "Assign this number to an active employee.")
+    if (n.shared !== 1 && n.membership_status !== "active") block("assignment_inactive", "Assign this number to an active employee.")
     if (n.account_state !== "active" || n.credential_ref !== "MANAGED") block("sender_inactive", "The company text sender is unavailable.")
     let identity: string | undefined
     try { if (n.sender_identity_cipher) identity = decryptSensitive(n.sender_identity_cipher, workspaceId) } catch { /* fail closed */ }
@@ -121,7 +121,7 @@ export async function reserveManagedSend(
     throw new AppError(
       409,
       "sms_setup_incomplete",
-      "Company SMS is suspended or awaiting verification, registration, or an active employee."
+      "Company SMS is suspended or awaiting verification, registration, or an active number."
     )
   if (!/^\+1\d{10}$/.test(recipient))
     throw new AppError(
@@ -164,12 +164,11 @@ export async function suppress(
   recipient: string,
   state: "opted_out" | "opted_in"
 ) {
-  await getDatabase()
-    .prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
-    .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
-  await getDatabase()
-    .prepare(
+  await withImmediateTransaction(async (db) => {
+    await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+      .get(`sms-consent:${smsRecipientHash(workspaceId, recipient)}`)
+    await db.prepare(
       "INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,?,?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state=EXCLUDED.state,updated_at=EXCLUDED.updated_at"
-    )
-    .run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+    ).run(workspaceId, smsRecipientHash(workspaceId, recipient), state, nowIso())
+  })
 }

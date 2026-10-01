@@ -1,5 +1,5 @@
-import { Client } from 'pg';
 import { runtimeTablePrivileges } from './runtime-grants';
+import { Client } from 'pg';
 import { applicationTables } from './manifest';
 import { assertMigrationDestination, identifier, postgresConnection, requiredUrl } from './connections';
 import { assertSafeRuntimeRole, type RuntimeRole } from './migration-safety';
