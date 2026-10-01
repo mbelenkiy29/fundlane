@@ -30,7 +30,7 @@ interface Queryable {
 }
 
 interface TransactionOptions { onRollback?: () => Promise<void> }
-const transactionContext = new AsyncLocalStorage<{ executor: DbExecutor; rollbackCallbacks: Array<() => Promise<void>> }>();
+const transactionContext = new AsyncLocalStorage<{ executor: DbExecutor; active: boolean; rollbackCallbacks: Array<() => Promise<void>> }>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
 
 function databaseUrl(): string {
@@ -201,6 +201,14 @@ const poolExecutor = createExecutor({
 
 export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
 
+/** Mutations spanning statements must use the active, connection-bound executor. */
+export function assertTransactionExecutor(db: DbExecutor): void {
+  const context = transactionContext.getStore();
+  if (!context?.active || context.executor !== db) {
+    throw new AppError(500, "transaction_required", "This operation requires an active database transaction.");
+  }
+}
+
 /** Hold a cross-instance lock on a separate transaction, including through a transaction pooler. */
 export async function withTransactionAdvisoryLock<T>(key: string, operation: () => Promise<T>): Promise<{ busy: true } | { busy: false; result: T }> {
   const client = await getPool().connect();
@@ -263,7 +271,11 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
         assertExecutionActive();
         await client.query("SELECT set_config('statement_timeout', $1, true)", [`${remaining}ms`]);
       }
-      const result = await transactionContext.run({ executor, rollbackCallbacks }, () => operation(executor));
+      const context = { executor, rollbackCallbacks, active: true };
+      const result = await transactionContext.run(context, async () => {
+        try { return await operation(executor); }
+        finally { context.active = false; }
+      });
       assertExecutionActive();
       await client.query("COMMIT");
       return result;

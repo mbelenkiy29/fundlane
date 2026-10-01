@@ -37,7 +37,7 @@ async function main() {
       policies.push(`REVOKE ALL ON TABLE ${qualified} FROM PUBLIC${browserRoles.length ? ', '+browserRoles.join(',') : ''}`);
       policies.push(`ALTER TABLE ${qualified} ENABLE ROW LEVEL SECURITY`);
       policies.push(`REVOKE ALL ON TABLE ${qualified} FROM mca_app`);
-      policies.push(`GRANT ${table === 'platform_admin_grants' ? 'SELECT' : (table === 'roadmap_item_audit' || table === 'platform_admin_audit') ? 'SELECT, INSERT' : table === 'platform_step_ups' ? 'SELECT, INSERT, UPDATE' : 'SELECT, INSERT, UPDATE, DELETE'} ON TABLE ${qualified} TO mca_app`);
+      policies.push(`GRANT ${table === 'platform_admin_grants' ? 'SELECT' : (table === 'roadmap_item_audit' || table === 'platform_admin_audit' || table === 'sms_credit_ledger') ? 'SELECT, INSERT' : (table === 'platform_step_ups' || table === 'sms_credit_accounts' || table === 'sms_credit_reservations') ? 'SELECT, INSERT, UPDATE' : 'SELECT, INSERT, UPDATE, DELETE'} ON TABLE ${qualified} TO mca_app`);
       policies.push(`DROP POLICY IF EXISTS mca_server_access ON ${qualified}`);
       // Only our server role has this policy. Every browser goes through MCA authorization.
       policies.push(table === 'platform_admin_grants'
