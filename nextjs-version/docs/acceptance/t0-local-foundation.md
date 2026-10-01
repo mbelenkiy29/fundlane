@@ -62,9 +62,11 @@ T0 owns this local runner, fixtures, evidence and byte-read integrity fix. Share
 ## Verification evidence
 
 - `scripts/ops/local-acceptance.sh`: **60/60 passed, 0 skipped**, PostgreSQL 16.14, Node 24.7.0, pnpm 11.1.2; final scoped run about 13.5 seconds.
-- Restored two private synthetic documents, 49 bytes each; total fixture/backup/restore drill reported 1,158 ms in that run. Encrypted bundle SHA-256 `8fa77422768a7683f55fd9547d36421f72607857003c0a4b58459c213062fc02` (randomized key/nonce means future runs differ).
+- Restored two private synthetic documents, 49 bytes each; total fixture/backup/restore drill reported 865 ms in that run. Encrypted bundle SHA-256 `6d6295223f36d586ac34b9d7882992fd9989bbeef5fe025ae27cb23f7189d30f` (randomized key/nonce means future runs differ).
 - Literal claim process exited by `SIGKILL`; retry kept `t0-killed-job`, attempt 2, stale completion denied, zero external sends.
 - `pnpm typecheck` and focused ESLint for the changed test/service: passed.
-- Full aggregate/lint/build: awaiting parent allocation; no result claimed here yet.
+- Full `pnpm lint`: passed with 0 errors and 16 existing warnings.
+- Full aggregate and production build: awaiting parent allocation; no result claimed here yet.
+- Draft PR: [#211](https://github.com/mbelenkiy29/fundlane/pull/211). Remote head verified; Vercel check pending at handoff, CodeRabbit and Preview Comments checks successful. Vercel connector cannot inspect build logs under the project scope (403); no access grant requested.
 
 Independent whole-branch review found one P2: unsuccessful PostgreSQL startup could bypass shutdown. Fixed with attempted-start tracking; regression observed RED then GREEN, plus retention when shutdown fails. Final scoped suite includes both cleanup regressions. No deferred review findings.

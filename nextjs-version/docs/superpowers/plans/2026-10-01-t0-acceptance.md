@@ -47,3 +47,5 @@ Task 1: scoped runner 58/58 pass, 0 skipped; checksum regression RED→GREEN, li
 Task 2: runner bash syntax and lifecycle pass; explicit C locale and short socket path required for macOS.
 
 Final review: independent reviewer t0_review identified P2 failed-start cleanup. Fixed startup tracking and retention; cleanup regression RED→GREEN, scoped suite 60/60. No deferred minors or rejected findings.
+
+Task 2: draft PR211 published; runtime/test final scoped suite60/60, typecheck pass, full lint0errors16existing warnings. Aggregate/build remain explicitly queued with parent, Vercel check pending. Generated graph refreshed locally, omitted from narrow feature PR.
