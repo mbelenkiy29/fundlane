@@ -172,7 +172,7 @@ The demo tests cover database persistence, duplicate request IDs, best-effort no
 
 Migration `0023_marketing_demo_requests` adds a global inbox separate from tenant deals. `POST /api/marketing/receiver` requires the demo bearer token, validates the envelope and matching idempotency header, and encrypts contact details using the existing application encryption key with the request ID as authenticated context. PostgreSQL atomically deduplicates concurrent deliveries; conflicting payloads fail closed. A deleted inquiry keeps a deduplication tombstone, so retries do not restore contact details. Neither endpoint logs contact details. There are no automated sales messages, customer-workspace imports, or CRM triggers.
 
-Authorized operators review the inbox from Render’s private service shell:
+The following Render shell commands are historical only. Current operators use `scripts/marketing/inbox.ts` from a trusted Supabase-configured environment; Render is not an active runtime:
 
 ```sh
 node marketing-inbox.cjs list
