@@ -1,7 +1,6 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
-import { attachDeadlineStatementTimeout, needsDedicatedDeadlineTransaction } from "../src/lib/mca/db";
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution";
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>;
@@ -125,31 +124,31 @@ test("transactions keep nested operations on one client, see their writes, and r
   assert.equal((await getDatabase().queryOne<{ count: number }>("SELECT count(*)::int count FROM transaction_probe WHERE id LIKE 'concurrent-%'"))?.count, 8);
 });
 
-test("deadline SQL rewrite keeps WITH / WITH RECURSIVE valid and does not add result columns", () => {
-  const select = attachDeadlineStatementTimeout("SELECT id FROM deals WHERE workspace_id = $1", ["ws"], 1_500);
-  assert.equal(select.text, "WITH mca_statement_timeout AS MATERIALIZED (SELECT set_config('statement_timeout', $2, true)) SELECT id FROM deals WHERE workspace_id = $1");
-  assert.deepEqual(select.values, ["ws", "1500ms"]);
-  const existing = attachDeadlineStatementTimeout("WITH candidate AS (SELECT id FROM jobs) UPDATE jobs j SET state='running' FROM candidate c WHERE j.id=c.id RETURNING j.id", [], 200);
-  assert.match(existing.text, /^WITH mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), candidate AS /);
-  const recursive = attachDeadlineStatementTimeout("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t", [], 90);
-  assert.match(recursive.text, /^WITH RECURSIVE mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), t\(n\) AS /);
-  assert.equal(needsDedicatedDeadlineTransaction("SELECT id FROM deals WHERE workspace_id = $1"), false);
-  assert.equal(needsDedicatedDeadlineTransaction("UPDATE mca_export_jobs SET state = 'ready' WHERE id = $1"), true);
-  assert.equal(needsDedicatedDeadlineTransaction("WITH candidate AS (SELECT id FROM jobs ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running' FROM candidate c WHERE j.id=c.id"), true);
-  assert.equal(needsDedicatedDeadlineTransaction("SELECT id FROM deals WHERE id = $1 FOR UPDATE"), true);
-});
-
-test("deadline pool queries apply statement_timeout without a dedicated transaction or leaked session GUC", { timeout: 20000 }, async () => {
+test("deadline queries cancel the server backend; pg_sleep is gone from pg_stat_activity", { timeout: 20000 }, async () => {
   const { AppError } = await import("../src/lib/mca/errors");
   const { getDatabase, withTransaction } = await import("../src/lib/mca/db");
   await withExecutionDeadline(async () => {
     const recursive = await getDatabase().queryOne<{ n: number }>("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t");
     assert.equal(recursive?.n, 3);
   }, undefined, 10_000);
+  const started = Date.now();
   await assert.rejects(
-    withExecutionDeadline(() => getDatabase().query("SELECT pg_sleep(2)"), undefined, 250),
+    withExecutionDeadline(() => getDatabase().query("SELECT pg_sleep(4)"), undefined, 300),
     (error: unknown) => error instanceof AppError && error.code === "execution_expired",
   );
+  assert.ok(Date.now() - started < 1_500, "the client must return near the 300ms deadline, not after pg_sleep(4)");
+  const leftoverSql = `SELECT count(*)::int AS n FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND pid <> pg_backend_pid()
+      AND query ILIKE '%pg_sleep(4)%'
+      AND state <> 'idle'`;
+  let leftover = await getDatabase().queryOne<{ n: number }>(leftoverSql);
+  const until = Date.now() + 1_000;
+  while ((leftover?.n ?? 0) > 0 && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    leftover = await getDatabase().queryOne<{ n: number }>(leftoverSql);
+  }
+  assert.equal(leftover?.n, 0, "SET LOCAL statement_timeout must cancel the server query, not only the JS waiter");
   const leaked = await getDatabase().queryOne<{ statement_timeout: string }>("SHOW statement_timeout");
   assert.ok(["0", "0ms", "0s"].includes(leaked?.statement_timeout ?? ""));
   await withTransaction(async (tx) => {

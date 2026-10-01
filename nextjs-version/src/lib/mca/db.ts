@@ -33,18 +33,11 @@ interface TransactionOptions { onRollback?: () => Promise<void> }
 const transactionContext = new AsyncLocalStorage<{ executor: DbExecutor; active: boolean; rollbackCallbacks: Array<() => Promise<void>> }>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
 let testWireQueryDelayMs = 0;
-let testLegacyDeadlineTransactions = false;
 
 /** Test-only: delay every wire query, including BEGIN/COMMIT, to reproduce pool-queue pressure. */
 export function setTestWireQueryDelayMs(ms: number): void {
   if (process.env.NODE_ENV === "production") throw new Error("setTestWireQueryDelayMs is test-only.");
   testWireQueryDelayMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
-}
-
-/** Test-only: restore the per-statement withTransaction deadline wrapper to prove the pool-timeout regression. */
-export function setTestLegacyDeadlineTransactions(enabled: boolean): void {
-  if (process.env.NODE_ENV === "production") throw new Error("setTestLegacyDeadlineTransactions is test-only.");
-  testLegacyDeadlineTransactions = enabled;
 }
 
 async function wireQuery<Row extends QueryResultRow>(
@@ -55,34 +48,6 @@ async function wireQuery<Row extends QueryResultRow>(
     await new Promise((resolve) => setTimeout(resolve, testWireQueryDelayMs));
   }
   return queryable.query<Row>({ text: config.text, values: config.values ?? [], query_timeout: config.query_timeout });
-}
-
-/** Bind remaining deadline as SET LOCAL statement_timeout in the same implicit transaction as `sql`. */
-export function attachDeadlineStatementTimeout(sql: string, values: readonly unknown[], remainingMs: number): { text: string; values: unknown[] } {
-  const timeout = `${Math.max(1, Math.floor(remainingMs))}ms`;
-  const nextValues = [...values, timeout];
-  const param = `$${nextValues.length}`;
-  const cte = `mca_statement_timeout AS MATERIALIZED (SELECT set_config('statement_timeout', ${param}, true))`;
-  const trimmed = sql.trim();
-  const recursive = /^WITH\s+RECURSIVE\s+/i.exec(trimmed);
-  if (recursive) return { text: `WITH RECURSIVE ${cte}, ${trimmed.slice(recursive[0].length)}`, values: nextValues };
-  const withPrefix = /^WITH\s+/i.exec(trimmed);
-  if (withPrefix) return { text: `WITH ${cte}, ${trimmed.slice(withPrefix[0].length)}`, values: nextValues };
-  if (/^(SELECT|INSERT|UPDATE|DELETE|TABLE|VALUES|MERGE)\b/i.test(trimmed)) return { text: `WITH ${cte} ${trimmed}`, values: nextValues };
-  return { text: sql, values: [...values] };
-}
-
-/**
- * DML and row locks must SET LOCAL statement_timeout *before* the statement.
- * A MATERIALIZED CTE + client query_timeout can reject the JS waiter while the
- * server UPDATE still waits on FOR UPDATE and then applies after the lock is
- * released (export_jobs → ready, discovery lease cleared).
- */
-export function needsDedicatedDeadlineTransaction(sql: string): boolean {
-  const trimmed = sql.trim();
-  if (/^(INSERT|UPDATE|DELETE|MERGE|LOCK|CALL|COPY|TRUNCATE|REFRESH)\b/i.test(trimmed)) return true;
-  if (/\bFOR\s+(NO\s+KEY\s+UPDATE|KEY\s+SHARE|UPDATE|SHARE)\b/i.test(trimmed)) return true;
-  return /^WITH\b/i.test(trimmed) && /\b(INSERT|UPDATE|DELETE|MERGE)\b/i.test(trimmed);
 }
 
 function databaseUrl(): string {
@@ -247,16 +212,14 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
 const poolExecutor = createExecutor({
   query: <Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }) => {
     const remaining = executionRemainingMs();
-    // Fence: hold FOR SHARE through the statement transaction.
-    // DML/locks: SET LOCAL must precede the statement so a lock wait is aborted
-    // server-side. Legacy test hook: restore the per-statement wrap that storms the pool.
-    if (remaining !== undefined && (testLegacyDeadlineTransactions || executionFence() || needsDedicatedDeadlineTransaction(config.text))) {
+    // Every deadline statement runs in a transaction so SET LOCAL statement_timeout
+    // is applied *before* the query. PostgreSQL then cancels the server backend
+    // (pg_sleep, lock waits). query_timeout still maps to execution_expired.
+    // Export list hydrate is batched by table so this wrap cannot storm the pool.
+    if (remaining !== undefined) {
       return withTransaction(database => database.query<Row>(config.text, config.values));
     }
-    if (remaining === undefined) return wireQuery<Row>(getPool(), config);
-    // Plain SELECTs (export hydrate Promise.all): one pool checkout, no BEGIN/COMMIT.
-    const bound = attachDeadlineStatementTimeout(config.text, config.values, remaining);
-    return wireQuery<Row>(getPool(), { text: bound.text, values: bound.values, query_timeout: remaining });
+    return wireQuery<Row>(getPool(), config);
   },
 });
 
@@ -364,7 +327,6 @@ export const withImmediateTransaction = withTransaction;
 
 export async function closeDatabaseForTests(): Promise<void> {
   testWireQueryDelayMs = 0;
-  testLegacyDeadlineTransactions = false;
   const pool = globalDatabase.__mcaDatabasePool;
   delete globalDatabase.__mcaDatabasePool;
   delete globalDatabase.__mcaDatabaseUrl;

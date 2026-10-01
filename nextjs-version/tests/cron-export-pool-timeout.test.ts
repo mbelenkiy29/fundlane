@@ -6,17 +6,17 @@ import { EMAIL, seedBen } from "../scripts/demo/seed-ben"
 import {
   closeDatabaseForTests,
   getDatabase,
-  setTestLegacyDeadlineTransactions,
   setTestWireQueryDelayMs,
 } from "../src/lib/mca/db"
+import { setTestUnbatchedDealListHydrate } from "../src/lib/mca/deals/repository"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { enqueueBackgroundJob } from "../src/lib/mca/jobs/queue"
-import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
 import { createExportJob } from "../src/lib/mca/exports/service"
+import { GET as runCron } from "../src/app/api/cron/jobs/route"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 
 const WORKSPACE = "ben-test"
-const DELAY_MS = 15
+const DELAY_MS = 60
 const actor = (): DealActor => ({
   workspaceId: WORKSPACE,
   userId: null,
@@ -28,12 +28,17 @@ const actor = (): DealActor => ({
   correlationId: "cron-export-pool-timeout",
 })
 
-test("all_deals_owners export_create through cron survives pool=2 after the per-statement transaction wrap is removed", { timeout: 180_000 }, async () => {
+async function runJobsCron() {
+  return runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
+}
+
+test("all_deals_owners export_create through cron survives pool=2 after list hydrate is batched", { timeout: 180_000 }, async () => {
   const previousEnv = { ...process.env }
   const fixture = await createPostgresTestDatabase("cron_export_pool")
   Object.assign(process.env, fixture.env({ MCA_DB_POOL_MAX: "2" }))
   process.env.MCA_BACKGROUND_JOBS = "enabled"
   process.env.MCA_JOB_RUNTIME = "vercel_cron"
+  process.env.CRON_SECRET = "synthetic-cron-secret"
   process.env.MCA_JOB_RUNTIME_KINDS = "export_create"
   delete process.env.VERCEL
   const client = new pg.Client({ connectionString: fixture.databaseUrl })
@@ -52,10 +57,10 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
     process.env.MCA_DB_POOL_MAX = "2"
 
     setTestWireQueryDelayMs(DELAY_MS)
-    setTestLegacyDeadlineTransactions(true)
+    setTestUnbatchedDealListHydrate(true)
     await assert.rejects(
       withExecutionDeadline(
-        () => createExportJob(actor(), { kind: "all_deals_owners", correlationId: "legacy-per-statement-txn" }),
+        () => createExportJob(actor(), { kind: "all_deals_owners", correlationId: "legacy-per-deal-hydrate" }),
         undefined,
         230_000,
       ),
@@ -64,7 +69,7 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
 
     await closeDatabaseForTests()
     process.env.MCA_DB_POOL_MAX = "2"
-    setTestLegacyDeadlineTransactions(false)
+    setTestUnbatchedDealListHydrate(false)
     setTestWireQueryDelayMs(DELAY_MS)
     const queued = await enqueueBackgroundJob({
       actor: actor(),
@@ -73,8 +78,10 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
       idempotencyKey: "cron-export-pool-timeout",
       payload: { kind: "all_deals_owners", correlationId: "cron-export-pool-timeout" },
     })
-    const processed = await withExecutionDeadline(() => runNextBackgroundJob(["export_create"]), undefined, 230_000)
-    assert.equal(processed, true)
+    const fixed = await runJobsCron()
+    const body = await fixed.json() as { processed?: number; error?: unknown }
+    assert.equal(fixed.status, 200, JSON.stringify(body))
+    assert.equal(body.processed, 1)
     const job = await getDatabase().prepare<{ state: string; error_code: string | null }>("SELECT state,error_code FROM mca_background_jobs WHERE id=?").get(queued.id)
     assert.equal(job?.state, "complete")
     assert.equal(job?.error_code, null)
@@ -83,7 +90,7 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
     assert.equal(exported?.row_count, 120)
   } finally {
     setTestWireQueryDelayMs(0)
-    setTestLegacyDeadlineTransactions(false)
+    setTestUnbatchedDealListHydrate(false)
     await client.end()
     await closeDatabaseForTests()
     await fixture.close()
@@ -96,5 +103,5 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
 
 after(() => {
   setTestWireQueryDelayMs(0)
-  setTestLegacyDeadlineTransactions(false)
+  setTestUnbatchedDealListHydrate(false)
 })
