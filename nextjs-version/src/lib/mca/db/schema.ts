@@ -205,6 +205,36 @@ export const platform_admin_grants = pgTable("platform_admin_grants", {
   revoked_at: text(),
 }, table => [check("platform_admin_grants_reason_check", sql`length(trim(${table.reason})) > 0`)]);
 
+export const platform_admin_audit = pgTable("platform_admin_audit", {
+  id: text().primaryKey(),
+  actor_user_id: text().notNull().references(() => users.id),
+  actor_email: text().notNull(),
+  session_id: text(),
+  action: text().notNull(),
+  target_workspace_id: text().references(() => workspaces.id),
+  target_type: text(),
+  target_id: text(),
+  reason: text(),
+  before_json: jsonb(),
+  after_json: jsonb(),
+  step_up_at: text(),
+  request_id: text(),
+  ip_hash: text(),
+  user_agent_hash: text(),
+  created_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
+}, table => [
+  index("platform_admin_audit_actor_created_idx").on(table.actor_user_id, table.created_at),
+  index("platform_admin_audit_action_created_idx").on(table.action, table.created_at),
+  index("platform_admin_audit_workspace_created_idx").on(table.target_workspace_id, table.created_at),
+  uniqueIndex("platform_admin_first_access_once_idx").on(table.actor_user_id).where(sql`${table.action} = 'super_admin.first_access'`),
+]);
+
+export const platform_step_ups = pgTable("platform_step_ups", {
+  session_id: text().primaryKey(),
+  user_id: text().notNull().references(() => users.id),
+  verified_at: text().notNull(),
+});
+
 export const sessions = pgTable("sessions", {
 	id: text().primaryKey().notNull(),
 	user_id: text().notNull(),
