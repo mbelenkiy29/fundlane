@@ -53,6 +53,7 @@ type ListPayload = {
       name: string
       adapterSlug?: string
       routeActive: boolean
+      destinations: Array<{ kind: string; active: boolean; providerReadiness: string }>
       credentials: Array<{ adapterSlug: string; environment: AdapterEnvironment; present: boolean; active: boolean }>
       apiContract: string
       callback: string
@@ -242,6 +243,7 @@ export function AdapterCredentialsPanel() {
   const canManage = payload?.canManage === true
   const funders = payload?.funders ?? []
   const funderStatus = funderSubmissionChannelStatus({
+    providerReadinessEnabled: Boolean(payload?.inventory),
     funders: funders.map((funder) => ({ hasApiRoute: funder.hasApiRoute })),
     credentials,
   })
@@ -263,6 +265,7 @@ export function AdapterCredentialsPanel() {
             <p className="font-medium">{funder.name} <Badge variant="outline">{funder.readiness}</Badge></p>
             <p>Adapter: {funder.adapterSlug ?? "none"} · API route: {funder.routeActive ? "active" : "unavailable"}</p>
             <p>Credentials: {funder.credentials.length ? funder.credentials.map((credential) => `${credential.adapterSlug} ${credential.environment} ${credential.present ? "present" : "missing"}${credential.active ? "" : " (inactive)"}`).join(", ") : "none"}</p>
+            {funder.destinations.map((route, index) => <p key={index}>{route.kind} · {route.active ? "configured" : "inactive"} · {route.providerReadiness}</p>)}
             <p>API contract: {funder.apiContract}</p>
             <p>Callback: {funder.callback}</p>
             <p>Commercial access: {funder.commercialAccess}</p>

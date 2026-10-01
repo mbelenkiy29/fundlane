@@ -314,3 +314,34 @@ test("post-provider audit failure preserves accepted and uncertain outcomes with
   }
   setEmailDeliveryFetchForTests(async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return new Response("ok") })
 })
+
+test("selection and exact previews expose gated provider evidence without sending", async () => {
+  const previous = process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+  const { prepareDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const { getSubmissionSelection } = await import("../src/lib/mca/submissions/queue")
+  const { previewSubmissionEmails } = await import("../src/lib/mca/submissions/email-templates")
+  const { providerReadinessLabel } = await import("../src/lib/mca/submissions/provider-readiness")
+  try {
+    const item = await readyApplication()
+    const deliveries = sent.length
+    delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+    const off = await prepareDealSubmission(actor, item.dealId, [funderId])
+    assert.equal(Object.hasOwn(off.destinations[0], "providerReadiness"), false)
+    assert.equal((await getSubmissionSelection(actor, item.dealId)).funders.find(f => f.id === funderId)?.providerReadiness, undefined)
+    assert.equal((await prepareApplicationSubmission(actor, item.intakeId, [funderId])).destinations[0].providerReadiness, undefined)
+    assert.equal((await previewSubmissionEmails(actor, { dealId: item.dealId, funderIds: [funderId] })).providerReadiness, undefined)
+    process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = "true"
+    const expected = providerReadinessLabel({ kind: "email", destination: "lender@example.test" })
+    assert.equal((await getSubmissionSelection(actor, item.dealId)).funders.find(f => f.id === funderId)?.providerReadiness, expected)
+    assert.equal((await prepareDealSubmission(actor, item.dealId, [funderId])).destinations[0].providerReadiness, expected)
+    assert.equal((await prepareApplicationSubmission(actor, item.intakeId, [funderId])).destinations[0].providerReadiness, expected)
+    assert.equal((await previewSubmissionEmails(actor, { dealId: item.dealId, funderIds: [funderId] })).providerReadiness, expected)
+    const portal = await prepareDealSubmission(actor, item.dealId, [portalFunderId])
+    assert.match(portal.destinations[0].providerReadiness ?? "", /Untested.*manual submission/)
+    assert.equal(sent.length, deliveries)
+    assert.equal((await listJobsForDeal(actor.workspaceId, item.dealId)).length, 0)
+  } finally {
+    if (previous === undefined) delete process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED
+    else process.env.MCA_FUNDER_READINESS_INVENTORY_ENABLED = previous
+  }
+})

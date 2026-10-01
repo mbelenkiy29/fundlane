@@ -1,5 +1,6 @@
 import "server-only"
 
+import { providerReadinessView } from "./provider-readiness"
 import { createHash } from "node:crypto"
 import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess } from "../auth"
 import { getDatabase, newId, nowIso, recordAuditEvent } from "../db"
@@ -185,6 +186,7 @@ export interface PreviewSubmissionEmailsInput {
 export interface PreviewSubmissionEmailsResult {
   dealId: string
   delivery: "preview"
+  providerReadiness?: string
   sender: { id: string; fromName: string; fromAddress: string }
   previews: SubmissionEmailPreview[]
   canManage: boolean
@@ -952,6 +954,7 @@ export async function previewSubmissionEmails(actor: DealActor, input: PreviewSu
   return {
     dealId: deal.id,
     delivery: "preview",
+    ...providerReadinessView({ kind: "email", destination: "" }),
     sender: { id: sender.id, fromName: sender.fromName, fromAddress: sender.fromAddress },
     previews,
     canManage: isAdmin(actor),

@@ -1,5 +1,6 @@
 import "server-only"
 
+import { providerReadinessView } from "./provider-readiness"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { listChecks } from "../datamerch/repository"
 import { getDatabase, newId, recordAuditEvent, withTransaction } from "../db"
@@ -49,6 +50,7 @@ export interface SubmissionSelectionFunder {
   nickname?: string
   active: boolean
   route: SubmissionJob["route"] | null
+  providerReadiness?: string
   preflightErrors: Array<{ field: string; message: string }>
   preflightWarnings: Array<{ field: string; message: string; severity: "warning" }>
   checklist: Array<{ documentId: string; filename: string; category: string; checksum: string; excluded: boolean }>
@@ -363,6 +365,7 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
         nickname: funder.nickname,
         active: funder.active,
         route,
+        ...providerReadinessView(route),
         preflightErrors: preflight.errors,
         preflightWarnings: preflight.warnings,
         checklist: checklistForRoute(documents, route ?? preflight.route),

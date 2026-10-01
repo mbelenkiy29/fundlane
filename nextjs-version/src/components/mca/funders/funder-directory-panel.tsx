@@ -1,5 +1,6 @@
 "use client"
 
+import { providerReadinessLabel } from "@/lib/mca/submissions/provider-readiness"
 import * as React from "react"
 import { AlertCircle, CheckCircle2, Landmark, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
@@ -116,6 +117,7 @@ function payloadFromDraft(draft: FunderDraft, idempotencyKey?: string) {
 }
 
 export function FunderDirectoryPanel() {
+  const [providerReadinessEnabled, setProviderReadinessEnabled] = React.useState(false)
   const [funders, setFunders] = React.useState<FunderRecord[]>([])
   const [groups, setGroups] = React.useState<FunderGroup[]>([])
   const [resolved, setResolved] = React.useState<Record<string, string[]>>({})
@@ -142,11 +144,12 @@ export function FunderDirectoryPanel() {
     setError("")
     try {
       const [directory, groupList, session] = await Promise.all([
-        requestJson<{ funders: FunderRecord[] }>("/api/mca/funders?includeInactive=true"),
+        requestJson<{ funders: FunderRecord[]; providerReadinessEnabled?: boolean }>("/api/mca/funders?includeInactive=true"),
         requestJson<{ groups: FunderGroup[] }>("/api/mca/funders/groups"),
         requestJson<SessionResponse>("/api/auth/session"),
       ])
       setFunders(directory.funders)
+      setProviderReadinessEnabled(directory.providerReadinessEnabled === true)
       setGroups(groupList.groups)
       setCanManage(Boolean(session.permissions?.canManageWorkspace))
       const destinations = await Promise.all(groupList.groups.map(async (group) => {
@@ -401,6 +404,7 @@ export function FunderDirectoryPanel() {
                   const exceptionsError = fieldErrors[`routes.${index}.documentExceptions`]?.[0]
                   const exceptionsErrorId = `route-${route.key}-exceptions-error`
                   return <div key={route.key} className="space-y-2 rounded-lg border p-3">
+                  {providerReadinessEnabled && <p className="text-sm text-muted-foreground">{providerReadinessLabel(route)}</p>}
                   <div className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]">
                     <div className="space-y-1">
                       <Select value={route.kind} disabled={!canManage || Boolean(selected && isSandboxFunder(selected))} onValueChange={(kind) => setDraft({ ...draft, routes: draft.routes.map((item) => item.key === route.key ? { ...item, kind: kind as FunderRouteKind } : item) })}>

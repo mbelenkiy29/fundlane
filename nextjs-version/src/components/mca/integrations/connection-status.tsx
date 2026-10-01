@@ -36,6 +36,7 @@ type AdaptersPayload = {
 }
 
 type FundersPayload = {
+  providerReadinessEnabled?: boolean
   funders: Array<{ active?: boolean; routes?: Array<{ active: boolean; kind: string }> }>
 }
 
@@ -92,6 +93,7 @@ export function IntegrationConnectionStatus() {
           emailChannelStatus(senders?.senders ?? []),
           smsChannelStatus({ accounts, onboarding }),
           funderSubmissionChannelStatus({
+            providerReadinessEnabled: funders?.providerReadinessEnabled,
             funders: [
               ...(funders?.funders ?? []),
               ...(adapters?.funders ?? []),

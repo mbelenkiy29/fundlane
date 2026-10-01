@@ -45,6 +45,7 @@ export interface ApplicationSubmissionPreview {
     funderId: string
     name: string
     method: string
+    providerReadiness?: string
     destination: string
     documents: Array<{ id: string; filename: string }>
     email?: { from: string; to: string[]; cc: string[]; replyTo: string; subject: string; body: string }
