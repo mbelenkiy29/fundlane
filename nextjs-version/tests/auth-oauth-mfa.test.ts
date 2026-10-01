@@ -35,6 +35,7 @@ mock.module(new URL("../src/lib/mca/totp-service.ts", import.meta.url).href, { n
   getTotpAccessState: async () => ({ available: true, enrolled: false, pending: false, recoveryRemaining: 0, enrollmentRequired: false, challengeRequired: false, sessionVerified: false }),
   regenerateRecoveryCodes: async () => ({ recoveryCodes: [] }),
   resolveAppUserId: async () => "user",
+  sessionHasAppTotp: async () => false,
 } })
 mock.module(new URL("../src/lib/supabase/server.ts", import.meta.url).href, { namedExports: { createSupabaseServerClient: async () => ({ auth: {
   signInWithOAuth: async (options: NonNullable<typeof oauthOptions>) => { oauthOptions = options; return { data: { url: "https://provider.example.test/authorize" }, error: null } },

@@ -13,6 +13,7 @@ import {
   getTotpAccessState,
   regenerateRecoveryCodes,
   resolveAppUserId,
+  sessionHasAppTotp,
 } from "@/lib/mca/totp-service"
 
 const headers = { "Cache-Control": "private, no-store" }
@@ -50,6 +51,7 @@ export async function GET() {
     const totp = userId ? await getTotpAccessState({ userId, sessionId: identity.sessionId }) : await getTotpAccessState({ userId: null, sessionId: identity.sessionId })
     return NextResponse.json({
       ...totp,
+      platformVerified: claims.data?.claims.sub === identity.user.id && claims.data?.claims.session_id === identity.sessionId && (claims.data?.claims.aal === "aal2" || Boolean(userId && await sessionHasAppTotp(identity.sessionId, userId))),
       factors: data.totp.map(f => ({ id: f.id, name: f.friendly_name ?? "Authenticator", status: f.status })),
       verified: totp.sessionVerified || claims.data?.claims.aal === "aal2",
     }, { headers })
