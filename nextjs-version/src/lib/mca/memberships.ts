@@ -53,8 +53,17 @@ function mapMembership(row: MembershipRow): MembershipSummary {
   };
 }
 
+// A pending member may be a shared account owned by another workspace. Only a
+// fresh invitation placeholder can expose its stored profile before acceptance.
+const pendingSharedProfile = `m.status = 'pending' AND (u.supabase_user_id IS NOT NULL
+  OR u.password_hash IS NOT NULL OR EXISTS (
+    SELECT 1 FROM memberships other WHERE other.user_id = m.user_id AND other.id <> m.id
+  ))`;
+
 export async function listMemberships(workspaceId: string): Promise<MembershipSummary[]> {
-  return (await getDatabase().prepare<MembershipRow>(`SELECT m.*, u.name, u.email, u.phone, u.application_identifier,
+  return (await getDatabase().prepare<MembershipRow>(`SELECT m.*,
+      CASE WHEN ${pendingSharedProfile} THEN u.email ELSE u.name END AS name,
+      u.email, CASE WHEN ${pendingSharedProfile} THEN NULL ELSE u.phone END AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status
@@ -63,7 +72,9 @@ export async function listMemberships(workspaceId: string): Promise<MembershipSu
 }
 
 export async function getMembership(workspaceId: string, membershipId: string): Promise<MembershipSummary> {
-  const row = await getDatabase().prepare<MembershipRow>(`SELECT m.*, u.name, u.email, u.phone, u.application_identifier,
+  const row = await getDatabase().prepare<MembershipRow>(`SELECT m.*,
+      CASE WHEN ${pendingSharedProfile} THEN u.email ELSE u.name END AS name,
+      u.email, CASE WHEN ${pendingSharedProfile} THEN NULL ELSE u.phone END AS phone, u.application_identifier,
       (SELECT i.id FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) pending_invitation_id,
       (SELECT i.expires_at FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_expires_at,
       (SELECT i.delivery_status FROM invitations i WHERE i.membership_id = m.id AND i.status = 'pending' ORDER BY i.created_at DESC LIMIT 1) invitation_delivery_status
