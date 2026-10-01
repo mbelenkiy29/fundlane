@@ -1,8 +1,8 @@
-import { redirect } from "next/navigation"
 import { requirePlatformPage } from "@/lib/mca/platform-page-access"
+import SmsReview from "@/components/mca/platform/sms-review"
 
 export const dynamic = "force-dynamic"
-export default async function Page() {
+export default async function SmsPage() {
   await requirePlatformPage()
-  redirect("/platform/monitoring")
+  return <SmsReview />
 }
