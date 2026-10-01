@@ -121,12 +121,13 @@ export async function touchDocumentWorkerHeartbeat(): Promise<void> {
 }
 
 async function guardedSendingAttempt(job: BackgroundJob): Promise<{ created_at: string } | undefined> {
-  if (job.kind !== "submission_delivery" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return undefined
+  if (job.kind !== "submission_delivery") return undefined
   return getDatabase().prepare<{ created_at: string }>(`SELECT a.created_at FROM mca_submission_jobs s
     JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
     JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
-    WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`)
-    .get(job.resource_id, job.workspace_id)
+    WHERE s.id=? AND s.workspace_id=? AND s.route_kind IN ('api','email','custom_webhook') AND s.state='sending'
+      AND (s.approved_package_cipher IS NOT NULL OR ?)`)
+    .get(job.resource_id, job.workspace_id, process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true")
 }
 
 export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[]): Promise<boolean> {
@@ -143,7 +144,7 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
     const outbound = ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)
     const observeOnly = Boolean(await guardedSendingAttempt(job))
     const result = await runAsBackgroundWorker(() => outbound && !observeOnly ? withOutboundApproval(job.workspace_id, job.created_at, () => dispatch(job)) : dispatch(job, observeOnly))
-    if (job.kind === "submission_delivery" && process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
+    if (job.kind === "submission_delivery") {
       const pending = await guardedSendingAttempt(job)
       if (pending) {
         const dueAt = new Date(Math.max(Date.now() + 1_000, Date.parse(pending.created_at) + 10 * 60_000)).toISOString()

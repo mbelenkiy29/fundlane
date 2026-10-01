@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -12,7 +13,7 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { setWebhookFetchForTests, setWebhookLookupForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as portalGet, POST as portalPost } from "../src/app/api/mca/submissions/portal/[dealId]/route"
 
@@ -334,7 +335,7 @@ test("MIC-178 webhook HTTP 500 stays failed and is distinct from portal complete
   assertNoSecret(webhookRow)
   const webhookAttempt = await attemptRow(webhookJob.jobId)
   assert.equal(webhookAttempt?.state, "failed")
-  assert.equal(webhookAttempt?.error_code, "provider_error")
+  assert.equal(webhookAttempt?.error_code, "delivery_uncertain")
   assert.match(webhookAttempt?.error_message ?? "", /HTTP 500/)
   assertNoSecret(webhookAttempt)
 

@@ -18,14 +18,14 @@ import { publishFunderCriteria } from "../src/lib/mca/funders/criteria"
 import { createSender, testSend } from "../src/lib/mca/senders/service"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
 import { setEmailDeliveryFetchForTests, upsertSubmissionEmailTemplate } from "../src/lib/mca/submissions/email-templates"
-import { processJobDelivery } from "../src/lib/mca/submissions/outbox"
-import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
+import { processJobDelivery, reconcileUncertainDelivery } from "../src/lib/mca/submissions/outbox"
+import { listJobsForDeal, persistNewDestination, insertAttempt, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { checkCompleteness } from "../src/lib/mca/underwriting/completeness"
 import { runAnalysis } from "../src/lib/mca/underwriting/analysis"
 import { getDealScores } from "../src/lib/mca/underwriting/scoring"
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
-const actor: DealActor = { workspaceId: newId(), userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId: newId() }
+const actor: DealActor = { workspaceId: newId(), userId: "t2-application-broker", membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "user", correlationId: newId() }
 const memory = new Map<string, Uint8Array>()
 const integrationId = newId()
 let portalFunderId: string
@@ -43,6 +43,7 @@ before(async () => {
   setEmailDeliveryFetchForTests(async(_url,init)=>{ sent.push(JSON.parse(String(init?.body)));return new Response("ok") })
   const now = new Date().toISOString()
   await getDatabase().prepare(`INSERT INTO workspaces(id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) VALUES (?,'Review','UTC',10,'{}','{"deals":true}','{"createDeal":true}',?,?)`).run(actor.workspaceId,now,now)
+  await getDatabase().prepare("INSERT INTO users(id,email,password_hash,name,application_identifier,created_at,updated_at) VALUES (?,'t2-review@example.test',NULL,'Fixture Broker','APP-T2REVIEW',?,?)").run(actor.userId,now,now)
   await saveIntegration({ id: integrationId, workspaceId: actor.workspaceId, provider: "custom", displayName: "Application", enabled: true, approvalState: "approved", mapping: {}, allowedHosts: [], senderRules: [], assignmentPool: [], initialStatus: "new_application" })
   await getDatabase().prepare("UPDATE intake_integrations SET automatic_processing=1 WHERE id=?").run(integrationId)
   const sender = await createSender(actor,{provider:"smtp",purpose:"submission",fromName:"Desk",fromAddress:"desk@example.test",isDefault:true,smtp:{host:"smtp.example.test",port:587,username:"desk",password:"secret"}})
@@ -156,6 +157,23 @@ test("independent destinations retain duplicate failure and continue the other l
   assert.equal(sent.jobs.find(job=>job.funderId===portalFunderId)?.state,"pending_portal")
   assert.deepEqual((await sendApplicationSubmission(actor,item.intakeId,next.id)).jobs,sent.jobs)
 })
+test("generic preview confirmation reports an unknown funder on first approval and replay", async () => {
+  const item = await readyApplication()
+  const unknownFunderId = newId()
+  const { prepareDealSubmission, confirmDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const preview = await prepareDealSubmission(actor, item.dealId, [unknownFunderId])
+  assert.match(preview.destinations[0]?.errors[0] ?? "", /not found/i)
+
+  const first = await confirmDealSubmission(actor, item.dealId, { previewId: preview.id })
+  const replay = await confirmDealSubmission(actor, item.dealId, { previewId: preview.id })
+
+  assert.equal(first.jobs.length, 1)
+  assert.equal(first.jobs[0]?.funderId, unknownFunderId)
+  assert.equal(first.jobs[0]?.state, "preflight_failed")
+  assert.match(first.jobs[0]?.reason ?? "", /not found/i)
+  assert.deepEqual(replay.jobs, first.jobs)
+  assert.equal((await listJobsForDeal(actor.workspaceId, item.dealId)).length, 0)
+})
 test("disabled connection and changed completeness block Send",async()=>{
   const item=await readyApplication()
   const preview=await prepareApplicationSubmission(actor,item.intakeId,[funderId])
@@ -203,4 +221,92 @@ test("approved portal derivatives download with job/deal authorization and exact
   memory.set(`${actor.workspaceId}/derivatives/stamp/${document.documentId}`,new Uint8Array(Buffer.from("changed")))
   await assert.rejects(()=>downloadApprovedPortalDocument(actor,item.dealId,job.id,document.documentId),{code:"immutable_storage_conflict"})
   await updateStampSettings(actor,{enabled:false})
+})
+
+test("generic deal preview sends only exact reviewed package, survives replay and rejects stale settings", async () => {
+  const item = await readyApplication()
+  const { prepareDealSubmission, confirmDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const preview = await prepareDealSubmission(actor, item.dealId, [funderId])
+  assert.equal(preview.destinations[0]?.email?.to[0], "lender@example.test")
+  assert.equal((await listJobsForDeal(actor.workspaceId, item.dealId)).length, 0)
+  await assert.rejects(() => confirmDealSubmission({ ...actor, source: "api_key" }, item.dealId, { previewId: preview.id }), { code: "broker_review_required" })
+  await assert.rejects(() => confirmDealSubmission({ ...actor, workspaceId: "another" }, item.dealId, { previewId: preview.id }), { status: 404 })
+  await upsertSubmissionEmailTemplate(actor, { subjectTemplate: "Changed generic preview", bodyTemplate: "Changed" })
+  await assert.rejects(() => confirmDealSubmission(actor, item.dealId, { previewId: preview.id }), { code: "submission_preview_stale" })
+  const fresh = await prepareDealSubmission(actor, item.dealId, [funderId])
+  const count = sent.length
+  const [first, replay] = await Promise.all([confirmDealSubmission(actor, item.dealId, { previewId: fresh.id }), confirmDealSubmission(actor, item.dealId, { previewId: fresh.id })])
+  assert.equal(first.jobs[0]?.state, "sent")
+  assert.equal(replay.jobs[0]?.jobId, first.jobs[0]?.jobId)
+  assert.equal(sent.length, count + 1)
+})
+
+
+test("uncertain API and webhook deliveries require broker reconciliation and fresh approval", async () => {
+  const item = await readyApplication()
+  for (const kind of ["api", "custom_webhook"] as const) {
+    const funder = (await createFunder(actor, { idempotencyKey: newId(), legalName: `Uncertain ${kind} fixture`, routes: [{ kind, label: "Fixture", destination: kind === "api" ? "fixture-no-network" : "https://fixture.example.test", documentExceptions: [], active: true }] })).funder
+    const confirmationKey = newId()
+    const job = (await persistNewDestination({ workspaceId: actor.workspaceId, dealId: item.dealId, funderId: funder.id, displayFunderName: funder.legalName, routeKind: kind, route: funder.routes[0], state: "failed", confirmationKey, attemptKey: confirmationKey, dealVersion: 1, documentVersions: [], packageDocumentIds: [], preflightErrors: [], merchantIdentityKey: "fixture", packageFingerprint: "fixture", actor, createdByUserId: actor.userId })).job
+    await insertAttempt({ workspaceId: actor.workspaceId, jobId: job.id, attemptKey: job.attemptKey, transport: kind, state: "failed", correlationId: "fixture-receipt", errorCode: "delivery_uncertain" })
+    await assert.rejects(() => reconcileUncertainDelivery({ ...actor, source: "api_key" }, job.id, { outcome: "accepted", evidence: "fixture" }), { code: "broker_review_required" })
+    await assert.rejects(() => reconcileUncertainDelivery({ ...actor, role: "rep" }, job.id, { outcome: "accepted", evidence: "fixture" }), { code: "broker_review_required" })
+    await assert.rejects(() => reconcileUncertainDelivery({ ...actor, workspaceId: newId() }, job.id, { outcome: "accepted", evidence: "fixture" }), { code: "resource_not_found" })
+    const reconciled = await reconcileUncertainDelivery(actor, job.id, { outcome: "not_sent", evidence: "Fixture receiver confirms no acceptance" })
+    assert.equal(reconciled.state, "failed")
+    await assert.rejects(() => reconcileUncertainDelivery(actor, job.id, { outcome: "accepted", evidence: "fixture" }), { code: "delivery_not_uncertain" })
+
+    for (const lenderState of ["funded", "declined"] as const) {
+      const lateKey = newId()
+      const late = (await persistNewDestination({ workspaceId: actor.workspaceId, dealId: item.dealId, funderId: funder.id, displayFunderName: funder.legalName, routeKind: kind, route: funder.routes[0], state: "failed", confirmationKey: lateKey, attemptKey: lateKey, dealVersion: 1, documentVersions: [], packageDocumentIds: [], preflightErrors: [], merchantIdentityKey: "fixture", packageFingerprint: "fixture", actor, createdByUserId: actor.userId })).job
+      await insertAttempt({ workspaceId: actor.workspaceId, jobId: late.id, attemptKey: late.attemptKey, transport: kind, state: "failed", correlationId: "late-receipt", errorCode: "delivery_uncertain" })
+      await updateJobRecord(actor.workspaceId, late.id, { state: lenderState })
+      await getDatabase().prepare("UPDATE deal_submissions SET status = ? WHERE job_id = ?").run(lenderState, late.id)
+      await assert.rejects(() => reconcileUncertainDelivery(actor, late.id, { outcome: "not_sent", evidence: "fixture" }), { code: "lender_evidence_exists" })
+      const acceptedLate = await reconcileUncertainDelivery(actor, late.id, { outcome: "accepted", evidence: "late receipt" })
+      assert.equal(acceptedLate.state, lenderState)
+      assert.equal((await getDatabase().prepare<{ status: string }>("SELECT status FROM deal_submissions WHERE job_id = ?").get(late.id))?.status, lenderState)
+    }
+  }
+})
+
+test("webhook preview exposes the exact routing query and removes credential parameters", async () => {
+  const item = await readyApplication()
+  const funder = (await createFunder(actor, { idempotencyKey: newId(), legalName: "Webhook route fixture", routes: [{ kind: "custom_webhook", label: "Fixture", destination: "https://fixture.example.test/submit?team=north&token=fixture-secret", documentExceptions: [], active: true }] })).funder
+  const { prepareDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const preview = await prepareDealSubmission(actor, item.dealId, [funder.id])
+  assert.equal(preview.destinations[0].destination, "https://fixture.example.test/submit?team=north")
+  assert.equal(JSON.stringify(preview).includes("fixture-secret"), false)
+})
+
+
+test("post-provider audit failure preserves accepted and uncertain outcomes without resend", async () => {
+  const { prepareDealSubmission, confirmDealSubmission } = await import("../src/lib/mca/submissions/broker-preview")
+  const { findAttempt } = await import("../src/lib/mca/submissions/repository")
+  for (const uncertain of [false, true]) {
+    const item = await readyApplication()
+    const preview = await prepareDealSubmission(actor, item.dealId, [funderId])
+    process.env.MCA_BACKGROUND_JOBS = "enabled"
+    let queued
+    try { queued = await confirmDealSubmission(actor, item.dealId, { previewId: preview.id }) }
+    finally { delete process.env.MCA_BACKGROUND_JOBS }
+    const job = (await listJobsForDeal(actor.workspaceId, item.dealId)).find(row => row.id === queued.jobs[0].jobId)!
+    let sends = 0
+    setEmailDeliveryFetchForTests(async () => { sends++; return new Response("fixture", { status: uncertain ? 500 : 202 }) })
+    await getDatabase().prepare(`CREATE FUNCTION t2_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='submission.delivery_recorded' THEN RAISE EXCEPTION 'synthetic audit outage'; END IF; RETURN NEW; END $$`).run()
+    await getDatabase().prepare(`CREATE TRIGGER t2_audit_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION t2_audit_failure()`).run()
+    try { await assert.rejects(() => processJobDelivery(job), /synthetic audit outage/) }
+    finally {
+      await getDatabase().prepare("DROP TRIGGER t2_audit_failure ON audit_events").run()
+      await getDatabase().prepare("DROP FUNCTION t2_audit_failure()").run()
+    }
+    const receipt = await findAttempt(job.id, job.attemptKey)
+    assert.equal(receipt?.state, uncertain ? "failed" : "sent")
+    assert.equal(receipt?.errorCode, uncertain ? "delivery_uncertain" : undefined)
+    const reloaded = (await listJobsForDeal(actor.workspaceId, item.dealId)).find(row => row.id === job.id)!
+    assert.equal((await processJobDelivery(reloaded)).state, uncertain ? "failed" : "sent")
+    assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM audit_events WHERE resource_id=? AND action='submission.delivery_recovered'").get(job.id))?.count, 1)
+    assert.equal(sends, 1)
+  }
+  setEmailDeliveryFetchForTests(async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return new Response("ok") })
 })

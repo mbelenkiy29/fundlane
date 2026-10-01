@@ -10,6 +10,7 @@ import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
+import { getMailboxReadiness, type MailboxReadiness } from "../senders/readiness"
 import { backgroundJobsEnabled } from "../jobs/queue"
 import { checkCompleteness } from "../underwriting/completeness"
 import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../underwriting/send-gates"
@@ -21,7 +22,7 @@ import { packageFingerprint, submissionMerchantIdentityKey } from "./identity"
 import { checklistForRoute, freezeDocumentVersions, toQueuedSummary, reasonFromErrors } from "./jobs"
 import { processJobDelivery } from "./outbox"
 import { loadFunderForDestination, preflightDestination, probeSubmissionSender, type SenderProbe } from "./preflight"
-import { listJobsForDeal, persistNewDestination } from "./repository"
+import { findAttempt, listJobsForDeal, persistNewDestination } from "./repository"
 
 let completenessReadyForTests: boolean | undefined
 
@@ -29,7 +30,7 @@ export function setSubmissionCompletenessForTests(ready?: boolean): void {
   completenessReadyForTests = ready
 }
 
-async function assertSubmissionSendGates(actor: DealActor, dealId: string): Promise<void> {
+export async function assertSubmissionSendGates(actor: DealActor, dealId: string): Promise<void> {
   if (completenessReadyForTests === true) return
   await checkCompleteness(actor, dealId)
   const gate = await evaluateUnderwritingSendGates(actor, dealId)
@@ -65,6 +66,7 @@ export interface SubmissionJobView {
   createdAt: string
   updatedAt: string
   autoSubmitted?: boolean
+  deliveryUncertain?: boolean
 }
 
 export interface SubmissionSelection {
@@ -73,6 +75,8 @@ export interface SubmissionSelection {
   documents: Array<{ id: string; filename: string; category: string; checksum: string; byteLength: number }>
   funders: SubmissionSelectionFunder[]
   jobs: SubmissionJobView[]
+  canReconcile: boolean
+  replyMailboxReadiness: MailboxReadiness
   autoDecisions?: Array<{ funder_id: string; score: number; outcome: string; reason: string; submission_job_id: string | null; created_at: string }>
 }
 
@@ -87,36 +91,6 @@ function uniqueIds(ids: string[]): string[] {
     if (seen.has(id)) continue
     seen.add(id)
     next.push(id)
-  }
-  return next
-}
-
-function asFunderIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new AppError(422, "validation_failed", "Select at least one funder.", { funderIds: ["Select at least one funder."] })
-  }
-  if (value.length > 200) {
-    throw new AppError(422, "validation_failed", "Select fewer funders.", { funderIds: ["Use at most 200 funders."] })
-  }
-  const ids: string[] = []
-  for (const [index, item] of value.entries()) {
-    if (typeof item !== "string" || !item.trim()) {
-      throw new AppError(422, "validation_failed", "Each funder ID must be present.", { funderIds: [`Funder ${index + 1} is invalid.`] })
-    }
-    ids.push(item.trim())
-  }
-  return uniqueIds(ids)
-}
-
-function asOptionalText(value: unknown, field: string, max: number): string | undefined {
-  if (value == null || value === "") return undefined
-  if (typeof value !== "string") {
-    throw new AppError(422, "validation_failed", "Review the highlighted fields.", { [field]: [`Enter a valid ${field}.`] })
-  }
-  const next = value.trim()
-  if (!next) return undefined
-  if (next.length > max) {
-    throw new AppError(422, "validation_failed", "Review the highlighted fields.", { [field]: [`Use at most ${max} characters.`] })
   }
   return next
 }
@@ -204,12 +178,12 @@ async function queueDestination(input: {
     || JSON.stringify(preflight.route) !== JSON.stringify(input.expectedAutoApiRoute))) {
     return { jobId: newId(), funderId: input.funderId, state: "preflight_failed", reason: "The approved API route changed before automatic submission." }
   }
-  if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true" && preflight.route.kind === "email") {
+  if (["email", "api", "custom_webhook"].includes(preflight.route.kind)) {
     const uncertain = await getDatabase().prepare<{ state: string }>(`SELECT a.state FROM mca_submission_jobs j
       JOIN mca_submission_attempts a ON a.job_id = j.id
-      WHERE j.workspace_id = ? AND j.deal_id = ? AND j.funder_id = ? AND j.route_kind = 'email'
+      WHERE j.workspace_id = ? AND j.deal_id = ? AND j.funder_id = ? AND j.route_kind IN ('email','api','custom_webhook')
         AND (a.error_code = 'delivery_uncertain' OR a.state = 'sending') LIMIT 1`).get(input.actor.workspaceId, input.dealId, funder.id)
-    if (uncertain) throw new AppError(409, "delivery_uncertain", "Wait for or reconcile the earlier email submission before sending to this destination again.")
+    if (uncertain) throw new AppError(409, "delivery_uncertain", "Wait for or reconcile the earlier submission before sending to this destination again.")
   }
 
   const merchantIdentityKey = submissionMerchantIdentityKey({
@@ -372,6 +346,7 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
   return {
     dealId: deal.id,
     dealVersion: deal.version,
+    replyMailboxReadiness: await getMailboxReadiness(actor),
     documents: documents.map((document) => ({
       id: document.id,
       filename: document.displayFilename,
@@ -393,7 +368,8 @@ export async function getSubmissionSelection(actor: DealActor, dealId: string): 
         checklist: checklistForRoute(documents, route ?? preflight.route),
       }
     }),
-    jobs: jobs.map(job => ({ ...toJobView(job), ...(autoJobIds.has(job.id) ? { autoSubmitted: true } : {}) })),
+    jobs: await Promise.all(jobs.map(async job => ({ ...toJobView(job), deliveryUncertain: (await findAttempt(job.id, job.attemptKey))?.errorCode === "delivery_uncertain", ...(autoJobIds.has(job.id) ? { autoSubmitted: true } : {}) }))),
+    canReconcile: actor.source === "user" && (actor.role === "admin" || actor.role === "super_admin"),
     ...(autoDecisions.length ? { autoDecisions } : {}),
   }
 }
@@ -402,23 +378,14 @@ export async function confirmSubmissions(actor: DealActor, dealId: string, input
   funderIds?: unknown
   confirmationKey?: unknown
   analysisRunId?: unknown
+  previewId?: unknown
   privilegedRetry?: unknown
   privilegedReason?: unknown
 }): Promise<ConfirmSubmissionsResult> {
-  const analysisRunId = asOptionalText(input.analysisRunId, "analysisRunId", 128)
-  const confirmationKey = asOptionalText(input.confirmationKey, "confirmationKey", 128) ?? analysisRunId ?? newId()
-  const privilegedRetry = input.privilegedRetry === true
-  const privilegedReason = asOptionalText(input.privilegedReason, "privilegedReason", 500)
-  const queued = await queueSubmissions({
-    actor,
-    dealId,
-    funderIds: asFunderIds(input.funderIds),
-    analysisRunId,
-    confirmationKey,
-    privilegedRetry,
-    privilegedReason,
-  })
-  return { ...queued, confirmationKey }
+  await getDealForDocument(actor, dealId)
+  if (actor.source !== "user" || !actor.userId) throw new AppError(403, "broker_review_required", "Open Submit to funders in this deal and approve the exact preview as a broker.")
+  if (!input.previewId) throw new AppError(409, "broker_approval_required", "Open Submit to funders in this deal, prepare the exact package preview, then approve it before sending.")
+  return (await import("./broker-preview")).confirmDealSubmission(actor, dealId, input)
 }
 
 export async function requireSubmissionActor(request: Request, mode: "read" | "write"): Promise<DealActor> {

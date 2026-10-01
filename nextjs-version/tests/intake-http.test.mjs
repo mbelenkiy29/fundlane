@@ -92,7 +92,7 @@ test("MIC-184 HTTP email admission, admin review, retry and receipt authorizatio
     assert.equal(new URL(redirect.headers.get("location"), baseUrl).searchParams.get("returnTo"), destination)
   } else {
     // Next.js can emit a streamed redirect after its loading boundary sends HTTP 200.
-    assert.equal(redirect.status, 200)
+    assert.equal(redirect.status, 200, output.slice(-12000))
     const html = await redirect.text()
     assert.match(html, /NEXT_REDIRECT/)
     assert.ok(html.includes(encodeURIComponent(destination)))

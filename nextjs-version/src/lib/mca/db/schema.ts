@@ -2018,7 +2018,7 @@ export const auth_session_totp = pgTable("auth_session_totp", {
 export const intake_submission_previews = pgTable("intake_submission_previews", {
   id: text().primaryKey().notNull(),
   workspace_id: text().notNull().references(() => workspaces.id),
-  intake_id: text().notNull().references(() => intake_events.id, { onDelete: "cascade" }),
+  intake_id: text().references(() => intake_events.id, { onDelete: "cascade" }),
   deal_id: text().notNull().references(() => deals.id),
   created_by_user_id: text().references(() => users.id),
   snapshot_cipher: text().notNull(),

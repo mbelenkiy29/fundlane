@@ -23,6 +23,7 @@ import { queueSubmissions } from "../submissions/queue"
 import { listJobsForDeal } from "../submissions/repository"
 import { toQueuedSummary } from "../submissions/jobs"
 import { backgroundJobsEnabled } from "../jobs/queue"
+import { resolveWebhookTarget } from "../submissions/webhook"
 import { processJobDelivery } from "../submissions/outbox"
 import type { ApplicationSubmissionPreview } from "./review-contracts"
 
@@ -102,7 +103,8 @@ function previewView(id: string, expiresAt: string, snapshot: Snapshot): Applica
 }
 
 function safeWebhookDestination(destination: string): string {
-  try { const url = new URL(destination); return `${url.origin}${url.pathname}` } catch { return "Webhook" }
+  const target = resolveWebhookTarget(destination)
+  return target.ok ? target.target.url : "Webhook"
 }
 
 export async function prepareApplicationSubmission(actor: DealActor, intakeId: string, funderIds: unknown): Promise<ApplicationSubmissionPreview> {
@@ -117,6 +119,7 @@ export async function prepareApplicationSubmission(actor: DealActor, intakeId: s
 }
 
 export async function sendApplicationSubmission(actor: DealActor, intakeId: string, previewId: unknown): Promise<{ ok: true; jobs: QueuedJobSummary[] }> {
+  if (actor.source !== "user" || !actor.userId) throw new AppError(403, "broker_review_required", "A broker must review and approve this submission.")
   if (typeof previewId !== "string" || !previewId.trim() || previewId.length > 128) throw new AppError(422, "validation_failed", "Prepare a submission preview first.")
   const deal = await visibleDeal(actor, intakeId)
   await withTransaction(async (db) => {
