@@ -72,6 +72,19 @@ export function attachDeadlineStatementTimeout(sql: string, values: readonly unk
   return { text: sql, values: [...values] };
 }
 
+/**
+ * DML and row locks must SET LOCAL statement_timeout *before* the statement.
+ * A MATERIALIZED CTE + client query_timeout can reject the JS waiter while the
+ * server UPDATE still waits on FOR UPDATE and then applies after the lock is
+ * released (export_jobs → ready, discovery lease cleared).
+ */
+export function needsDedicatedDeadlineTransaction(sql: string): boolean {
+  const trimmed = sql.trim();
+  if (/^(INSERT|UPDATE|DELETE|MERGE|LOCK|CALL|COPY|TRUNCATE|REFRESH)\b/i.test(trimmed)) return true;
+  if (/\bFOR\s+(NO\s+KEY\s+UPDATE|KEY\s+SHARE|UPDATE|SHARE)\b/i.test(trimmed)) return true;
+  return /^WITH\b/i.test(trimmed) && /\b(INSERT|UPDATE|DELETE|MERGE)\b/i.test(trimmed);
+}
+
 function databaseUrl(): string {
   assertHostedSupabaseConfig();
   const value = process.env.DATABASE_URL?.trim();
@@ -234,15 +247,14 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
 const poolExecutor = createExecutor({
   query: <Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }) => {
     const remaining = executionRemainingMs();
-    // A fence must hold FOR SHARE through the statement's transaction so a
-    // generation revocation cannot race a checked write. Cron/export has no fence.
-    if (remaining !== undefined && (testLegacyDeadlineTransactions || executionFence())) {
+    // Fence: hold FOR SHARE through the statement transaction.
+    // DML/locks: SET LOCAL must precede the statement so a lock wait is aborted
+    // server-side. Legacy test hook: restore the per-statement wrap that storms the pool.
+    if (remaining !== undefined && (testLegacyDeadlineTransactions || executionFence() || needsDedicatedDeadlineTransaction(config.text))) {
       return withTransaction(database => database.query<Row>(config.text, config.values));
     }
     if (remaining === undefined) return wireQuery<Row>(getPool(), config);
-    // Bind statement_timeout in the same implicit transaction as the statement.
-    // Do not BEGIN/COMMIT a dedicated client per statement: hydrate Promise.all
-    // would otherwise queue hundreds of waiters on a 2-connection Vercel pool.
+    // Plain SELECTs (export hydrate Promise.all): one pool checkout, no BEGIN/COMMIT.
     const bound = attachDeadlineStatementTimeout(config.text, config.values, remaining);
     return wireQuery<Row>(getPool(), { text: bound.text, values: bound.values, query_timeout: remaining });
   },
@@ -351,6 +363,8 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
 export const withImmediateTransaction = withTransaction;
 
 export async function closeDatabaseForTests(): Promise<void> {
+  testWireQueryDelayMs = 0;
+  testLegacyDeadlineTransactions = false;
   const pool = globalDatabase.__mcaDatabasePool;
   delete globalDatabase.__mcaDatabasePool;
   delete globalDatabase.__mcaDatabaseUrl;

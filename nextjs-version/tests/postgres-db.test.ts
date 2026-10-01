@@ -1,7 +1,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
-import { attachDeadlineStatementTimeout } from "../src/lib/mca/db";
+import { attachDeadlineStatementTimeout, needsDedicatedDeadlineTransaction } from "../src/lib/mca/db";
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution";
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>;
@@ -133,6 +133,10 @@ test("deadline SQL rewrite keeps WITH / WITH RECURSIVE valid and does not add re
   assert.match(existing.text, /^WITH mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), candidate AS /);
   const recursive = attachDeadlineStatementTimeout("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t", [], 90);
   assert.match(recursive.text, /^WITH RECURSIVE mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), t\(n\) AS /);
+  assert.equal(needsDedicatedDeadlineTransaction("SELECT id FROM deals WHERE workspace_id = $1"), false);
+  assert.equal(needsDedicatedDeadlineTransaction("UPDATE mca_export_jobs SET state = 'ready' WHERE id = $1"), true);
+  assert.equal(needsDedicatedDeadlineTransaction("WITH candidate AS (SELECT id FROM jobs ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running' FROM candidate c WHERE j.id=c.id"), true);
+  assert.equal(needsDedicatedDeadlineTransaction("SELECT id FROM deals WHERE id = $1 FOR UPDATE"), true);
 });
 
 test("deadline pool queries apply statement_timeout without a dedicated transaction or leaked session GUC", { timeout: 20000 }, async () => {
@@ -153,4 +157,27 @@ test("deadline pool queries apply statement_timeout without a dedicated transact
     const second = await getDatabase().queryOne<{ pid: number }>("SELECT pg_backend_pid() pid");
     assert.equal(first?.pid, second?.pid);
   });
+});
+
+test("blocked deadline UPDATE is aborted server-side and does not apply after the lock is released", { timeout: 20000 }, async () => {
+  const { AppError } = await import("../src/lib/mca/errors");
+  const { Client } = await import("pg");
+  const { getDatabase } = await import("../src/lib/mca/db");
+  await getDatabase().execute("CREATE TABLE IF NOT EXISTS deadline_lock_probe (id text PRIMARY KEY, value text NOT NULL)");
+  await getDatabase().execute("INSERT INTO deadline_lock_probe (id, value) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET value = excluded.value", ["row", "original"]);
+  const blocker = new Client({ connectionString: fixture.databaseUrl });
+  await blocker.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM deadline_lock_probe WHERE id=$1 FOR UPDATE", ["row"]);
+    await assert.rejects(
+      withExecutionDeadline(() => getDatabase().execute("UPDATE deadline_lock_probe SET value = ? WHERE id = ?", ["mutated", "row"]), undefined, 400),
+      (error: unknown) => error instanceof AppError && error.code === "execution_expired",
+    );
+  } finally {
+    await blocker.query("ROLLBACK");
+    await blocker.end();
+  }
+  const row = await getDatabase().queryOne<{ value: string }>("SELECT value FROM deadline_lock_probe WHERE id = ?", ["row"]);
+  assert.equal(row?.value, "original");
 });

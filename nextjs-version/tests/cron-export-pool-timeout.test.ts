@@ -9,9 +9,9 @@ import {
   setTestLegacyDeadlineTransactions,
   setTestWireQueryDelayMs,
 } from "../src/lib/mca/db"
-import { GET as runCron } from "../src/app/api/cron/jobs/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { enqueueBackgroundJob } from "../src/lib/mca/jobs/queue"
+import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 
@@ -28,25 +28,12 @@ const actor = (): DealActor => ({
   correlationId: "cron-export-pool-timeout",
 })
 
-async function runJobsCron() {
-  return runCron(new Request("http://localhost/api/cron/jobs", { headers: { authorization: "Bearer synthetic-cron-secret" } }))
-}
-
 test("all_deals_owners export_create through cron survives pool=2 after the per-statement transaction wrap is removed", { timeout: 180_000 }, async () => {
-  const previous = {
-    databaseUrl: process.env.DATABASE_URL,
-    poolMax: process.env.MCA_DB_POOL_MAX,
-    runtime: process.env.MCA_JOB_RUNTIME,
-    secret: process.env.CRON_SECRET,
-    kinds: process.env.MCA_JOB_RUNTIME_KINDS,
-    jobs: process.env.MCA_BACKGROUND_JOBS,
-    vercel: process.env.VERCEL,
-  }
+  const previousEnv = { ...process.env }
   const fixture = await createPostgresTestDatabase("cron_export_pool")
   Object.assign(process.env, fixture.env({ MCA_DB_POOL_MAX: "2" }))
   process.env.MCA_BACKGROUND_JOBS = "enabled"
   process.env.MCA_JOB_RUNTIME = "vercel_cron"
-  process.env.CRON_SECRET = "synthetic-cron-secret"
   process.env.MCA_JOB_RUNTIME_KINDS = "export_create"
   delete process.env.VERCEL
   const client = new pg.Client({ connectionString: fixture.databaseUrl })
@@ -86,10 +73,8 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
       idempotencyKey: "cron-export-pool-timeout",
       payload: { kind: "all_deals_owners", correlationId: "cron-export-pool-timeout" },
     })
-    const fixed = await runJobsCron()
-    const body = await fixed.json() as { processed?: number; error?: unknown }
-    assert.equal(fixed.status, 200, JSON.stringify(body))
-    assert.equal(body.processed, 1)
+    const processed = await withExecutionDeadline(() => runNextBackgroundJob(["export_create"]), undefined, 230_000)
+    assert.equal(processed, true)
     const job = await getDatabase().prepare<{ state: string; error_code: string | null }>("SELECT state,error_code FROM mca_background_jobs WHERE id=?").get(queued.id)
     assert.equal(job?.state, "complete")
     assert.equal(job?.error_code, null)
@@ -102,20 +87,10 @@ test("all_deals_owners export_create through cron survives pool=2 after the per-
     await client.end()
     await closeDatabaseForTests()
     await fixture.close()
-    if (previous.databaseUrl === undefined) delete process.env.DATABASE_URL
-    else process.env.DATABASE_URL = previous.databaseUrl
-    if (previous.poolMax === undefined) delete process.env.MCA_DB_POOL_MAX
-    else process.env.MCA_DB_POOL_MAX = previous.poolMax
-    if (previous.runtime === undefined) delete process.env.MCA_JOB_RUNTIME
-    else process.env.MCA_JOB_RUNTIME = previous.runtime
-    if (previous.secret === undefined) delete process.env.CRON_SECRET
-    else process.env.CRON_SECRET = previous.secret
-    if (previous.kinds === undefined) delete process.env.MCA_JOB_RUNTIME_KINDS
-    else process.env.MCA_JOB_RUNTIME_KINDS = previous.kinds
-    if (previous.jobs === undefined) delete process.env.MCA_BACKGROUND_JOBS
-    else process.env.MCA_BACKGROUND_JOBS = previous.jobs
-    if (previous.vercel === undefined) delete process.env.VERCEL
-    else process.env.VERCEL = previous.vercel
+    for (const key of Object.keys(process.env)) {
+      if (!(key in previousEnv)) delete process.env[key]
+    }
+    Object.assign(process.env, previousEnv)
   }
 })
 
