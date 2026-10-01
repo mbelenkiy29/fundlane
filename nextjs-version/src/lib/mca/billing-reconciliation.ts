@@ -220,7 +220,7 @@ const stripeId = (value: string | { id: string } | null | undefined) => typeof v
  * settlement is pending. Only a current intent allocated to this invoice proves
  * payment has begun; merely creating an open invoice does not start this grace.
  * This is not extension eligibility, which still requires full debt coverage. */
-function hasPendingRenewalPayment(invoice: Stripe.Invoice, payments: Stripe.InvoicePayment[], intents: Map<string, Stripe.PaymentIntent | null>, customerId: string) {
+export function hasPendingRenewalPayment(invoice: Stripe.Invoice, payments: Stripe.InvoicePayment[], intents: Map<string, Stripe.PaymentIntent | null>, customerId: string) {
   if (invoice.status !== "open" || invoice.amount_remaining <= 0) return false
   return payments.some(payment => {
     if (payment.status !== "open" || payment.payment?.type !== "payment_intent" || stripeId(payment.invoice) !== invoice.id ||
@@ -237,7 +237,7 @@ function hasPendingRenewalPayment(invoice: Stripe.Invoice, payments: Stripe.Invo
 /** amount_requested is an invoice allocation, never the whole intent amount.
  * Read ALL allocations for each intent: even unrelated invoices can consume it.
  * Unsupported or inconsistent provider evidence cannot authorize extra access. */
-async function fullyCoveredProcessingDebt(debt: Stripe.Invoice[], invoices: Stripe.Invoice[], payments: Map<string, Stripe.InvoicePayment[]>, intents: Map<string, Stripe.PaymentIntent | null>, customerId: string, client: StripeBillingClient) {
+export async function fullyCoveredProcessingDebt(debt: Stripe.Invoice[], invoices: Stripe.Invoice[], payments: Map<string, Stripe.InvoicePayment[]>, intents: Map<string, Stripe.PaymentIntent | null>, customerId: string, client: StripeBillingClient) {
   const candidates = new Set<string>()
   for (const invoice of debt) {
     if (invoice.status !== "open" || !Number.isSafeInteger(invoice.amount_remaining) || invoice.amount_remaining <= 0) return false
@@ -300,7 +300,7 @@ function allocationSignature(payment: Stripe.InvoicePayment) {
   return JSON.stringify([stripeId(payment.invoice), payment.status, payment.currency, payment.livemode, payment.amount_requested, payment.amount_paid, payment.payment?.type, stripeId(payment.payment?.payment_intent)])
 }
 
-async function readBillingInvoices(customerId: string, client: StripeBillingClient) {
+export async function readBillingInvoices(customerId: string, client: StripeBillingClient) {
   const invoices: Stripe.Invoice[] = []
   let cursor: string | undefined
   for (let page = 0; ; page++) {

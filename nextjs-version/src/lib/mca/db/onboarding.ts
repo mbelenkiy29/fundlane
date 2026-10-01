@@ -150,3 +150,13 @@ export const mcaSenderTestRuns = pgTable("mca_sender_test_runs", {
   check("mca_sender_test_runs_evidence_source_check", sql`evidence_source IN ('user_confirmed','provider_delivered')`),
   check("mca_sender_test_runs_lease_check", sql`(claim_token IS NULL)=(lease_until IS NULL)`),
 ]);
+
+/** Mutable current evidence; original activation remains on mca_enrollments. */
+export const mcaEnrollmentBillingEvidence = pgTable("mca_enrollment_billing_evidence", {
+  enrollment_id: text().primaryKey().references(() => mcaEnrollments.id), provider_account_id: text().notNull(),
+  revision: integer().notNull(), snapshot_cipher: text().notNull(), verified_at: text().notNull(),
+}, t => [foreignKey({columns:[t.enrollment_id,t.provider_account_id],foreignColumns:[mcaEnrollments.id,mcaEnrollments.provider_account_id]}),check("mca_enrollment_billing_evidence_revision_check",sql`revision>0`)]);
+export const mcaEnrollmentTrialReservations = pgTable("mca_enrollment_trial_reservations", {
+  enrollment_id: text().primaryKey().references(() => mcaEnrollments.id), owner_user_id:text().references(() => users.id), provider_user_id:uuid(),
+  email_hash:text().notNull(),domain_hash:text().notNull(),released_at:text(),created_at:text().notNull(),
+}, t => [index("mca_enrollment_trial_reservations_owner_idx").on(t.owner_user_id),index("mca_enrollment_trial_reservations_provider_idx").on(t.provider_user_id),index("mca_enrollment_trial_reservations_email_idx").on(t.email_hash),index("mca_enrollment_trial_reservations_domain_idx").on(t.domain_hash)]);

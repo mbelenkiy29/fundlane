@@ -5,6 +5,7 @@ import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBounda
 import { enqueueBillingNotification } from "./billing-reconciliation"
 import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
 import { resendSystemEmailEnabled, systemEmailCredentials } from "./system-email"
+import { runEnrollmentMaintenance } from "./onboarding/maintenance"
 import { AppError } from "./errors"
 import { recordOperationalError } from "./operations/telemetry"
 
@@ -132,6 +133,7 @@ async function reconcileQueuedBillingEvents(client?: StripeBillingClient) {
 }
 
 export async function runBillingMaintenance(client?: StripeBillingClient) {
+  const enrollments=await runEnrollmentMaintenance({client})
   const queued=await reconcileQueuedBillingEvents(client)
   const companies = await getDatabase().prepare<{ workspace_id: string; trial_ends_at: string | null; stripe_customer_id: string | null; stripe_subscription_id: string | null }>(`SELECT w.id workspace_id,s.trial_ends_at,c.stripe_customer_id,e.stripe_subscription_id FROM workspaces w
     LEFT JOIN company_subscription_state s ON s.workspace_id=w.id
@@ -160,7 +162,7 @@ export async function runBillingMaintenance(client?: StripeBillingClient) {
     // Fair rotation even for a provider failure; the next cron revisits after others.
     await getDatabase().prepare("UPDATE company_subscription_state SET updated_at=? WHERE workspace_id=?").run(nowIso(), company.workspace_id)
   }
-  return { scanned: companies.length, jobsClaimed:queued.claimed, reconciled, errors, notifications: await deliverBillingNotifications() }
+  return { enrollments, scanned: companies.length, jobsClaimed:queued.claimed, reconciled, errors, notifications: await deliverBillingNotifications() }
 }
 
 export function localTrialNoticeEligible(stripeSubscriptionId: string | null) {
