@@ -29,3 +29,28 @@ test("stepError and cents conversion", () => {
   assert.equal(stepError("ein", { ein: "12-3456789" }), undefined)
   assert.match(stepError("owners", { owners: [{ firstName: "A", lastName: "B", ownershipPercent: 40 }] }) ?? "", /100/)
 })
+
+test("required business fields reject impossible dates and malformed US contact details", () => {
+  for (const startDate of ["2025-02-29", "2024-02-30", "2025-13-01", "2999-01-01"]) {
+    assert.match(stepError("startDate", { startDate }) ?? "", /date/i)
+  }
+  assert.equal(stepError("startDate", { startDate: "2024-02-29" }), undefined)
+  for (const postalCode of ["abc", "1234", "123456"]) {
+    assert.match(stepError("address", { address: { line1: "1 Main", city: "Austin", state: "TX", postalCode } }) ?? "", /ZIP/)
+  }
+  assert.equal(stepError("address", { address: { line1: "1 Main", city: "Austin", state: "TX", postalCode: "78701-1234" } }), undefined)
+  for (const contactPhone of ["hello", "123", "12345678901234"]) {
+    assert.match(stepError("contact", { contactName: "Alex", contactPhone }) ?? "", /phone/i)
+  }
+  assert.equal(stepError("contact", { contactName: "Alex", contactPhone: "+1 (512) 555-0100" }), undefined)
+})
+
+test("financial and ownership requirements reject nonfinite and out-of-range values", () => {
+  for (const monthlyRevenue of [NaN, Infinity, -1]) assert.ok(stepError("monthlyRevenue", { monthlyRevenue }))
+  for (const requestedAmount of [NaN, Infinity, 0, -1]) assert.ok(stepError("requestedAmount", { requestedAmount }))
+  assert.equal(stepError("monthlyRevenue", { monthlyRevenue: 0 }), undefined)
+  assert.ok(stepError("owners", { owners: [{ firstName: "A", lastName: "B", ownershipPercent: -10 }, { firstName: "C", lastName: "D", ownershipPercent: 110 }] }))
+  assert.ok(stepError("owners", { owners: [{ firstName: "A", lastName: "B", ownershipPercent: NaN }] }))
+  assert.ok(stepError("owners", { owners: [{ firstName: "A", lastName: "B", ownershipPercent: undefined }, { firstName: "C", lastName: "D", ownershipPercent: 100 }] }))
+  assert.equal(stepError("owners", { owners: [{ firstName: "A", lastName: "B", ownershipPercent: 0 }, { firstName: "C", lastName: "D", ownershipPercent: 100 }] }), undefined)
+})

@@ -44,6 +44,11 @@ export async function maintainAssistantExperience(maxCleanupJobs = 30) {
         "INSERT INTO mca_assistant_cleanup(id,resource_type,resource_id,workspace_id,run_id,next_attempt_at) VALUES (?,'file',?,?,?,?) ON CONFLICT(resource_type,resource_id) DO NOTHING"
       )
       .run(newId(), file.id, file.workspace_id, file.run_id, now)
+  // The last claim consumes its attempt before deletion. If that worker dies,
+  // expose the exhausted job only after its existing lease has expired.
+  await db.prepare(
+    "UPDATE mca_assistant_cleanup SET state='failed' WHERE state='pending' AND attempts>=8 AND next_attempt_at<=?"
+  ).run(nowIso())
   // A crashed worker's lease expires; separate workers claim different rows.
   for (let i = 0; i < maxCleanupJobs; i++) {
     const job = await withTransaction(async (tx) => {
