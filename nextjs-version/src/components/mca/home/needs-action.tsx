@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { VoiceLauncher } from "@/components/mca/voice/voice-launcher"
 import { ArrowUpRight, Loader2, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -220,9 +221,7 @@ export function NeedsAction() {
                     <div className="flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>
                       {item.suggestedActions.map((action) =>
                         action.id === "call" && action.href ? (
-                          <Button key={action.id} size="sm" variant="outline" asChild disabled={!action.enabled}>
-                            <a href={action.href}>{action.label}</a>
-                          </Button>
+                          action.enabled ? <VoiceLauncher key={action.id} dealId={item.dealId} label={action.label} /> : <Button key={action.id} size="sm" variant="outline" disabled>{action.label}</Button>
                         ) : action.id === "call" ? (
                           <Button
                             key={action.id}

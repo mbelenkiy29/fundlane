@@ -1,5 +1,8 @@
 import test,{before,beforeEach,after} from "node:test"
 import assert from "node:assert/strict"
+import pg from "pg"
+import { execFileSync } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import { createHmac } from "node:crypto"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { getDatabase,closeDatabaseForTests,nowIso } from "../src/lib/mca/db"
@@ -13,7 +16,10 @@ let fixture:Awaited<ReturnType<typeof createPostgresTestDatabase>>,actor:DealAct
 const env={...process.env},accountSid=`AC${"a".repeat(32)}`,numberId="voice-number",phone="+15555550101",appSid=`AP${"c".repeat(32)}`
 const sid=(v:string)=>`CA${v.repeat(32)}`
 before(async()=>{
- fixture=await createPostgresTestDatabase("voice");Object.assign(process.env,fixture.env({MCA_DATA_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64url"),MCA_APP_ORIGIN:"https://example.test"}))
+ fixture=await createPostgresTestDatabase("voice");
+ await fixture.query("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='mca_app') THEN CREATE ROLE mca_app NOLOGIN; END IF; END $$;")
+ const migration=await readFile("drizzle/0069_browser_voice.sql","utf8"),grants=migration.slice(migration.indexOf("DO $grants$"));if(migration.includes("DO $grants$"))await fixture.query(grants)
+Object.assign(process.env,fixture.env({MCA_DATA_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64url"),MCA_APP_ORIGIN:"https://example.test"}))
  for(const [name,email] of [["Voice company","voice@example.test"],["Foreign company","foreign@example.test"]]){
  const owner=await createWorkspaceWithAdmin({workspaceName:name,adminName:name,adminEmail:email,password:"synthetic-password-123",role:"admin"});const a=await actorForDeals({authType:"session",...owner,role:"admin",scopes:[],sessionId:"fixture"});if(!actor)actor=a;else foreign=a
  }
@@ -70,4 +76,24 @@ test("inbound replay with expired recipients records one terminal missed call",a
  assert.equal((await listVoiceHistory(actor)).find(c=>c.id===sid("c"))?.state,"missed")
  const row=await getDatabase().prepare<{terminal_at:string|null}>("SELECT terminal_at FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(actor.workspaceId,sid("c"));assert.ok(row?.terminal_at)
  assert.match(await handleInbound(hook("inbound",p),actor.workspaceId),/<Hangup/)
+})
+
+test("restricted mca_app can use Voice tables but cannot disable RLS",async()=>{
+ await fixture.query("ALTER ROLE mca_app LOGIN")
+ execFileSync(process.execPath,["--import","tsx","scripts/database/secure-runtime.ts"],{env:fixture.env({MCA_DB_RUNTIME_PASSWORD:"synthetic_runtime_password_only_123",MCA_TEST_DATABASE_DISPOSABLE:"true"}),encoding:"utf8"})
+ const client=new pg.Client({connectionString:fixture.databaseUrl});await client.connect()
+ try{
+  await client.query("BEGIN; SET LOCAL ROLE mca_app; SELECT workspace_id FROM voice_config; SELECT identity FROM voice_presence; SELECT id FROM voice_dial_intents; SELECT id FROM voice_calls;")
+  await client.query("UPDATE voice_config SET updated_at=updated_at; UPDATE voice_dial_intents SET expires_at=expires_at; UPDATE voice_calls SET state=state; DELETE FROM voice_presence WHERE expires_at<'2000-01-01';")
+  await client.query("INSERT INTO voice_config SELECT * FROM voice_config ON CONFLICT DO NOTHING; INSERT INTO voice_presence SELECT * FROM voice_presence ON CONFLICT DO NOTHING;")
+  assert.equal((await client.query("INSERT INTO voice_dial_intents SELECT 'restricted-intent',workspace_id,membership_id,deal_id,number_id,phone_cipher,expires_at,consumed_at,canceled_at,created_at FROM voice_dial_intents LIMIT 1")).rowCount,1)
+  assert.equal((await client.query("INSERT INTO voice_calls SELECT 'restricted-call',workspace_id,number_id,account_sid,'CAffffffffffffffffffffffffffffffff',membership_id,recipient_memberships,deal_id,direction,state,phone_cipher,company_phone_cipher,terminal_at,alert_pending,created_at FROM voice_calls LIMIT 1")).rowCount,1)
+  await assert.rejects(client.query("ALTER TABLE voice_calls DISABLE ROW LEVEL SECURITY"))
+  await client.query("ROLLBACK")
+  const result=await client.query("SELECT has_table_privilege('mca_app','voice_calls','DELETE') AS delete_calls,has_table_privilege('mca_app','voice_config','TRUNCATE') AS truncate_config")
+  assert.equal(result.rows[0].delete_calls,false);assert.equal(result.rows[0].truncate_config,false)
+  const runtimeUrl=new URL(fixture.databaseUrl);runtimeUrl.username="mca_app";runtimeUrl.password=""
+  const output=execFileSync(process.execPath,["--conditions=react-server","--import","tsx","--input-type=module","-e","const svc=await import('./src/lib/mca/voice/service.ts');const {issueToken,listVoiceHistory,setPresence}=svc.default??svc;const db=await import('./src/lib/mca/db.ts');const {closeDatabaseForTests}=db.default??db;const actor=JSON.parse(process.env.VOICE_TEST_ACTOR);await issueToken(actor);await listVoiceHistory(actor);await setPresence(actor,true);await setPresence(actor,false);await closeDatabaseForTests();console.log('restricted service OK')"],{env:fixture.env({DATABASE_URL:runtimeUrl.toString(),DATABASE_URL_UNPOOLED:runtimeUrl.toString(),VOICE_TEST_ACTOR:JSON.stringify(actor)}),encoding:"utf8"})
+  assert.match(output,/restricted service OK/)
+ }finally{await client.query("ROLLBACK");await client.end()}
 })

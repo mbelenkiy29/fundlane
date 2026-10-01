@@ -4,7 +4,7 @@ Voice is user-operated: enable the browser panel, choose a merchant Call action,
 
 ## Setup and external acceptance gates
 
-1. Apply notification0068 then Voice0069 through the reviewed nonproduction/release migration procedure. Voice migration does not grant any runtime or hosted credentials/roles: the restricted `mca_app` role needs reviewed table access and RLS policies for voice_config, voice_presence, voice_dial_intents, voice_calls before activation. This task does not execute security grants.
+1. Apply notification0068 then Voice0069 through the reviewed nonproduction/release migration procedure. Voice migration enables RLS, revokes public/browser-role access and grants the existing trusted server `mca_app` role SELECT/INSERT/UPDATE on config/intents/history plus DELETE only on presence. Policies follow the repository server trust model; authenticated service code enforces tenant/member filters. The role cannot delete call history, truncate configuration or disable RLS. The release securing script preserves these table-specific privileges; local tests run the actual securing script, verify INSERT/SELECT/UPDATE/presence DELETE, and execute token/history/presence services through an mca_app connection. These definitions are reviewed source; no hosted migration, role creation or security grants are applied by this task.
 2. SMS owns existing company number identity and encrypted Twilio subaccount credentials. Voice pins SMS contract53e7947 and notifications fa14fe3+41a4264. A released/releasing/foreign-company number cannot be selected; SMS campaign registration does not establish or gate Voice capability. Company suspension blocks new calls.
 3. Existing subaccount signing API key/secret, auth token and a TwiML Voice application SID must be configured by the authorized administrator outside this task. No credentials or numbers are created here. `MCA_VOICE_PUBLIC_ORIGIN` (fallback `MCA_APP_ORIGIN`) must be an exact public HTTPS origin.
 4. Set that application's Voice URL to `ORIGIN/api/mca/voice/webhooks/WORKSPACE_ID/outbound` (POST) and the designated number's Voice URL to `ORIGIN/api/mca/voice/webhooks/WORKSPACE_ID/inbound` (POST). TwiML supplies `.../outcome` as the Dial action callback. Voice verification uses the canonical configured origin, account SID, unique bounded form fields and signature. Never configure callbacks for a different company's account/number.
@@ -21,7 +21,7 @@ Broker missed-call events use the pinned notification foundation with kind `miss
 - `POST /api/mca/voice/presence`: opt-in 300-second availability lease; disabled removes it.
 - `POST /api/mca/voice/dial-intents`: visible dealId; one-use 60-second intent; destination and number rechecked at dispatch. `POST .../cancel` invalidates unconsumed intents.
 - `GET /api/mca/voice/history`: tenant-only; admins company history, members their originated/intended calls. Terminal callbacks cannot regress outcomes.
-- `VoiceLauncher({dealId,label?})` / `launchVoiceCall(dealId)` replace tel handoffs during coordinated CRM integration; launcher requests a reviewable call panel and never automatically dials.
+- `VoiceLauncher({dealId,label?})` / `launchVoiceCall(dealId)` replace tel handoffs in the deals table, merchant sheet and Home renewal call action; launcher requests a reviewable call panel and never automatically dials.
 
 Provider references: [Twilio Device](https://www.twilio.com/docs/voice/sdks/javascript/twiliodevice), [Access Tokens](https://www.twilio.com/docs/iam/access-tokens), [Dial](https://www.twilio.com/docs/voice/twiml/dial).
 

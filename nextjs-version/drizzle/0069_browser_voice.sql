@@ -55,4 +55,32 @@ ALTER TABLE voice_presence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE voice_dial_intents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE voice_calls ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON voice_config,voice_presence,voice_dial_intents,voice_calls FROM PUBLIC;
--- Runtime role policies/grants are a reviewed release operation; never change hosted grants here.
+-- Reviewed server-runtime access follows existing mca_app trust boundaries.
+-- Tenant/member authorization remains in the authenticated service; browser roles have no access.
+--> statement-breakpoint
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON voice_config,voice_presence,voice_dial_intents,voice_calls FROM anon;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
+    REVOKE ALL ON voice_config,voice_presence,voice_dial_intents,voice_calls FROM authenticated;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'mca_app') THEN
+    GRANT SELECT,INSERT,UPDATE ON voice_config,voice_dial_intents,voice_calls TO mca_app;
+    GRANT SELECT,INSERT,UPDATE,DELETE ON voice_presence TO mca_app;
+    IF NOT EXISTS(SELECT FROM pg_policies WHERE schemaname='public' AND tablename='voice_config' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON voice_config TO mca_app USING(true) WITH CHECK(true);
+    END IF;
+    IF NOT EXISTS(SELECT FROM pg_policies WHERE schemaname='public' AND tablename='voice_presence' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON voice_presence TO mca_app USING(true) WITH CHECK(true);
+    END IF;
+    IF NOT EXISTS(SELECT FROM pg_policies WHERE schemaname='public' AND tablename='voice_dial_intents' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON voice_dial_intents TO mca_app USING(true) WITH CHECK(true);
+    END IF;
+    IF NOT EXISTS(SELECT FROM pg_policies WHERE schemaname='public' AND tablename='voice_calls' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON voice_calls TO mca_app USING(true) WITH CHECK(true);
+    END IF;
+  END IF;
+END
+$grants$;

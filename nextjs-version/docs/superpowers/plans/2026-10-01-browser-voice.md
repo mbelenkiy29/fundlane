@@ -9,7 +9,7 @@
 
 ## Global constraints
 
-No live calls/mic acceptance, provider data invention, provisioning, production data, hosted migrations, credential grants or merges. Recording always do-not-record. All shared contracts pinned before consumption; parent reserves migration/build slots.
+No live calls/mic acceptance, provider data invention, provisioning, production data, hosted migrations, live credential/security grants or merges. Reviewed migration definitions and restricted-role local tests are explicitly authorized by parent clarification. Recording always do-not-record. All shared contracts pinned before consumption; parent reserves migration/build slots.
 
 ## Review focus
 
@@ -58,3 +58,6 @@ Task 2: completeeb77c22; disposable Postgres service4/4 including missed alert R
 Task 3: completeeb77c22; browser/policy10 total focused checks GREEN, typecheck0 and targeted ESLint0 errors/warnings. CRM owner confirmed nonconflicting launcher insertions subsequently applied in Voice branch.
 Final independent review: local voice_review reviewedeb77c22, four important findings. All reproduced before fixes: dispatch permissions, historical terminal callback readiness, late refresh presence, replay rejection nonterminal. Fixed in one pass; focused provider/browser/policy11/11 and service7/7 GREEN. Type/lint rechecked. No deferred minor findings or spec rulings.
 Remaining: parent-allocated build/aggregate slot, publication/remote checks; activation remains external and documented.
+
+Parent clarification: security prohibition concerns live application.0069 now includes least-privilege server-role grants/RLS definitions, with local mca_app access/negative grant tests RED→GREEN; no hosted execution. Home renewal launcher authorized and integrated preserving contracts/phone/access guards. SMS stable pin388c3f8+4ca987e resolves dependency lint error; notifications stable10013c8 retained.
+New-scope migration review: db:secure overrode restricted Voice grants; reproduced RED true!=false and fixed via table-specific runtime-grants helper preserving existing exceptions. Migration+real local securing script+restricted service proof GREEN; final focused36/36, typecheck0, full lint0 errors/16 baseline warnings. Home launcher guards independently reviewed. Evidence: ../../acceptance/browser-voice-2026-10-01.md.
