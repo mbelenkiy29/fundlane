@@ -73,11 +73,8 @@ export async function persistInbound(
     )
       return
     if (type === "STOP") await suppress(workspaceId, recipient, "opted_out")
-    // Inbound forms have no reliable event ordering. A delayed, previously unseen
-    // START must not clear a newer STOP. Fresh manual consent can clear it.
-    if (type === "START") await db.prepare(
-      "INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,'opted_in',?) ON CONFLICT (workspace_id,recipient_hash) DO NOTHING"
-    ).run(workspaceId, smsRecipientHash(workspaceId, recipient), nowIso())
+    if (type === "START")
+      await suppress(workspaceId, recipient, "opted_in")
     if (!/^(SM|MM)[a-fA-F0-9]{32}$/.test(sid)) {
       if (type) return
       throw new AppError(

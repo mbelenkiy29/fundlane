@@ -3,7 +3,8 @@ import test, { before, beforeEach, after, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac, randomBytes } from 'node:crypto'
 import { createPostgresTestDatabase } from './helpers/postgres-test-db.mjs'
-import { getDatabase, closeDatabaseForTests, nowIso } from '../src/lib/mca/db'
+import { getDatabase, closeDatabaseForTests, nowIso, assertTransactionExecutor } from '../src/lib/mca/db'
+import { AppError } from '../src/lib/mca/errors'
 import { encryptSensitive, hashOpaqueToken } from '../src/lib/mca/crypto'
 import type { DealActor } from '../src/lib/mca/deals/schema'
 import { createDeal } from '../src/lib/mca/deals/service'
@@ -181,12 +182,11 @@ for (const block of ['STOP', 'suspension', 'eligibility', 'credentials'] as cons
   assert.equal(calls, 0)
 })
 
-test('signed callback duplicates, HELP and delayed START cannot undo STOP', async () => {
+test('signed callback duplicates and HELP preserve STOP; a new START restores consent', async () => {
   const start = sid(), stop = sid()
   await inbound('START', start)
   await Promise.all([inbound('STOP', stop), inbound('STOP', stop)])
   await inbound('START', start)
-  await inbound('START') // previously unseen, possibly older START
   await inbound('HELP')
   await inbound('ordinary text', sid(), 'HELP')
   assert.equal((await getSmsConsent(actor, dealId, phone)).state, 'opted_out')
@@ -194,8 +194,9 @@ test('signed callback duplicates, HELP and delayed START cannot undo STOP', asyn
   assert.equal(rows?.count, '1')
   await assert.rejects(deliverClosingSms(actor, input('callback-stop')), { code: 'sms_recipient_opted_out' })
   assert.equal(calls, 0)
-  await consent()
-  assert.equal((await deliverClosingSms(actor, input('fresh-consent'))).state, 'accepted')
+  await inbound('START')
+  assert.equal((await getSmsConsent(actor, dealId, phone)).state, 'opted_in')
+  assert.equal((await deliverClosingSms(actor, input('fresh-start'))).state, 'accepted')
   assert.equal(calls, 1)
 })
 
@@ -240,4 +241,27 @@ test('company SMS suspension also blocks manually configured senders', async () 
   await beforeDispatch("UPDATE sms_companies SET suspended=1 WHERE workspace_id=NEW.workspace_id")
   assert.equal((await deliverClosingSms(actor, input('suspended-manual-account'))).errorCode, 'sms_setup_incomplete')
   assert.equal(calls, 0)
+})
+
+for (const transport of ['adapter', 'injected'] as const) test(`${transport}: provider dispatch runs after the consent transaction commits`, async () => {
+  const send = async () => {
+    calls++
+    assert.throws(() => assertTransactionExecutor(getDatabase()), { code: 'transaction_required' })
+    const lock = await fixture.query('SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired', [`sms-consent:${smsRecipientHash(workspaceId, phone)}`])
+    assert.equal(lock.rows[0].acquired, true, 'recipient lock must be released before provider I/O')
+    return { state: 'accepted' as const, externalId: sid() }
+  }
+  const adapter = transport === 'adapter' ? mock.method(twilioSmsAdapter, 'send', send) : undefined
+  try {
+    assert.equal((await deliverClosingSms(actor, input(`transaction-${transport}`), transport === 'injected' ? { send } : undefined)).state, 'accepted')
+    assert.equal(calls, 1)
+  } finally { adapter?.mock.restore() }
+})
+
+test('an error after calling the provider is not reported as a never-sent failure', async () => {
+  const error = new AppError(503, 'provider_outcome_unknown', 'Synthetic ambiguous provider outcome')
+  await assert.rejects(deliverClosingSms(actor, input('provider-throws'), { send: async () => { calls++; throw error } }), error)
+  assert.equal(calls, 1)
+  const message = await getDatabase().prepare<{ state: string }>('SELECT state FROM mca_sms_messages WHERE workspace_id=? AND idempotency_key=?').get(workspaceId, 'provider-throws')
+  assert.equal(message?.state, 'pending')
 })

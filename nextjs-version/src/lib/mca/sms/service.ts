@@ -133,12 +133,13 @@ async function dispatchOutboundSms(input: {
 }): Promise<SmsDeliveryResult> {
   await (await import("../company-access")).assertCompanyOperational(input.actor.workspaceId)
   const provider = asSmsProvider(input.accountRow.provider)
-  // Serialize the final consent check and dispatch against inbound STOP/manual opt-out.
+  // Serialize the final consent check against inbound STOP/manual opt-out.
   // Reservation commits earlier; consent and managed eligibility may have changed since then.
   const guardedSend = async (send: () => Promise<SmsDeliveryResult>): Promise<SmsDeliveryResult> => {
-    let dispatchStarted = false
     try {
-      return await withImmediateTransaction(async (db) => {
+      await withImmediateTransaction(async (db) => {
+        await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))")
+          .get(`sms-consent:${smsRecipientHash(input.actor.workspaceId, input.recipient)}`)
         await assertNotSuppressed(db, input.actor.workspaceId, input.recipient)
         const consent = await getSmsConsent(input.actor, input.dealId, input.recipient, { matchDealContact: false })
         if (consent.state !== "opted_in") throw new AppError(409, consent.state === "opted_out" ? "sms_recipient_opted_out" : "sms_consent_required", "Current SMS consent is required.")
@@ -149,15 +150,16 @@ async function dispatchOutboundSms(input: {
         if (current.credential_ref === "MANAGED" && !await managedReady(input.actor.workspaceId, input.route.accountId))
           throw new AppError(409, "sms_setup_incomplete", "Company SMS is suspended or awaiting setup.")
         await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
-        dispatchStarted = true
-        const result = await send()
-        if (result.state === "failed" && result.errorCode === "twilio_21610") await suppress(input.actor.workspaceId, input.recipient, "opted_out")
-        return result
       })
     } catch (error) {
-      if (!dispatchStarted && error instanceof AppError) return { state: "failed", errorCode: error.code, errorMessage: error.message }
+      if (error instanceof AppError) return { state: "failed", errorCode: error.code, errorMessage: error.message }
       throw error
     }
+    // Commit and release the consent lock before provider I/O. Errors from here
+    // must propagate: dispatch may have occurred, so a never-sent result is unsafe.
+    const result = await send()
+    if (result.state === "failed" && result.errorCode === "twilio_21610") await suppress(input.actor.workspaceId, input.recipient, "opted_out")
+    return result
   }
   await (await import("../outbound-approval")).assertOutboundDispatch(input.actor.workspaceId, input.approvedAt)
   const credentialRef = String(input.accountRow.credential_ref)

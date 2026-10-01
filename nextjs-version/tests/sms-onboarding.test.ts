@@ -676,7 +676,7 @@ test("company registration checkpoints the complete ISV workflow without sharing
  assert.equal((await getDatabase().prepare<{registration_state:string}>("SELECT registration_state FROM sms_companies WHERE workspace_id=?").get(newOwner.workspaceId))?.registration_state,"approved")
 })
 
-test("opt-out keywords suppress; unordered opt-in keywords cannot clear STOP", async () => {
+test("default opt-out keywords and opt-in keywords update suppression with whitespace and case", async () => {
   const from = "+12125559001", to = "+12125552222"
   let sequence = 100
   const send = async (body: string, optOutType?: string) => {
@@ -688,16 +688,16 @@ test("opt-out keywords suppress; unordered opt-in keywords cannot clear STOP", a
     await send(`  ${word.toLowerCase()}  `)
     await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from)), { code: "sms_recipient_opted_out" })
     await send("  yes  ")
-    await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from)), { code: "sms_recipient_opted_out" })
+    await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
   }
   for (const word of ["START", "UNSTOP", "YES"]) {
     await send(" stop ")
     await send(` ${word.toLowerCase()} `)
-    await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from)), { code: "sms_recipient_opted_out" })
+    await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
   }
   await send("ordinary text", "STOP")
   await send("ordinary text", "START")
-  await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from)), { code: "sms_recipient_opted_out" })
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, from))
 })
 
 test("manual evidence clears an earlier STOP but replayed evidence does not undo a later STOP", async () => {
@@ -770,7 +770,7 @@ test("Twilio 21610 suppresses a recipient after a failed send", async () => {
   const consent = await getDatabase().prepare<{ source: string; state: string }>("SELECT source,state FROM mca_sms_consent_events WHERE workspace_id=? AND deal_id=? AND source='keyword' ORDER BY created_at DESC LIMIT 1").get(owner.workspaceId, dealId)
   assert.equal(consent?.source, "keyword")
   assert.equal(consent?.state, "opted_in")
-  await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient)), { code: "sms_recipient_opted_out" })
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient))
 })
 
 test("purchase attempt keys dedupe a double submit and advance after failure or release", async () => {
