@@ -1,3 +1,4 @@
+import { PerformanceReportPanel } from "@/components/mca/reports/performance"
 import { ExportPanel } from "@/components/mca/exports/export-panel"
 import { FunderAnalytics } from "@/components/mca/reports/funder-analytics"
 import { LeadRoi } from "@/components/mca/reports/lead-roi"
@@ -18,6 +19,7 @@ export default function ReportsPage() {
       <div id="mca-export-panel">
         <ExportPanel />
       </div>
+      <PerformanceReportPanel />
       <ApplicationOutreachReport />
       <div id="mca-reports-rep-funnel">
         <RepFunnel />

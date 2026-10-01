@@ -119,3 +119,6 @@ graphify-out/reflections/
 
 # Local Graphify refresh backups
 graphify-out/20??-??-??/
+
+# Superpowers per-task scratch ledgers
+/.superpowers/
