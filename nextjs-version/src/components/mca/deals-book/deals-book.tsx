@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { AlertCircle, Building2, RefreshCw, Search, Upload } from "lucide-react"
+import { launchVoiceCall } from "@/components/mca/voice/voice-launcher"
 import { AssistantButton } from "@/components/mca/assistant/assistant-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -101,7 +102,7 @@ export function DealsBook() {
 
   function onCall(row: BookRow) {
     if (!row.contactPhone) return
-    window.location.href = `tel:${row.contactPhone}`
+    launchVoiceCall(row.dealId)
   }
 
   return (
