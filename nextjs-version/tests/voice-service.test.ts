@@ -18,7 +18,7 @@ const sid=(v:string)=>`CA${v.repeat(32)}`
 before(async()=>{
  fixture=await createPostgresTestDatabase("voice");
  await fixture.query("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='mca_app') THEN CREATE ROLE mca_app NOLOGIN; END IF; END $$;")
- const migration=await readFile("drizzle/0069_browser_voice.sql","utf8"),grants=migration.slice(migration.indexOf("DO $grants$"));if(migration.includes("DO $grants$"))await fixture.query(grants)
+ const migration=await readFile("drizzle/0072_browser_voice.sql","utf8"),grants=migration.slice(migration.indexOf("DO $grants$"));if(migration.includes("DO $grants$"))await fixture.query(grants)
 Object.assign(process.env,fixture.env({MCA_DATA_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64url"),MCA_APP_ORIGIN:"https://example.test"}))
  for(const [name,email] of [["Voice company","voice@example.test"],["Foreign company","foreign@example.test"]]){
  const owner=await createWorkspaceWithAdmin({workspaceName:name,adminName:name,adminEmail:email,password:"synthetic-password-123",role:"admin"});const a=await actorForDeals({authType:"session",...owner,role:"admin",scopes:[],sessionId:"fixture"});if(!actor)actor=a;else foreign=a
