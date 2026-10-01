@@ -276,5 +276,5 @@ test("revoking the sole default sender atomically clears default status and disa
   assert.equal(revoked.isDefault, false)
   const row = await fixture.query("SELECT state,is_default FROM mca_sms_accounts WHERE id=$1", [accountAId])
   assert.deepEqual((row.rows as unknown as Array<{ state: string; is_default: number }>)[0], { state: "revoked", is_default: 0 })
-  await assert.rejects(() => resolveSmsRoute(repA, { dealId: ids.dealA }), /No assigned SMS account is available/)
+  await assert.rejects(() => resolveSmsRoute(repA, { dealId: ids.dealA }), /No SMS account is available/)
 })

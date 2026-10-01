@@ -10,14 +10,14 @@ import pg from "pg";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
 
 test("current-main SMS ledger upgrades new feature migrations once without rewriting applied identity", async () => {
-  const timestamp = 1790385600017;
+  const timestamp = 1790385600019;
   const smsHash = "cd74e933b3c1efbaf386369e94e14414ab99485f6a49b5ae37cf4e2f2311522f";
   const folder = await mkdtemp(join(tmpdir(), "fundlane-main-upgrade-"));
   let fixture, pool;
   try {
     const journal = JSON.parse(await readFile(resolve("drizzle/meta/_journal.json"), "utf8"));
     const entries = journal.entries.filter(entry => entry.when <= timestamp);
-    assert.equal(entries.at(-1).tag, "0068_sms_keyword_consent");
+    assert.equal(entries.at(-1).tag, "0070_platform_super_admin");
     assert.equal(entries.at(-1).when, timestamp);
     await mkdir(join(folder, "meta"));
     await writeFile(join(folder, "meta/_journal.json"), JSON.stringify({ ...journal, entries }));
@@ -29,7 +29,15 @@ test("current-main SMS ledger upgrades new feature migrations once without rewri
     await migrate(drizzle(pool), { migrationsFolder: folder });
     const before = (await pool.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows;
     assert.equal(Number(before.at(-1).created_at), timestamp);
-    assert.equal(before.at(-1).hash, smsHash);
+    const applied = [
+      [1790385600017, smsHash],
+      [1790385600018, "8e7ea3824ff8e83745e7f59ac327d9ffbdf3fbba8141544d41d53e38db5dffe9"],
+      [1790385600019, "2688b607f19922c6fa6efe93a48bc1a2d52bd491f529f12acc4a9398b54426d1"],
+    ];
+    for (const [when, hash] of applied) {
+      assert.equal(before.filter(row => Number(row.created_at) === when).length, 1);
+      assert.equal(before.find(row => Number(row.created_at) === when).hash, hash);
+    }
     await migrate(drizzle(pool), { migrationsFolder: resolve("drizzle") });
     const after = (await pool.query("SELECT hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at")).rows;
     assert.deepEqual(after.slice(0, before.length), before);

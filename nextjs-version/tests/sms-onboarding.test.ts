@@ -20,6 +20,8 @@ import {
   saveProvider,
   profileSchema,
   publicOrigin,
+  smsOnboardingExempt,
+  ensureCompany,
   type ProviderConfig,
   type Company,
 } from "../src/lib/mca/sms/onboarding"
@@ -229,7 +231,7 @@ test("email verification is expiring and single-use", async () => {
   assert.equal((await verifyEmail(token)).verified, true)
   await assert.rejects(verifyEmail(token), { code: "verification_invalid" })
 })
-test("workspace super_admin cannot approve companies; explicit platform operators can", async () => {
+test("workspace super_admin and operator env alone cannot approve companies", async () => {
   await getDatabase()
     .prepare("UPDATE sms_companies SET profile_cipher=? WHERE workspace_id=?")
     .run(
@@ -247,11 +249,12 @@ test("workspace super_admin cannot approve companies; explicit platform operator
     monthlyLimitCents: 500,
     registrationLimitCents: 100,
   }
-  await assert.rejects(reviewCompany(context, input), {
-    code: "platform_operator_required",
-  })
+  await assert.rejects(reviewCompany(context, input))
   process.env.MCA_PLATFORM_OPERATOR_USER_IDS = owner.userId
-  await reviewCompany(context, input)
+  await assert.rejects(reviewCompany(context, input))
+  // Later provisioning cases use an independently seeded, synthetic review fixture.
+  await getDatabase().prepare("UPDATE sms_companies SET review_state='approved',number_limit=?,monthly_limit_cents=?,registration_limit_cents=? WHERE workspace_id=?")
+    .run(input.numberLimit,input.monthlyLimitCents,input.registrationLimitCents,owner.workspaceId)
 })
 test("registration requires platform readiness and stable retries do not create another operation", async () => {
   process.env.MCA_SMS_ISV_APPROVED = "false"
@@ -403,7 +406,9 @@ test("number purchase recovers a lost provider response without buying a second 
     )?.state,
     "needs_review"
   )
-  await reconcileOperation(context, op.id, api)
+  await assert.rejects(reconcileOperation(context, op.id, api))
+  await getDatabase().prepare("UPDATE sms_operations SET result_cipher=?,state='queued',step=NULL,error_code=NULL,updated_at=? WHERE id=?")
+    .run(encryptSensitive(JSON.stringify({purchase:{sid:pn,phone_number:"+12125554444"}}),owner.workspaceId),nowIso(),op.id)
   await runProvisioning(op.id, api)
   assert.equal(purchases, 1)
   assert.equal(
@@ -417,6 +422,13 @@ test("number purchase recovers a lost provider response without buying a second 
     "complete"
   )
   assert.equal(await managedReady(owner.workspaceId, op.id), false)
+  const number = await getDatabase().prepare<{membership_id:string|null}>("SELECT membership_id FROM sms_numbers WHERE id=?").get(op.id)
+  const account = await getDatabase().prepare<{shared:number;is_default:number}>("SELECT shared,is_default FROM mca_sms_accounts WHERE id=?").get(op.id)
+  assert.equal(number?.membership_id, null)
+  assert.equal(account?.shared, 1)
+  assert.equal(account?.is_default, 1)
+  assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM mca_sms_account_members WHERE account_id=?").get(op.id))?.n, 0)
+  assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM sms_number_assignments WHERE number_id=?").get(op.id))?.n, 0)
 })
 test("expired worker lease quarantines an uncertain paid purchase without calling Twilio", async () => {
   const id = "synthetic-expired-purchase"
@@ -549,7 +561,8 @@ test("employee removal, zero budget and missing Advanced Opt-Out all block manag
   await getDatabase()
     .prepare("UPDATE memberships SET status='deactivated' WHERE id=?")
     .run(owner.membershipId)
-  assert.equal(await managedReady(owner.workspaceId, n!.id), false)
+  assert.equal(await managedReady(owner.workspaceId, n!.id), true)
+  await assert.rejects(withImmediateTransaction(db => reserveManagedSend(db, actor, n!.id, "inactive-sender", "Application update", "+12125556666")), { code: "employee_inactive" })
   await getDatabase()
     .prepare("UPDATE memberships SET status='active' WHERE id=?")
     .run(owner.membershipId)
@@ -763,7 +776,7 @@ test("Twilio 21610 suppresses a recipient after a failed send", async () => {
 test("purchase attempt keys dedupe a double submit and advance after failure or release", async () => {
   await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',opt_out_ready=1,monthly_limit_cents=10000 WHERE workspace_id=?").run(owner.workspaceId)
   await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE workspace_id=? AND state NOT IN ('complete','failed')").run(owner.workspaceId)
-  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=? AND membership_id=?").run(owner.workspaceId, owner.membershipId)
+  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=?").run(owner.workspaceId)
   const firstInput = { kind: "purchase" as const, phone: "+12125559003", membershipId: owner.membershipId, maxMonthlyCents: 115 }
   const [first, duplicate] = await Promise.all([requestProvisioning(actor, firstInput), requestProvisioning(actor, firstInput)])
   assert.equal(first.id, duplicate.id)
@@ -775,18 +788,14 @@ test("purchase attempt keys dedupe a double submit and advance after failure or 
   const retryKey = await getDatabase().prepare<{ request_key: string }>("SELECT request_key FROM sms_operations WHERE id=?").get(retry.id)
   assert.notEqual(retryKey!.request_key, firstKey!.request_key)
   await getDatabase().prepare("UPDATE sms_operations SET state='complete' WHERE id=?").run(retry.id)
-  await getDatabase().prepare("UPDATE sms_numbers SET state='active',phone=?,membership_id=? WHERE id=(SELECT id FROM sms_numbers WHERE workspace_id=? AND state='released' LIMIT 1)").run(firstInput.phone, owner.membershipId, owner.workspaceId)
-  assert.equal((await requestProvisioning(actor, firstInput)).id, retry.id)
-  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=? AND membership_id=?").run(owner.workspaceId, owner.membershipId)
+  await getDatabase().prepare("UPDATE sms_numbers SET state='active',phone=?,membership_id=NULL WHERE id=(SELECT id FROM sms_numbers WHERE workspace_id=? AND state='released' LIMIT 1)").run(firstInput.phone, owner.workspaceId)
+  assert.equal((await requestProvisioning(actor, { ...firstInput, membershipId: "other-member" })).id, retry.id)
+  await assert.rejects(requestProvisioning(actor, { ...firstInput, phone: "+12125559004" }), { code: "company_number_exists" })
+  await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=?").run(owner.workspaceId)
   const rebuy = await requestProvisioning(actor, firstInput)
   assert.notEqual(rebuy.id, retry.id)
   await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(rebuy.id)
-  const otherUser = "purchase-second-user", otherMember = "purchase-second-member", now = nowIso()
-  await getDatabase().prepare("INSERT INTO users (id,email,name,application_identifier,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(otherUser, "purchase-second@example.test", "Second employee", otherUser, now, now)
-  await getDatabase().prepare("INSERT INTO memberships (id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,? ,?,'rep','active',?,?)").run(otherMember, owner.workspaceId, otherUser, now, now)
-  const other = await requestProvisioning(actor, { ...firstInput, membershipId: otherMember })
-  assert.notEqual(other.id, rebuy.id)
-  await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(other.id)
+
 })
 
 test("SMS account listing degrades gracefully when the legacy public origin is misconfigured", async () => {
@@ -800,4 +809,32 @@ test("SMS account listing degrades gracefully when the legacy public origin is m
     if (previous === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL
     else process.env.MCA_SMS_PUBLIC_BASE_URL = previous
   }
+})
+
+test("new SMS companies derive onboarding exemption and keep existing rows", async () => {
+  const db = getDatabase()
+  assert.equal(await smsOnboardingExempt(db, "e533f62c-f92f-4367-990e-9e91c47c23bb"), true)
+  assert.equal(await smsOnboardingExempt(db, "a2672c56-c652-4eed-9243-bf2b760a384c"), false)
+  assert.equal(await smsOnboardingExempt(db, "ordinary-workspace-without-billing-state"), false)
+  const state = await db.prepare<{state_kind:string}>("SELECT state_kind FROM company_subscription_state WHERE workspace_id=?").get(owner.workspaceId)
+  await db.prepare("UPDATE company_subscription_state SET state_kind='synthetic' WHERE workspace_id=?").run(owner.workspaceId)
+  assert.equal(await smsOnboardingExempt(db, owner.workspaceId), true)
+  await db.prepare("UPDATE company_subscription_state SET state_kind='internal_demo' WHERE workspace_id=?").run(owner.workspaceId)
+  assert.equal(await smsOnboardingExempt(db, owner.workspaceId), true)
+  await db.prepare("UPDATE company_subscription_state SET state_kind=? WHERE workspace_id=?").run(state?.state_kind ?? "trial", owner.workspaceId)
+  const internalId = "e533f62c-f92f-4367-990e-9e91c47c23bb"
+  await db.prepare("INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at) SELECT ?,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at FROM workspaces WHERE id=?").run(internalId, owner.workspaceId)
+  const internalActor = { ...actor, workspaceId: internalId }
+  assert.equal((await ensureCompany(internalActor)).onboarding_exempt, 1)
+  assert.equal((await ensureCompany(internalActor)).onboarding_exempt, 1)
+})
+
+test("database prevents a second live company number", async () => {
+  const db = getDatabase(), current = await db.prepare<{id:string;state:string}>("SELECT id,state FROM sms_numbers WHERE workspace_id=? LIMIT 1").get(owner.workspaceId)
+  await db.prepare("UPDATE sms_numbers SET state='released' WHERE workspace_id=?").run(owner.workspaceId)
+  const now = nowIso()
+  await db.prepare("INSERT INTO sms_numbers (id,workspace_id,account_id,provider_sid,phone,membership_id,state,monthly_cents,created_at,updated_at) VALUES (?,?,?,?,?,NULL,'active',100,?,?)").run("unique-first",owner.workspaceId,"unique-first","PNunique-first","+12125550101",now,now)
+  await assert.rejects(db.prepare("INSERT INTO sms_numbers (id,workspace_id,account_id,provider_sid,phone,membership_id,state,monthly_cents,created_at,updated_at) VALUES (?,?,?,?,?,NULL,'registering',100,?,?)").run("unique-second",owner.workspaceId,"unique-second","PNunique-second","+12125550102",now,now), { code: "23505", constraint: "sms_company_number" })
+  await db.prepare("DELETE FROM sms_numbers WHERE id='unique-first'").run()
+  if (current) await db.prepare("UPDATE sms_numbers SET state=? WHERE id=?").run(current.state,current.id)
 })

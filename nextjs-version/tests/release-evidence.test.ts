@@ -54,6 +54,8 @@ test("real migration fixture retains the historical release and a unique forward
   assert.equal(result.consistent, true)
   assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0067_retention_holds"))
   assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0068_sms_keyword_consent"))
+  assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0069_sms_company_provisioning"))
+  assert.ok(journal.entries.some((entry: { tag: string }) => entry.tag === "0070_platform_super_admin"))
   for (let index = 0; index < journal.entries.length; index++) {
     assert.ok(Number.isInteger(journal.entries[index].idx)); if (index > 0) assert.ok(journal.entries[index].idx > journal.entries[index - 1].idx)
     if (index > 0) assert.ok(journal.entries[index].when > journal.entries[index - 1].when)

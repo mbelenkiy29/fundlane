@@ -59,7 +59,7 @@ export async function managedReady(
     return false
   return !!(await getDatabase()
     .prepare(
-      "SELECT n.id FROM sms_numbers n JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id WHERE n.workspace_id=? AND n.account_id=? AND n.state='active' AND m.status='active'"
+      "SELECT n.id FROM sms_numbers n JOIN mca_sms_accounts a ON a.id=n.account_id AND a.workspace_id=n.workspace_id LEFT JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id WHERE n.workspace_id=? AND n.account_id=? AND n.state='active' AND a.state='active' AND (a.shared=1 OR m.status='active')"
     )
     .get(workspaceId, accountId))
 }
@@ -105,7 +105,7 @@ export async function reserveManagedSend(
     throw new AppError(
       409,
       "sms_setup_incomplete",
-      "Company SMS is suspended or awaiting verification, registration, or an active employee."
+      "Company SMS is suspended or awaiting verification, registration, or an active number."
     )
   if (!/^\+1\d{10}$/.test(recipient))
     throw new AppError(

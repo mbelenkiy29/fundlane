@@ -60,14 +60,10 @@ const fields = [
 ]
 export function SmsOnboardingPanel() {
   const [status, setStatus] = useState<Status>(),
-    [members, setMembers] = useState<
-      { id: string; name: string; status: string }[]
-    >([]),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [area, setArea] = useState("212"),
-    [employee, setEmployee] = useState(""),
     [available, setAvailable] = useState<
       { phone: string; monthlyCents: number }[]
     >([]),
@@ -79,12 +75,6 @@ export function SmsOnboardingPanel() {
   const load = useCallback(async () => {
     const s = await requestJson<Status>("/api/mca/sms/onboarding")
     setStatus(s)
-    if (s.canManage) {
-      const m = await requestJson<{
-        memberships: { id: string; name: string; status: string }[]
-      }>("/api/memberships")
-      setMembers(m.memberships.filter((x) => x.status === "active"))
-    }
   }, [])
   useEffect(() => {
     void load().catch((e) => setError(e.message))
@@ -121,8 +111,7 @@ export function SmsOnboardingPanel() {
           Company SMS <ConnectionStatusBadge label={smsStatus.label} />
         </CardTitle>
         <CardDescription>
-          Verify your company, register application updates, and assign a
-          dedicated number to each employee.
+          Verify your company, register application updates, and get a company number for your team.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -386,7 +375,7 @@ export function SmsOnboardingPanel() {
             )}
             {status.registrationState === "approved" && !status.suspended && (
               <div className="space-y-4">
-                <h3 className="font-medium">Get an employee number</h3>
+                <h3 className="font-medium">Get a company number</h3>
                 <div className="flex flex-wrap gap-3">
                   <Label>
                     Area code
@@ -397,23 +386,8 @@ export function SmsOnboardingPanel() {
                       className="w-28"
                     />
                   </Label>
-                  <Label>
-                    Employee
-                    <select
-                      className="block rounded border p-2"
-                      value={employee}
-                      onChange={(e) => setEmployee(e.target.value)}
-                    >
-                      <option value="">Select employee</option>
-                      {members.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Label>
                   <Button
-                    disabled={busy || !employee}
+                    disabled={busy}
                     onClick={() =>
                       void act(async () => {
                         const result = await requestJson<{
@@ -453,19 +427,17 @@ export function SmsOnboardingPanel() {
                     className="space-y-3 rounded border p-4"
                   >
                     <p>
-                      Purchase {purchase.phone} for{" "}
-                      {members.find((m) => m.id === employee)?.name}? Rental is
+                      Purchase {purchase.phone} for your company? Rental is
                       ${(purchase.monthlyCents / 100).toFixed(2)} per month plus
                       SMS and carrier charges until released.
                     </p>
                     <Button
-                      disabled={busy || !employee}
+                      disabled={busy}
                       onClick={() =>
                         void act(async () => {
                           await post("/api/mca/sms/provisioning", {
                             kind: "purchase",
                             phone: purchase.phone,
-                            membershipId: employee,
                             maxMonthlyCents: purchase.monthlyCents,
                           })
                           setPurchase(null)
@@ -499,37 +471,6 @@ export function SmsOnboardingPanel() {
                       </Button>
                     )}
                   </div>
-                  {n.state !== "released" && (
-                    <Label className="block">
-                      Assigned employee
-                      <select
-                        className="ml-3 rounded border p-2"
-                        value={n.membership_id ?? ""}
-                        disabled={busy}
-                        onChange={(e) =>
-                          void act(
-                            () =>
-                              post(
-                                "/api/mca/sms/numbers",
-                                {
-                                  numberId: n.id,
-                                  membershipId: e.target.value,
-                                },
-                                "PATCH"
-                              ),
-                            "Number reassigned. Deal permissions still control conversation access."
-                          )
-                        }
-                      >
-                        <option value="">Unassigned / inactive employee</option>
-                        {members.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Label>
-                  )}
                   {release === n.id && (
                     <div role="dialog" aria-label="Confirm number release">
                       <p className="text-sm">
