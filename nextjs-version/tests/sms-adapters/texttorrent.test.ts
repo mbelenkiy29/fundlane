@@ -55,6 +55,7 @@ function credentials(overrides: Record<string, string> = {}) {
 function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSendInput {
   return {
     account,
+    idempotencyKey: "sms-row-texttorrent",
     senderKind: "phone_number",
     senderIdentity: FIXTURE_SENDER,
     recipient: FIXTURE_RECIPIENT,

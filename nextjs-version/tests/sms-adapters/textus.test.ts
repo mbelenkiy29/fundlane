@@ -1,4 +1,4 @@
-import test, { beforeEach } from "node:test"
+import test from "node:test"
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
 import { AppError } from "../../src/lib/mca/errors"
@@ -25,7 +25,6 @@ import {
   createTextusSmsAdapter,
   createTextusSmsTransport,
   mapSendBody,
-  resetTextusAdapterState,
   textusFixtureFetch,
   textusFixtureMessageId,
   textusInboundFixture,
@@ -62,6 +61,7 @@ function account(overrides: Partial<SmsAccount> = {}): SmsAccount {
 function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSendInput {
   return {
     account: account(),
+    idempotencyKey: "sms-row-textus",
     senderKind: "phone_number",
     senderIdentity: TEXTUS_FIXTURE_SENDER,
     recipient: TEXTUS_FIXTURE_ACCEPTED_RECIPIENT,
@@ -72,10 +72,6 @@ function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSend
     ...overrides,
   }
 }
-
-beforeEach(() => {
-  resetTextusAdapterState()
-})
 
 test("MIC-188: required-field rejection covers account email and API key", () => {
   const empty = textusSmsAdapter.validate({})
@@ -154,7 +150,7 @@ test("MIC-188: timeout and unconfigured credential fail closed without inventing
   const timeoutReplay = await textusSmsAdapter.send(sendInput({
     recipient: TEXTUS_FIXTURE_TIMEOUT_RECIPIENT,
     correlationId: "corr-textus-timeout",
-    body: "Must not create a second TextUs message",
+    body: "A second TextUs message",
   }))
   assert.deepEqual(timeoutReplay, timeout)
   assert.equal(timeoutReplay.externalId, undefined)
@@ -170,7 +166,8 @@ test("MIC-188: timeout and unconfigured credential fail closed without inventing
     correlationId: "corr-textus-unconfigured",
     credentials: { accountEmail: TEXTUS_FIXTURE_ACCOUNT_EMAIL, apiKey: TEXTUS_FIXTURE_API_KEY },
   }))
-  assert.deepEqual(unconfiguredReplay, unconfigured)
+  assert.equal(unconfiguredReplay.state, "accepted")
+  assert.ok(unconfiguredReplay.externalId)
 
   assert.deepEqual(await textusSmsAdapter.testConnection(account()), { ok: true })
   assert.deepEqual(await textusSmsAdapter.testConnection(account({ providerConfigured: false })), { ok: false, code: "textus_unconfigured" })

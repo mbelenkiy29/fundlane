@@ -57,12 +57,6 @@ export {
   type TwilioSmsTransport,
 } from "./mapping"
 
-const sends = new Map<string, SmsDeliveryResult>()
-
-export function resetTwilioAdapterState(): void {
-  sends.clear()
-}
-
 export function createTwilioSmsTransport(options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): TwilioSmsTransport {
   const fetchImpl = options.fetchImpl ?? fetch
   return {
@@ -114,8 +108,6 @@ export function createTwilioSmsAdapter(options: { fetchImpl?: typeof fetch; time
       return account.providerConfigured ? { ok: true } : { ok: false, code: "twilio_unconfigured" }
     },
     async send(input) {
-      const existing = input.correlationId ? sends.get(input.correlationId) : undefined
-      if (existing) return existing
       const request = sendRequest(input)
       let result: SmsDeliveryResult
       if (!request.accountSid || !request.apiKeySid || !request.apiKeySecret) {
@@ -125,7 +117,6 @@ export function createTwilioSmsAdapter(options: { fetchImpl?: typeof fetch; time
       } else {
         result = await transport.send(request)
       }
-      if (input.correlationId) sends.set(input.correlationId, result)
       return result
     },
     async parseStatus(_headers, body) {

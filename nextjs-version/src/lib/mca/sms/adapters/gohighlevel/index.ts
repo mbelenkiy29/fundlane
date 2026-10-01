@@ -79,12 +79,6 @@ export {
   type GohighlevelSmsTransport,
 } from "./mapping"
 
-const sends = new Map<string, SmsDeliveryResult>()
-
-export function resetGohighlevelAdapterState(): void {
-  sends.clear()
-}
-
 function jsonPayload(response: Response): Promise<unknown> {
   return response.json().catch(() => ({}))
 }
@@ -179,8 +173,6 @@ export function createGohighlevelSmsAdapter(options: { fetchImpl?: typeof fetch;
       return account.providerConfigured ? { ok: true } : { ok: false, code: "gohighlevel_unconfigured" }
     },
     async send(input) {
-      const existing = input.correlationId ? sends.get(input.correlationId) : undefined
-      if (existing) return existing
       const request = sendRequest(input)
       let result: SmsDeliveryResult
       if (!request.privateIntegrationToken || !request.locationId) {
@@ -190,7 +182,6 @@ export function createGohighlevelSmsAdapter(options: { fetchImpl?: typeof fetch;
       } else {
         result = await transport.send(request)
       }
-      if (input.correlationId) sends.set(input.correlationId, result)
       return result
     },
     async parseStatus(_headers, body) {

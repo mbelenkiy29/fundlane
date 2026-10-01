@@ -141,6 +141,12 @@ function assertDateOnly(name: string, value: string | undefined): void {
   if (value && !DATE_ONLY.test(value)) {
     throw new AppError(422, "invalid_filter", `${name} must use YYYY-MM-DD.`, { [name]: ["Use YYYY-MM-DD."] })
   }
+  if (value) {
+    const parsed = new Date(`${value}T00:00:00.000Z`)
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new AppError(422, "invalid_filter", `${name} must be a real calendar date.`, { [name]: ["Use a real calendar date."] })
+    }
+  }
 }
 
 export function parseReportFilters(search: URLSearchParams): ReportFilters {

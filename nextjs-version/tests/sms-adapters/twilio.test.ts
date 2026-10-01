@@ -1,4 +1,4 @@
-import test, { beforeEach } from "node:test"
+import test from "node:test"
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
 import { AppError } from "../../src/lib/mca/errors"
@@ -6,7 +6,6 @@ import type { SmsAccount, SmsAdapterSendInput, SmsAdapterStatus } from "../../sr
 import {
   createTwilioSmsAdapter,
   createTwilioSmsTransport,
-  resetTwilioAdapterState,
   TWILIO_FIXTURE_ACCEPTED_RECIPIENT,
   TWILIO_FIXTURE_ACCOUNT_SID,
   TWILIO_FIXTURE_API_KEY_SECRET,
@@ -56,6 +55,7 @@ function account(overrides: Partial<SmsAccount> = {}): SmsAccount {
 function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSendInput {
   return {
     account: account(),
+    idempotencyKey: "sms-row-twilio",
     senderKind: "phone_number",
     senderIdentity: TWILIO_FIXTURE_SENDER,
     recipient: TWILIO_FIXTURE_ACCEPTED_RECIPIENT,
@@ -66,10 +66,6 @@ function sendInput(overrides: Partial<SmsAdapterSendInput> = {}): SmsAdapterSend
     ...overrides,
   }
 }
-
-beforeEach(() => {
-  resetTwilioAdapterState()
-})
 
 test("required-field rejection covers API credentials, sending number, and Messaging Service SID", () => {
   const empty = twilioSmsAdapter.validate({})
@@ -157,7 +153,7 @@ test("timeout and unconfigured credential fail closed without inventing an exter
   const timeoutReplay = await twilioSmsAdapter.send(sendInput({
     recipient: TWILIO_FIXTURE_TIMEOUT_RECIPIENT,
     correlationId: "corr-twilio-timeout",
-    body: "Must not create a second Twilio message",
+    body: "A second Twilio message",
   }))
   assert.deepEqual(timeoutReplay, timeout)
   assert.equal(timeoutReplay.externalId, undefined)
@@ -173,7 +169,8 @@ test("timeout and unconfigured credential fail closed without inventing an exter
     correlationId: "corr-twilio-unconfigured",
     credentials: { accountSid: TWILIO_FIXTURE_ACCOUNT_SID, apiKeySid: TWILIO_FIXTURE_API_KEY_SID, apiKeySecret: TWILIO_FIXTURE_API_KEY_SECRET },
   }))
-  assert.deepEqual(unconfiguredReplay, unconfigured)
+  assert.equal(unconfiguredReplay.state, "accepted")
+  assert.ok(unconfiguredReplay.externalId)
 
   assert.deepEqual(await twilioSmsAdapter.testConnection(account()), { ok: true })
   assert.deepEqual(await twilioSmsAdapter.testConnection(account({ providerConfigured: false })), { ok: false, code: "twilio_unconfigured" })
@@ -303,6 +300,19 @@ test("extracted transport keeps the documented request contract behind injected 
   })
   assert.equal(timedOut.state, "unknown")
   assert.equal(timedOut.externalId, undefined)
+})
+
+test("two sends with one run correlation call Twilio twice and return distinct SIDs", async () => {
+  let calls = 0
+  const adapter = createTwilioSmsAdapter({ fetchImpl: async () => {
+    calls++
+    return new Response(JSON.stringify({ sid: `SM${String(calls).padStart(32, "0")}`, status: "queued" }), { status: 201 })
+  } })
+  const input = sendInput({ correlationId: "same-run", credentials: { ...TWILIO_FIXTURE_CREDENTIALS, accountSid: livePathSid } })
+  const first = await adapter.send(input)
+  const second = await adapter.send({ ...input, body: "Second approved message" })
+  assert.equal(calls, 2)
+  assert.notEqual(first.externalId, second.externalId)
 })
 
 test("Twilio form signature matches the official fixture and sorts duplicate parameters", () => {
