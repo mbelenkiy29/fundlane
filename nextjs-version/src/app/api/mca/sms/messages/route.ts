@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 import { z } from "zod"
-import { apiError } from "@/lib/mca/errors"
+import { apiError, AppError } from "@/lib/mca/errors"
 import { readJson } from "@/lib/mca/http"
 import { parseSmsQuery, requireSmsActor } from "@/lib/mca/sms/http"
 import { deliverClosingSms, getSmsComposerContext, previewDirectSms } from "@/lib/mca/sms/service"
+import { assertConversationReply } from "@/lib/mca/sms/inbox"
 
 const querySchema = z.object({ dealId: z.string().min(1) })
 const schema = z.object({
@@ -12,6 +13,7 @@ const schema = z.object({
   recipient: z.string().min(1),
   body: z.string().min(1).max(1600),
   senderAccountId: z.string().min(1).optional(),
+  conversationId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1),
   preview: z.boolean().optional(),
 }).strict()
@@ -27,6 +29,10 @@ export async function POST(request: Request) {
   try {
     const actor = await requireSmsActor(request, { mode: "write" })
     const input = await readJson(request, schema)
+    if (input.conversationId) {
+      if (!input.senderAccountId) throw new AppError(404, "conversation_missing", "Conversation not found.")
+      await assertConversationReply(actor, input.conversationId, input.dealId, input.senderAccountId, input.recipient)
+    }
     if (input.preview) {
       return NextResponse.json(await previewDirectSms(actor, input), { headers: { "cache-control": "no-store" } })
     }

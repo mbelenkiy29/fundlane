@@ -222,7 +222,13 @@ export async function getDocumentContent(actor: DealActor, id: string): Promise<
   if (!isDocumentReady(record.processingState)) {
     throw new AppError(423, "document_not_clean", "This document is unavailable. Retry upload completion or upload a new version.")
   }
-  return { document: record, bytes: await documentStorage().get(record.storageKey) }
+  let bytes: Uint8Array
+  try { bytes = await documentStorage().get(record.storageKey) }
+  catch { throw new AppError(503, "document_storage_unavailable", "The stored file could not be read. Retry later or upload a new version.") }
+  if (bytes.byteLength !== record.byteLength || createHash("sha256").update(bytes).digest("hex") !== record.checksum) {
+    throw new AppError(409, "document_integrity_failed", "Stored file verification failed. Upload a new version of this document.")
+  }
+  return { document: record, bytes }
 }
 
 export async function retryDocumentScan(actor: DealActor, id: string): Promise<DocumentSummary> {

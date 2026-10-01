@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm"
 export const mca_sms_accounts = pgTable("mca_sms_accounts", {
   id: text().primaryKey().notNull(), workspace_id: text().notNull(), provider: text().notNull(), label: text().notNull(),
   sender_kind: text().notNull(), sender_identity_cipher: text().notNull(), credential_ref: text().notNull(),
-  state: text().default("active").notNull(), is_default: integer().default(0).notNull(),
+  state: text().default("active").notNull(), is_default: integer().default(0).notNull(), shared: integer().default(0).notNull(),
   created_by_user_id: text(), created_at: text().notNull(), updated_at: text().notNull(),
 }, (table) => [
   unique("mca_sms_accounts_label_key").on(table.workspace_id, table.label),
@@ -13,6 +13,7 @@ export const mca_sms_accounts = pgTable("mca_sms_accounts", {
   check("mca_sms_accounts_sender_kind_check", sql`sender_kind = ANY (ARRAY['phone_number'::text, 'messaging_service'::text])`),
   check("mca_sms_accounts_state_check", sql`state = ANY (ARRAY['active'::text, 'revoked'::text])`),
   check("mca_sms_accounts_default_check", sql`is_default IN (0,1)`),
+  check("mca_sms_accounts_shared_check", sql`shared IN (0,1)`),
 ])
 
 export const mca_sms_account_members = pgTable("mca_sms_account_members", {
@@ -30,7 +31,7 @@ export const mca_sms_consent_events = pgTable("mca_sms_consent_events", {
   unique("mca_sms_consent_events_idempotency_key").on(table.workspace_id, table.idempotency_key),
   index("mca_sms_consent_events_current_idx").on(table.workspace_id, table.deal_id, table.recipient_hash, table.effective_at),
   check("mca_sms_consent_events_state_check", sql`state = ANY (ARRAY['opted_in'::text, 'opted_out'::text])`),
-  check("mca_sms_consent_events_source_check", sql`source = ANY (ARRAY['manual'::text, 'provider_webhook'::text])`),
+  check("mca_sms_consent_events_source_check", sql`source = ANY (ARRAY['manual'::text, 'provider_webhook'::text, 'keyword'::text])`),
 ])
 
 export const mca_sms_messages = pgTable("mca_sms_messages", {
@@ -38,13 +39,15 @@ export const mca_sms_messages = pgTable("mca_sms_messages", {
   sender_identity_cipher: text().notNull(), recipient_hash: text().notNull(), recipient_cipher: text().notNull(), body_cipher: text().notNull(),
   content_hash: text().notNull(), payload_hash: text().notNull(), state: text().notNull(), provider_message_id: text(), provider_status: text(),
   error_code: text(), error_message: text(), idempotency_key: text().notNull(), correlation_id: text().notNull(), actor_user_id: text(),
-  accepted_at: text(), delivered_at: text(), created_at: text().notNull(), updated_at: text().notNull(),
+  accepted_at: text(), delivered_at: text(), num_segments: integer(), segments_source: text(), final_status_at: text(), billing_period_start: text(), created_at: text().notNull(), updated_at: text().notNull(),
 }, (table) => [
   unique("mca_sms_messages_idempotency_key").on(table.workspace_id, table.idempotency_key),
   unique("mca_sms_messages_provider_id_key").on(table.workspace_id, table.provider, table.provider_message_id),
   index("mca_sms_messages_deal_idx").on(table.workspace_id, table.deal_id, table.created_at),
   index("mca_sms_messages_recipient_idx").on(table.workspace_id, table.recipient_hash, table.created_at),
   check("mca_sms_messages_provider_check", sql`provider = ANY (ARRAY['twilio'::text, 'entrance'::text, 'texttorrent'::text, 'textus'::text, 'openphone'::text, 'gohighlevel'::text])`),
+  check("mca_sms_messages_num_segments_check", sql`num_segments IS NULL OR num_segments > 0`),
+  check("mca_sms_messages_segments_source_check", sql`segments_source IN ('provider','estimate')`),
   check("mca_sms_messages_state_check", sql`state = ANY (ARRAY['pending'::text, 'accepted'::text, 'sent'::text, 'delivered'::text, 'failed'::text, 'unknown'::text])`),
 ])
 

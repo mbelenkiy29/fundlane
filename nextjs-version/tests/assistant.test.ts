@@ -452,6 +452,23 @@ test("SDK approval survives serialization, sends exactly once and preserves acce
   )
   assert.equal((await getRun(run.id)).status, "completed")
 })
+test("two approved SMS actions in one run use distinct tool correlations", async () => {
+  const f = await setup("Send two approved texts")
+  const correlations: string[] = []
+  f.ctx.smsTransport = { send: async (request) => {
+    correlations.push(request.correlationId)
+    return { state: "accepted", externalId: `SM${String(correlations.length).padStart(32, "0")}`, providerStatus: "queued" }
+  } }
+  for (const body of ["First approved text", "Second approved text"]) {
+    const prepared = await prepareAction(f.ctx, "sms", { body, senderAccountId: accountId })
+    assert.ok("approvalId" in prepared && prepared.approvalId)
+    await sql("UPDATE mca_assistant_approvals SET status='approved' WHERE id=?", prepared.approvalId)
+    await executeAction(f.ctx, prepared.approvalId)
+  }
+  assert.equal(correlations.length, 2)
+  assert.deepEqual(correlations.map((value) => value.split(":")[0]), [f.run.id, f.run.id])
+  assert.notEqual(correlations[0], correlations[1])
+})
 test("rejecting an SDK approval never calls delivery", async () => {
   const f = await setup(),
     { approvalId } = await pendingSms(f)

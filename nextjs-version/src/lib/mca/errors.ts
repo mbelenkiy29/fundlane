@@ -31,5 +31,5 @@ export function apiError(error: unknown, correlationId?: string): NextResponse<A
     },
     ...(known && error.code === "merchant_exists" ? extra : {}),
   };
-  return NextResponse.json(body, { status });
+  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }

@@ -170,6 +170,16 @@ export function sanitizeAnswers(raw: unknown): DealWriteInput {
   }
 }
 
+export function parseMoneyInput(value: string): number | undefined {
+  return money(value)
+}
+
+function validStartDate(value: string | undefined): boolean {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value && value <= new Date().toISOString().slice(0, 10)
+}
+
 export function dollarsToCents(amount: number | undefined): number | null {
   if (amount === undefined || !Number.isFinite(amount) || amount <= 0) return null
   return Math.round(amount * 100)
@@ -185,18 +195,23 @@ export function stepError(step: FunnelStepId, answers: DealWriteInput, optional:
       if (!answers.address?.line1) return "Enter the street address."
       if (!answers.address.city) return "Enter the city."
       if (!answers.address.state || !US_STATES.includes(answers.address.state as typeof US_STATES[number])) return "Choose a US state."
-      if (!answers.address.postalCode) return "Enter the ZIP code."
+      if (!answers.address.postalCode || !/^\d{5}(-\d{4})?$/.test(answers.address.postalCode)) return "Enter a valid 5-digit ZIP code or ZIP+4."
       return undefined
     }
-    case "startDate": return answers.startDate && /^\d{4}-\d{2}-\d{2}$/.test(answers.startDate) ? undefined : "Enter the business start date."
+    case "startDate": return validStartDate(answers.startDate) ? undefined : "Enter a valid business start date that is not in the future."
     case "industry": return answers.industry ? undefined : "Enter the industry."
-    case "monthlyRevenue": return answers.monthlyRevenue !== undefined && answers.monthlyRevenue >= 0 ? undefined : "Enter typical monthly deposits."
-    case "requestedAmount": return answers.requestedAmount !== undefined && answers.requestedAmount > 0 ? undefined : "Enter the amount they want to borrow."
+    case "monthlyRevenue": return answers.monthlyRevenue !== undefined && Number.isFinite(answers.monthlyRevenue) && answers.monthlyRevenue >= 0 ? undefined : "Enter typical monthly deposits."
+    case "requestedAmount": return answers.requestedAmount !== undefined && Number.isFinite(answers.requestedAmount) && answers.requestedAmount > 0 ? undefined : "Enter the amount they want to borrow."
     case "fundingPurpose": return !flags.fundingPurpose || answers.fundingPurpose ? undefined : "Enter the funding purpose."
-    case "contact": return answers.contactName && answers.contactPhone ? undefined : "Enter a contact name and phone number."
+    case "contact": {
+      if (!answers.contactName?.trim()) return "Enter a contact name."
+      const phone = answers.contactPhone?.replace(/[\s()+.\-]/g, "") ?? ""
+      return /^\d{10}$/.test(phone) || /^1\d{10}$/.test(phone) ? undefined : "Enter a valid 10-digit US phone number."
+    }
     case "owners": {
       if (!answers.owners?.length) return "Add at least one owner."
       if (answers.owners.some(owner => !owner.firstName || !owner.lastName)) return "Each owner needs a first and last name."
+      if (answers.owners.some(owner => owner.ownershipPercent === undefined || !Number.isFinite(owner.ownershipPercent) || owner.ownershipPercent < 0 || owner.ownershipPercent > 100)) return "Each ownership percentage must be between 0 and 100%."
       const total = answers.owners.reduce((sum, owner) => sum + (owner.ownershipPercent ?? 0), 0)
       if (Math.abs(total - 100) > 0.01) return "Ownership percentages must add up to 100%."
       if (answers.owners.some(owner => owner.identityLast4 && !/^\d{4}$/.test(owner.identityLast4))) return "Use only the last four digits of an SSN."
