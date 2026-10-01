@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { DocumentCategory, DocumentSummary } from "@/lib/mca/documents/contracts"
 import { requestJson } from "@/lib/mca/client"
 import { uploadMultipart } from "./upload"
+import { DocumentNotifications } from "./document-notifications"
 
 type FilenamePreview = { suggestedFilename: string; uncertain: boolean; warnings: string[]; candidates: { bankLabel?: { value: string }; statementMonth?: { value: string }; accountSuffix?: { value: string } } }
 
@@ -37,6 +38,7 @@ function uploadStatusMessage(state: string): string {
 }
 
 export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh?: () => void }) {
+  const [alertRevision, setAlertRevision] = React.useState(0)
   const [documents, setDocuments] = React.useState<DocumentSummary[]>([])
   const [category, setCategory] = React.useState<DocumentCategory>("statement")
   const [file, setFile] = React.useState<File>()
@@ -62,6 +64,7 @@ export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh
         requestJson<{ contactName?: string; contactEmail?: string; contactPhone?: string }>(`/api/mca/deals/${encodeURIComponent(dealId)}`),
       ])
       setDocuments(vault.documents)
+      setAlertRevision(current => current + 1)
       setContactPreview(deal)
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Documents could not be loaded.") }
   }, [dealId])
@@ -173,6 +176,7 @@ export function DocumentPanel({ dealId, onRefresh }: { dealId: string; onRefresh
   }
 
   return <div className="space-y-4">
+    <DocumentNotifications dealId={dealId} revision={alertRevision} />
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="size-5" />Document vault</CardTitle><CardDescription>Originals stay in quarantine until the scanner returns clean.</CardDescription></CardHeader>
       <CardContent className="space-y-4">

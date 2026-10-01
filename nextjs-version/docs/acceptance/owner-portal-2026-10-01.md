@@ -19,6 +19,6 @@ Authenticated staging Supabase/Vercel checks require an approved nonproduction t
 
 ## Schema and rollback
 
-The owner operations slice needs no migration. The separate credit-core PR adds an expand-only schema and message-tenant uniqueness constraint. Migration filename0074 avoids open voice0072/document-notification0073 filenames, but journal ordering still must be refreshed against the actual main history before merge. Run exact-history upgrade and fresh-schema checks after that refresh. Preserve notifications, AI balances, existing SMS records and platform audit/grants.
+The owner operations slice needs no migration. The separate credit-core PR adds an expand-only schema and message-tenant uniqueness constraint. Main `b71f40b` now includes voice `0072` and document notifications `0073`. Ledger `0074` follows them at journal index 65 / timestamp `1790819000073`. Exact-history upgrade tests build through `0073`, preserve seeded voice/document-notification rows alongside notifications, AI balances, existing SMS records and platform audit, and verify Drizzle applies the ledger once. Fresh-schema and runtime grants remain covered. Recheck journal ordering against then-current main before any hosted release.
 
 Keep old URLs guarded during rollback. Retain credit/audit data; a code revert must not refund payments, release numbers, close subaccounts or erase balances. See [release gates](../owner-portal-release.md).

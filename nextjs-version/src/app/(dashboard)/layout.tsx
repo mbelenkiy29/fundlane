@@ -7,6 +7,7 @@ import { authenticateSupabaseSession, supabaseIdentity } from "@/lib/mca/supabas
 import { getTotpAccessState } from "@/lib/mca/totp-service"
 import { getSessionResponse } from "@/lib/mca/sessions"
 import type { PageKey } from "@/lib/mca/types"
+import { VoiceProvider } from "@/components/mca/voice/voice-provider"
 import { PwaLifecycle } from "@/components/mca/pwa-lifecycle"
 import { getCompanyAccess } from "@/lib/mca/company-access"
 import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
@@ -52,5 +53,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (page && !session.permissions?.pages[page]) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
   if (page === "payments" && !session.permissions?.actions.viewPaymentTable) redirect(`/errors/forbidden?from=${encodeURIComponent(pathname)}`)
 
-  return <><NewDealProvider><DashboardChrome session={session} supportEmail={getSupportConfig().supportEmail} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={["supabase", "vercel_node"].includes(process.env.MCA_ASSISTANT_RUNTIME ?? "") ? "supabase" : "chatkit"}>{children}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
+  const content = session.permissions?.pages.deals ? <VoiceProvider key={`${context.workspaceId}:${context.membershipId}`}>{children}</VoiceProvider> : children
+  return <><NewDealProvider><DashboardChrome session={session} supportEmail={getSupportConfig().supportEmail} fullBleed={pathname === "/assistant"} assistantEnabled={assistantEnabled(context) && Boolean(session.permissions?.pages.deals)} assistantDomainKey={process.env.MCA_ASSISTANT_DOMAIN_KEY ?? ""} assistantRuntime={["supabase", "vercel_node"].includes(process.env.MCA_ASSISTANT_RUNTIME ?? "") ? "supabase" : "chatkit"}>{content}</DashboardChrome></NewDealProvider><PwaLifecycle /></>
 }

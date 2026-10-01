@@ -1,3 +1,4 @@
+import { runtimeTablePrivileges } from './runtime-grants';
 import { Client } from 'pg';
 import { applicationTables } from './manifest';
 import { assertMigrationDestination, identifier, postgresConnection, requiredUrl } from './connections';
@@ -37,7 +38,7 @@ async function main() {
       policies.push(`REVOKE ALL ON TABLE ${qualified} FROM PUBLIC${browserRoles.length ? ', '+browserRoles.join(',') : ''}`);
       policies.push(`ALTER TABLE ${qualified} ENABLE ROW LEVEL SECURITY`);
       policies.push(`REVOKE ALL ON TABLE ${qualified} FROM mca_app`);
-      policies.push(`GRANT ${table === 'platform_admin_grants' ? 'SELECT' : ['roadmap_item_audit','platform_admin_audit','mca_notification_receipts','sms_credit_ledger'].includes(table) ? 'SELECT, INSERT' : ['platform_step_ups','sms_credit_accounts','sms_credit_reservations'].includes(table) ? 'SELECT, INSERT, UPDATE' : 'SELECT, INSERT, UPDATE, DELETE'} ON TABLE ${qualified} TO mca_app`);
+      policies.push(`GRANT ${runtimeTablePrivileges(table)} ON TABLE ${qualified} TO mca_app`);
       policies.push(`DROP POLICY IF EXISTS mca_server_access ON ${qualified}`);
       // Only our server role has this policy. Every browser goes through MCA authorization.
       policies.push(table === 'platform_admin_grants'

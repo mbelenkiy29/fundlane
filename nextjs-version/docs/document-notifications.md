@@ -1,0 +1,32 @@
+# Document alerts and optional reminders
+
+The document vault includes **Document alerts**. Its read-only snapshot derives the existing four document buckets (application, bank statement, driver license, voided check) and existing open/received closing stipulations. It does not create requirements or consent records.
+
+A broker selects an unresolved missing/requested/stale condition and queues a broker email alert. Optional merchant reminders require explicit selection, enabled company document notification policy, current consent through existing services, a published merchant template and an existing persisted closing request link. Email also requires a usable merchant sender. The result reports each audience independently; a blocked merchant reminder does not erase a broker alert. **Queued** means persisted for the existing notification runtime, not sent.
+
+Published reminder templates use `{{document_request_url}}` and optionally `{{document_request_label}}`. Server guards resolve these values from the current tenant/deal/category/stipulation-bound persisted request. Document reminders reject the old generated upload URL variables, including republishing one after enqueue. Values are escaped by the existing renderer. No link tokens are returned in the alert snapshot or broker payload.
+
+## Document conditions
+
+- Only malware-clean current lineage versions satisfy requirements. Pending scans, validation-only `ready`, failed uploads/scans and quarantined documents do not.
+- Statement freshness uses the immediately preceding completed **UTC calendar month**, with month/year/leap-day boundaries. Underwriting statement period records supply the covered month; upload dates and filenames do not. Future, malformed and duplicate periods do not satisfy freshness.
+- A requested stipulation resolves when verified/waived or its linked current clean document matches the requested category. Recategorization or an unsafe replacement leaves the request unresolved.
+- Closed/funded deals suppress conditions. At dispatch, a changed month, resolved condition, expired/revoked/consumed request, access loss, disabled company policy or consent/optout change suppresses delivery.
+
+## Integration and operation
+
+`src/lib/mca/documents/notification-service.ts` exposes `documentNotificationSnapshot` and `enqueueDocumentNotifications`. `src/lib/mca/documents/notification-condition.ts` registers type `document`, version `1`, and is explicitly bootstrapped by the foundation worker in each process. The authenticated session API is `/api/mca/documents/notifications`; it reads snapshots and queues approved selected events. The existing comms notification runtime handles delivery, uncertainty, receipts, safe retries and reconciliation. `MCA_NOTIFICATION_RUNTIME=enabled` remains an external runtime activation gate; no transport or scheduler is introduced here.
+
+Stable event identities include deal/condition and, for merchant reminders, request link identity. Repeated actions retain the original event schedule/approval and reject changed content under the same identity. Accepted/uncertain events are not replayed; reconcile uncertain outcomes through the foundation. Automatic discovery also runs through the same foundation runtime. Company administrators configure **Company automatic document notifications** in the vault: enable discovery, choose missing/requested/stale reasons, assigned broker alerts and optional merchant reminders, local daily/weekly/monthly cadence, channel, published document template and sender. Existing companies remain off. Merchant automation requires the dedicated checkbox; generic followup templates are not treated as approval. Server timestamps, the live administrator membership and an incrementing approval version persist the approval. Disabling or changing the configuration invalidates queued automatic events under its old version.
+
+`discoverDocumentNotifications({clock,limit,deadlineMs})` claims one enabled company by oldest checked cursor per pass. It keysets at most ten open deals and caps produced event attempts at twenty on the worker hook (caller maximum one hundred). Active assigned originators/closers receive broker alerts; absent assignments never broadcast. The cursor records a partially processed deal/item and cadence occurrence. Concurrent instances use a short fenced lease; expired leases recover idempotently. Discovery has at most fourteen seconds of cooperative/database work plus one second of bounded cleanup, within the supplied runtime budget; the worker reserves forty-five seconds for delivery. Cleanup contention leaves the lease to expire. The next cadence resets the keyset cursor, and repeated occurrences retain their original approval and event identity. At dispatch, automatic broker assignment and durable approval are checked again. Any unknown document outcome for that merchant or broker/deal blocks additional automatic enqueue and suppresses queued automatic occurrences until reconciliation, including after a new approval version.
+
+The configuration panel distinguishes saved company approval, runtime activation and live merchant prerequisites. It does not collect consent, create request links or activate providers. Missing usable request links, consent or senders block reminders; configured broker alerts remain independent.
+
+## External gates
+
+No provider traffic, production credentials, hosted migrations, live consent claims or real merchant data were used. Apply/review the notification foundation prerequisite before this stacked feature. Confirm a safe application origin, published templates, existing closing requests, company policy, sender/provider configuration, actual consent, and hosted Auth/Storage acceptance before activation. This task does not change consent wording or enable any of those gates.
+
+## Migration dependency
+
+Reserved `0073_document_notification_discovery.sql` stores configuration, approval, occurrence cursor and lease only. This stacked branch journals it at index 64 (`when` 1790819000072) after notification foundation `0071` at index 62 (`when` 1790385600020). Browser voice `0072` belongs to separate PR #213 and must be reconciled at index 63 (`when` 1790385600021) before integration; production applies `0071`, `0072`, then `0073`. Foundation prerequisite is exact `1e56cc77b1ca5a5568e36cb4d7cd91e17a5fde27` (PR #212). Migration replay was exercised only in disposable local databases. Hosted migration and runtime activation remain human release gates.
