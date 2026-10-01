@@ -63,12 +63,6 @@ export {
   type OpenPhoneSmsTransport,
 } from "./mapping"
 
-const sends = new Map<string, SmsDeliveryResult>()
-
-export function resetOpenPhoneAdapterState(): void {
-  sends.clear()
-}
-
 export function createOpenPhoneSmsTransport(options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): OpenPhoneSmsTransport {
   const fetchImpl = options.fetchImpl ?? fetch
   return {
@@ -115,8 +109,6 @@ export function createOpenPhoneSmsAdapter(options: { fetchImpl?: typeof fetch; t
       return account.providerConfigured ? { ok: true } : { ok: false, code: "openphone_unconfigured" }
     },
     async send(input) {
-      const existing = input.correlationId ? sends.get(input.correlationId) : undefined
-      if (existing) return existing
       const request = sendRequest(input)
       let result: SmsDeliveryResult
       if (!request.apiKey || !request.user) {
@@ -126,7 +118,6 @@ export function createOpenPhoneSmsAdapter(options: { fetchImpl?: typeof fetch; t
       } else {
         result = await transport.send(request)
       }
-      if (input.correlationId) sends.set(input.correlationId, result)
       return result
     },
     async parseStatus(_headers, body) {

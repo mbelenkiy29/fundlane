@@ -9,15 +9,23 @@ test("retention hold routes default off and require operator MFA and trusted mut
     mock.module("server-only", { exports: {} });
     const { AppError } = require("./src/lib/mca/errors.ts");
     let mode = "operator", calls = 0;
-    mock.module("./src/lib/mca/platform-auth.ts", { namedExports: { requirePlatformAdmin: async () => {
+    mock.module("./src/lib/mca/platform-auth.ts", { namedExports: { requireSuperAdmin: async () => {
       if (mode === "nonoperator") throw new AppError(403, "platform_admin_required", "Forbidden.");
       if (mode === "mfa") throw new AppError(403, "mfa_required", "MFA required.");
-      return { userId: "operator" };
+      return { userId: "operator", email: "mike@sentineltechsolutions.io", sessionId: "session" };
     } } });
     mock.module("./src/lib/mca/retention-holds.ts", { namedExports: {
       retentionHoldsEnabled: () => process.env.MCA_RETENTION_HOLDS_ENABLED === "true",
       placeRetentionHoldSchema: require("zod").z.object({ workspaceId: require("zod").z.string(), reason: require("zod").z.enum(["dispute","chargeback","subpoena","regulator_request"]), note: require("zod").z.string().min(1) }).strict(),
       placeRetentionHold: async () => (++calls, { id: "hold" }), releaseRetentionHold: async () => (++calls, { id: "hold" })
+    } });
+    mock.module("./src/lib/mca/platform-audit.ts", { namedExports: {
+      assertStrictPlatformMutation: request => { if (!request.headers.get("origin")) throw new AppError(403,"untrusted_origin","Origin required."); },
+      withSuperAdminAction: async (_input, action) => action(),
+    } });
+    mock.module("./src/lib/mca/auth.ts", { namedExports: {
+      assertTrustedMutation: request => { if (request.headers.get("origin") !== new URL(request.url).origin) throw new AppError(403,"untrusted_origin","Origin denied."); },
+      consumeRequestRateLimit: async () => {},
     } });
     const route = require("./src/app/api/platform/retention-holds/route.ts");
     const item = require("./src/app/api/platform/retention-holds/[id]/route.ts");

@@ -4,7 +4,6 @@ import type { SmsAdapter, SmsAdapterSendInput, SmsDeliveryResult } from "../../c
 import {
   isTextusFixtureApiKey,
   resolveTextusSendScenario,
-  resetTextusFixtures,
   textusFixtureFetch,
   textusFixtureSendResult,
 } from "./fixtures"
@@ -78,13 +77,6 @@ export {
   type TextusSmsTransport,
 } from "./mapping"
 
-const sends = new Map<string, SmsDeliveryResult>()
-
-export function resetTextusAdapterState(): void {
-  sends.clear()
-  resetTextusFixtures()
-}
-
 export function createTextusSmsTransport(options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): TextusSmsTransport {
   const fetchImpl = options.fetchImpl ?? textusFixtureFetch
   return {
@@ -137,8 +129,6 @@ export function createTextusSmsAdapter(options: { fetchImpl?: typeof fetch; time
       return account.providerConfigured ? { ok: true } : { ok: false, code: "textus_unconfigured" }
     },
     async send(input) {
-      const existing = input.correlationId ? sends.get(input.correlationId) : undefined
-      if (existing) return existing
       const request = sendRequest(input)
       let result: SmsDeliveryResult
       if (!request.accountEmail || !request.apiKey) {
@@ -148,7 +138,6 @@ export function createTextusSmsAdapter(options: { fetchImpl?: typeof fetch; time
       } else {
         result = await transport.send(request)
       }
-      if (input.correlationId) sends.set(input.correlationId, result)
       return result
     },
     async parseStatus(_headers, body) {
