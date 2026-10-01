@@ -1,6 +1,6 @@
 # Shared scheduled notifications
 
-Foundation for document, renewal and internal missed-call events. Producers call the server-only API; they do not send mail/text themselves. Default runtime is inert. The existing `/api/cron/comms` tick consumes notifications only with `MCA_NOTIFICATION_RUNTIME=enabled`. No schedule or provider configuration is installed by this PR.
+Foundation for document, renewal and internal missed-call events. Producers call the server-only API; they do not send mail/text themselves. Default runtime is inert. The existing `/api/cron/comms` tick consumes notifications only with `MCA_NOTIFICATION_RUNTIME=enabled`. No schedule or provider configuration is installed by this PR. The notification budget is measured from the original comms tick start; exhausted ticks leave events queued, with room reserved for bounded provider calls.
 
 ## Producer contract
 

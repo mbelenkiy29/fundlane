@@ -41,6 +41,7 @@ export interface ScheduledCommsJobsResult {
 
 /** Runtime-agnostic tick for signed webhook retries and due daily report emails. */
 export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<ScheduledCommsJobsResult> {
+  const notificationDeadline=Date.now()+230_000
   await import("./digest")
   await import("./webhooks")
   const rows = await getDatabase().prepare<{ workspace_id: string }>(
@@ -74,7 +75,7 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
   }
   if(process.env.MCA_NOTIFICATION_RUNTIME === "enabled") {
     const {runScheduledNotifications}=await import("../notifications/worker")
-    result.notifications=await runScheduledNotifications(nowIsoValue)
+    result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
   }
   return result
 }
