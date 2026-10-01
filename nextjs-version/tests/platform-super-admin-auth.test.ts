@@ -81,10 +81,10 @@ test("grant, same-session MFA, confirmed email ceiling and API key are independe
   await assert.rejects(auth.requireSuperAdmin(),{code:"platform_admin_required",status:403})
   await getDatabase().prepare("UPDATE platform_admin_grants SET revoked_at=NULL WHERE user_id=?").run(userId)
 })
-test("Ben lacks SMS approver capability; step-up is session-bound and expires",async()=>{
+test("Both owners have SMS approver capability; step-up is session-bound and expires",async()=>{
   const actor=await auth.requireSuperAdmin()
   auth.requireSmsApprover(actor)
-  assert.throws(()=>auth.requireSmsApprover({...actor,email:"ben@sentineltechsolutions.io"}),{code:"sms_approver_required",status:403})
+  assert.doesNotThrow(()=>auth.requireSmsApprover({...actor,email:"ben@sentineltechsolutions.io"}))
   await assert.rejects(stepUp.requirePlatformStepUp(actor),{code:"step_up_required",status:403})
   await getDatabase().prepare("INSERT INTO platform_step_ups(session_id,user_id,verified_at) VALUES (?,?,?)").run(sessionId,userId,"2000-01-01T00:00:00.000Z")
   await assert.rejects(stepUp.requirePlatformStepUp(actor),{code:"step_up_required",status:403})
@@ -107,15 +107,16 @@ test("one audit row commits with an action; an audit failure rolls state back; r
   assert.equal((await getDatabase().prepare<{n:number}>("SELECT count(*)::int n FROM platform_admin_audit WHERE action='super_admin.first_access' AND actor_user_id=?").get(userId))!.n,1)
 })
 
-test("legacy SMS approve/reject require Michael capability and a fresh step-up; a rejection is audited once",async()=>{
+test("legacy SMS approve/reject require a fresh step-up for either owner; a rejection is audited once",async()=>{
   const workspaceId=randomUUID(),stamp=nowIso()
   await getDatabase().prepare(`INSERT INTO workspaces(id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?)`).run(workspaceId,"Synthetic review","America/New_York",1,"{}","{}","{}",stamp,stamp)
   await getDatabase().prepare("INSERT INTO sms_companies(workspace_id,owner_user_id,created_at,updated_at) VALUES (?,?,?,?)").run(workspaceId,userId,stamp,stamp)
   const input={workspaceId,decision:"rejected" as const,note:"Synthetic review reason",numberLimit:1,monthlyLimitCents:100,registrationLimitCents:100}
   email="ben@sentineltechsolutions.io"
-  await assert.rejects(sms.reviewCompany(null,input),{code:"sms_approver_required",status:403})
-  await assert.rejects(sms.reviewCompany(null,{...input,decision:"approved"}),{code:"sms_approver_required",status:403})
+  await getDatabase().prepare("DELETE FROM platform_step_ups WHERE session_id=?").run(sessionId)
+  await assert.rejects(sms.reviewCompany(null,input),{code:"step_up_required",status:403})
+  await assert.rejects(sms.reviewCompany(null,{...input,decision:"approved"}),{code:"step_up_required",status:403})
   email="mike@sentineltechsolutions.io"
   await getDatabase().prepare("DELETE FROM platform_step_ups WHERE session_id=?").run(sessionId)
   await assert.rejects(sms.reviewCompany(null,input),{code:"step_up_required",status:403})
