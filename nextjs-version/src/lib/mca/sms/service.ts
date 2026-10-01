@@ -341,14 +341,19 @@ export async function recordSmsConsent(actor: DealActor, input: { dealId: string
   const recipient = await assertRecipient(actor, input.dealId, input.recipient, { matchDealContact }), evidence = required(input.evidence, "evidence", 500), key = stableKey(input.idempotencyKey)
   const effectiveAt = input.effectiveAt ?? nowIso()
   if (!Number.isFinite(Date.parse(effectiveAt))) throw new AppError(422, "consent_date_invalid", "Enter a valid consent date and time.")
-  const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient)
+  const normalizedEffectiveAt = new Date(effectiveAt).toISOString()
+  const id = newId(), createdAt = nowIso(), hash = recipientHash(actor.workspaceId, recipient), suppressionHash = smsRecipientHash(actor.workspaceId, recipient)
   const { row, inserted } = await withImmediateTransaction(async (db) => {
+    if (input.state === "opted_in") await db.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`sms-consent:${suppressionHash}`)
     const inserted = await db.prepare<Row>(`INSERT INTO mca_sms_consent_events
     (id,workspace_id,deal_id,recipient_hash,recipient_cipher,state,source,evidence,idempotency_key,actor_user_id,effective_at,created_at)
-    VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, effectiveAt, createdAt)
+    VALUES (?,?,?,?,?,?,'manual',?,?,?,?,?) ON CONFLICT (workspace_id,idempotency_key) DO NOTHING RETURNING *`).get(id, actor.workspaceId, input.dealId, hash, encryptSensitive(recipient, actor.workspaceId), input.state, evidence, key, actor.userId, normalizedEffectiveAt, createdAt)
     const row = inserted ?? await db.prepare<Row>("SELECT * FROM mca_sms_consent_events WHERE workspace_id=? AND idempotency_key=?").get(actor.workspaceId, key)
     if (!row || row.deal_id !== input.dealId || row.recipient_hash !== hash || row.state !== input.state || row.evidence !== evidence) throw new AppError(409, "idempotency_conflict", "That retry key already identifies different SMS consent evidence.")
-    if (inserted && input.state === "opted_in") await db.prepare("INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,'opted_in',?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state='opted_in',updated_at=EXCLUDED.updated_at").run(actor.workspaceId, smsRecipientHash(actor.workspaceId, recipient), nowIso())
+    if (inserted && input.state === "opted_in") {
+      const suppression = await db.prepare<{ updated_at: string }>("SELECT updated_at FROM sms_suppressions WHERE workspace_id=? AND recipient_hash=?").get(actor.workspaceId, suppressionHash)
+      if (!suppression || normalizedEffectiveAt >= suppression.updated_at) await db.prepare("INSERT INTO sms_suppressions (workspace_id,recipient_hash,state,updated_at) VALUES (?,?,'opted_in',?) ON CONFLICT (workspace_id,recipient_hash) DO UPDATE SET state='opted_in',updated_at=EXCLUDED.updated_at").run(actor.workspaceId, suppressionHash, nowIso())
+    }
     if (inserted) await recordAuditEvent({ context: actor, action: `sms.consent_${input.state}`, resourceType: "deal", resourceId: input.dealId, metadata: { source: "manual", recipientMasked: maskPhone(recipient), effectiveAt, matchDealContact }, correlationId: actor.correlationId, executor: db })
     return { row, inserted }
   })

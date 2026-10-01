@@ -102,7 +102,7 @@ export async function registrationEvents(
         const latest = await db
           .prepare<{
             state: string
-          }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY provider_time DESC,id DESC LIMIT 1")
+          }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY (id LIKE 'assumed:%') ASC,provider_time DESC,id DESC LIMIT 1")
           .get(workspaceId, data.phonenumbersid)
         await db
           .prepare(

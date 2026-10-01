@@ -899,7 +899,7 @@ export async function refreshCompany(
   const configuredHours = Number(process.env.MCA_SMS_NUMBER_REG_ASSUME_HOURS)
   const hours = Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : 6
   for (const n of rows) {
-    const latest = await getDatabase().prepare<{ state: string }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY provider_time DESC,id DESC LIMIT 1").get(workspaceId, n.provider_sid)
+    const latest = await getDatabase().prepare<{ state: string }>("SELECT state FROM sms_registration_events WHERE workspace_id=? AND number_sid=? ORDER BY (id LIKE 'assumed:%') ASC,provider_time DESC,id DESC LIMIT 1").get(workspaceId, n.provider_sid)
     if (latest) {
       await getDatabase().prepare("UPDATE sms_numbers SET state=?,updated_at=? WHERE id=? AND state NOT IN ('released','releasing')").run(latest.state, nowIso(), n.id)
       continue

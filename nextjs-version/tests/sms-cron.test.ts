@@ -1,6 +1,6 @@
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { createHash, createHmac, randomBytes } from "node:crypto"
 import { Client } from "pg"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -10,6 +10,7 @@ import { runScheduledSmsJobs } from "../src/lib/mca/sms/scheduler"
 import { encryptSensitive } from "../src/lib/mca/crypto"
 import { reviewQueue } from "../src/lib/mca/sms/onboarding"
 import type { TwilioApi } from "../src/lib/mca/sms/provisioning"
+import { registrationEvents } from "../src/lib/mca/sms/registration-events"
 
 const previous = { ...process.env }
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -168,6 +169,7 @@ test("scheduled refresh assumes silent number registration only after the config
   process.env.MCA_TWILIO_PRIMARY_PROFILE_SID = `BU${"8".repeat(32)}`
   process.env.MCA_TWILIO_PARENT_ACCOUNT_SID = sid
   process.env.MCA_TWILIO_PARENT_AUTH_TOKEN = "synthetic"
+  process.env.MCA_APP_ORIGIN = "https://crm.example.test"
   const api: TwilioApi = async (_config, _host, path) => path.includes("Compliance/Usa2p") ? { campaign_status: "VERIFIED" } : { usage_records: [] }
   assert.equal((await runScheduledSmsJobs(api)).failedWorkspaces.length, 0)
   const states = await db.prepare<{ id: string; state: string }>("SELECT id,state FROM sms_numbers WHERE workspace_id=? ORDER BY id").all(workspaceId)
@@ -177,12 +179,25 @@ test("scheduled refresh assumes silent number registration only after the config
   assert.equal(states.find(row => row.id === "fallback-released")?.state, "released")
   assert.equal(states.find(row => row.id === "fallback-releasing")?.state, "releasing")
   assert.equal((await db.prepare<{ n: number }>("SELECT count(*)::int n FROM sms_registration_events WHERE id='assumed:fallback-mature'").get())?.n, 1)
+  const event = JSON.stringify({
+    id: "fallback-delayed-failure",
+    type: "com.twilio.messaging.compliance.number-registration.failed",
+    time: new Date().toISOString(),
+    data: { accountsid: sid, messagingservicesid: serviceSid, phonenumbersid: `PN${"mature".padEnd(32, "8")}`, externalstatus: "failure", updateddate: Date.parse(old) },
+  })
+  const hash = createHash("sha256").update(event).digest("hex")
+  const url = `https://crm.example.test/api/mca/sms/webhooks/registration/${workspaceId}?bodySHA256=${hash}`
+  const signature = createHmac("sha1", "synthetic").update(url).digest("base64")
+  await registrationEvents(workspaceId, new Request(url, { method: "POST", headers: { "x-twilio-signature": signature }, body: event }))
+  assert.equal((await db.prepare<{ state: string }>("SELECT state FROM sms_numbers WHERE id='fallback-mature'").get())?.state, "registration_failed")
+  const { refreshCompany } = await import("../src/lib/mca/sms/provisioning")
+  await refreshCompany(workspaceId, api)
+  assert.equal((await db.prepare<{ state: string }>("SELECT state FROM sms_numbers WHERE id='fallback-mature'").get())?.state, "registration_failed")
   await runScheduledSmsJobs(api)
   assert.equal((await db.prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE workspace_id=? AND action='sms.number_registration_assumed'").get(workspaceId))?.n, 1)
   process.env.MCA_SMS_NUMBER_REG_ASSUME_HOURS = "invalid"
   await db.prepare("UPDATE sms_companies SET registration_state='pending' WHERE workspace_id=?").run(workspaceId)
   await db.prepare("UPDATE sms_numbers SET created_at=?,state='registering' WHERE id='fallback-early'").run(old)
-  const { refreshCompany } = await import("../src/lib/mca/sms/provisioning")
   await refreshCompany(workspaceId, async (_config, _host, path) => path.includes("Compliance/Usa2p") ? { campaign_status: "PENDING" } : {})
   assert.equal((await db.prepare<{ state: string }>("SELECT state FROM sms_numbers WHERE id='fallback-early'").get())?.state, "registering")
 })

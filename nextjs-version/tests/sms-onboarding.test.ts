@@ -701,6 +701,18 @@ test("manual evidence clears an earlier STOP but replayed evidence does not undo
   await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient)), { code: "sms_recipient_opted_out" })
 })
 
+test("backdated manual opt-in does not clear a later STOP", async () => {
+  const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
+  const dealId = "backdated-reoptin-deal", recipient = "+12125559003", to = "+12125552222"
+  await getDatabase().prepare("INSERT INTO deals (id,workspace_id,display_id,legal_name,contact_phone_cipher,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at) VALUES (?,?,?,'Synthetic application',?,'offer',1,'submission_ready','[]','{}',1,?,?)").run(dealId, owner.workspaceId, "SMS-BACKDATED", encryptSensitive(recipient, owner.workspaceId), nowIso(), nowIso())
+  await persistInbound(owner.workspaceId, "synthetic-keyword-route", new URLSearchParams({ From: recipient, To: to, Body: "STOP", MessageSid: `SM${"c".repeat(32)}` }), "phone_number", to)
+  const beforeStop = new Date(Date.now() - 86400000).toISOString()
+  await recordSmsConsent(actor, { dealId, recipient, state: "opted_in", evidence: "Older signed form", effectiveAt: beforeStop, idempotencyKey: "backdated-reoptin" })
+  await assert.rejects(withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient)), { code: "sms_recipient_opted_out" })
+  await recordSmsConsent(actor, { dealId, recipient, state: "opted_in", evidence: "Owner confirmed consent again", effectiveAt: new Date().toISOString(), idempotencyKey: "current-reoptin" })
+  await withImmediateTransaction(db => assertNotSuppressed(db, owner.workspaceId, recipient))
+})
+
 test("registration route accepts object and string data and ignores irrelevant events", async () => {
   const { POST } = await import("../src/app/api/mca/sms/webhooks/registration/[workspaceId]/route")
   const number = await getDatabase().prepare<{ provider_sid: string }>("SELECT provider_sid FROM sms_numbers WHERE workspace_id=? LIMIT 1").get(owner.workspaceId)
