@@ -12,9 +12,9 @@ T0_POSTGRES_BIN=/opt/homebrew/opt/postgresql@16/bin \
 T0_POSTGRES_PORT=56435 scripts/ops/local-acceptance.sh
 ```
 
-On Linux, set `T0_POSTGRES_BIN` to the directory containing `initdb`, `pg_ctl`, `pg_dump`, `pg_restore`, and `psql`. Run as a non-root user. Choose an unused unprivileged port per task. The runner refuses an occupied port; it cannot attach to an existing database. It starts a private temporary loopback cluster, clears inherited application/provider/PG credentials, applies checked Drizzle migrations through the existing test helper, creates uniquely named databases, and stops/removes only its cluster on exit. PostgreSQL process creation may require execution-environment approval. No `.env.local` is loaded.
+On Linux, set `T0_POSTGRES_BIN` to the directory containing `initdb`, `pg_ctl`, `pg_dump`, `pg_restore`, and `psql`. Run as a non-root user. Choose an unused unprivileged port per task. The runner refuses an occupied port; it cannot attach to an existing database. It starts a private temporary loopback cluster, clears inherited application/provider/PG credentials, applies checked Drizzle migrations through the existing test helper, creates uniquely named databases, and stops/removes only its cluster on exit. After attempted startup, cleanup always attempts shutdown; when shutdown cannot be confirmed it retains the directory and reports its path. PostgreSQL process creation may require execution-environment approval. No `.env.local` is loaded.
 
-The scoped command includes `acceptance-foundation`, `documents-core`, `jobs-worker`, `foundation-core`, and `ops-backup-safety`. Keep console output as sanitized local evidence; no archive key, provider credentials, bank content, or document payload is printed. Test archives and keys are disposable and deleted automatically.
+The scoped command includes `acceptance-foundation`, `documents-core`, `jobs-worker`, `foundation-core`, `ops-backup-safety`, and runner cleanup tests. Keep console output as sanitized local evidence; no archive key, provider credentials, bank content, or document payload is printed. Test archives and keys are disposable and deleted automatically.
 
 ## Coverage and limits
 
@@ -61,8 +61,10 @@ T0 owns this local runner, fixtures, evidence and byte-read integrity fix. Share
 
 ## Verification evidence
 
-- `scripts/ops/local-acceptance.sh`: **58/58 passed, 0 skipped**, PostgreSQL 16.14, Node 24.7.0, pnpm 11.1.2; final scoped run about 14.9 seconds.
+- `scripts/ops/local-acceptance.sh`: **60/60 passed, 0 skipped**, PostgreSQL 16.14, Node 24.7.0, pnpm 11.1.2; final scoped run about 13.5 seconds.
 - Restored two private synthetic documents, 49 bytes each; total fixture/backup/restore drill reported 1,158 ms in that run. Encrypted bundle SHA-256 `8fa77422768a7683f55fd9547d36421f72607857003c0a4b58459c213062fc02` (randomized key/nonce means future runs differ).
 - Literal claim process exited by `SIGKILL`; retry kept `t0-killed-job`, attempt 2, stale completion denied, zero external sends.
 - `pnpm typecheck` and focused ESLint for the changed test/service: passed.
 - Full aggregate/lint/build: awaiting parent allocation; no result claimed here yet.
+
+Independent whole-branch review found one P2: unsuccessful PostgreSQL startup could bypass shutdown. Fixed with attempted-start tracking; regression observed RED then GREEN, plus retention when shutdown fails. Final scoped suite includes both cleanup regressions. No deferred review findings.

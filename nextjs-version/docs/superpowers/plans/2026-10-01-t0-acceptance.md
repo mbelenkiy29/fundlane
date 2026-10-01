@@ -25,7 +25,7 @@ No hosted mutation, communications, cloud provisioning, shared auth/schema/sched
 - [x] Run RED to expose missing proof helper/fixture.
 - [x] Implement test-only bundle encryption/decryption and synthetic linked fixture; use existing operational SQL restore.
 - [x] Run targeted proof GREEN and existing document/job/backup suites.
-- [ ] Commit test with evidence.
+- [x] Commit test with evidence (51b7076).
 
 ### Task 2: Local reproducibility and acceptance matrix
 **Files:** Create nextjs-version/scripts/ops/local-acceptance.sh and nextjs-version/docs/acceptance/t0-local-foundation.md.
@@ -45,3 +45,5 @@ Ruling: native worktree creation tool could not identify this projectless task r
 
 Task 1: scoped runner 58/58 pass, 0 skipped; checksum regression RED→GREEN, literal SIGKILL pass. Typecheck and focused lint pass.
 Task 2: runner bash syntax and lifecycle pass; explicit C locale and short socket path required for macOS.
+
+Final review: independent reviewer t0_review identified P2 failed-start cleanup. Fixed startup tracking and retention; cleanup regression RED→GREEN, scoped suite 60/60. No deferred minors or rejected findings.
