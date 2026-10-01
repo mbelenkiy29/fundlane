@@ -12,15 +12,23 @@ export function PublicApplication({ token, formId, provider }: { token: string; 
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState("")
   const native = provider === "fundlane"
+  const [loading, setLoading] = React.useState(native)
+  const [reload, setReload] = React.useState(0)
   React.useEffect(() => {
+    let cancelled = false
     void requestJson("/api/applications/track", { method: "POST", body: JSON.stringify({ token, kind: "opened" }) }).catch(() => undefined)
     if (!native) return
-    void requestJson<ApplicationSession>(`/api/applications/session?token=${encodeURIComponent(token)}`).then(async current => {
-      if (current.submitted) { setSession(current); setStarted(true); return }
-      if (current.step !== "welcome") { setSession(current); setStarted(true) }
-      else setSession(current)
-    }).catch(() => undefined)
-  }, [token, native])
+    setLoading(true); setError("")
+    void requestJson<ApplicationSession>(`/api/applications/session?token=${encodeURIComponent(token)}`).then(current => {
+      if (cancelled) return
+      setSession(current)
+      setStarted(current.submitted || current.step !== "welcome")
+    }).catch(reason => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : "Could not load your saved application.")
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [token, native, reload])
+
   async function start() {
     setBusy(true); setError("")
     try {
@@ -36,6 +44,11 @@ export function PublicApplication({ token, formId, provider }: { token: string; 
     } catch (reason) { setError(reason instanceof Error ? reason.message : "The application could not open. Try again.") }
     finally { setBusy(false) }
   }
+  if (native && loading) return <p role="status" className="p-8">Loading your saved application…</p>
+  if (native && !session) return <div className="p-8">
+    <p role="alert" className="text-sm text-destructive">{error || "Could not load your saved application."}</p>
+    <Button className="mt-4" variant="outline" onClick={() => setReload(value => value + 1)}>Try again</Button>
+  </div>
   if (native && session?.submitted) return <FunnelForm token={token} initial={session} />
   if (!started) return <div className="p-8 sm:p-12">
     <h2 className="text-xl font-semibold">{session?.branding.welcomeTitle ?? "Ready when you are"}</h2>

@@ -320,6 +320,9 @@ export async function onboardingStatus(actor: DealActor) {
         )
         .all(actor.workspaceId)
     : []
+  const { managedReadiness } = await import("./managed")
+  const visibleNumbers = manageable ? numbers : numbers.filter((n) => n.membership_id === null || n.membership_id === actor.membershipId)
+  const readyNumbers = await Promise.all(visibleNumbers.map(async (n) => ({ ...n, readiness: await managedReadiness(actor.workspaceId, String(n.account_id)) })))
   return {
     emailVerified: !!c?.email_verified_at,
     reviewState: c?.review_state ?? "draft",
@@ -339,9 +342,7 @@ export async function onboardingStatus(actor: DealActor) {
       registrationCents: c?.registration_limit_cents ?? 0,
     },
     optOutReady: !!c?.opt_out_ready,
-    numbers: manageable
-      ? numbers
-      : numbers.filter((n) => n.membership_id === null || n.membership_id === actor.membershipId),
+    numbers: readyNumbers,
     operations,
   }
 }

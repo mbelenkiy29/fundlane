@@ -102,3 +102,57 @@ test("MIC-167 uses OAuth state, verified offline scope, and refreshes credential
 test("MIC-167 resumes downloaded Drive checkpoints without listing or overwriting them",async()=>{const registry=await listImportRegistry(actor),source=registry.sources[0],batch=registry.batches[0],preview=await previewSpreadsheetImport(actor,{sourceId:source.id,batchId:batch.id,filename:"drive-resume.csv",bytes:Buffer.from("Business Name\nDrive Resume LLC")});await commitSpreadsheetImport(actor,{runId:preview.runId,expectedPreviewRevision:1});await recordDriveTransfer({workspaceId:actor.workspaceId,runId:preview.runId,fileId:"drive-file-complete",name:"Drive Resume LLC/statement.pdf",state:"downloaded",checksum:"abc123",byteLength:321});await removeDriveConnection(actor.workspaceId);const originalFetch=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;throw new Error("checkpointed files must not reach Drive")};try{const resumed=await applyDriveDocuments(actor,{runId:preview.runId,confirmations:[{fileId:"drive-file-complete",rowId:preview.rows[0].id,category:"statement"}]});assert.equal(resumed.results[0].state,"downloaded");assert.equal(resumed.results[0].size,321);assert.equal(requests,0);await recordDriveTransfer({workspaceId:actor.workspaceId,runId:preview.runId,fileId:"drive-file-complete",name:"Removed file",state:"removed",message:"late retry"});assert.equal((await driveTransfersForRun(actor.workspaceId,preview.runId)).get("drive-file-complete")?.state,"downloaded")}finally{globalThis.fetch=originalFetch}})
 
 test("MIC-119 staged PII is admin-session only at the service boundary",async()=>{const rep={...actor,userId:ids.repAUser,membershipId:ids.repA,role:"rep" as const};await assert.rejects(()=>listImportRegistry(rep),(error:{code?:string})=>error.code==="permission_denied")})
+
+test("CRM synthetic import remains assigned and auditable through broker stage and note edits", async () => {
+  const source = await createImportSource(actor, { name: "Synthetic CRM referrals" })
+  const batch = await createLeadBatch(actor, { sourceId: source.id, name: "Synthetic CRM journey" })
+  const preview = await previewSpreadsheetImport(actor, {
+    sourceId: source.id, batchId: batch.id, filename: "synthetic-crm.csv",
+    bytes: Buffer.from("Merchant,Contact,Email,Phone\nSynthetic CRM LLC,Synthetic Contact,contact@crm.example.test,555-0101"),
+    mapping: { Merchant: "legalName", Contact: "contactName", Email: "contactEmail", Phone: "contactPhone" },
+    assignmentPool: [ids.repA],
+  })
+  assert.deepEqual(preview.rows[0].errors, [])
+  const committed = await commitSpreadsheetImport(actor, { runId: preview.runId, expectedPreviewRevision: preview.previewRevision })
+  assert.equal(committed.created, 1, committed.resultsCsv)
+  const { getDeal, listDeals, transitionDeal, addDealNote } = await import("../src/lib/mca/deals/service")
+  const ownerList = await listDeals(actor, { search: "Synthetic CRM LLC" })
+  assert.equal(ownerList.deals.length, 1)
+  const original = await getDeal(actor, ownerList.deals[0].id)
+  assert.equal(original.status, "lead")
+  assert.equal(original.contactName, "Synthetic Contact")
+  assert.equal(original.contactEmail, "contact@crm.example.test")
+  assert.equal(original.fieldSources.legalName.source, "import")
+  assert.equal(original.assignments.find((assignment) => assignment.kind === "originator")?.membershipId, ids.repA)
+  const broker: DealActor = { ...actor, userId: ids.repAUser, membershipId: ids.repA, role: "rep" }
+  const restricted: DealActor = { ...actor, userId: ids.repBUser, membershipId: ids.repB, role: "rep" }
+  assert.equal((await getDeal(broker, original.id)).id, original.id)
+  assert.equal((await listDeals(restricted, { search: "Synthetic CRM LLC" })).total, 0)
+  const forbidden = (error: unknown) => Boolean(error && typeof error === "object" && "status" in error && [403, 404].includes(Number(error.status)))
+  for (const denied of [restricted, otherActor]) {
+    await assert.rejects(() => getDeal(denied, original.id), forbidden)
+    await assert.rejects(() => updateDealRecord(denied, original.id, { expectedVersion: original.version, contactName: "Denied edit" }), forbidden)
+    await assert.rejects(() => transitionDeal(denied, original.id, { expectedVersion: original.version, status: "new_application" }), forbidden)
+    await assert.rejects(() => addDealNote(denied, original.id, { expectedVersion: original.version, body: "Denied note" }), forbidden)
+  }
+  await assert.rejects(() => updateDealRecord(actor, original.id, { expectedVersion: original.version, assignments: [{ membershipId: ids.otherAdmin, kind: "originator" }] }))
+  await assert.rejects(() => updateDealRecord(broker, original.id, { expectedVersion: original.version, assignments: [{ membershipId: ids.repB, kind: "originator" }] }))
+  await assert.rejects(() => transitionDeal(broker, original.id, { expectedVersion: original.version, status: "funded" }), (error: { code?: string }) => error.code === "transition_not_allowed")
+  assert.equal((await getDeal(actor, original.id)).version, original.version)
+  const moved = await transitionDeal(broker, original.id, { expectedVersion: original.version, status: "new_application", reason: "Synthetic application received" })
+  assert.equal(moved.deal.status, "new_application")
+  assert.deepEqual(moved.sideEffects, { advanceCreated: false, commissionCreated: false })
+  await assert.rejects(() => transitionDeal(broker, original.id, { expectedVersion: moved.deal.version, status: "ready_to_submit" }), (error: { code?: string }) => error.code === "submission_fields_missing")
+  await assert.rejects(() => addDealNote(broker, original.id, { expectedVersion: original.version, body: "Stale note" }))
+  const noted = await addDealNote(broker, original.id, { expectedVersion: moved.deal.version, body: "Synthetic broker follow-up" })
+  assert.equal(noted.version, original.version + 2)
+  assert.deepEqual(noted.notes.map((note) => note.body), ["Synthetic broker follow-up"])
+  const transition = noted.activity.find((event) => event.action === "status_changed")
+  assert.ok(transition)
+  assert.match(transition.summary, /lead → new_application/)
+  assert.equal(transition.version, original.version + 1)
+  assert.equal(noted.activity.filter((event) => event.action === "note_added").length, 1)
+  const replay = await commitSpreadsheetImport(actor, { runId: preview.runId, expectedPreviewRevision: preview.previewRevision })
+  assert.equal(replay.resultsCsv, committed.resultsCsv)
+  assert.equal((await getDeal(actor, original.id)).version, noted.version)
+})

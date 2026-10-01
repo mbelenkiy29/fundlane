@@ -774,6 +774,10 @@ test("Twilio 21610 suppresses a recipient after a failed send", async () => {
 })
 
 test("purchase attempt keys dedupe a double submit and advance after failure or release", async () => {
+  const fixtureNumbers = await getDatabase().prepare<{ id: string; state: string; membership_id: string | null; phone: string }>("SELECT id,state,membership_id,phone FROM sms_numbers WHERE workspace_id=?").all(owner.workspaceId)
+  const fixtureCompany = await getDatabase().prepare<{ registration_state: string; opt_out_ready: number; monthly_limit_cents: number }>("SELECT registration_state,opt_out_ready,monthly_limit_cents FROM sms_companies WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(fixtureCompany)
+  try {
   await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',opt_out_ready=1,monthly_limit_cents=10000 WHERE workspace_id=?").run(owner.workspaceId)
   await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE workspace_id=? AND state NOT IN ('complete','failed')").run(owner.workspaceId)
   await getDatabase().prepare("UPDATE sms_numbers SET state='released',membership_id=NULL WHERE workspace_id=?").run(owner.workspaceId)
@@ -796,6 +800,10 @@ test("purchase attempt keys dedupe a double submit and advance after failure or 
   assert.notEqual(rebuy.id, retry.id)
   await getDatabase().prepare("UPDATE sms_operations SET state='failed' WHERE id=?").run(rebuy.id)
 
+  } finally {
+    for (const number of fixtureNumbers) await getDatabase().prepare("UPDATE sms_numbers SET state=?,membership_id=?,phone=? WHERE workspace_id=? AND id=?").run(number.state,number.membership_id,number.phone,owner.workspaceId,number.id)
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state=?,opt_out_ready=?,monthly_limit_cents=? WHERE workspace_id=?").run(fixtureCompany.registration_state,fixtureCompany.opt_out_ready,fixtureCompany.monthly_limit_cents,owner.workspaceId)
+  }
 })
 
 test("SMS account listing degrades gracefully when the legacy public origin is misconfigured", async () => {
@@ -837,4 +845,80 @@ test("database prevents a second live company number", async () => {
   await assert.rejects(db.prepare("INSERT INTO sms_numbers (id,workspace_id,account_id,provider_sid,phone,membership_id,state,monthly_cents,created_at,updated_at) VALUES (?,?,?,?,?,NULL,'registering',100,?,?)").run("unique-second",owner.workspaceId,"unique-second","PNunique-second","+12125550102",now,now), { code: "23505", constraint: "sms_company_number" })
   await db.prepare("DELETE FROM sms_numbers WHERE id='unique-first'").run()
   if (current) await db.prepare("UPDATE sms_numbers SET state=? WHERE id=?").run(current.state,current.id)
+})
+
+test("managed account exposes readiness and refuses a sender that differs from its owned number", async () => {
+  const n = await getDatabase().prepare<{ id: string; phone: string }>("SELECT id,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  const initial = (await listSmsAccounts(actor)).accounts.find(a => a.id === n.id)
+  assert.deepEqual(initial?.readiness, { ready: true, blockers: [] })
+  try {
+    await getDatabase().prepare("UPDATE mca_sms_accounts SET sender_identity_cipher=? WHERE workspace_id=? AND id=?")
+      .run(encryptSensitive("+12125550000", owner.workspaceId), owner.workspaceId, n.id)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    const account = (await listSmsAccounts(actor)).accounts.find(a => a.id === n.id)
+    assert.equal(account?.readiness?.blockers[0]?.code, "number_sender_mismatch")
+  } finally {
+    await getDatabase().prepare("UPDATE mca_sms_accounts SET sender_identity_cipher=? WHERE workspace_id=? AND id=?")
+      .run(encryptSensitive(n.phone, owner.workspaceId), owner.workspaceId, n.id)
+  }
+})
+
+test("managed readiness reports malformed callback origins rather than rendering a ready sender", async () => {
+  const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  const origin = process.env.MCA_SMS_PUBLIC_BASE_URL
+  try {
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "not a URL"
+    assert.equal(await managedReady(owner.workspaceId, n!.id), false)
+    const account = (await listSmsAccounts(actor)).accounts.find(a => a.id === n!.id)
+    assert.equal(account?.readiness?.blockers[0]?.code, "callback_origin_missing")
+  } finally {
+    if (origin === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL
+    else process.env.MCA_SMS_PUBLIC_BASE_URL = origin
+  }
+})
+
+test("number ownership is read-only, tenant scoped and independent of SMS registration", async () => {
+  const contract = await import("../src/lib/mca/sms/number-ownership").catch(() => null)
+  assert.equal(typeof contract?.getCompanyNumberOwnership, "function")
+  const lookup = contract!.getCompanyNumberOwnership
+  const n = await getDatabase().prepare<{ id: string; account_id: string; provider_sid: string; phone: string }>("SELECT id,account_id,provider_sid,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  assert.equal(await lookup("foreign-company", n.id), undefined)
+  assert.equal(await lookup(owner.workspaceId, "missing-number"), undefined)
+  try {
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='pending',suspended=1 WHERE workspace_id=?").run(owner.workspaceId)
+    const result = await lookup(owner.workspaceId, n.id)
+    assert.deepEqual(result, {
+      numberId: n.id, accountId: n.account_id, providerSid: n.provider_sid, phone: n.phone,
+      state: "active", assignedMembershipId: null, assignedMembershipActive: false,
+      companySuspended: true, providerAccountSid: p.accountSid, providerConfigured: true,
+    })
+    assert.equal(JSON.stringify(result).includes(p.authToken), false)
+    assert.equal(JSON.stringify(result).includes(p.apiKeySecret!), false)
+  } finally {
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',suspended=0 WHERE workspace_id=?").run(owner.workspaceId)
+  }
+})
+
+test("signed consent keywords remain authoritative with unknown provider metadata", async () => {
+  const { processTwilioOptOut } = await import("../src/lib/mca/sms/service")
+  const n = await getDatabase().prepare<{ id: string; phone: string }>("SELECT id,phone FROM sms_numbers WHERE workspace_id=? AND state='active'").get(owner.workspaceId)
+  assert.ok(n)
+  const url = `https://crm.example.test/api/mca/sms/webhooks/twilio/${n.id}/inbound`
+  const { recordSmsConsent } = await import("../src/lib/mca/sms/service")
+  await recordSmsConsent(actor, {dealId:"managed-send-deal",recipient:"+12125550198",state:"opted_in",evidence:"Synthetic keyword regression consent",idempotencyKey:"unknown-metadata-consent",matchDealContact:false})
+  const send = async (body: string, digit: string) => {
+    const params = new URLSearchParams({AccountSid:p.accountSid,From:"+12125550198",To:n.phone,MessageSid:`SM${createHash("sha256").update(`unknown-metadata:${digit}`).digest("hex").slice(0,32)}`,Body:body,OptOutType:"UNSUPPORTED"})
+    const signature=createHmac("sha1",p.authToken).update(url+[...params.keys()].sort().map(k=>k+params.get(k)).join("")).digest("base64")
+    const result=await processTwilioOptOut(n.id,params,signature,url)
+    assert.ok(await getDatabase().prepare("SELECT id FROM sms_inbox_messages WHERE workspace_id=? AND provider_id=?").get(owner.workspaceId,params.get("MessageSid")))
+    return result
+  }
+  assert.equal((await send("ordinary text","a")).updated,0)
+  await withImmediateTransaction(db=>assertNotSuppressed(db,owner.workspaceId,"+12125550198"))
+  assert.equal((await send("STOP","b")).updated,1)
+  await assert.rejects(withImmediateTransaction(db=>assertNotSuppressed(db,owner.workspaceId,"+12125550198")),{code:"sms_recipient_opted_out"})
+  assert.equal((await send("ordinary text","c")).updated,0)
+  await assert.rejects(withImmediateTransaction(db=>assertNotSuppressed(db,owner.workspaceId,"+12125550198")),{code:"sms_recipient_opted_out"})
 })
