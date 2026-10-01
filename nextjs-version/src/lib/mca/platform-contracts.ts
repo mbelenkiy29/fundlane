@@ -23,3 +23,10 @@ export type ProviderObservation = {
   state: "not_started" | "pending" | "approved" | "rejected" | "unknown"
   providerStatus: string | null; observedAt: string; errorCodes: string[]
 }
+
+export interface SmsCreditBalance {
+  balanceSegments: number
+  reservedSegments: number
+  availableSegments: number
+  updatedAt: string
+}

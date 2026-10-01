@@ -1,4 +1,4 @@
-import { check, index, integer, pgTable, primaryKey, text, unique } from "drizzle-orm/pg-core"
+import { check, index, integer, pgTable, primaryKey, text, unique, uniqueIndex } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const mca_sms_accounts = pgTable("mca_sms_accounts", {
@@ -41,6 +41,7 @@ export const mca_sms_messages = pgTable("mca_sms_messages", {
   error_code: text(), error_message: text(), idempotency_key: text().notNull(), correlation_id: text().notNull(), actor_user_id: text(),
   accepted_at: text(), delivered_at: text(), num_segments: integer(), segments_source: text(), final_status_at: text(), billing_period_start: text(), created_at: text().notNull(), updated_at: text().notNull(),
 }, (table) => [
+  uniqueIndex("sms_credit_message_workspace_id").on(table.workspace_id, table.id),
   unique("mca_sms_messages_idempotency_key").on(table.workspace_id, table.idempotency_key),
   unique("mca_sms_messages_provider_id_key").on(table.workspace_id, table.provider, table.provider_message_id),
   index("mca_sms_messages_deal_idx").on(table.workspace_id, table.deal_id, table.created_at),
