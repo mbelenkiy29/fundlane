@@ -6,7 +6,7 @@ import { requestJson } from "@/lib/mca/client"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar"
 
-export function NavUser({ user }: { user: { name: string; email: string; avatar: string } }) {
+export function NavUser({ user, platform = false }: { user: { name: string; email: string; avatar: string }; platform?: boolean }) {
   const { isMobile } = useSidebar()
 
   async function signOut() {
@@ -23,8 +23,8 @@ export function NavUser({ user }: { user: { name: string; email: string; avatar:
     <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width) min-w-56" side={isMobile ? "bottom" : "right"} align="end" sideOffset={4}>
       <DropdownMenuLabel><span className="block truncate">{user.name}</span><span className="block truncate text-xs font-normal text-muted-foreground">{user.email}</span></DropdownMenuLabel>
       <DropdownMenuSeparator />
-      <DropdownMenuGroup><DropdownMenuItem asChild><Link href="/settings/profile"><CircleUser /> Profile</Link></DropdownMenuItem><DropdownMenuItem asChild><Link href="/settings"><Settings /> Workspace settings</Link></DropdownMenuItem></DropdownMenuGroup>
-      <DropdownMenuItem asChild><Link href="/onboarding?switch=1">Switch company</Link></DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem onSelect={signOut}><LogOut /> Sign out</DropdownMenuItem>
+      {platform ? <DropdownMenuGroup><DropdownMenuItem asChild><Link href="/account-security"><Settings /> Account security</Link></DropdownMenuItem><DropdownMenuItem asChild><Link href="/dashboard"><CircleUser /> Return to dashboard</Link></DropdownMenuItem></DropdownMenuGroup> : <><DropdownMenuGroup><DropdownMenuItem asChild><Link href="/settings/profile"><CircleUser /> Profile</Link></DropdownMenuItem><DropdownMenuItem asChild><Link href="/settings"><Settings /> Workspace settings</Link></DropdownMenuItem></DropdownMenuGroup><DropdownMenuItem asChild><Link href="/onboarding?switch=1">Switch company</Link></DropdownMenuItem></>}
+      <DropdownMenuSeparator /><DropdownMenuItem onSelect={signOut}><LogOut /> Sign out</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu></SidebarMenuItem></SidebarMenu>
 }

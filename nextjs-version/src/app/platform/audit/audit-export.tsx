@@ -1,5 +1,8 @@
 "use client"
 import {useState} from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { PlatformSection } from "@/components/mca/platform/presentation"
 
 export function AuditExport({filters}:{filters:{actor?:string;action?:string;workspace?:string;from?:string;to?:string}}) {
   const [code,setCode]=useState("")
@@ -15,12 +18,12 @@ export function AuditExport({filters}:{filters:{actor?:string;action?:string;wor
     } catch (error) { setVerified(false);setMessage(error instanceof Error?error.message:"Verification failed.") }
     finally {setBusy(false)}
   }
-  return <div className="space-y-2">
-    <div className="flex gap-2"><input aria-label="Authenticator code" autoComplete="one-time-code" inputMode="numeric" value={code} onChange={event=>setCode(event.target.value)} placeholder="Authenticator code"/><button type="button" disabled={busy||!code} onClick={stepUp}>Verify for export</button></div>
+  return <PlatformSection title="Export audit records" description="Verify a fresh authenticator code before exporting these filtered records.">
+    <div className="flex flex-wrap gap-2"><Input className="w-56" aria-label="Authenticator code" autoComplete="one-time-code" inputMode="numeric" value={code} onChange={event=>setCode(event.target.value)} placeholder="Authenticator code"/><Button type="button" disabled={busy||!code} onClick={stepUp}>Verify for export</Button></div>
     {message?<p role="status">{message}</p>:null}
     <form method="post" action="/api/platform/audit/export">
       {Object.entries(filters).map(([key,value])=><input key={key} type="hidden" name={key} value={value??""}/>)}
-      <button type="submit" disabled={!verified}>Export CSV</button>
+      <Button type="submit" variant="outline" disabled={!verified}>Export CSV</Button>
     </form>
-  </div>
+  </PlatformSection>
 }

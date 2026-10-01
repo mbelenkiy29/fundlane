@@ -1,3 +1,4 @@
+import { PlatformHeading } from "@/components/mca/platform/presentation"
 import { notFound } from "next/navigation"
 import { publicRoadmapEnabled } from "@/lib/marketing/launch-switches"
 import { requirePlatformPage } from "@/lib/mca/platform-page-access"
@@ -8,5 +9,5 @@ export const dynamic = "force-dynamic"
 export default async function PlatformRoadmapPage() {
   if (!publicRoadmapEnabled()) notFound()
   await requirePlatformPage()
-  return <div className="space-y-6"><h1 className="text-3xl font-bold">Roadmap</h1><RoadmapEditor initialItems={await listRoadmapItems()} /></div>
+  return <div className="space-y-6"><PlatformHeading title="Roadmap" description="Manage product updates and publication status." /><RoadmapEditor initialItems={await listRoadmapItems()} /></div>
 }

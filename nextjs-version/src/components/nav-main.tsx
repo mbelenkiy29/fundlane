@@ -85,8 +85,8 @@ export function NavMain({
                   </CollapsibleContent>
                 </>
               ) : (
-                <SidebarMenuButton asChild tooltip={item.title} className="cursor-pointer" isActive={pathname === item.url}>
-                  <Link href={item.url}>
+                <SidebarMenuButton asChild tooltip={item.title} className="cursor-pointer" isActive={item.isActive ?? pathname === item.url}>
+                  <Link href={item.url} aria-current={(item.isActive ?? pathname === item.url) ? "page" : undefined}>
                     {item.icon && <item.icon />}
                     <span>{item.title}</span>
                   </Link>

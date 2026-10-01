@@ -15,6 +15,8 @@ export default defineConfig([
     ".next-*/**",
     "out/**",
     "build/**",
+    // Generated synthetic platform browser bundle; lint its test sources instead.
+    "output/playwright/platform-redesign/**",
     "next-env.d.ts",
     "pnpm-workspace.yaml",
     // Minified Edge bundles from scripts/supabase/build.mjs. Lint the TypeScript
