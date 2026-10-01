@@ -26,3 +26,26 @@ export function rejectSmsReplyDraft(
   ].includes(code ?? "")
   return !wasRetry && rejectedBeforeDispatch ? { body: draft.body } : draft
 }
+
+/** A failed conversation refresh cannot change the outcome of a completed POST. */
+export async function postSmsReplyAndRefresh<T>(input: {
+  post: () => Promise<T>
+  onResult: (result: T) => boolean
+  onPostError: (error: unknown) => void
+  refresh: () => Promise<void>
+  onRefreshError: (error: unknown) => void
+}): Promise<void> {
+  let result: T
+  try {
+    result = await input.post()
+  } catch (error) {
+    input.onPostError(error)
+    return
+  }
+  if (!input.onResult(result)) return
+  try {
+    await input.refresh()
+  } catch (error) {
+    input.onRefreshError(error)
+  }
+}

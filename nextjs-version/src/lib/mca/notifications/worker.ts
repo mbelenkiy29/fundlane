@@ -166,7 +166,7 @@ export async function reconcileNotificationProviders(clock = nowIso(), limit = 5
     if (!Number.isFinite(Date.parse(clock)) || !Number.isInteger(limit) || limit < 1 || limit > 25)
         throw new AppError(422, 'notification_clock_invalid', 'Use a valid clock and a limit between 1 and 25.');
     const rows = await getDatabase().prepare<NotificationRow>(`SELECT * FROM mca_notifications WHERE state IN ('uncertain','accepted') AND next_attempt_at<=? ORDER BY next_attempt_at,id LIMIT ?`).all(clock, limit);
-    const deadlineMs = options?.deadlineMs ?? Date.now() + 60000;
+    const deadlineMs = options?.deadlineMs ?? Date.now() + 75000;
     let resolved = 0;
     for (const row of rows) {
         if (deadlineMs - Date.now() < 60000)

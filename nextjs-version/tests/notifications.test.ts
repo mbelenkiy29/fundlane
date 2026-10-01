@@ -183,6 +183,22 @@ test('provider receipt lookup resolves uncertain without replay and absence stay
     assert.equal(sends, 1);
     setNotificationReceiptLookupForTests();
 });
+test('standalone receipt poll starts with its default deadline after a clock tick', async (t) => {
+    const row = await enqueueNotification(actor(), event('default-receipt-deadline'));
+    await getDatabase().prepare("UPDATE mca_notifications SET state='uncertain' WHERE id=?").run(row.id);
+    let tick = 1000000, lookups = 0;
+    const clockMock = t.mock.method(Date, 'now', () => ++tick);
+    setNotificationReceiptLookupForTests(async () => { lookups++; return { state: 'accepted', providerMessageId: 'default-deadline-receipt' }; });
+    try {
+        assert.deepEqual(await reconcileNotificationProviders(now), { resolved: 1 });
+        assert.equal(lookups, 1);
+    }
+    finally {
+        clockMock.mock.restore();
+        setNotificationReceiptLookupForTests();
+    }
+    assert.equal((await getNotification(actor(), row.id)).state, 'accepted');
+});
 test('SMS optout after enqueue stops merchant sends', async () => {
     await setNotificationPolicy(actor(), { kind: 'document', merchantEnabled: true, brokerEnabled: true });
     const template = await createMessageTemplate(actor(), { name: 'Notification SMS consent', channel: 'sms', scope: 'merchant', body: 'Please review your documents.' });

@@ -42,7 +42,9 @@ Opaque recipient-specific unsubscribe capabilities appear in each message. GET o
 
 ## Migration, runtime and release gates
 
-Migration `0071_notification_foundation`, journal idx59/version7/when1790385600017: four tables (event outbox, policy, recipient preferences combining consent/suppression, append-only receipts); adds tenant composite unique deal index for a tenant-safe FK. The existing followup, submission and conversation queues retain their behavior and ownership. A generic event lifecycle cannot fit their constrained domain identities without conflating policies.
+Migration `0071_notification_foundation`, journal idx62/version7/when1790385600020 (after applied `0070` idx61/when1790385600019): four tables (event outbox, policy, recipient preferences combining consent/suppression, append-only receipts); adds tenant composite unique deal index for a tenant-safe FK. The existing followup, submission and conversation queues retain their behavior and ownership. A generic event lifecycle cannot fit their constrained domain identities without conflating policies.
+
+`0071` builds the unique index on `deals(workspace_id,id)` inside the migration transaction, so apply it with a lock timeout (for example, `SET lock_timeout = '5s'`).
 
 Apply checked migrations and restricted role grants through the existing human-reviewed release flow. Never use hosted migration as build/setup. Enable runtime only after synthetic nonproduction provider tests, sender scopes/number readiness, existing comms scheduler ownership and restricted role validation. Verify company pause/reapproval, opt-out between enqueue/send, disconnect, callback receipts, killed send, duplicate events and bounded cron duration with the deployed head. No new cron is declared in `vercel.json`; do not create a second consumer/schedule. Disable `MCA_NOTIFICATION_RUNTIME` to stop dispatch without deleting pending/uncertain rows.
 
