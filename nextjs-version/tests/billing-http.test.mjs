@@ -139,7 +139,7 @@ test("recovery projects only verified company debt and paid redirects cannot gra
   assert.match(portal.payload.url, /^https:\/\/billing.stripe.com\//)
   assert.equal((await request("/api/billing?paid=true")).payload.access.allowed, false, "opening payment settings cannot restore access")
   const billingPage = await fetch(`${base}/settings/billing?paid=true`, { headers: await fixture.headers(owner.cookie), redirect: "manual" })
-  assert.equal(billingPage.status, 200, "paused administrators can reach the billing page")
+  assert.equal(billingPage.status, 200, "paused administrators can reach the billing page: " + output.slice(-12000))
   assert.equal(result.payload.recovery.paymentRequired, true)
   assert.equal(result.payload.recovery.verificationPending, false)
   assert.deepEqual(result.payload.recovery.invoices.map(i => i.id), ["in_recovery_one", "in_recovery_two"])

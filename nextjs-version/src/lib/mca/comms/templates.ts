@@ -214,6 +214,8 @@ export const TEMPLATE_VARIABLE_REGISTRY: readonly TemplateVariableDefinition[] =
   { name: "selected_offers_all_details", group: "offers", label: "Selected offers", description: "Formatted list of selected offers. Omits commissions.", example: "Offer 1:\n- Funding Amount: $75,000" },
   { name: "highest_offer_all_details", group: "offers", label: "Highest offer", description: "Formatted details of the highest funding amount. Omits commissions.", example: "Offer 1:\n- Funding Amount: $100,000" },
   { name: "highest_offer_funding_amount", group: "offers", label: "Highest offer amount", description: "Dollar amount of the highest offer, no decimals.", example: "$100,000" },
+  { name: "document_request_url", group: "uploads", label: "Document request URL", description: "Live expiring document request link resolved by scheduled notification guard.", example: "https://app.example.test/merchant-upload/…" },
+  { name: "document_request_label", group: "documents", label: "Document request label", description: "Current document request label resolved by scheduled notification guard.", example: "Requested bank statement" },
   { name: "docs_check_summary", group: "documents", label: "Document check", description: "Summary of missing required documents.", example: "Missing 2 of 4 required documents" },
   { name: "missing_docs", group: "documents", label: "Missing documents", description: "List of missing document items.", example: "- Funding Application\n- Bank Statement" },
   { name: "auto_upload_url", group: "uploads", label: "Auto upload URL", description: "Scoped merchant upload link that auto-categorizes files.", example: "https://app.example.test/merchant-upload/…" },
@@ -1026,15 +1028,34 @@ export async function previewMessageTemplate(actor: DealActor, input: {
   })
 }
 
+/** Document reminders use only persisted links supplied by their live condition guard. */
+export function assertDocumentRequestTemplate(input: { body: string; subject?: string | null; channel: MessageTemplateChannel; scope: MessageTemplateScope }): void {
+  const names = validateTemplateVariables(input).names
+  const legacyLinks = ["auto_upload_url", "statements_upload_url", "dlvc_upload_url", "closing_docs_upload_url", "other_docs_upload_url", "missing_docs_upload_url"]
+  if (!names.includes("document_request_url") || names.some(name => legacyLinks.includes(name))) throw new AppError(422, "document_request_template_invalid", "Use the document request URL variable without legacy upload URL variables.")
+}
+
 export async function renderPublishedMessageTemplate(actor: DealActor, input: {
   templateId: string
   dealId: string
   origin: string
+  notificationValues?: { document_request_url?: string; document_request_label?: string }
 }): Promise<RenderedMessageTemplate> {
   const template = await getPublishedMessageTemplate(actor, input.templateId)
   const version = template.published
   if (!version) throw new AppError(404, "template_not_published", "This message template has no published version.")
   const built = await buildDealTemplateValues(actor, { dealId: asId(input.dealId, "dealId"), origin: input.origin, channel: template.channel })
+  // Only guard-derived fixed values are supported; this is never a caller dictionary.
+  if (input.notificationValues) {
+    assertDocumentRequestTemplate({ body: version.body, subject: version.subject, channel: template.channel, scope: template.scope })
+    const requestUrl = input.notificationValues.document_request_url
+    if (requestUrl) {
+      const url = new URL(requestUrl), origin = new URL(input.origin)
+      if (url.origin !== origin.origin || !/^\/merchant-upload\/[A-Za-z0-9_-]{30,200}$/.test(url.pathname) || url.search || url.hash || url.username || url.password) throw new AppError(422, "document_request_url_invalid", "Use a scoped document request link.")
+      built.values.document_request_url = url.toString()
+    }
+    if (input.notificationValues.document_request_label) built.values.document_request_label = input.notificationValues.document_request_label
+  }
   const rendered = renderTemplateSource({
     subject: version.subject,
     body: version.body,
