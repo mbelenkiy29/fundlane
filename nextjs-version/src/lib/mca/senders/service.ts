@@ -2,7 +2,7 @@ import "server-only"
 
 import { createOpaqueToken, hashOpaqueToken } from "../crypto"
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
-import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
+import { newId, nowIso, recordAuditEvent, withTransaction } from "../db"
 import { actorForDeals } from "../deals/service"
 import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
@@ -390,13 +390,18 @@ export async function updateSender(actor: DealActor, senderId: string, input: Up
 export async function revokeSender(actor: DealActor, senderId: string): Promise<SenderConnection> {
   const current = assertCanView(actor, await findSenderById(actor.workspaceId, senderId))
   if (!isAdmin(actor) && (!actor.membershipId || current.ownerMembershipId !== actor.membershipId)) denied()
-  const stored = await updateSenderRecord({
-    id: current.id,
-    workspaceId: actor.workspaceId,
-    state: "revoked",
-    isDefault: false,
-    lastError: "Sender connection revoked.",
-    updatedAt: nowIso(),
+  const stored = await withTransaction(async executor => {
+    await executor.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, current.id)
+    await executor.prepare("DELETE FROM mca_email_oauth_states WHERE workspace_id=? AND sender_id=?").run(actor.workspaceId,current.id)
+    return updateSenderRecord({
+      id: current.id,
+      workspaceId: actor.workspaceId,
+      credentialCipher: current.provider === "google" || current.provider === "microsoft" ? null : undefined,
+      state: "revoked",
+      isDefault: false,
+      lastError: "Sender connection revoked.",
+      updatedAt: nowIso(),
+    }, executor)
   })
   await audit(actor, "sender.revoked", stored)
   return toConnection(stored)
@@ -465,15 +470,22 @@ export async function startSenderOAuth(actor: DealActor, senderId: string): Prom
   senderOAuthConfig(sender.provider)
   const state = createOpaqueToken()
   const now = nowIso()
-  await saveOauthState({
-    stateHash: hashOpaqueToken(state),
-    userId: actor.userId,
-    workspaceId: actor.workspaceId,
-    senderId: sender.id,
-    provider: sender.provider,
-    purpose: sender.purpose,
-    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-    createdAt: now,
+  await withTransaction(async executor => {
+    await executor.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, sender.id)
+    const current = await findSenderById(actor.workspaceId, sender.id, executor)
+    if (!current || current.updatedAt !== sender.updatedAt || current.state !== sender.state || current.credentialCipher !== sender.credentialCipher) {
+      throw new AppError(409, "sender_connection_changed", "Email connection changed. Start the connection again.")
+    }
+    await saveOauthState({
+      stateHash: hashOpaqueToken(state),
+      userId: actor.userId,
+      workspaceId: actor.workspaceId,
+      senderId: sender.id,
+      provider: sender.provider,
+      purpose: sender.purpose,
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      createdAt: now,
+    }, executor)
   })
   await audit(actor, "sender.oauth_started", sender)
   return {
@@ -483,9 +495,18 @@ export async function startSenderOAuth(actor: DealActor, senderId: string): Prom
 }
 
 export async function completeSenderOAuth(actor: DealActor, input: { state: string; code: string }): Promise<SenderConnection> {
-  const pending = await consumeOauthState(actor.workspaceId, hashOpaqueToken(input.state), nowIso(), getDatabase(), actor.userId)
-  if (!pending) throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
-  const sender = await findSenderById(actor.workspaceId, pending.senderId)
+  const sender = await withTransaction(async executor => {
+    // Use the same lock order as disconnect: sender first, then its OAuth states.
+    const locked = await executor.prepare<{ id: string }>(
+      `SELECT s.id FROM mca_email_senders s JOIN mca_email_oauth_states o
+       ON o.sender_id=s.id AND o.workspace_id=s.workspace_id
+       WHERE o.state_hash=? AND o.workspace_id=? AND o.user_id=? FOR UPDATE OF s`
+    ).get(hashOpaqueToken(input.state), actor.workspaceId, actor.userId ?? null)
+    if (!locked) throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
+    const pending = await consumeOauthState(actor.workspaceId, hashOpaqueToken(input.state), nowIso(), executor, actor.userId)
+    if (!pending) throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
+    return findSenderById(actor.workspaceId, pending.senderId, executor)
+  })
   if (!sender || (sender.provider !== "google" && sender.provider !== "microsoft")) {
     throw new AppError(403, "sender_oauth_state", "The email sender authorization link expired or was already used. Start again.")
   }
@@ -495,15 +516,22 @@ export async function completeSenderOAuth(actor: DealActor, input: { state: stri
   const credential = await exchangeSenderAuthorizationCode(sender.provider, input.code, previous)
   if (!credential.email || credential.email.toLowerCase() !== sender.fromAddress.toLowerCase()) throw new AppError(422, "sender_address_mismatch", "Connect the email account matching the saved sender address.")
   const now = nowIso()
-  const stored = await updateSenderRecord({
-    id: sender.id,
-    workspaceId: actor.workspaceId,
-    fromAddress: sender.fromAddress || credential.email,
-    credentialCipher: encryptSenderCredential(actor.workspaceId, credential),
-    state: "verified",
-    verifiedAt: now,
-    lastError: null,
-    updatedAt: now,
+  const stored = await withTransaction(async executor => {
+    await executor.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, sender.id)
+    const current = await findSenderById(actor.workspaceId, sender.id, executor)
+    if (!current || current.updatedAt !== sender.updatedAt || current.state !== sender.state || current.credentialCipher !== sender.credentialCipher) {
+      throw new AppError(409, "sender_connection_changed", "Email connection changed. Start the connection again.")
+    }
+    return updateSenderRecord({
+      id: sender.id,
+      workspaceId: actor.workspaceId,
+      fromAddress: sender.fromAddress || credential.email,
+      credentialCipher: encryptSenderCredential(actor.workspaceId, credential),
+      state: "verified",
+      verifiedAt: now,
+      lastError: null,
+      updatedAt: now,
+    }, executor)
   })
   await audit(actor, "sender.oauth_connected", stored)
   return toConnection(stored)
