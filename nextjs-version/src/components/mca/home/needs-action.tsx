@@ -221,7 +221,7 @@ export function NeedsAction() {
                     <div className="flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>
                       {item.suggestedActions.map((action) =>
                         action.id === "call" && action.href ? (
-                          action.enabled ? <VoiceLauncher key={action.id} dealId={item.dealId} label={action.label} /> : <Button key={action.id} size="sm" variant="outline" disabled>{action.label}</Button>
+                          action.enabled ? <VoiceLauncher key={action.id} dealId={item.dealId} href={action.href} label={action.label} /> : <Button key={action.id} size="sm" variant="outline" disabled>{action.label}</Button>
                         ) : action.id === "call" ? (
                           <Button
                             key={action.id}

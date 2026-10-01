@@ -96,10 +96,15 @@ export async function handleInbound(request:Request,workspaceId:string){
   let row=await db.prepare<CallRow>("SELECT * FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(workspaceId,callSid)
   if(row && (row.direction!=="inbound" || decryptSensitive(row.phone_cipher,workspaceId)!==phone || row.number_id!==number.numberId))throw new AppError(409,"voice_call_mismatch","Call identity mismatch.")
   if(row?.terminal_at)return hangupTwiml
+  if(row){
+   const ids=JSON.parse(row.recipient_memberships) as string[]
+   const active=await db.prepare<{id:string}>("SELECT id FROM memberships WHERE workspace_id=? AND id=ANY(?::text[]) AND status='active' AND role IN ('rep','manager','admin','super_admin')").all(workspaceId,ids)
+   return inboundTwiml(ids.filter(id=>active.some(member=>member.id===id)).map(id=>identityFor(workspaceId,id)),callbackUrl(credentials.publicOrigin,workspaceId,"outcome"))
+  }
   const recipients=await db.prepare<{membership_id:string;identity:string}>(`SELECT p.membership_id,p.identity FROM voice_presence p JOIN memberships m ON m.id=p.membership_id AND m.workspace_id=p.workspace_id WHERE p.workspace_id=? AND p.expires_at>? AND m.status='active' AND m.role IN ('rep','manager','admin','super_admin') ORDER BY p.membership_id LIMIT 10`).all(workspaceId,nowIso())
   const fallback=recipients.length?[]:await db.prepare<{id:string}>("SELECT id FROM memberships WHERE workspace_id=? AND status='active' AND role IN ('admin','super_admin') ORDER BY id LIMIT 10").all(workspaceId)
-  const ids=row?JSON.parse(row.recipient_memberships) as string[]:[...recipients.map(r=>r.membership_id),...fallback.map(r=>r.id)]
-  const identities=recipients.filter(r=>ids.includes(r.membership_id)).map(r=>r.identity)
+  const ids=[...recipients.map(r=>r.membership_id),...fallback.map(r=>r.id)]
+  const identities=recipients.map(r=>r.identity)
   if(!row){await db.prepare("INSERT INTO voice_calls(id,workspace_id,number_id,account_sid,provider_call_sid,recipient_memberships,direction,state,phone_cipher,company_phone_cipher,terminal_at,alert_pending,created_at) VALUES (?,?,?,?,?,?,'inbound',?,?,?,?,?,?)").run(newId(),workspaceId,number.numberId,credentials.accountSid,callSid,JSON.stringify(ids),identities.length?"ringing":"missed",encryptSensitive(phone,workspaceId),encryptSensitive(number.phone,workspaceId),identities.length?null:nowIso(),identities.length?0:1,nowIso());row=await db.prepare<CallRow>("SELECT * FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(workspaceId,callSid)}
   if(!identities.length && row){const clock=nowIso();await db.prepare("UPDATE voice_calls SET state='missed',terminal_at=?,alert_pending=1 WHERE workspace_id=? AND id=? AND terminal_at IS NULL").run(clock,workspaceId,row.id);await enqueueMissed({...row,state:"missed",terminal_at:clock},db)}
   return inboundTwiml(identities,callbackUrl(credentials.publicOrigin,workspaceId,"outcome"))
@@ -121,6 +126,7 @@ export async function handleOutcome(request:Request,workspaceId:string){
 }
 export async function listVoiceHistory(actor:DealActor):Promise<VoiceHistoryItem[]>{
  await activeActor(actor)
- const rows=await getDatabase().prepare<CallRow>("SELECT * FROM voice_calls WHERE workspace_id=? ORDER BY created_at DESC LIMIT 100").all(actor.workspaceId)
- return rows.filter(row=>["admin","super_admin"].includes(actor.role??"") || row.membership_id===actor.membershipId || (JSON.parse(row.recipient_memberships) as string[]).includes(actor.membershipId!)).map(row=>({id:row.provider_call_sid,direction:row.direction,state:row.state,phone:decryptSensitive(row.phone_cipher,actor.workspaceId),dealId:row.deal_id,createdAt:row.created_at}))
+ const admin=["admin","super_admin"].includes(actor.role??"")
+ const rows=await getDatabase().prepare<CallRow>(admin?"SELECT * FROM voice_calls WHERE workspace_id=? ORDER BY created_at DESC LIMIT 100":"SELECT * FROM voice_calls WHERE workspace_id=? AND (membership_id=? OR recipient_memberships::jsonb @> jsonb_build_array(?::text)) ORDER BY created_at DESC LIMIT 100").all(...(admin?[actor.workspaceId]:[actor.workspaceId,actor.membershipId,actor.membershipId]))
+ return rows.map(row=>({id:row.provider_call_sid,direction:row.direction,state:row.state,phone:decryptSensitive(row.phone_cipher,actor.workspaceId),dealId:row.deal_id,createdAt:row.created_at}))
 }

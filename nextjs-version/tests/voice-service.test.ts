@@ -70,12 +70,26 @@ test("signed terminal callback survives released number and disabled setup",asyn
  await getDatabase().prepare("UPDATE sms_numbers SET state='registering' WHERE id=?").run(numberId)
  await getDatabase().prepare("UPDATE voice_config SET callbacks_confirmed=1 WHERE workspace_id=?").run(actor.workspaceId)
 })
-test("inbound replay with expired recipients records one terminal missed call",async()=>{
+test("inbound replay after presence expiry preserves ringing for completed outcome",async()=>{
  await setPresence(actor,true);const p={CallSid:sid("c"),To:phone,From:"+15555550105"};await handleInbound(hook("inbound",p),actor.workspaceId);await getDatabase().prepare("UPDATE voice_presence SET expires_at=? WHERE workspace_id=?").run("2000-01-01T00:00:00.000Z",actor.workspaceId)
- assert.match(await handleInbound(hook("inbound",p),actor.workspaceId),/<Reject/)
- assert.equal((await listVoiceHistory(actor)).find(c=>c.id===sid("c"))?.state,"missed")
- const row=await getDatabase().prepare<{terminal_at:string|null}>("SELECT terminal_at FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(actor.workspaceId,sid("c"));assert.ok(row?.terminal_at)
+ assert.match(await handleInbound(hook("inbound",p),actor.workspaceId),/<Client>/)
+ assert.equal((await listVoiceHistory(actor)).find(c=>c.id===sid("c"))?.state,"ringing")
+ const row=await getDatabase().prepare<{terminal_at:string|null}>("SELECT terminal_at FROM voice_calls WHERE workspace_id=? AND provider_call_sid=?").get(actor.workspaceId,sid("c"));assert.equal(row?.terminal_at,null)
+ await handleOutcome(hook("outcome",{...p,DialCallStatus:"completed"}),actor.workspaceId)
+ assert.equal((await listVoiceHistory(actor)).find(c=>c.id===sid("c"))?.state,"completed")
  assert.match(await handleInbound(hook("inbound",p),actor.workspaceId),/<Hangup/)
+})
+test("member history filters before the company 100-call limit",async()=>{
+ const db=getDatabase(),rep={...actor,role:"rep" as const},cipher=encryptSensitive("+15555550106",actor.workspaceId),companyCipher=encryptSensitive(phone,actor.workspaceId)
+ await db.prepare("UPDATE memberships SET role='rep' WHERE id=?").run(actor.membershipId)
+ try{
+  const insert=db.prepare("INSERT INTO voice_calls(id,workspace_id,number_id,account_sid,provider_call_sid,membership_id,recipient_memberships,direction,state,phone_cipher,company_phone_cipher,created_at) VALUES (?,?,?,?,?,?,?,'inbound','completed',?,?,?)")
+  await insert.run("member-old",actor.workspaceId,numberId,accountSid,sid("d"),null,JSON.stringify([actor.membershipId]),cipher,companyCipher,"2000-01-01T00:00:00.000Z")
+  for(let i=0;i<101;i++)await insert.run(`other-${i}`,actor.workspaceId,numberId,accountSid,`CA${i.toString(16).padStart(32,"0")}`,null,"[]",cipher,companyCipher,`2099-01-01T00:00:${String(i%60).padStart(2,"0")}.${String(i).padStart(3,"0")}Z`)
+  assert.ok((await listVoiceHistory(rep)).some(call=>call.id===sid("d")))
+  await db.prepare("UPDATE memberships SET role='admin' WHERE id=?").run(actor.membershipId)
+  assert.ok(!(await listVoiceHistory(actor)).some(call=>call.id===sid("d")))
+ }finally{await db.prepare("UPDATE memberships SET role='admin' WHERE id=?").run(actor.membershipId)}
 })
 
 test("restricted mca_app can use Voice tables but cannot disable RLS",async()=>{

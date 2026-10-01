@@ -1,7 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import { execFileSync } from "node:child_process"
 import { BrowserVoice } from "../src/lib/mca/voice/browser"
+test("unconfigured Call actions retain tel links and ready Voice uses browser controls",()=>{
+ const script=`const React=require('react');const {renderToStaticMarkup}=require('react-dom/server');const {VoiceLauncher,VoiceReadyContext}=require('./src/components/mca/voice/voice-launcher.tsx');const {BookTable}=require('./src/components/mca/deals-book/book-table.tsx');const row={id:'advance',dealId:'deal',legalName:'Merchant',contactPhone:'+15555550102'};const controls=React.createElement(React.Fragment,null,React.createElement(VoiceLauncher,{dealId:'deal',href:'tel:+15555550102'}),React.createElement(BookTable,{rows:[row],visible:new Set(['contact']),onOpen(){},onSms(){},onCall(){}}));console.log(JSON.stringify([renderToStaticMarkup(controls),renderToStaticMarkup(React.createElement(VoiceReadyContext.Provider,{value:true},controls))]));`
+ const [unconfigured,ready]=JSON.parse(execFileSync(process.execPath,["--import","tsx","-e",script],{encoding:"utf8"})) as string[]
+ assert.equal((unconfigured.match(/href="tel:\+15555550102"/g)??[]).length,2)
+ assert.ok(!ready.includes('href="tel:'))
+ assert.match(ready,/<button/)
+})
 class Call extends EventEmitter { rejected=0; disconnected=0; accepted=0; parameters={From:"+15555550101"}; accept(){this.accepted++;this.emit("accept")}reject(){this.rejected++;this.emit("reject")}disconnect(){this.disconnected++;this.emit("disconnect")}}
 class Device extends EventEmitter {destroyed=0;token="";next:Promise<Call>=Promise.resolve(new Call()); async register(){this.emit("registered")}async connect(){return this.next}updateToken(token:string){this.token=token}destroy(){this.destroyed++}}
 function harness(){const device=new Device();const states:string[]=[];let presence=0;let canceled=0; const voice=new BrowserVoice({createDevice:()=>device,token:async()=>({token:"synthetic"}),presence:async enabled=>{presence+=enabled?1:-1},intent:async()=>({intentId:"intent"}),cancelIntent:async()=>{canceled++},onState:s=>states.push(s.state)});return {voice,device,states,get presence(){return presence},get canceled(){return canceled}}}

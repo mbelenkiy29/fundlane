@@ -33,7 +33,7 @@ export function MerchantSheet({ detail, open, onOpenChange, focusSms }: {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{STATUS_LABEL[detail.servicingStatus]}</Badge>
               {detail.renewalEligible && <Badge>Renewal eligible</Badge>}
-              {detail.contactPhone && <VoiceLauncher dealId={detail.dealId} />}
+              {detail.contactPhone && <VoiceLauncher dealId={detail.dealId} href={`tel:${detail.contactPhone}`} />}
               <Button size="sm" variant="outline" onClick={()=>{setChannel("sms");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Text</Button>
               <Button size="sm" variant="outline" onClick={()=>{setChannel("email");document.getElementById("merchant-sms")?.scrollIntoView({behavior:"smooth"})}}>Email</Button>
               <Button size="sm" variant="outline" asChild><Link href={`/pipeline?deal=${detail.dealId}`}>Full application</Link></Button>
