@@ -712,7 +712,7 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) {
-      if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true" && (response.status === 408 || response.status >= 500)) {
+      if ((job?.approvedPackage || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") && (response.status === 408 || response.status >= 500)) {
         return uncertain(correlationId, messageId, rendered)
       }
       return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
@@ -728,7 +728,7 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
     return { ok: true, state: "sent", correlationId, externalRef: encodeExternalRef(ref) }
   } catch (error) {
     if (error instanceof AppError) return failed(correlationId, error.code, error.message)
-    if (process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
+    if (job?.approvedPackage || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true") {
       return uncertain(correlationId, messageId, rendered)
     }
     return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
@@ -736,7 +736,8 @@ async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId:
 }
 
 export async function sendSubmissionEmail(job: SubmissionJob, packaged: OutgoingDocument[] = []): Promise<DeliverResult> {
-  const reserved = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+  await (await import("./broker-approval")).assertBrokerApprovedDelivery(job)
+  const reserved = job.approvedPackage || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
     ? await db().prepare<{ correlation_id: string }>(`SELECT correlation_id FROM mca_submission_attempts
         WHERE workspace_id = ? AND job_id = ? AND attempt_key = ? AND state = 'sending'`).get(job.workspaceId, job.id, job.attemptKey)
     : undefined

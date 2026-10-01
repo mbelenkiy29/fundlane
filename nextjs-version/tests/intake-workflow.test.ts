@@ -104,10 +104,10 @@ async function seedFunder(workspaceId: string, key: string, rules: EligibilityRu
   )
   for (const [index, rule] of rules.entries()) {
     await exec(
-      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, unspecified, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, source_as_of, valid_until, unspecified, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       newId(), workspaceId, id, rule.field, rule.operator, rule.unit,
-      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? null, rule.unspecified ? 1 : 0, index, now, now,
+      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? "Synthetic workflow fixture; not lender policy", rule.sourceAsOf ?? "2026-01-01", rule.validUntil ?? null, rule.unspecified ? 1 : 0, index, now, now,
     )
   }
   return id

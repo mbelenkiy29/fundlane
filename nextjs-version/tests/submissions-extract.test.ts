@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { syntheticApprovedPackages } from "./helpers/broker-submission-preview"
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
@@ -273,8 +274,8 @@ async function extractPost(request: Request) {
       method: "POST", headers: request.headers, body: JSON.stringify({ replyId: body.replyId }),
     }))
     if (preview.ok) {
-      const result = await preview.json() as { classification: string }
-      return rawExtractPost(new Request(request, { body: JSON.stringify({ ...body, confirm: true, expectedClassification: result.classification }) }))
+      const result = await preview.json() as { classification: string; proposalKey: string }
+      return rawExtractPost(new Request(request, { body: JSON.stringify({ ...body, confirm: true, expectedClassification: result.classification, expectedProposalKey: result.proposalKey }) }))
     }
   }
   return rawExtractPost(request)
@@ -317,6 +318,7 @@ async function sendTo(dealId: string) {
     dealId,
     funderIds: [funderId],
     confirmationKey: `extract-send-${dealId}`,
+    approvedPackages: await syntheticApprovedPackages(actor(), dealId, [funderId], `extract-send-${dealId}`),
   })
   assert.equal(queued.jobs[0]?.state, "sent")
   const attempt = await getDatabase().prepare<{ external_ref: string | null }>(
@@ -341,6 +343,7 @@ type ExtractBody = {
   state: string
   replyId: string
   classification?: string
+  proposalKey?: string
   termsUnknown?: boolean
   requiresReview?: boolean
   preview?: boolean
@@ -463,7 +466,7 @@ test("MIC-122: approval without financial terms does not fabricate amounts and r
 
   const corrected = await extractPatch(cookieRequest(`/api/mca/submissions/extract/${replyId}`, "admin-session-token", {
     method: "PATCH",
-    body: JSON.stringify({ classification: "approval", amount: 25_000, rate: 1.35, term: 10 }),
+    body: JSON.stringify({ expectedProposalKey: replayBody.proposalKey, classification: "approval", amount: 25_000, rate: 1.35, term: 10 }),
   }), replyParams(replyId))
   assert.equal(corrected.status, 200)
   const correctedBody = await corrected.json() as ExtractBody
@@ -652,8 +655,7 @@ test("MIC-122: unrelated stays unmatched, email is data not instructions, and AP
     method: "POST",
     body: JSON.stringify({ replyId }),
   }))
-  assert.equal(writePost.status, 200)
-  assert.equal((await writePost.json() as ExtractBody).classification, "unrelated")
+  assert.equal(writePost.status, 403)
 
   const cross = await extractGet(cookieRequest(`/api/mca/submissions/extract?dealId=${deal.id}`, "other-session-token"))
   assert.equal(cross.status, 404)
@@ -956,4 +958,32 @@ test("confirmed approval does not insert or revise mca_offers for a funded job",
       WHERE o.deal_id = ?`).get(reviseDeal.id)
   assert.equal(closing?.amount_cents, 2_500_000)
   assert.equal(closing?.revisions, 1)
+})
+
+
+test("broker confirmation and correction reject changed terms with the same classification", async () => {
+  const deal = await seedDeal("T2 stale proposal LLC")
+  await sendTo(deal.id)
+  const ingested = await ingest([{ providerMessageId: "t2-stale-proposal", from: "uw@alpha-extract.example.test", subject: `Application approved for ${deal.displayId}`, body: "Approved for 25000; revised amount 50000 at rate 1.35 for 10 months." }])
+  const replyId = ingested.ingested[0]!.id
+  let amount = 25_000
+  setReplyOutcomeClassifierForTests({ name: "t2-fixture", async classify() { return classified({ classification: "approval", summary: "Terms", amount: { value: amount, unknown: false, evidence: String(amount) }, rate: { value: 1.35, unknown: false, evidence: "rate 1.35" }, term: { value: 10, unknown: false, evidence: "10 months" } }) } })
+  const oldPreview = await extractPreview(cookieRequest("/api/mca/submissions/extract/preview", "admin-session-token", { method: "POST", body: JSON.stringify({ replyId }) }))
+  const old = await oldPreview.json() as ExtractBody
+  assert.ok(old.proposalKey)
+  amount = 50_000
+  const newPreview = await extractPreview(cookieRequest("/api/mca/submissions/extract/preview", "admin-session-token", { method: "POST", body: JSON.stringify({ replyId }) }))
+  const fresh = await newPreview.json() as ExtractBody
+  assert.notEqual(fresh.proposalKey, old.proposalKey)
+  const stale = await rawExtractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", { method: "POST", body: JSON.stringify({ replyId, confirm: true, expectedClassification: "approval", expectedProposalKey: old.proposalKey }) }))
+  assert.equal(stale.status, 409)
+  const correction = await extractPatch(cookieRequest(`/api/mca/submissions/extract/${replyId}`, "admin-session-token", { method: "PATCH", body: JSON.stringify({ expectedProposalKey: old.proposalKey, amount: 75_000 }) }), replyParams(replyId))
+  assert.equal(correction.status, 409)
+  assert.equal((await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM deal_offers WHERE deal_id=?").get(deal.id))?.count, 0)
+  const missing = await rawExtractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", { method: "POST", body: JSON.stringify({ replyId, confirm: true, expectedClassification: "approval" }) }))
+  assert.equal(missing.status, 409)
+  const confirmed = await rawExtractPost(cookieRequest("/api/mca/submissions/extract", "admin-session-token", { method: "POST", body: JSON.stringify({ replyId, confirm: true, expectedClassification: "approval", expectedProposalKey: fresh.proposalKey }) }))
+  assert.equal(confirmed.status, 200)
+  const confirmedBody = await confirmed.json() as ExtractBody
+  assert.equal(confirmedBody.offer?.amount, 50_000, JSON.stringify(confirmedBody))
 })

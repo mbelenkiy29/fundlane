@@ -121,13 +121,12 @@ export async function claimBackgroundJob(kinds?: readonly BackgroundJobKind[]): 
     else if (!kinds || kinds.some(kind => ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(kind))) {
       // Outbound intent is not replayed after recovery. Keep the idempotency row and
       // require a fresh reviewed request; never consume an attempt for a pause.
-      const preserveGuardedAttempt = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
-        ? ` AND NOT (kind='submission_delivery' AND EXISTS (
+      const preserveGuardedAttempt = ` AND NOT (kind='submission_delivery' AND EXISTS (
           SELECT 1 FROM mca_submission_jobs s JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key
           JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
           WHERE s.id=mca_background_jobs.resource_id AND s.workspace_id=mca_background_jobs.workspace_id
-            AND s.route_kind='api' AND s.state='sending' AND a.state='sending'))`
-        : ""
+            AND s.route_kind IN ('api','email','custom_webhook') AND s.state='sending' AND a.state='sending'
+            AND (s.approved_package_cipher IS NOT NULL OR ${process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true" ? "TRUE" : "FALSE"})))`
       await getDatabase().prepare(`UPDATE mca_background_jobs SET state='failed',error_code='company_paused',updated_at=?
         WHERE workspace_id=? AND state='queued' AND kind IN ('auto_submit','submission_delivery','application_invitation_email','application_invitation_reminder')${preserveGuardedAttempt}`).run(now, company.workspace_id)
       await getDatabase().prepare(`UPDATE mca_submission_jobs SET state='failed',reason='Company paused. Review and submit again after recovery.',updated_at=?
@@ -171,11 +170,12 @@ export async function deferBackgroundJob(job: BackgroundJob, availableAt: string
 }
 
 async function guardedSendingDeliveryPending(job: BackgroundJob): Promise<boolean> {
-  if (job.kind !== "submission_delivery" || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED !== "true") return false
+  if (job.kind !== "submission_delivery") return false
   const row = await getDatabase().prepare<{ id: string }>(`SELECT s.id FROM mca_submission_jobs s
     JOIN mca_submission_attempts a ON a.job_id=s.id AND a.attempt_key=s.attempt_key AND a.state='sending'
     JOIN mca_submission_outbox o ON o.job_id=s.id AND o.processed_at IS NULL
-    WHERE s.id=? AND s.workspace_id=? AND s.route_kind='api' AND s.state='sending'`).get(job.resource_id, job.workspace_id)
+    WHERE s.id=? AND s.workspace_id=? AND s.route_kind IN ('api','email','custom_webhook') AND s.state='sending'
+      AND (s.approved_package_cipher IS NOT NULL OR ?)`).get(job.resource_id, job.workspace_id, process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true")
   return Boolean(row)
 }
 

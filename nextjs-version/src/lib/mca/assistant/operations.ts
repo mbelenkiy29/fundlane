@@ -24,7 +24,7 @@ import {
   getSubmissionSelection,
   confirmSubmissions
 } from "../submissions/queue"
-import { previewSubmissionEmails } from "../submissions/email-templates"
+import { prepareDealSubmission, readDealSubmissionPreview } from "../submissions/broker-preview"
 import {
   getSmsComposerContext,
   previewDirectSms,
@@ -320,7 +320,8 @@ export async function buildPreview(
   actor: DealActor,
   dealId: string,
   kind: ActionKind,
-  input: unknown
+  input: unknown,
+  submissionApproval?: { previewId: unknown }
 ): Promise<{
   payload: unknown
   preview: ApprovalPreview
@@ -388,57 +389,24 @@ export async function buildPreview(
     evidence = { preview, thread: p.thread, senderId: p.sender.id }
   } else {
     const args = submissionInput.parse(input)
-    const selection = await getSubmissionSelection(actor, dealId)
     const funderIds = [...new Set(args.funderIds)].sort()
-    const funders = funderIds.map((id) => {
-      const f = selection.funders.find((f) => f.id === id)
-      if (!f)
-        throw new AppError(
-          404,
-          "funder_not_found",
-          "A selected funder is unavailable."
-        )
-      return f
-    })
-    const emails = funders.some((f) => f.route?.kind === "email")
-      ? await previewSubmissionEmails(actor, {
-          dealId,
-          funderIds: funders
-            .filter((f) => f.route?.kind === "email")
-            .map((f) => f.id)
-        })
-      : null
-    payload = { funderIds }
+    const durable = submissionApproval
+      ? await readDealSubmissionPreview(actor,dealId,submissionApproval.previewId)
+      : await prepareDealSubmission(actor,dealId,funderIds)
+    if (canonical(durable.destinations.map(d=>d.funderId).sort())!==canonical(funderIds)) throw new AppError(409,"submission_preview_stale","The selected funders changed. Prepare a new preview.")
+    payload = {funderIds,previewId:durable.id}
     preview = {
-      title: "Submit deal to selected funders",
-      details: [
-        detail(
-          "Funders",
-          funders.map((f) => f.nickname || f.legalName).join(", ")
-        ),
-        detail(
-          "Documents",
-          selection.documents.map((d) => d.filename).join("\n")
-        ),
-        ...(emails?.previews.flatMap((p) => [
-          detail(`${p.funderName} — To`, p.to.join(", ")),
-          detail("Cc", p.cc.join(", ")),
-          detail("From", `${p.fromName} <${p.fromAddress}>`),
-          detail("Subject", p.subject),
-          detail("Message", p.body)
-        ]) ?? [])
-      ],
-      blocked: funders.some((f) => f.preflightErrors.length)
-        ? "Some selected funders failed submission preflight. Review the Submissions tab."
-        : emails?.previews.find((p) => p.error)?.error
+      title:"Submit deal to selected funders",
+      details:[detail("Funders",durable.destinations.map(d=>d.name).join(", ")),
+        ...durable.destinations.flatMap(d=>[
+          detail(`${d.name} — Destination`,d.destination),
+          detail("Documents",d.documents.map(doc=>`${doc.filename} (${doc.checksum})`).join("\n")),
+          ...(d.email ? [detail(`${d.name} — To`,d.email.to.join(", ")),detail("Cc",d.email.cc.join(", ")),detail("From",d.email.from),detail("Reply to",d.email.replyTo),detail("Subject",d.email.subject),detail("Message",d.email.body)] : [])
+        ])],
+      blocked:durable.destinations.some(d=>d.errors.length) ? "Some selected funders failed submission preflight. Review the Submissions tab." : undefined
     }
-    evidence = {
-      preview,
-      dealVersion: selection.dealVersion,
-      documents: selection.documents,
-      funders,
-      emails
-    }
+    evidence={preview,destinations:durable.destinations}
+
   }
   return { payload, preview, fingerprint: hashOpaqueToken(canonical(evidence)) }
 }
@@ -602,8 +570,10 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
     const input =
       stored.kind === "reminder"
         ? { jobId: original.jobId, body: original.body }
-        : original
-    const fresh =
+        : stored.kind === "submissions" ? {funderIds:original.funderIds} : original
+    let fresh: Awaited<ReturnType<typeof buildPreview>>
+    try {
+    fresh =
       stored.kind === "calendar_plan"
         ? await calendarPlanPreview(
             actor,
@@ -615,8 +585,13 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
             actor,
             currentDealId(ctx),
             stored.kind,
-            input
+            input,
+            stored.kind === "submissions" ? {previewId:original.previewId} : undefined
           )
+    } catch(error) {
+      if (stored.kind === "submissions") await getDatabase().prepare("UPDATE mca_assistant_approvals SET status='stale' WHERE id=? AND status='approved'").run(approvalId)
+      throw error
+    }
     if (fresh.preview.blocked || fresh.fingerprint !== stored.fingerprint) {
       await getDatabase()
         .prepare(
@@ -684,8 +659,9 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
         }
       } else
         result = await confirmSubmissions(actor, currentDealId(ctx), {
-          ...submissionInput.parse(original),
-          confirmationKey: approvalId
+          ...submissionInput.parse({funderIds:original.funderIds}),
+          confirmationKey: approvalId,
+          previewId: original.previewId as string
         })
       await getDatabase()
         .prepare(
@@ -705,13 +681,15 @@ export async function executeAction(ctx: OperationContext, approvalId: string) {
       })
       return result
     } catch (error) {
+      const knownPreDispatch = stored.kind === "submissions" && error instanceof AppError && ["broker_approval_required","submission_preview_stale","preview_not_found","broker_review_required"].includes(error.code)
       await getDatabase()
         .prepare(
-          "UPDATE mca_assistant_approvals SET status='uncertain',result_cipher=? WHERE id=? AND status='executing'"
+          "UPDATE mca_assistant_approvals SET status=?,result_cipher=? WHERE id=? AND status='executing'"
         )
         .run(
+          knownPreDispatch ? "stale" : "uncertain",
           seal(actor.workspaceId, {
-            state: "unknown",
+            state: knownPreDispatch ? "not_sent" : "unknown",
             message:
               "Review the delivery or submission record before attempting again."
           }),

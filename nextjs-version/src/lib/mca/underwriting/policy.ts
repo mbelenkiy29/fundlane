@@ -1,6 +1,6 @@
 import "server-only"
 
-export const POLICY_VERSION = 2
+export const POLICY_VERSION = 3
 
 export const SCORE_FIT_DISCLAIMER = "Scores describe funder fit, not approval odds."
 

@@ -49,7 +49,7 @@ function fitRules(): EligibilityRule[] {
     { id: "r-ent", funderId: "", field: "entity", operator: "in", unit: "entity", value: ["llc", "corp"], unspecified: false },
     { id: "r-st", funderId: "", field: "state", operator: "not_in", unit: "state", value: ["NV", "SD"], unspecified: false },
     { id: "r-ind", funderId: "", field: "industry", operator: "not_in", unit: "naics", value: ["7132"], unspecified: false },
-  ]
+  ].map((rule) => ({ ...rule, sourceText: "Synthetic analysis fixture", sourceAsOf: "2026-01-01" })) as EligibilityRule[]
 }
 
 async function exec(sql: string, ...values: unknown[]) {
@@ -80,10 +80,10 @@ async function seedFunder(workspaceId: string, key: string, rules: EligibilityRu
   )
   for (const [index, rule] of rules.entries()) {
     await exec(
-      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, unspecified, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO mca_funder_criteria (id, workspace_id, funder_id, field, operator, unit, value_json, source_text, source_as_of, valid_until, unspecified, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       newId(), workspaceId, id, rule.field, rule.operator, rule.unit,
-      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? null, rule.unspecified ? 1 : 0, index, now, now,
+      rule.unspecified ? null : JSON.stringify(rule.value), rule.sourceText ?? null, rule.sourceAsOf ?? null, rule.validUntil ?? null, rule.unspecified ? 1 : 0, index, now, now,
     )
   }
   return id

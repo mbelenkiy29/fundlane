@@ -1,4 +1,5 @@
 import "./helpers/business-auth"
+import { queueWithSyntheticApproval } from "./helpers/broker-submission-preview"
 import test, { after, afterEach, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -276,7 +277,7 @@ test("regular create/update cannot impersonate or relabel the sandbox funder", a
 test("sandbox submission returns a synthetic offer and never touches the network", async () => {
   const sandbox = await setSandboxFunderEnabled(actor(), true)
   const deal = await readyDeal("QA Test Pizza LLC")
-  const queued = await queueSubmissions({
+  const queued = await queueWithSyntheticApproval({
     actor: actor(),
     dealId: deal.id,
     funderIds: [sandbox.funder!.id],
@@ -296,7 +297,7 @@ test("sandbox submission returns a synthetic offer and never touches the network
 test("sandbox decline path stays in-workspace and creates no offer", async () => {
   const sandbox = await setSandboxFunderEnabled(actor(), true)
   const deal = await readyDeal(`Decline Path ${SANDBOX_NICKNAME} SANDBOX-DECLINE LLC`)
-  const queued = await queueSubmissions({
+  const queued = await queueWithSyntheticApproval({
     actor: actor(),
     dealId: deal.id,
     funderIds: [sandbox.funder!.id],

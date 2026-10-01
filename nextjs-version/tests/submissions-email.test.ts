@@ -1,4 +1,5 @@
 import "./helpers/business-auth";
+import { queueWithSyntheticApproval as queueSubmissions } from "./helpers/broker-submission-preview"
 import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -23,7 +24,7 @@ import {
   upsertSubmissionEmailTemplate,
 } from "../src/lib/mca/submissions/email-templates"
 import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
-import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
+import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
 import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
@@ -626,17 +627,7 @@ test("queue fails closed when watermark is enabled without a logo", async () => 
   const { deal } = await seedDeal()
   await updateWatermarkSettings(actor(), { enabled: true, logoDocumentId: null, excludedFunderIds: [] })
   try {
-    const queued = await queueSubmissions({
-      actor: actor(),
-      dealId: deal.id,
-      funderIds: [alphaFunderId],
-      confirmationKey: `email-watermark-nologo-${dealCounter}`,
-    })
-    assert.equal(queued.ok, true)
-    assert.equal(queued.jobs[0]?.state, "failed")
-    const attempt = await attemptRow(queued.jobs[0]!.jobId)
-    assert.equal(attempt?.state, "failed")
-    assert.equal(attempt?.error_code, "watermark_logo_required")
+    await assert.rejects(() => queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [alphaFunderId], confirmationKey: `email-watermark-nologo-${dealCounter}` }), (error: unknown) => (error as { code?: string }).code === "watermark_logo_required")
   } finally {
     await updateWatermarkSettings(actor(), { enabled: false, logoDocumentId: null, excludedFunderIds: [] })
   }
@@ -668,7 +659,7 @@ test("production missing webhook or preview delivery fails the job", async () =>
   }
 })
 
-test("ambiguous relay responses are uncertain only with the unknown-send guard enabled", async () => {
+test("approved ambiguous relay responses stay uncertain even with the optional legacy guard disabled", async () => {
   const priorWebhook = process.env.MCA_EMAIL_WEBHOOK_URL
   const priorGuard = process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://controlled.example.test/send"
@@ -677,7 +668,7 @@ test("ambiguous relay responses are uncertain only with the unknown-send guard e
       ["true", "timeout", "delivery_uncertain"],
       ["true", "http500", "delivery_uncertain"],
       ["true", "http400", "email_delivery_failed"],
-      ["false", "timeout", "email_delivery_failed"],
+      ["false", "timeout", "delivery_uncertain"],
     ] as const) {
       process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = guard
       setEmailDeliveryFetchForTests(async () => {

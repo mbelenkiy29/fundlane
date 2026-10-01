@@ -781,6 +781,8 @@ export const mca_funder_criteria = pgTable("mca_funder_criteria", {
 	unit: text().notNull(),
 	value_json: text(),
 	source_text: text(),
+	source_as_of: text(),
+	valid_until: text(),
 	unspecified: integer().default(0).notNull(),
 	position: integer().notNull(),
 	created_at: text().notNull(),
@@ -2016,7 +2018,7 @@ export const auth_session_totp = pgTable("auth_session_totp", {
 export const intake_submission_previews = pgTable("intake_submission_previews", {
   id: text().primaryKey().notNull(),
   workspace_id: text().notNull().references(() => workspaces.id),
-  intake_id: text().notNull().references(() => intake_events.id, { onDelete: "cascade" }),
+  intake_id: text().references(() => intake_events.id, { onDelete: "cascade" }),
   deal_id: text().notNull().references(() => deals.id),
   created_by_user_id: text().references(() => users.id),
   snapshot_cipher: text().notNull(),
