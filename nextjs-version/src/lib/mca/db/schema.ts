@@ -168,6 +168,7 @@ export const users = pgTable("users", {
 	updated_at: text().notNull(),
 }, (table) => [
 	uniqueIndex("users_email_lower_unique").using("btree", sql`lower(email)`),
+	uniqueIndex("users_id_supabase_user_id_unique").on(table.id, table.supabase_user_id),
 	unique("users_application_identifier_key").on(table.application_identifier),
 	unique("users_email_key").on(table.email),
 ]);
@@ -1558,6 +1559,7 @@ export const mca_email_senders = pgTable("mca_email_senders", {
 	created_at: text().notNull(),
 	updated_at: text().notNull(),
 }, (table) => [
+	uniqueIndex("mca_email_senders_workspace_id_id_unique").on(table.workspace_id, table.id),
 	index("mca_email_senders_workspace_idx").using("btree", table.workspace_id.asc().nullsLast(), table.purpose.asc().nullsLast()),
 	foreignKey({
 		columns: [table.workspace_id],
