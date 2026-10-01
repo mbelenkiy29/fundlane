@@ -1,7 +1,7 @@
 import test, { before, after, mock } from "node:test"
 import assert from "node:assert/strict"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { getDatabase, closeDatabaseForTests } from "../src/lib/mca/db"
+import { closeDatabaseForTests } from "../src/lib/mca/db"
 const actor={userId:"owner",supabaseUserId:"00000000-0000-4000-8000-000000000001",email:"mike@sentineltechsolutions.io",sessionId:"session"}
 let signedIn=true
 mock.module(new URL("../src/lib/mca/supabase-auth.ts",import.meta.url).href,{namedExports:{supabaseIdentity:async()=>signedIn?{user:{id:actor.supabaseUserId},email:actor.email,sessionId:actor.sessionId}:null}})
@@ -43,6 +43,11 @@ test("missing provider observations remain unknown and legacy submissions have n
 })
 test("HTTP validates bounds and rejects tenant roles, revoked grants and API keys regardless of requested company",async()=>{
  const request=(suffix="",headers={})=>new Request(`https://app.test/api/platform/queues?workspaceId=queue-101${suffix}`,{headers})
+ const all=await route.GET(new Request("https://app.test/api/platform/queues"))
+ assert.equal((await all.json()).items.length,50)
+ const maximum=await route.GET(new Request("https://app.test/api/platform/queues?limit=100"))
+ assert.equal((await maximum.json()).items.length,100)
+ assert.equal((await route.GET(request("&limit=0"))).status,422)
  assert.equal((await route.GET(request("&limit=101"))).status,422)
  assert.equal((await route.GET(request("&cursor=garbage"))).status,422)
  const response=await route.GET(request());assert.equal(response.status,200);assert.match(response.headers.get("cache-control")!,/no-store/)
@@ -71,4 +76,10 @@ test("company detail includes only scoped membership and seat metadata",async()=
  assert.deepEqual(detail.memberships.map(m=>({id:m.membershipId,role:m.role,status:m.status})),[{id:"tenant",role:"super_admin",status:"active"}])
  assert.deepEqual(Object.keys(detail.memberships[0]).sort(),["membershipId","name","email","role","status"].sort())
  assert.equal((await platformCompany("queue-100")).memberships.length,0)
+})
+test("latest operation metadata stays company-scoped and excludes payloads and raw errors",async()=>{
+ await db.query(`INSERT INTO sms_operations(id,workspace_id,kind,request_key,payload_cipher,state,error_code,created_at,updated_at) VALUES ('operation-a','queue-101','register','request-a','SECRET-OPERATION','needs_review','SECRET-ERROR',$1,$1),('operation-b','queue-100','register','request-b','SECRET-OTHER','queued',NULL,$1,$1)`,[stamp])
+ const row=(await queues.listSmsReviewQueue(actor,{workspaceId:"queue-101",limit:1})).items[0]
+ assert.deepEqual(row.latestOperation,{id:"operation-a",kind:"register",state:"needs_review"})
+ assert.doesNotMatch(JSON.stringify(row),/SECRET|operation-b/)
 })

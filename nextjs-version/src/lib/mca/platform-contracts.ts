@@ -15,6 +15,7 @@ export type CompanyOperationsRow = {
 export type RegistrationSummary = { id: string; kind: string; attempt: number; state: string }
 export type SmsReviewItem = {
   workspaceId: string; companyName: string; submissionId: string | null; version: number | null
+  latestOperation: { id: string; kind: string; state: string } | null
   reviewState: string; submittedAt: string | null; registrationSummary: RegistrationSummary[]; blockedReasons: string[]
 }
 export type ProviderObservation = {

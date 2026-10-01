@@ -7,7 +7,7 @@ import { getCompanyAccess } from "./company-access"
 import { ownerQueueQuerySchema, type OwnerQueueQuery, type CompanyOperationsRow, type SmsReviewItem, type Page, type RegistrationSummary } from "./platform-contracts"
 
 const cursorSchema = z.object({ stamp: z.string().min(1).max(100), id: z.string().min(1).max(200), workspaceId: z.string(), state: z.string(), kind: z.enum(["companies","sms"]) }).strict()
-type Row = { id:string; name:string; created_at:string; owner_email:string|null; occupied_seats:number; purchased_seats:number; subscription_status:string|null; review_state:string; submitted_at:string|null; suspended:number; registrations:RegistrationSummary[] }
+type Row = { id:string; name:string; created_at:string; owner_email:string|null; occupied_seats:number; purchased_seats:number; subscription_status:string|null; review_state:string; submitted_at:string|null; suspended:number; registrations:RegistrationSummary[]; latest_operation:SmsReviewItem["latestOperation"] }
 async function readQueue(actor:SuperAdminActor, input:OwnerQueueQuery, kind:"companies"|"sms") {
   const live=await requireSuperAdmin()
   if(live.userId!==actor.userId||live.sessionId!==actor.sessionId||live.supabaseUserId!==actor.supabaseUserId) throw new AppError(403,"super_admin_required","Platform access required.")
@@ -25,6 +25,7 @@ async function readQueue(actor:SuperAdminActor, input:OwnerQueueQuery, kind:"com
     (SELECT count(*)::int FROM memberships m WHERE m.workspace_id=w.id AND m.status IN ('active','pending')) occupied_seats,
     CASE WHEN e.status IS NOT NULL THEN w.seat_limit ELSE 0 END purchased_seats,e.status subscription_status,
     COALESCE(c.review_state,'not_started') review_state,c.submitted_at,COALESCE(c.suspended,0) suspended,
+    (SELECT jsonb_build_object('id',o.id,'kind',o.kind,'state',o.state) FROM sms_operations o WHERE o.workspace_id=w.id ORDER BY o.created_at DESC,o.id DESC LIMIT 1) latest_operation,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id,'kind',r.kind,'attempt',r.attempt,'state',
       CASE WHEN r.provider_status IN ('not_started','pending','approved','rejected') AND r.status=r.provider_status THEN r.status ELSE 'unknown' END) ORDER BY r.kind)
       FROM (SELECT DISTINCT ON (kind) id,kind,attempt,status,provider_status FROM sms_registrations WHERE workspace_id=w.id ORDER BY kind,attempt DESC,id DESC) r),'[]'::jsonb) registrations
@@ -47,5 +48,5 @@ export async function listCompanyOperations(actor:SuperAdminActor,query:OwnerQue
 }
 export async function listSmsReviewQueue(actor:SuperAdminActor,query:OwnerQueueQuery):Promise<Page<SmsReviewItem>> {
   const page=await readQueue(actor,query,"sms")
-  return {items:page.rows.map(row=>({workspaceId:row.id,companyName:row.name,submissionId:null,version:null,reviewState:row.review_state,submittedAt:row.submitted_at,registrationSummary:row.registrations,blockedReasons:blockedReasons(row)})),nextCursor:page.nextCursor}
+  return {items:page.rows.map(row=>({workspaceId:row.id,companyName:row.name,submissionId:null,version:null,latestOperation:row.latest_operation,reviewState:row.review_state,submittedAt:row.submitted_at,registrationSummary:row.registrations,blockedReasons:blockedReasons(row)})),nextCursor:page.nextCursor}
 }
