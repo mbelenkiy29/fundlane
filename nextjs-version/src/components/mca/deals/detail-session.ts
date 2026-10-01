@@ -19,6 +19,10 @@ export function createDealDetailSession<T extends Detail>(load: (id: string) => 
     snapshot = next
     listeners.forEach((listener) => listener())
   }
+  function close() {
+    generation++
+    publish({ id: null, selected: null, loading: false, failure: "", note: "", transition: "" })
+  }
   const capture = () => generation
   const isCurrent = (token: number) => snapshot.id !== null && token === generation
   return {
@@ -31,14 +35,16 @@ export function createDealDetailSession<T extends Detail>(load: (id: string) => 
       publish({ id, selected: null, loading: true, failure: "", note: "", transition: "" })
       try {
         const selected = await load(id)
-        if (isCurrent(token)) publish({ ...snapshot, selected, loading: false })
+        if (isCurrent(token)) publish({ ...snapshot, selected: selected.version >= (snapshot.selected?.version ?? 0) ? selected : snapshot.selected, loading: false })
       } catch (error) {
         if (isCurrent(token)) publish({ ...snapshot, loading: false, failure: error instanceof Error ? error.message : "Could not load deal." })
       }
     },
-    close() {
-      generation++
-      publish({ id: null, selected: null, loading: false, failure: "", note: "", transition: "" })
+    close,
+    handoff() {
+      const selected = snapshot.selected
+      close()
+      return selected
     },
     update(selected: T) {
       if (selected.id !== snapshot.id || selected.version < (snapshot.selected?.version ?? 0)) return false

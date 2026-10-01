@@ -21,12 +21,12 @@ Owner means the existing `admin`/`super_admin` company role, broker means an ass
 
 Node 24.7.0, pnpm 11.1.2, unique loopback PostgreSQL 16 port 56416. Tests create/drop randomly named disposable databases; no production data, provider sends, credentials or hosted changes.
 
-- Six deterministic detail-session tests: out-of-order success/failure, close/reopen, failure/retry, draft clearing, old mutation guard, version ordering, stable store subscription.
+- Nine deterministic detail-session tests: out-of-order success/failure, close/reopen, failure/retry, draft clearing, old mutation guard, version ordering, stable store subscription, child callback session binding, initial-load/version ordering and Assistant handoff.
 - Synthetic journey in `tests/imports-core.test.ts`: one CSV import → originator assignment → assigned broker `lead` to `new_application` → internal note → stage/note history; contact/provenance and idempotent replay checked. Unassigned rep and foreign-company admin reads/updates/transitions/notes reject; foreign assignment/hierarchy escalation, illegal stage, incomplete submission and stale note versions reject without version changes.
-- Targeted suite: `node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1 src/lib/mca/deals/acceptance.test.ts tests/crm-detail-session.test.ts tests/imports-core.test.ts tests/deals-http.test.mjs` — 37 passed, 0 failed.
-- `pnpm typecheck` and `pnpm lint` — passed.
+- Targeted suite: `node --experimental-test-module-mocks --conditions=react-server --import tsx --test --test-concurrency=1 src/lib/mca/deals/acceptance.test.ts tests/crm-detail-session.test.ts tests/imports-core.test.ts tests/deals-http.test.mjs` — 40 passed, 0 failed.
+- `pnpm typecheck` — passed. `pnpm lint` — exit 0, with 16 warnings in unchanged files and no errors.
 
-Final aggregate/build and independent review outcomes are recorded in the PR after their coordinated runs.
+Independent reviewer identified Assistant context clearing and child workflow token capture/version ordering as Important findings. Both were corrected; the new initial-load ordering test reproduced the failure (v1 overwrote v2) before the fix and now passes. Assistant handoff has its own failing-then-passing lifecycle test. Final aggregate/build results will be recorded after their coordinated runs.
 
 ## Remaining acceptance
 

@@ -22,12 +22,12 @@
 
 ### Task 1: Detail selection lifecycle
 **Files:** Create nextjs-version/src/components/mca/deals/detail-session.ts; test nextjs-version/tests/crm-detail-session.test.ts; modify nextjs-version/src/app/(dashboard)/pipeline/components/pipeline-workspace.tsx.
-**Interfaces:** Consumes fetch returning DealDetail with id/version; produces createDealDetailSession<T extends {id:string;version:number}>(load:(id:string)=>Promise<T>) with subscribe/getSnapshot/open/close/capture/isCurrent/update/setNote/setTransition, state id/selected/loading/failure/note/transition. Snapshot identity is stable until changed.
+**Interfaces:** Consumes fetch returning DealDetail with id/version; produces createDealDetailSession<T extends {id:string;version:number}>(load:(id:string)=>Promise<T>) with subscribe/getSnapshot/open/close/capture/isCurrent/update/handoff/setNote/setTransition, state id/selected/loading/failure/note/transition. Snapshot identity is stable until changed.
 - [x] Write controlled deferred-load tests: A/B reversed, stale error, close/reopen, active failure/retry, note/transition clearing, version regression and late mutation guards.
 - [x] Run node --import tsx --test tests/crm-detail-session.test.ts; expected failure for missing session module.
 - [x] Implement the session; wire detail loading/error/Retry UI and reset edit/form/conflict/fieldErrors/saving on open. Guard save, transition, note, workflow and assistant completion against captured session. Close invalidates requests and unmount cleanup closes the session.
 - [x] Run same test command; expected all pass. Run targeted ESLint and typecheck; expected exit 0.
-- [ ] Commit lifecycle fix and tests.
+- [x] Commit lifecycle fix and tests.
 
 ### Task 2: Synthetic brokerage journey
 **Files:** Modify nextjs-version/tests/imports-core.test.ts; create nextjs-version/docs/acceptance/crm-pipeline-audit.md.
@@ -36,12 +36,14 @@
 - [x] Assert unassigned rep and foreign admin read/update/transition/note fail; foreign assignment, hierarchy escalation, illegal stage, incomplete submit and stale version reject without record changes.
 - [x] Run imports-core, deals acceptance and deals HTTP targeted tests on local Postgres port 56416; expected all pass. These characterize already implemented behavior; no artificial RED for existing correct behavior.
 - [x] Document verified scope, stage/role assumptions, existing queues and remaining hosted/browser acceptance.
-- [ ] Commit regression evidence/docs.
+- [x] Commit regression evidence/docs.
 
 ### Final verification and publication
-- [ ] Request independent code review against the complete branch; address Important/Critical findings with regression tests.
+- [x] Request independent code review against the complete branch; address Important/Critical findings with regression tests.
 - [ ] Coordinate aggregate/build slot with parent. Run typecheck/lint/build and aggregate suite as available; record exact results and blockers.
 - [ ] Refresh Graphify; inspect generated changes, avoid unnecessary large graph commits.
 - [ ] Push unique branch, create draft PR, attach PR, verify remote head and checks.
 
 Self-review: all spec behaviors map to Task 1/2; no schema or overlapping feature contracts. Pre-flight: no shared interfaces between tasks. Ruling: explicit user plan-and-execute authorization means self-reviewed plan proceeds without a second approval. Existing correct-behavior regression tests need no fabricated failing implementation. Full-suite/build scheduling remains coordinated with parent.
+
+Execution ledger: Task1+2 committed9ce4c5c; final scoped suite40/40 after review corrections, typecheck exit0, lint exit0 with16 unchanged warnings. Final review: independent reviewer identified2 Important integration findings; corrected selection-bound callback tokens/version ordering and explicit Assistant context handoff. No deferred minors. Ruling: retain safe-preview browser verification as an explicit gate; session tests cover lifecycle logic, not complete React interactions. Graphify refreshed locally (14740 nodes), generated graph artifacts excluded from scoped PR due broad regeneration.

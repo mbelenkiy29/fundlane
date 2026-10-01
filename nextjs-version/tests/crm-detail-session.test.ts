@@ -85,3 +85,32 @@ test("snapshot identity is stable and subscribers observe load and success", asy
   unsubscribe(); session.close()
   assert.deepEqual(observed, [true, false])
 })
+
+test("initial load cannot overwrite a newer workflow refresh in the same session", async () => {
+  const initial = deferred(), session = createDealDetailSession(() => initial.promise)
+  const opening = session.open("a")
+  session.update({ id: "a", version: 2 })
+  initial.resolve({ id: "a", version: 1 }); await opening
+  assert.equal(session.getSnapshot().selected?.version, 2)
+  assert.equal(session.getSnapshot().loading, false)
+})
+
+test("a child workflow callback retains its original session before asynchronous work", async () => {
+  const session = createDealDetailSession(async (id) => ({ id, version: 1 }))
+  await session.open("a")
+  const childToken = session.capture()
+  const finishChild = () => { if (session.isCurrent(childToken)) session.update({ id: "a", version: 2 }) }
+  session.close(); await session.open("a")
+  finishChild()
+  assert.equal(session.getSnapshot().selected?.version, 1)
+})
+
+test("assistant handoff retains the selected deal context while invalidating dialog requests", async () => {
+  const session = createDealDetailSession(async (id) => ({ id, version: 1, displayId: "FL-001" }))
+  await session.open("a"); const token = session.capture()
+  const context = session.handoff()
+  assert.equal(context?.id, "a")
+  assert.equal(context?.displayId, "FL-001")
+  assert.equal(session.getSnapshot().selected, null)
+  assert.equal(session.isCurrent(token), false)
+})
