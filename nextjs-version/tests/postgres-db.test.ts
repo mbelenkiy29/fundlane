@@ -1,6 +1,8 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
+import { attachDeadlineStatementTimeout } from "../src/lib/mca/db";
+import { withExecutionDeadline } from "../src/lib/mca/jobs/execution";
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>;
 let originalDatabaseUrl: string | undefined;
@@ -121,4 +123,34 @@ test("transactions keep nested operations on one client, see their writes, and r
   });
   assert.equal((await getDatabase().queryOne<{ value: string }>("SELECT value FROM transaction_probe WHERE id = ?", ["committed"]))?.value, "kept");
   assert.equal((await getDatabase().queryOne<{ count: number }>("SELECT count(*)::int count FROM transaction_probe WHERE id LIKE 'concurrent-%'"))?.count, 8);
+});
+
+test("deadline SQL rewrite keeps WITH / WITH RECURSIVE valid and does not add result columns", () => {
+  const select = attachDeadlineStatementTimeout("SELECT id FROM deals WHERE workspace_id = $1", ["ws"], 1_500);
+  assert.equal(select.text, "WITH mca_statement_timeout AS MATERIALIZED (SELECT set_config('statement_timeout', $2, true)) SELECT id FROM deals WHERE workspace_id = $1");
+  assert.deepEqual(select.values, ["ws", "1500ms"]);
+  const existing = attachDeadlineStatementTimeout("WITH candidate AS (SELECT id FROM jobs) UPDATE jobs j SET state='running' FROM candidate c WHERE j.id=c.id RETURNING j.id", [], 200);
+  assert.match(existing.text, /^WITH mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), candidate AS /);
+  const recursive = attachDeadlineStatementTimeout("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t", [], 90);
+  assert.match(recursive.text, /^WITH RECURSIVE mca_statement_timeout AS MATERIALIZED \(SELECT set_config\('statement_timeout', \$1, true\)\), t\(n\) AS /);
+});
+
+test("deadline pool queries apply statement_timeout without a dedicated transaction or leaked session GUC", { timeout: 20000 }, async () => {
+  const { AppError } = await import("../src/lib/mca/errors");
+  const { getDatabase, withTransaction } = await import("../src/lib/mca/db");
+  await withExecutionDeadline(async () => {
+    const recursive = await getDatabase().queryOne<{ n: number }>("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t");
+    assert.equal(recursive?.n, 3);
+  }, undefined, 10_000);
+  await assert.rejects(
+    withExecutionDeadline(() => getDatabase().query("SELECT pg_sleep(2)"), undefined, 250),
+    (error: unknown) => error instanceof AppError && error.code === "execution_expired",
+  );
+  const leaked = await getDatabase().queryOne<{ statement_timeout: string }>("SHOW statement_timeout");
+  assert.ok(["0", "0ms", "0s"].includes(leaked?.statement_timeout ?? ""));
+  await withTransaction(async (tx) => {
+    const first = await tx.queryOne<{ pid: number }>("SELECT pg_backend_pid() pid");
+    const second = await getDatabase().queryOne<{ pid: number }>("SELECT pg_backend_pid() pid");
+    assert.equal(first?.pid, second?.pid);
+  });
 });

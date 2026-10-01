@@ -32,6 +32,45 @@ interface Queryable {
 interface TransactionOptions { onRollback?: () => Promise<void> }
 const transactionContext = new AsyncLocalStorage<{ executor: DbExecutor; active: boolean; rollbackCallbacks: Array<() => Promise<void>> }>();
 const globalDatabase = globalThis as typeof globalThis & { __mcaDatabasePool?: Pool; __mcaDatabaseUrl?: string };
+let testWireQueryDelayMs = 0;
+let testLegacyDeadlineTransactions = false;
+
+/** Test-only: delay every wire query, including BEGIN/COMMIT, to reproduce pool-queue pressure. */
+export function setTestWireQueryDelayMs(ms: number): void {
+  if (process.env.NODE_ENV === "production") throw new Error("setTestWireQueryDelayMs is test-only.");
+  testWireQueryDelayMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+/** Test-only: restore the per-statement withTransaction deadline wrapper to prove the pool-timeout regression. */
+export function setTestLegacyDeadlineTransactions(enabled: boolean): void {
+  if (process.env.NODE_ENV === "production") throw new Error("setTestLegacyDeadlineTransactions is test-only.");
+  testLegacyDeadlineTransactions = enabled;
+}
+
+async function wireQuery<Row extends QueryResultRow>(
+  queryable: Queryable,
+  config: { text: string; values?: unknown[]; query_timeout?: number },
+): Promise<{ rows: Row[]; rowCount: number | null }> {
+  if (testWireQueryDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, testWireQueryDelayMs));
+  }
+  return queryable.query<Row>({ text: config.text, values: config.values ?? [], query_timeout: config.query_timeout });
+}
+
+/** Bind remaining deadline as SET LOCAL statement_timeout in the same implicit transaction as `sql`. */
+export function attachDeadlineStatementTimeout(sql: string, values: readonly unknown[], remainingMs: number): { text: string; values: unknown[] } {
+  const timeout = `${Math.max(1, Math.floor(remainingMs))}ms`;
+  const nextValues = [...values, timeout];
+  const param = `$${nextValues.length}`;
+  const cte = `mca_statement_timeout AS MATERIALIZED (SELECT set_config('statement_timeout', ${param}, true))`;
+  const trimmed = sql.trim();
+  const recursive = /^WITH\s+RECURSIVE\s+/i.exec(trimmed);
+  if (recursive) return { text: `WITH RECURSIVE ${cte}, ${trimmed.slice(recursive[0].length)}`, values: nextValues };
+  const withPrefix = /^WITH\s+/i.exec(trimmed);
+  if (withPrefix) return { text: `WITH ${cte}, ${trimmed.slice(withPrefix[0].length)}`, values: nextValues };
+  if (/^(SELECT|INSERT|UPDATE|DELETE|TABLE|VALUES|MERGE)\b/i.test(trimmed)) return { text: `WITH ${cte} ${trimmed}`, values: nextValues };
+  return { text: sql, values: [...values] };
+}
 
 function databaseUrl(): string {
   assertHostedSupabaseConfig();
@@ -138,7 +177,7 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
         // Hold the control/lease locks through the statement's transaction so a
         // generation revocation cannot race a checked write. Use the raw client
         // here to avoid recursively fencing the fence check itself.
-        const active = await queryable.query({ text: `SELECT e.token
+        const active = await wireQuery(queryable, { text: `SELECT e.token
           FROM mca_private.worker_executions e
           JOIN mca_private.worker_controls c ON c.subsystem=e.subsystem
           WHERE e.token=$1 AND e.subsystem=$2 AND e.generation=$3
@@ -150,11 +189,11 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
       // limit before each one so later statements cannot use its original budget.
       const remaining = executionRemainingMs();
       if (serialize && remaining !== undefined) {
-        await queryable.query({ text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`], query_timeout: remaining });
+        await wireQuery(queryable, { text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`], query_timeout: remaining });
         assertExecutionActive();
       }
       try {
-        const result = await queryable.query<Row>({ text: postgresPlaceholders(sql), values: [...values], query_timeout: executionRemainingMs() });
+        const result = await wireQuery<Row>(queryable, { text: postgresPlaceholders(sql), values: [...values], query_timeout: executionRemainingMs() });
         assertExecutionActive();
         return result;
       } catch (error) {
@@ -193,10 +232,20 @@ function createExecutor(queryable: Queryable, serialize = false): DbExecutor {
 }
 
 const poolExecutor = createExecutor({
-  query: <Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }) =>
-    executionRemainingMs() !== undefined
-      ? withTransaction(database => database.query<Row>(config.text, config.values))
-      : getPool().query<Row>(config),
+  query: <Row extends QueryResultRow = QueryResultRow>(config: { text: string; values: unknown[]; query_timeout?: number }) => {
+    const remaining = executionRemainingMs();
+    // A fence must hold FOR SHARE through the statement's transaction so a
+    // generation revocation cannot race a checked write. Cron/export has no fence.
+    if (remaining !== undefined && (testLegacyDeadlineTransactions || executionFence())) {
+      return withTransaction(database => database.query<Row>(config.text, config.values));
+    }
+    if (remaining === undefined) return wireQuery<Row>(getPool(), config);
+    // Bind statement_timeout in the same implicit transaction as the statement.
+    // Do not BEGIN/COMMIT a dedicated client per statement: hydrate Promise.all
+    // would otherwise queue hundreds of waiters on a 2-connection Vercel pool.
+    const bound = attachDeadlineStatementTimeout(config.text, config.values, remaining);
+    return wireQuery<Row>(getPool(), { text: bound.text, values: bound.values, query_timeout: remaining });
+  },
 });
 
 export function getDatabase(): DbExecutor { return transactionContext.getStore()?.executor ?? poolExecutor; }
@@ -214,18 +263,18 @@ export async function withTransactionAdvisoryLock<T>(key: string, operation: () 
   const client = await getPool().connect();
   let discard = false;
   try {
-    await client.query("BEGIN");
+    await wireQuery(client, { text: "BEGIN" });
     try {
-      const lock = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_xact_lock(hashtext($1)) locked", [key]);
+      const lock = await wireQuery<{ locked: boolean }>(client, { text: "SELECT pg_try_advisory_xact_lock(hashtext($1)) locked", values: [key] });
       if (!lock.rows[0]?.locked) {
-        await client.query("COMMIT");
+        await wireQuery(client, { text: "COMMIT" });
         return { busy: true };
       }
       const result = await operation();
-      await client.query("COMMIT");
+      await wireQuery(client, { text: "COMMIT" });
       return { busy: false, result };
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch { discard = true; }
+      try { await wireQuery(client, { text: "ROLLBACK" }); } catch { discard = true; }
       throw error;
     }
   } finally {
@@ -265,11 +314,11 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
     // callbacks may use Promise.all, so serialize only this transaction's command stream.
     const executor = createExecutor(client, true);
     try {
-      await client.query("BEGIN");
+      await wireQuery(client, { text: "BEGIN" });
       const remaining = executionRemainingMs();
       if (remaining !== undefined) {
         assertExecutionActive();
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [`${remaining}ms`]);
+        await wireQuery(client, { text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`] });
       }
       const context = { executor, rollbackCallbacks, active: true };
       const result = await transactionContext.run(context, async () => {
@@ -277,10 +326,10 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
         finally { context.active = false; }
       });
       assertExecutionActive();
-      await client.query("COMMIT");
+      await wireQuery(client, { text: "COMMIT" });
       return result;
     } catch (error) {
-      try { await client.query("ROLLBACK"); rolledBack = true; }
+      try { await wireQuery(client, { text: "ROLLBACK" }); rolledBack = true; }
       catch { discardClient = true; }
       throw error;
     } finally { client.release(discardClient); }
