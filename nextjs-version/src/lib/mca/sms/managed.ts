@@ -1,4 +1,6 @@
 import "server-only"
+import type { SmsReadiness } from "./contracts"
+import { decryptSensitive } from "../crypto"
 import { createHash } from "node:crypto"
 import { getDatabase, nowIso, type DbExecutor } from "../db"
 import { AppError } from "../errors"
@@ -34,34 +36,48 @@ export async function managedConfig(workspaceId: string, sender?: string) {
     messagingServiceSid: p.serviceSid,
   }
 }
-export async function managedReady(
+export async function managedReadiness(
   workspaceId: string,
   accountId: string
-): Promise<boolean> {
+): Promise<SmsReadiness> {
+  const blockers: SmsReadiness["blockers"] = []
+  const block = (code: string, message: string) => blockers.push({ code, message })
   const c = await company(workspaceId)
   const p = c ? provider(c) : undefined
-  if (
-    !c ||
-    !c.email_verified_at ||
-    c.review_state !== "approved" ||
-    c.registration_state !== "approved" ||
-    c.suspended ||
-    !c.opt_out_ready ||
-    !platformReady() ||
-    !p?.accountSid ||
-    !p.authToken ||
-    !p.apiKeySid ||
-    !p.apiKeySecret ||
-    !p.serviceSid ||
-    !p.brandSid ||
-    !p.campaignSid
-  )
-    return false
-  return !!(await getDatabase()
-    .prepare(
-      "SELECT n.id FROM sms_numbers n JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id WHERE n.workspace_id=? AND n.account_id=? AND n.state='active' AND m.status='active'"
-    )
-    .get(workspaceId, accountId))
+  if (!c) block("company_missing", "Start company SMS setup in Settings → Connections.")
+  else {
+    if (!c.email_verified_at) block("email_unverified", "Verify the company owner's email.")
+    if (c.review_state !== "approved") block("company_review_pending", "Company business review is awaiting approval.")
+    if (c.registration_state !== "approved") block("registration_pending", "Carrier registration is awaiting approval.")
+    if (c.suspended) block("company_suspended", "Company SMS is suspended. Contact the platform operator.")
+    if (!c.opt_out_ready) block("opt_out_unconfirmed", "Advanced Opt-Out needs operator confirmation.")
+  }
+  if (!platformReady()) block("platform_pending", "Platform SMS eligibility is awaiting approval.")
+  if (!p?.accountSid || !p.authToken || !p.apiKeySid || !p.apiKeySecret || !p.serviceSid || !p.brandSid || !p.campaignSid)
+    block("provider_setup_missing", "Company SMS provider setup is incomplete.")
+  try { publicOrigin() } catch { block("callback_origin_missing", "SMS callback origin needs operator configuration.") }
+  const n = await getDatabase().prepare<{
+    phone: string; state: string; membership_id: string | null; membership_status: string | null
+    sender_kind: string | null; sender_identity_cipher: string | null; account_state: string | null; credential_ref: string | null
+  }>(`SELECT n.phone,n.state,n.membership_id,m.status AS membership_status,
+    a.sender_kind,a.sender_identity_cipher,a.state AS account_state,a.credential_ref
+    FROM sms_numbers n LEFT JOIN memberships m ON m.id=n.membership_id AND m.workspace_id=n.workspace_id
+    LEFT JOIN mca_sms_accounts a ON a.id=n.account_id AND a.workspace_id=n.workspace_id
+    WHERE n.workspace_id=? AND n.account_id=?`).get(workspaceId, accountId)
+  if (!n) block("number_missing", "No company number is connected to this text sender.")
+  else {
+    if (n.state !== "active") block("number_inactive", "This number is awaiting carrier activation or is unavailable.")
+    if (n.membership_status !== "active") block("assignment_inactive", "Assign this number to an active employee.")
+    if (n.account_state !== "active" || n.credential_ref !== "MANAGED") block("sender_inactive", "The company text sender is unavailable.")
+    let identity: string | undefined
+    try { if (n.sender_identity_cipher) identity = decryptSensitive(n.sender_identity_cipher, workspaceId) } catch { /* fail closed */ }
+    if (n.sender_kind !== "phone_number" || identity !== n.phone) block("number_sender_mismatch", "The text sender does not match its company number. Contact the platform operator.")
+  }
+  return { ready: blockers.length === 0, blockers }
+}
+
+export async function managedReady(workspaceId: string, accountId: string): Promise<boolean> {
+  return (await managedReadiness(workspaceId, accountId)).ready
 }
 export async function assertNotSuppressed(
   db: DbExecutor,

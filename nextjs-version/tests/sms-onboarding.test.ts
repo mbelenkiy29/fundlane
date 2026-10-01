@@ -602,3 +602,57 @@ test("company registration checkpoints the complete ISV workflow without sharing
  await refreshCompany(newOwner.workspaceId,api)
  assert.equal((await getDatabase().prepare<{registration_state:string}>("SELECT registration_state FROM sms_companies WHERE workspace_id=?").get(newOwner.workspaceId))?.registration_state,"approved")
 })
+
+test("managed account exposes readiness and refuses a sender that differs from its owned number", async () => {
+  const n = await getDatabase().prepare<{ id: string; phone: string }>("SELECT id,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  const initial = (await listSmsAccounts(actor)).accounts.find(a => a.id === n.id)
+  assert.deepEqual(initial?.readiness, { ready: true, blockers: [] })
+  try {
+    await getDatabase().prepare("UPDATE mca_sms_accounts SET sender_identity_cipher=? WHERE workspace_id=? AND id=?")
+      .run(encryptSensitive("+12125550000", owner.workspaceId), owner.workspaceId, n.id)
+    assert.equal(await managedReady(owner.workspaceId, n.id), false)
+    const account = (await listSmsAccounts(actor)).accounts.find(a => a.id === n.id)
+    assert.equal(account?.readiness?.blockers[0]?.code, "number_sender_mismatch")
+  } finally {
+    await getDatabase().prepare("UPDATE mca_sms_accounts SET sender_identity_cipher=? WHERE workspace_id=? AND id=?")
+      .run(encryptSensitive(n.phone, owner.workspaceId), owner.workspaceId, n.id)
+  }
+})
+
+test("managed readiness reports malformed callback origins rather than rendering a ready sender", async () => {
+  const n = await getDatabase().prepare<{ id: string }>("SELECT id FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  const origin = process.env.MCA_SMS_PUBLIC_BASE_URL
+  try {
+    process.env.MCA_SMS_PUBLIC_BASE_URL = "not a URL"
+    assert.equal(await managedReady(owner.workspaceId, n!.id), false)
+    const account = (await listSmsAccounts(actor)).accounts.find(a => a.id === n!.id)
+    assert.equal(account?.readiness?.blockers[0]?.code, "callback_origin_missing")
+  } finally {
+    if (origin === undefined) delete process.env.MCA_SMS_PUBLIC_BASE_URL
+    else process.env.MCA_SMS_PUBLIC_BASE_URL = origin
+  }
+})
+
+test("number ownership is read-only, tenant scoped and independent of SMS registration", async () => {
+  const module = await import("../src/lib/mca/sms/number-ownership").catch(() => null)
+  assert.equal(typeof module?.getCompanyNumberOwnership, "function")
+  const lookup = module!.getCompanyNumberOwnership
+  const n = await getDatabase().prepare<{ id: string; account_id: string; provider_sid: string; phone: string }>("SELECT id,account_id,provider_sid,phone FROM sms_numbers WHERE workspace_id=?").get(owner.workspaceId)
+  assert.ok(n)
+  assert.equal(await lookup("foreign-company", n.id), undefined)
+  assert.equal(await lookup(owner.workspaceId, "missing-number"), undefined)
+  try {
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='pending',suspended=1 WHERE workspace_id=?").run(owner.workspaceId)
+    const result = await lookup(owner.workspaceId, n.id)
+    assert.deepEqual(result, {
+      numberId: n.id, accountId: n.account_id, providerSid: n.provider_sid, phone: n.phone,
+      state: "active", assignedMembershipId: owner.membershipId, assignedMembershipActive: true,
+      companySuspended: true, providerAccountSid: p.accountSid, providerConfigured: true,
+    })
+    assert.equal(JSON.stringify(result).includes(p.authToken), false)
+    assert.equal(JSON.stringify(result).includes(p.apiKeySecret!), false)
+  } finally {
+    await getDatabase().prepare("UPDATE sms_companies SET registration_state='approved',suspended=0 WHERE workspace_id=?").run(owner.workspaceId)
+  }
+})

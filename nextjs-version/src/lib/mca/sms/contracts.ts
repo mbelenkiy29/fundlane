@@ -17,6 +17,11 @@ export type SmsProvider = (typeof SMS_PROVIDERS)[number]
 export const SMS_ADAPTER_ENVIRONMENTS = ["development", "production"] as const
 export type SmsAdapterEnvironment = (typeof SMS_ADAPTER_ENVIRONMENTS)[number]
 
+export interface SmsReadiness {
+  ready: boolean
+  blockers: { code: string; message: string }[]
+}
+
 export interface SmsAccount {
   id: string
   workspaceId: string
@@ -29,6 +34,7 @@ export interface SmsAccount {
   isDefault: boolean
   memberIds: string[]
   providerConfigured: boolean
+  readiness?: SmsReadiness
   createdAt: string
   updatedAt: string
 }

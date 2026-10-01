@@ -1,5 +1,5 @@
 import "server-only"
-import { managedConfig, managedReady, reserveManagedSend, smsRecipientHash } from "./managed"
+import { managedConfig, managedReady, managedReadiness, reserveManagedSend, smsRecipientHash } from "./managed"
 import { persistInbound, rememberOutbound } from "./inbox"
 
 import { createHash } from "node:crypto"
@@ -199,11 +199,12 @@ async function account(row: Row, memberIds: string[], structuredReady = false): 
   const provider = asSmsProvider(row.provider)
   const kind = String(row.sender_kind) as SmsSenderKind
   const senderIdentity = decryptSensitive(String(row.sender_identity_cipher), workspaceId)
+  const readiness = row.credential_ref === "MANAGED" ? await managedReadiness(workspaceId, String(row.id)) : undefined
   return {
     id: String(row.id), workspaceId, provider, label: String(row.label), senderKind: kind,
     senderMasked: maskSender(senderIdentity, kind), credentialRef: String(row.credential_ref),
     state: String(row.state) as SmsAccountState, isDefault: Number(row.is_default) === 1, memberIds,
-    providerConfigured: row.credential_ref === "MANAGED" ? await managedReady(workspaceId, String(row.id)) : await isAccountConfigured(workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    readiness, providerConfigured: readiness ? readiness.ready : await isAccountConfigured(workspaceId, provider, String(row.credential_ref), senderIdentity, structuredReady), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   }
 }
 
