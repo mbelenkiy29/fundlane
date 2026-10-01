@@ -468,6 +468,30 @@ test("T7 later funding dates reconcile independently and expected payments do no
   }
 })
 
+test("T7 zero-cent reconciliation with a receipt date is not collected company commission", async () => {
+  const { reconcilePayment } = await import("../src/lib/mca/accounting/service")
+  const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
+  const db = getDatabase()
+  const paymentId = "pay-t7-zero-reconciled"
+  const receivedAt = "2026-01-28T15:00:00.000Z"
+  await db.prepare(`INSERT INTO mca_accounting_payments (id,workspace_id,advance_id,type,origin,expected_amount_cents,received_amount_cents,status,idempotency_key,created_at,updated_at)
+    VALUES (?,?,'adv-harbor','commission','manual',7000,0,'expected',?,?,?)`).run(paymentId, ids.workspace, paymentId, now, now)
+  try {
+    const reconciled = await reconcilePayment(adminActor, paymentId, { receivedAmountCents: 0, receivedAt })
+    assert.equal(reconciled.status, "expected")
+    assert.equal(reconciled.receivedAt, receivedAt)
+    const report = await getPerformanceReport(adminActor, januaryFilters())
+    assert.equal(report.finance.collectedCommission.visible, true)
+    if (report.finance.collectedCommission.visible) {
+      assert.equal(report.finance.collectedCommission.count, 1)
+      assert.equal(report.finance.collectedCommission.knownCents, 320_000)
+      assert.equal(report.finance.collectedCommission.records.some((row) => row.recordId === paymentId), false)
+    }
+  } finally {
+    await db.prepare("DELETE FROM mca_accounting_payments WHERE workspace_id=? AND id=?").run(ids.workspace, paymentId)
+  }
+})
+
 test("T7 renewals deduplicate source advances, fees/voids are excluded and broker payouts use recipients", async () => {
   const { getPerformanceReport } = await import("../src/lib/mca/reports/performance")
   const db = getDatabase()
