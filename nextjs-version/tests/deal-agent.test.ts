@@ -5,7 +5,11 @@ import { createDeal } from "../src/lib/mca/deals/service"
 import { retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
-import { documentProposals } from "../src/lib/mca/deal-agent/run"
+import { documentProposals, processDealAgentJob, upsertProposals } from "../src/lib/mca/deal-agent/run"
+import { documentScanActor } from "../src/lib/mca/documents/scan-job"
+import { AppError } from "../src/lib/mca/errors"
+import type { BackgroundJob } from "../src/lib/mca/jobs/queue"
+import { setStatementExtractionProviderForTests } from "../src/lib/mca/underwriting/statement-extraction"
 import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { publishFunderCriteria } from "../src/lib/mca/funders/criteria"
@@ -279,4 +283,105 @@ test("lender fit without underwriting data is recorded and does not fail the run
   const fit = stepsOf(run).find(step => step.step === "lender_fit")!
   assert.match(fit.summary, /^0 matched lender/, JSON.stringify(fit))
   assert.equal((await actionsFor(dealId)).filter(action => action.kind === "submit_to_funder").length, 0)
+})
+
+async function incompleteDealWithRun() {
+  const { workspaceId, dealId } = await enabledDeal()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "application", "app-original"))
+  await runAgent(dealId)
+  return { workspaceId, dealId }
+}
+
+test("retrying the same job creates no new run or actions", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const before = await actionsFor(dealId)
+  const job = await getDatabase().prepare<BackgroundJob>("SELECT * FROM mca_background_jobs WHERE kind='deal_agent' AND resource_id=?").get(dealId)
+  const result = await withAgentEnv("true", () => processDealAgentJob(job!, documentScanActor({ workspaceId, dealId, id: "retry" })))
+  assert.deepEqual(result, { skipped: "unchanged" })
+  assert.equal((await runsFor(dealId)).length, 1)
+  assert.deepEqual((await actionsFor(dealId)).map(action => action.id), before.map(action => action.id))
+})
+
+test("identical re-upload is a no-op", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "application", "app-original"))
+  const results = await runAgent(dealId)
+  assert.deepEqual(results[1], { skipped: "unchanged" })
+  assert.equal((await runsFor(dealId)).length, 1)
+})
+
+test("changed inputs supersede pending action", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const [oldRequest] = (await actionsFor(dealId)).filter(action => action.kind === "request_documents")
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const actions = await actionsFor(dealId)
+  assert.equal(actions.find(action => action.id === oldRequest.id)?.status, "superseded")
+  const pending = actions.filter(action => action.kind === "request_documents" && action.status === "pending")
+  assert.equal(pending.length, 1)
+  assert.notEqual(pending[0].fingerprint, oldRequest.fingerprint)
+  const items = (JSON.parse(pending[0].payload_json) as { items: Array<{ category: string }> }).items
+  assert.ok(!items.some(item => item.category === "driver_license"))
+  assert.ok(items.some(item => item.category === "voided_check"))
+  assert.equal(actions.filter(action => action.kind === "schedule_follow_up" && action.status === "pending").length, 1)
+})
+
+test("burst uploads coalesce to one run", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  for (const category of ["application", "driver_license", "voided_check"]) await withAgentEnv("true", () => upload(workspaceId, dealId, category))
+  const results = await runAgent(dealId)
+  assert.equal(results.length, 3)
+  const runs = await runsFor(dealId)
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0].state, "completed")
+  assert.deepEqual(results.filter(result => result.skipped === "unchanged").length, 2)
+  assert.equal((await actionsFor(dealId)).filter(action => action.kind === "request_documents").length, 1)
+})
+
+test("concurrent runs keep one open action per target", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  const now = new Date().toISOString()
+  for (const id of ["concurrent-a", "concurrent-b"]) await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at)
+    VALUES (?,?,?,?,'running',?,?)`).run(`${id}-${dealId}`, workspaceId, dealId, id, now, now)
+  const actor = documentScanActor({ workspaceId, dealId, id: "concurrent" })
+  const proposal = (fingerprint: string) => [{ kind: "request_documents" as const, targetKey: "request_documents", fingerprint, payload: {} }]
+  await Promise.all([
+    upsertProposals(actor, dealId, `concurrent-a-${dealId}`, proposal("c1")),
+    upsertProposals(actor, dealId, `concurrent-b-${dealId}`, proposal("c2")),
+  ])
+  assert.equal((await actionsFor(dealId)).filter(action => action.status === "pending").length, 1)
+})
+
+test("dismissed proposal is not re-proposed for unchanged inputs", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET status='dismissed' WHERE deal_id=?").run(dealId)
+  // A new document that does not change completeness: new run, same completeness fingerprint.
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "other_stip"))
+  await runAgent(dealId)
+  assert.equal((await runsFor(dealId)).length, 2)
+  const actions = await actionsFor(dealId)
+  assert.equal(actions.length, 2)
+  assert.ok(actions.every(action => action.status === "dismissed"))
+})
+
+test("failed run is reclaimed on retry", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  let calls = 0
+  setStatementExtractionProviderForTests({ name: "flaky", async extractStatement() {
+    calls += 1
+    if (calls === 1) throw new Error("transient provider crash")
+    throw new AppError(422, "statement_unreadable", "Synthetic unreadable statement.")
+  } })
+  try {
+    await withAgentEnv("true", () => upload(workspaceId, dealId, "statement"))
+    await runAgent(dealId)
+    const [failed] = await runsFor(dealId)
+    assert.equal(failed.state, "failed")
+    await runAgent(dealId)
+    const runs = await runsFor(dealId)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].id, failed.id)
+    assert.equal(runs[0].state, "completed")
+    assert.equal(stepsOf(runs[0])[0].code, "statement_unreadable")
+  } finally { setStatementExtractionProviderForTests() }
 })
