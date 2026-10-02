@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { requestJson } from "@/lib/mca/client"
-import { authErrorMessage } from "@/lib/mca/auth-navigation"
+import { authErrorMessage, type CanonicalEnrollmentContinuation } from "@/lib/mca/auth-navigation"
 
 type Security = {
   available: boolean
@@ -20,7 +20,7 @@ type Security = {
   verified: boolean
 }
 
-export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?: "manage" | "challenge" | "enroll"; continueTo?: "/onboarding" | "/platform" }) {
+export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?: "manage" | "challenge" | "enroll"; continueTo?: "/onboarding" | "/platform" | CanonicalEnrollmentContinuation }) {
   const continuationLabel = continueTo === "/platform" ? "Continue to platform administration" : "Continue to your workspace"
   const [state, setState] = useState<Security | null>(null)
   const [enrollment, setEnrollment] = useState<{ secret: string; qrCode: string } | null>(null)

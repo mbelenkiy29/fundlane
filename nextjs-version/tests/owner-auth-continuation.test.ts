@@ -103,6 +103,14 @@ test("security gives the owner one platform continuation and a challenge after i
   assert.equal(props?.mode, "challenge")
 })
 
+test("explicit enrollment intent survives owner MFA without changing platform authority", async () => {
+  const next = "/enrollment?enrollment=10000000-0000-4000-8000-000000000001&destination=business&generation=2"
+  const props = mfaProps(await security.default({ searchParams: Promise.resolve({ next, challenge: "1" }) }))
+  assert.equal(props?.continueTo, next)
+  assert.equal(props?.mode, "challenge")
+  assert.equal(mfaProps(await security.default({ searchParams: Promise.resolve({ next: "https://evil.test", challenge: "1" }) }))?.continueTo, "/platform")
+})
+
 test("revocation, unconfirmed identity and email ceiling cannot authorize owner continuation", async () => {
   await getDatabase().prepare("UPDATE platform_admin_grants SET revoked_at=? WHERE user_id=?").run(nowIso(), userId)
   await assert.doesNotReject(visit({ returnTo: "/platform", owner: "1" }))

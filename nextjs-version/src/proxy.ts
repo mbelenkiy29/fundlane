@@ -2,11 +2,15 @@ import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
 import { supabasePublicConfig } from "@/lib/supabase/config"
 import { maintenanceResponse } from "@/lib/mca/maintenance/capture"
+import { authContinuation } from "@/lib/mca/auth-navigation"
 export default async function proxy(request:NextRequest){
   const paused=await maintenanceResponse(request)
   if(paused)return paused
-  if(request.nextUrl.pathname==="/login")return NextResponse.redirect(new URL("/sign-in",request.url))
-  if(request.nextUrl.pathname==="/register")return NextResponse.redirect(new URL("/sign-up",request.url))
+  if(request.nextUrl.pathname==="/login" || request.nextUrl.pathname==="/register") {
+    const target=new URL(request.nextUrl.pathname==="/login" ? "/sign-in" : "/sign-up",request.url)
+    if(request.nextUrl.searchParams.has("next"))target.searchParams.set("next",authContinuation(request.nextUrl.searchParams.getAll("next").length===1 ? request.nextUrl.searchParams.get("next") : null))
+    return NextResponse.redirect(target)
+  }
   const requestHeaders=new Headers(request.headers)
   requestHeaders.set("x-mca-pathname",request.nextUrl.pathname)
   requestHeaders.set("x-mca-return-to",request.nextUrl.pathname+request.nextUrl.search)
