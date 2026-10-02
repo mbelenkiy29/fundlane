@@ -107,11 +107,17 @@ export function authContinuation(value: string | null): string {
     )
       return "/onboarding"
     const rawNext = url.searchParams.get("next")
-    if (
-      rawNext &&
-      new URL(rawNext, "https://auth.invalid").pathname === "/account-security"
-    )
-      return "/onboarding"
+    if (rawNext) {
+      try {
+        if (
+          new URL(rawNext, "https://auth.invalid").pathname ===
+          "/account-security"
+        )
+          return "/onboarding"
+      } catch {
+        return "/onboarding"
+      }
+    }
     const query = new URLSearchParams()
     if (url.searchParams.get("challenge") === "1") query.set("challenge", "1")
     else if (url.searchParams.get("required") === "1")

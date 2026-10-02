@@ -407,6 +407,265 @@ test("login aliases preserve only sanitized enrollment context", async () => {
     "/onboarding"
   )
 })
+
+function issuedCallbackRequest(
+  redirect: string,
+  branch: "token" | "code",
+  client: string
+) {
+  const query = new URLSearchParams({ redirect_to: redirect })
+  if (branch === "token") {
+    query.set("token_hash", "synthetic-token")
+    query.set("type", "magiclink")
+  } else query.set("code", "synthetic-code")
+  return new Request(`http://localhost:3000/auth/callback?${query}`, {
+    headers: { "x-forwarded-for": client },
+  })
+}
+
+for (const branch of ["token", "code"] as const) {
+  test(`issued ${branch} callbacks reserve five failed attempts before provider I/O`, async () => {
+    const f = await activatedEnrollment(),
+      auth = await import("../src/lib/mca/onboarding/auth")
+    await auth.requestEnrollmentAuthentication({
+      enrollmentId: f.id,
+      email: f.identity.email,
+    })
+    const challengeId = browserCookies
+      .get(auth.enrollmentAuthCookie)!
+      .split(".")[0]
+    const redirect = (
+      provider.otpInputs[0] as { options: { emailRedirectTo: string } }
+    ).options.emailRedirectTo
+    const { GET } = await import("../src/app/auth/callback/route")
+    provider.otpError = { status: 400, message: "Synthetic invalid proof" }
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const response = await GET(issuedCallbackRequest(redirect, branch, f.id))
+      assert.match(response.headers.get("location")!, /verification_failed/)
+    }
+    assert.equal(
+      branch === "token"
+        ? provider.verificationInputs.length
+        : provider.exchangeInputs.length,
+      5
+    )
+    assert.deepEqual(
+      await getDatabase().queryOne(
+        "SELECT attempts,state FROM mca_enrollment_challenges WHERE id=?",
+        [challengeId]
+      ),
+      { attempts: 5, state: "pending" }
+    )
+  })
+}
+
+test("the fifth valid issued callback succeeds for both token and code exchange", async () => {
+  const auth = await import("../src/lib/mca/onboarding/auth"),
+    { GET } = await import("../src/app/auth/callback/route")
+  for (const branch of ["token", "code"] as const) {
+    const f = await activatedEnrollment()
+    await auth.requestEnrollmentAuthentication({
+      enrollmentId: f.id,
+      email: f.identity.email,
+      destination: "business",
+      generation: 1,
+    })
+    const challengeId = browserCookies
+      .get(auth.enrollmentAuthCookie)!
+      .split(".")[0]
+    const redirect = (
+      provider.otpInputs.at(-1) as { options: { emailRedirectTo: string } }
+    ).options.emailRedirectTo
+    provider.otpError = { status: 400, message: "Synthetic invalid proof" }
+    for (let attempt = 0; attempt < 4; attempt++)
+      await GET(issuedCallbackRequest(redirect, branch, f.id))
+    provider.otpError = null
+    const result = await GET(issuedCallbackRequest(redirect, branch, f.id))
+    assert.equal(
+      result.headers.get("location"),
+      `http://localhost:3000/enrollment?enrollment=${f.id}&destination=business&generation=1`
+    )
+    assert.deepEqual(
+      await getDatabase().queryOne(
+        "SELECT attempts,state FROM mca_enrollment_challenges WHERE id=?",
+        [challengeId]
+      ),
+      { attempts: 5, state: "consumed" }
+    )
+    const calls =
+      provider.verificationInputs.length + provider.exchangeInputs.length
+    await GET(issuedCallbackRequest(redirect, branch, f.id))
+    assert.equal(
+      provider.verificationInputs.length + provider.exchangeInputs.length,
+      calls
+    )
+  }
+})
+
+test("typed OTP and issued callbacks share one verification budget", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth"),
+    { GET } = await import("../src/app/auth/callback/route")
+  await auth.requestEnrollmentAuthentication({
+    enrollmentId: f.id,
+    email: f.identity.email,
+  })
+  const challengeId = browserCookies
+    .get(auth.enrollmentAuthCookie)!
+    .split(".")[0]
+  const redirect = (
+    provider.otpInputs[0] as { options: { emailRedirectTo: string } }
+  ).options.emailRedirectTo
+  provider.otpError = { status: 400, message: "Synthetic invalid proof" }
+  for (let attempt = 0; attempt < 2; attempt++)
+    await assert.rejects(
+      auth.verifyEnrollmentAuthentication({
+        challengeId,
+        email: f.identity.email,
+        token: "111111",
+      }),
+      { code: "enrollment_challenge_invalid" }
+    )
+  for (let attempt = 0; attempt < 2; attempt++)
+    await GET(issuedCallbackRequest(redirect, "token", f.id))
+  provider.otpError = null
+  assert.equal(
+    (await GET(issuedCallbackRequest(redirect, "code", f.id))).headers.get(
+      "location"
+    ),
+    `http://localhost:3000/enrollment?enrollment=${f.id}`
+  )
+  assert.deepEqual(
+    await getDatabase().queryOne(
+      "SELECT attempts,state FROM mca_enrollment_challenges WHERE id=?",
+      [challengeId]
+    ),
+    { attempts: 5, state: "consumed" }
+  )
+  await assert.rejects(
+    auth.verifyEnrollmentAuthentication({
+      challengeId,
+      email: f.identity.email,
+      token: "123456",
+    }),
+    { code: "enrollment_challenge_invalid" }
+  )
+  assert.equal(
+    provider.verificationInputs.length + provider.exchangeInputs.length,
+    5
+  )
+})
+
+test("concurrent issued callbacks cannot reserve more than five attempts", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth"),
+    { GET } = await import("../src/app/auth/callback/route")
+  await auth.requestEnrollmentAuthentication({
+    enrollmentId: f.id,
+    email: f.identity.email,
+  })
+  const challengeId = browserCookies
+    .get(auth.enrollmentAuthCookie)!
+    .split(".")[0]
+  const redirect = (
+    provider.otpInputs[0] as { options: { emailRedirectTo: string } }
+  ).options.emailRedirectTo
+  provider.otpError = { status: 400, message: "Synthetic invalid proof" }
+  await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      GET(issuedCallbackRequest(redirect, index % 2 ? "code" : "token", f.id))
+    )
+  )
+  assert.equal(
+    provider.verificationInputs.length + provider.exchangeInputs.length,
+    5
+  )
+  assert.equal(
+    (
+      await getDatabase().queryOne<{ attempts: number }>(
+        "SELECT attempts FROM mca_enrollment_challenges WHERE id=?",
+        [challengeId]
+      )
+    )?.attempts,
+    5
+  )
+})
+
+test("issued callbacks revalidate generations after provider verification", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth"),
+    { GET } = await import("../src/app/auth/callback/route")
+  await auth.requestEnrollmentAuthentication({
+    enrollmentId: f.id,
+    email: f.identity.email,
+  })
+  const challengeId = browserCookies
+    .get(auth.enrollmentAuthCookie)!
+    .split(".")[0]
+  const redirect = (
+    provider.otpInputs[0] as { options: { emailRedirectTo: string } }
+  ).options.emailRedirectTo
+  provider.onOtp = async () => {
+    await getDatabase().execute(
+      "UPDATE mca_enrollments SET email_generation=email_generation+1,revision=revision+1,updated_at=? WHERE id=?",
+      [nowIso(), f.id]
+    )
+  }
+  assert.match(
+    (await GET(issuedCallbackRequest(redirect, "code", f.id))).headers.get(
+      "location"
+    )!,
+    /verification_failed/
+  )
+  assert.deepEqual(
+    await getDatabase().queryOne(
+      "SELECT attempts,state FROM mca_enrollment_challenges WHERE id=?",
+      [challengeId]
+    ),
+    { attempts: 1, state: "pending" }
+  )
+})
+
+test("issued callbacks apply a durable client rate guard across challenges without requiring GET Origin", async () => {
+  const auth = await import("../src/lib/mca/onboarding/auth"),
+    { GET } = await import("../src/app/auth/callback/route")
+  const client = "synthetic-rate-client"
+  let last: Response | undefined
+  for (let group = 0; group < 4; group++) {
+    const f = await activatedEnrollment()
+    provider.otpError = null
+    await auth.requestEnrollmentAuthentication({
+      enrollmentId: f.id,
+      email: f.identity.email,
+    })
+    const redirect = (
+      provider.otpInputs.at(-1) as { options: { emailRedirectTo: string } }
+    ).options.emailRedirectTo
+    provider.otpError = { status: 400, message: "Synthetic invalid proof" }
+    for (let attempt = 0; attempt < 4; attempt++)
+      last = await GET(issuedCallbackRequest(redirect, "token", client))
+  }
+  assert.equal(last?.status, 429)
+  assert.equal(provider.verificationInputs.length, 15)
+})
+
+test("malformed nested MFA URLs and login aliases fall back safely", async () => {
+  const { default: proxy } = await import("../src/proxy")
+  for (const malformed of ["http://[", "http://%"])
+    for (const alias of ["login", "register"]) {
+      const next = `/account-security?next=${encodeURIComponent(malformed)}`
+      assert.equal(authContinuation(next), "/onboarding")
+      const response = await proxy(
+        new NextRequest(
+          `http://localhost:3000/${alias}?next=${encodeURIComponent(next)}`
+        )
+      )
+      assert.equal(
+        new URL(response.headers.get("location")!).searchParams.get("next"),
+        "/onboarding"
+      )
+    }
+})
 test("status with a deactivated membership offers recovery instead of an operational tenant destination", async () => {
   const f = await activatedEnrollment(),
     { claimEnrollment, readEnrollmentStatus } =

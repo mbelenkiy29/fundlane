@@ -22,11 +22,14 @@ export const provider = {
   failCookie: false,
   otpInputs: [] as unknown[],
   verificationInputs: [] as unknown[],
+  exchangeInputs: [] as unknown[],
   onOtp: undefined as undefined | (() => Promise<void>),
   onGetUser: undefined as undefined | (() => Promise<void>),
 }
-mock.module("next/headers", {
-  namedExports: {
+// Node 24 uses exports; cache also keeps options compatible with the older installed type declarations.
+const headersMock = {
+  cache: false,
+  exports: {
     cookies: async () => ({
       get: (name: string) =>
         browserCookies.has(name)
@@ -41,9 +44,11 @@ mock.module("next/headers", {
       },
     }),
   },
-})
-mock.module(new URL("../../src/lib/supabase/server.ts", import.meta.url).href, {
-  namedExports: {
+}
+mock.module("next/headers", headersMock)
+const serverMock = {
+  cache: false,
+  exports: {
     createSupabaseServerClient: async () => ({
       auth: {
         getUser: async () => {
@@ -69,7 +74,11 @@ mock.module(new URL("../../src/lib/supabase/server.ts", import.meta.url).href, {
           if (provider.onOtp) await provider.onOtp()
           return { error: provider.otpError }
         },
-        exchangeCodeForSession: async () => ({ error: provider.otpError }),
+        exchangeCodeForSession: async (input: unknown) => {
+          provider.exchangeInputs.push(input)
+          if (provider.onOtp) await provider.onOtp()
+          return { error: provider.otpError }
+        },
       },
     }),
     getSupabaseAdminClient: () => ({
@@ -83,7 +92,11 @@ mock.module(new URL("../../src/lib/supabase/server.ts", import.meta.url).href, {
       },
     }),
   },
-})
+}
+mock.module(
+  new URL("../../src/lib/supabase/server.ts", import.meta.url).href,
+  serverMock
+)
 
 export async function authDatabase(name: string) {
   const originalEnv = { ...process.env }
@@ -114,6 +127,7 @@ export function resetAuthProvider() {
   provider.onGetUser = undefined
   provider.otpInputs.length = 0
   provider.verificationInputs.length = 0
+  provider.exchangeInputs.length = 0
   browserCookies.clear()
 }
 export async function liveIdentity(email: string): Promise<SupabaseIdentity> {

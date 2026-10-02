@@ -65,17 +65,30 @@ export async function GET(request: Request) {
         type === "recovery" ||
         (type === "magiclink" &&
           (issued || process.env.MCA_MAGIC_LINK_ENABLED === "true")))
-    )
+    ) {
+      if (issued)
+        await enrollmentAuth!.reserveEnrollmentCallbackAttempt(
+          request,
+          challengeId!,
+          next
+        )
       success = !(await client.auth.verifyOtp({ token_hash: tokenHash, type }))
         .error
-    else if (
+    } else if (
       code &&
       !tokenHash &&
       (url.searchParams.get("flow") !== "magic-link" ||
         issued ||
         process.env.MCA_MAGIC_LINK_ENABLED === "true")
-    )
+    ) {
+      if (issued)
+        await enrollmentAuth!.reserveEnrollmentCallbackAttempt(
+          request,
+          challengeId!,
+          next
+        )
       success = !(await client.auth.exchangeCodeForSession(code)).error
+    }
     if (success) {
       const identity = await supabaseIdentity({ allowPasswordSetup: true })
       success = Boolean(identity)

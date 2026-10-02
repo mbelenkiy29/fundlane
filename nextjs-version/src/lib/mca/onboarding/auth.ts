@@ -16,7 +16,7 @@ import {
   hashOpaqueToken,
 } from "../crypto"
 import { AppError } from "../errors"
-import { consumeRequestRateLimit } from "../auth"
+import { clientRateKey, consumeRequestRateLimit } from "../auth"
 import {
   enrollmentContinuation,
   parseEnrollmentContinuation,
@@ -370,22 +370,71 @@ export async function completeEnrollmentAuthentication(
     }
   })
 }
+
+/** Commit one shared OTP/link attempt before any external verification request. */
+export async function reserveEnrollmentAuthenticationAttempt(
+  challengeId: string,
+  input: { continuation?: string | null; email?: string } = {}
+): Promise<{
+  challenge: EnrollmentChallenge
+  payload: EnrollmentChallengePayload
+  row: EnrollmentRecord
+}> {
+  requireEnrollmentRuntime()
+  const candidate = await getDatabase().queryOne<EnrollmentChallenge>(
+    "SELECT * FROM mca_enrollment_challenges WHERE id=?",
+    [challengeId]
+  )
+  if (!candidate) throw invalidChallenge()
+  return withImmediateTransaction(async (db) => {
+    await db.queryOne("SELECT id FROM mca_enrollments WHERE id=? FOR UPDATE", [
+      candidate.enrollment_id,
+    ])
+    await db.queryOne(
+      "SELECT id FROM mca_enrollment_challenges WHERE id=? FOR UPDATE",
+      [challengeId]
+    )
+    const current = await requireIssuedEnrollmentChallenge(
+      challengeId,
+      input.continuation,
+      db
+    )
+    if (
+      input.email !== undefined &&
+      enrollmentEmailHash(input.email) !== current.challenge.email_hash
+    )
+      throw invalidChallenge()
+    const changed = await db.execute(
+      "UPDATE mca_enrollment_challenges SET attempts=attempts+1,updated_at=? WHERE id=? AND state='pending' AND attempts<5",
+      [nowIso(), challengeId]
+    )
+    if (changed !== 1) throw invalidChallenge()
+    return current
+  })
+}
+
+/** Enrollment callbacks are GETs from Auth; their bound challenge replaces a mutation Origin check. */
+export async function reserveEnrollmentCallbackAttempt(
+  request: Request,
+  challengeId: string,
+  continuation: string
+): Promise<void> {
+  await consumeRequestRateLimit(
+    clientRateKey(request, "enrollment:callback"),
+    15
+  )
+  await reserveEnrollmentAuthenticationAttempt(challengeId, { continuation })
+}
+
 export async function verifyEnrollmentAuthentication(input: {
   challengeId: string
   email: string
   token: string
 }): Promise<{ destination: string }> {
-  const { challenge, payload } = await requireIssuedEnrollmentChallenge(
-    input.challengeId
+  const { payload } = await reserveEnrollmentAuthenticationAttempt(
+    input.challengeId,
+    { email: input.email }
   )
-  if (enrollmentEmailHash(input.email) !== challenge.email_hash)
-    throw invalidChallenge()
-  // Attempts commit before provider verification, including failed provider outcomes.
-  const consumed = await getDatabase().execute(
-    "UPDATE mca_enrollment_challenges SET attempts=attempts+1,updated_at=? WHERE id=? AND state='pending' AND attempts<5",
-    [nowIso(), input.challengeId]
-  )
-  if (consumed !== 1) throw invalidChallenge()
   const client = await createSupabaseServerClient()
   const { error } = await client.auth.verifyOtp({
     email: payload.email,
