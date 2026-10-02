@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { ArrowUpRight, LoaderCircle } from "lucide-react"
 import { useSignInFlow } from "@/components/mca/auth/use-sign-in-flow"
@@ -10,13 +10,14 @@ import {
   currentAuthContinuation,
 } from "@/lib/mca/auth-navigation"
 
-export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showMigratedAccountNotice = true }: {
+export function SignInForm({ magicLinkEnabled = false, showMigratedAccountNotice = true }: {
   magicLinkEnabled?: boolean
   inviteOnly?: boolean
   showMigratedAccountNotice?: boolean
 }) {
   const flow = useSignInFlow()
   const [email, setEmail] = useState("")
+  const [stage, setStage] = useState<"email" | "password">("email")
   const [password, setPassword] = useState("")
   const [code, setCode] = useState("")
   const [googleBusy, setGoogleBusy] = useState(false)
@@ -24,8 +25,18 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
   const [magicBusy, setMagicBusy] = useState(false)
   const [magicError, setMagicError] = useState("")
   const [magicSent, setMagicSent] = useState(false)
+  const emailRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
+  const errorRef = useRef<HTMLParagraphElement>(null)
   const loading = flow.busy
+  const busy = loading || googleBusy || magicBusy
   const error = flow.error || googleError || magicError
+
+  useEffect(() => {
+    if (stage === "password") passwordRef.current?.focus()
+    else emailRef.current?.focus()
+  }, [stage])
+  useEffect(() => { if (error) errorRef.current?.focus() }, [error])
 
   async function sendMagicLink() {
     setMagicBusy(true)
@@ -46,7 +57,12 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
 
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (busy) return
     setGoogleError("")
+    if (stage === "email") {
+      setStage("password")
+      return
+    }
     await flow.password(email, password)
   }
 
@@ -79,7 +95,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
         <p>Enter an authenticator or single-use recovery code to finish signing in.</p>
         <form className="fl-form" onSubmit={submitCode} aria-busy={loading}>
           {error && (
-            <p className="fl-form-notice fl-form-error" role="alert">
+            <p ref={errorRef} tabIndex={-1} className="fl-form-notice fl-form-error" role="alert">
               {error}
             </p>
           )}
@@ -112,11 +128,11 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
   if (flow.codeSent) {
     return (
       <>
-        <h2 id="sign-in-title">Verify your sign-in</h2>
-        <p>Enter the code we sent to continue to your workspace.</p>
+        <h2 id="sign-in-title">Verify your email</h2>
+        <p>Enter the email verification code to finish verifying your account.</p>
         <form className="fl-form" onSubmit={submitCode} aria-busy={loading}>
           {error && (
-            <p className="fl-form-notice fl-form-error" role="alert">
+            <p ref={errorRef} tabIndex={-1} className="fl-form-notice fl-form-error" role="alert">
               {error}
             </p>
           )}
@@ -149,9 +165,9 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
 
   return (
     <>
-      <h2 id="sign-in-title">Sign in</h2>
+      <h2 id="sign-in-title">Login</h2>
       <p>Use your work email or continue with Google.</p>
-      <form className="fl-form" onSubmit={submitPassword} aria-busy={loading || magicBusy}>
+      <form className="fl-form" onSubmit={submitPassword} aria-busy={busy}>
         <button
           className="fl-button fl-button-secondary"
           type="button"
@@ -164,7 +180,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
           or
         </p>
         {error && (
-          <p className="fl-form-notice fl-form-error" role="alert">
+          <p ref={errorRef} tabIndex={-1} className="fl-form-notice fl-form-error" role="alert">
             {error}
           </p>
         )}
@@ -172,6 +188,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
           <label htmlFor="sign-in-email">Work email</label>
           <input
             id="sign-in-email"
+            ref={emailRef}
             name="email"
             type="email"
             autoComplete="email"
@@ -180,9 +197,17 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
             required
             autoFocus
             disabled={loading || googleBusy || magicBusy}
+            readOnly={stage === "password"}
           />
+          {stage === "password" && <button className="fl-inline-link" type="button" disabled={busy} onClick={() => {
+            setStage("email")
+            setPassword("")
+            setMagicSent(false)
+            setGoogleError("")
+            setMagicError("")
+          }}>Change email</button>}
         </div>
-        <div>
+        {stage === "password" && <div>
           <div className="fl-sign-in-label-row">
             <label htmlFor="sign-in-password">Password</label>
             <Link href="/forgot-password" className="fl-inline-link">
@@ -191,24 +216,26 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
           </div>
           <input
             id="sign-in-password"
+            ref={passwordRef}
             name="password"
             type="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             required
+            autoFocus
             disabled={loading || googleBusy || magicBusy}
           />
-        </div>
+        </div>}
         <button className="fl-button" type="submit" disabled={loading || googleBusy || magicBusy}>
-          {loading ? "Signing in" : "Sign in"}
+          {loading ? "Signing in…" : stage === "email" ? "Next" : "Login"}
           {loading ? (
             <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
           ) : (
             <ArrowUpRight size={16} aria-hidden="true" />
           )}
         </button>
-        {magicLinkEnabled && (
+        {stage === "password" && magicLinkEnabled && (
           <>
             <button className="fl-button fl-button-secondary" type="button" disabled={loading || googleBusy || magicBusy || !email} onClick={sendMagicLink}>
               {magicBusy ? "Sending link…" : "Email me a sign-in link"}
@@ -216,7 +243,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
             {magicSent && <p className="fl-form-notice" role="status">If an account exists, we&apos;ve sent a link.</p>}
           </>
         )}
-        <button
+        {stage === "password" && <button
           className="fl-button fl-button-secondary"
           type="button"
           disabled={loading || googleBusy || magicBusy || !email}
@@ -226,7 +253,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
           }}
         >
           Resend email verification
-        </button>
+        </button>}
         {showMigratedAccountNotice && <p className="fl-form-privacy">
           Existing users:{" "}
           <Link href="/forgot-password" className="fl-inline-link">
@@ -235,11 +262,7 @@ export function SignInForm({ magicLinkEnabled = false, inviteOnly = false, showM
           to activate your migrated account.
         </p>}
         <p className="fl-form-privacy">
-          New team members join through an invitation.{!inviteOnly && <>{" "}
-          <Link href="/sign-up" className="fl-inline-link">
-            Create a company workspace
-          </Link>
-          .</>}
+          New team members join through an invitation.
         </p>
       </form>
     </>

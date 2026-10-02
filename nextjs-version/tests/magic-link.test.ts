@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
 import { before, beforeEach, mock, test } from "node:test"
+import { interactionSetup, runClient } from "./helpers/public-entry-render"
 
 let providerError: object | null = null
 let providerThrows = false
@@ -29,15 +29,26 @@ test("flag defaults off and the endpoint is unavailable", async () => {
   assert.deepEqual(rateCalls, [])
 })
 
-test("sign-in form renders the link option only when enabled", () => {
-  const result = spawnSync(process.execPath, ["--import", "tsx", "-e", `
-    const React = require('react');
-    const { renderToStaticMarkup } = require('react-dom/server');
+test("sign-in form renders the enabled link option after local email Next", () => {
+  const [off, on] = runClient(`${interactionSetup}
     const { SignInForm } = require('./src/app/(auth)/sign-in/sign-in-form.tsx');
-    console.log(JSON.stringify([false, true].map(magicLinkEnabled => renderToStaticMarkup(React.createElement(SignInForm, { magicLinkEnabled })))));
-  `], { encoding: "utf8" })
-  assert.equal(result.status, 0, result.stderr)
-  const [off, on] = JSON.parse(result.stdout) as string[]
+    (async () => {
+      const markup = [];
+      for (const magicLinkEnabled of [false, true]) {
+        states.length = 0;
+        const props = { magicLinkEnabled };
+        let view = render(SignInForm, props);
+        assert.equal(button(view.tree, "Email me a sign-in link"), undefined);
+        input(view.tree, "email").props.onChange({ target: { value: "person@example.test" } });
+        view = render(SignInForm, props);
+        assert.ok(button(view.tree, "Next"));
+        await submit(view.tree);
+        markup.push(render(SignInForm, props).markup);
+      }
+      assert.equal(calls.length, 0);
+      console.log(JSON.stringify(markup));
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `) as string[]
   assert.doesNotMatch(off, /Email me a sign-in link/)
   assert.match(on, /Email me a sign-in link/)
 })
