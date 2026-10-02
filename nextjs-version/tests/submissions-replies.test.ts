@@ -629,6 +629,47 @@ test("unique-domain reply with zero subject hits stays pending_review", async ()
   assert.equal(spy.mutations.length, 0)
 })
 
+test("system-provider reply anchors by the attempted Message-ID in References or In-Reply-To", async () => {
+  const deal = await seedDeal("References Anchor Merchant LLC")
+  const sent = await sendTo(deal.id, alphaFunderId)
+  const attempted = sent.ref.messageId
+  // Stored shape of a Resend/useSend attempt: the delivered RFC Message-ID is unknown.
+  await getDatabase().prepare("UPDATE mca_submission_attempts SET external_ref=? WHERE job_id=?").run(JSON.stringify({
+    ...sent.ref, messageId: "", threadId: "", inReplyTo: null, references: [], threadStatus: "unknown",
+    attemptedMessageId: attempted, provider: "resend", providerEmailId: "em-1", delivery: "sent",
+  }), sent.jobId)
+  const sesId = "<010001a0fd6dc083-references-000000@email.amazonses.com>"
+  const reply = (providerMessageId: string, inReplyTo: string, references?: string[]) => ({
+    providerMessageId, inReplyTo, references, from: "Underwriting <uw@unrelated-replies.example.test>", subject: "Checking in", body: "Any update on the file?",
+  })
+  const spy: MailboxSpy = {
+    list: 0,
+    mutations: [],
+    messages: [
+      reply("system-anchor-references", sesId, [attempted, sesId]),
+      reply("system-anchor-in-reply-to", attempted),
+      reply("system-anchor-ses-only", sesId, [sesId]),
+    ],
+  }
+  setReplyMailboxForTests(fixtureMailbox(spy))
+
+  const run = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ senderId, enabled: true }),
+  }))
+  assert.equal(run.status, 200)
+  const replies = (await (await repliesGet(cookieRequest("/api/mca/submissions/replies", "admin-session-token"))).json() as QueueBody).replies
+  for (const id of ["system-anchor-references", "system-anchor-in-reply-to"]) {
+    const item = replies.find((entry) => entry.providerMessageId === id)
+    assert.equal(item?.state, "matched", id)
+    assert.equal(item?.matchedJobId, sent.jobId, id)
+    assert.equal(item?.evidence.method, "message_id", id)
+  }
+  const sesOnly = replies.find((entry) => entry.providerMessageId === "system-anchor-ses-only")
+  assert.equal(sesOnly?.state, "pending_review")
+  assert.equal(sesOnly?.matchedJobId, undefined)
+})
+
 test("scheduled funder reply ingest needs both flags and isolates each workspace", async () => {
   const other = await createSender(actor(ids.otherWorkspace), {
     provider: "smtp", purpose: "submission", fromName: "Other Desk", fromAddress: "other@example.test", signature: "Best",

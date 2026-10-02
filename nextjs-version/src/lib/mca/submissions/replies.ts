@@ -194,6 +194,7 @@ type SubmissionAnchor = {
   messageId: string
   threadId: string
   references: string[]
+  attemptedMessageId: string
   subject: string
   displayId: string
   legalName: string
@@ -521,7 +522,7 @@ async function updateReplyExtractionMarker(sender: StoredEmailSender, token: str
     // Use checkpoint-before-reply lock ordering, including extraction persistence.
     await assertReplyClaim(sender, token, true)
     await database.prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || ?::jsonb)::text
-      WHERE workspace_id=? AND sender_id=? AND id=? ${patch.automaticExtractionPending === true ? "AND NOT (match_evidence::jsonb ? 'extraction')" : ''}`)
+      WHERE workspace_id=? AND sender_id=? AND id=? ${patch.automaticExtractionPending === true ? "AND NOT jsonb_exists(match_evidence::jsonb, 'extraction')" : ''}`)
       .run(JSON.stringify(patch), sender.workspaceId, sender.id, replyId)
   })
 }
@@ -536,7 +537,7 @@ async function drainReplyExtractions(actor: DealActor, sender: StoredEmailSender
       const pending = await db().prepare<{ id: string }>(`SELECT id FROM mca_funder_replies
         WHERE workspace_id=? AND sender_id=? AND state='matched'
           AND match_evidence::jsonb->>'automaticExtractionPending'='true'
-          AND NOT (match_evidence::jsonb ? 'extraction')
+          AND NOT jsonb_exists(match_evidence::jsonb, 'extraction')
         ORDER BY COALESCE(match_evidence::jsonb->>'automaticExtractionAttemptAt',''),created_at,id LIMIT 2`).all(sender.workspaceId, sender.id)
       for (const { id: replyId } of pending) {
         await assertReplyClaim(sender, checkpoint.scheduledClaimToken!)
@@ -563,7 +564,7 @@ async function drainReplyExtractions(actor: DealActor, sender: StoredEmailSender
       // IDs are an active-page diagnostic; durable reply markers are the queue.
       const remaining = await db().prepare<{ id: string }>(`SELECT id FROM mca_funder_replies
         WHERE workspace_id=? AND sender_id=? AND state='matched' AND match_evidence::jsonb->>'automaticExtractionPending'='true'
-          AND NOT (match_evidence::jsonb ? 'extraction')
+          AND NOT jsonb_exists(match_evidence::jsonb, 'extraction')
         ORDER BY COALESCE(match_evidence::jsonb->>'automaticExtractionAttemptAt',''),created_at,id LIMIT 2`).all(sender.workspaceId, sender.id)
       current = { ...current, pendingReplyIds: remaining.map(row => row.id) }
       await saveClaimedCheckpoint(sender, current)
@@ -670,7 +671,7 @@ async function loadAnchors(actor: DealActor): Promise<SubmissionAnchor[]> {
     assertExecutionActive()
     const ref = parseEmailAttemptRef(row.external_ref)
     // Operator-reconciled system sends can be accepted without an API receipt ID.
-    // They remain domain/subject anchors; no attempted RFC ID becomes thread evidence.
+    // System sends anchor replies only by the attempted ID sent in References, never by thread.
     if (!ref || (!ref.messageId && !ref.providerEmailId && !(ref.provider && ref.delivery === "sent")) || ref.delivery === "uncertain") continue
     const funder = funderById.get(row.funder_id)
     anchors.push({
@@ -682,6 +683,7 @@ async function loadAnchors(actor: DealActor): Promise<SubmissionAnchor[]> {
       messageId: ref.messageId,
       threadId: ref.threadId,
       references: ref.references,
+      attemptedMessageId: ref.attemptedMessageId ?? "",
       subject: ref.snapshot.subject,
       displayId: row.deal_display_id,
       legalName: row.deal_legal_name?.trim() || "",
@@ -706,8 +708,10 @@ function threadHits(message: MailboxMessage, anchors: SubmissionAnchor[]): Submi
     const messageId = normalizeToken(anchor.messageId)
     const threadId = normalizeToken(anchor.threadId)
     const storedRefs = anchor.references.map(normalizeToken)
+    const attempted = normalizeToken(anchor.attemptedMessageId)
     const byMessage = Boolean(inReplyTo && (inReplyTo === messageId || inReplyTo === threadId))
       || references.some((item) => item === messageId || item === threadId || storedRefs.includes(item))
+      || Boolean(attempted && (inReplyTo === attempted || references.includes(attempted)))
     const byThread = Boolean(incomingThread && (incomingThread === threadId || incomingThread === messageId))
     if ((byMessage || byThread) && !seen.has(anchor.jobId)) {
       seen.add(anchor.jobId)
@@ -749,8 +753,8 @@ function correlate(message: MailboxMessage, anchors: SubmissionAnchor[], funders
   const threadMatched = threadHits(message, anchors)
   if (threadMatched.length === 1) {
     const hit = threadMatched[0]!
-    const byHeader = Boolean(normalizeToken(inReplyTo) === normalizeToken(hit.messageId)
-      || references.some((item) => normalizeToken(item) === normalizeToken(hit.messageId)))
+    const headerIds = [hit.messageId, hit.attemptedMessageId].map(normalizeToken).filter(Boolean)
+    const byHeader = [inReplyTo, ...references].some((item) => headerIds.includes(normalizeToken(item)))
     notes.push(byHeader
       ? "Correlated by Message-ID / In-Reply-To before domain matching."
       : "Correlated by stored submission thread id before domain matching.")
@@ -972,7 +976,7 @@ async function persistReply(input: {
     const existing = await findReplyByProvider(input.sender.workspaceId, input.sender.id, input.message.providerMessageId)
     if (!existing) throw new Error("Funder reply insert conflicted but no row was found.")
     if (existing.state === "matched") await db().prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || '{"automaticExtractionPending":true}'::jsonb)::text
-      WHERE workspace_id=? AND id=? AND NOT (match_evidence::jsonb ? 'extraction')`).run(input.sender.workspaceId, existing.id)
+      WHERE workspace_id=? AND id=? AND NOT jsonb_exists(match_evidence::jsonb, 'extraction')`).run(input.sender.workspaceId, existing.id)
     return { reply: mapReply(existing, { includeBody: false, created: false }), created: false }
   }
   const saved = await findReplyByProvider(input.sender.workspaceId, input.sender.id, input.message.providerMessageId)
@@ -1254,7 +1258,7 @@ async function claimReplySender(workspaceId: string, leaseMs: number, senderId?:
     if (!sender) return
     const previous = parseCheckpoint(row.match_evidence)
     if (previous.pendingReplyIds?.length) await database.prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || '{"automaticExtractionPending":true}'::jsonb)::text
-      WHERE workspace_id=? AND sender_id=? AND id=ANY(?::text[]) AND state='matched' AND NOT (match_evidence::jsonb ? 'extraction')`).run(workspaceId, sender.id, previous.pendingReplyIds)
+      WHERE workspace_id=? AND sender_id=? AND id=ANY(?::text[]) AND state='matched' AND NOT jsonb_exists(match_evidence::jsonb, 'extraction')`).run(workspaceId, sender.id, previous.pendingReplyIds)
     const checkpoint = { ...previous, pendingReplyIds: previous.pendingReplyIds?.slice(0, 100), claimMode, scheduledClaimToken: newId(), scheduledLeaseUntil: new Date(Date.now() + leaseMs).toISOString() }
     await database.prepare("UPDATE mca_funder_replies SET match_evidence=?,updated_at=? WHERE id=? AND workspace_id=?").run(encodeCheckpoint(checkpoint), nowIso(), row.id, workspaceId)
     return { sender, checkpoint }

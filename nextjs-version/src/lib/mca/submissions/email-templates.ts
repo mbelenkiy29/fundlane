@@ -739,7 +739,8 @@ async function deliverViaSystemProvider(rendered: RenderedSubmissionEmail, corre
       text: rendered.body,
       html: `<div style="white-space:pre-wrap">${escapeHtml(rendered.body)}</div>`,
       attachments,
-      headers: { "Message-ID": messageId },
+      // Resend replaces Message-ID but keeps References, which replies carry forward.
+      headers: { "Message-ID": messageId, References: messageId },
       idempotencyKey: correlationId,
       fetchImpl: http(),
     }, configuration)

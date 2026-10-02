@@ -734,7 +734,7 @@ for (const [provider, url, key, from, replyToKey] of [
   ["usesend", "https://app.usesend.com/api/v1/emails", "us_test_key", "Fundlane <system@mail.example.test>", "replyTo"],
   ["resend", "https://api.resend.com/emails", "re_test_key", "Fundlane <system@resend.example.test>", "reply_to"],
 ] as const) {
-  test(`${provider} submission send carries attachments, Reply-To and Message-ID`, async () => {
+  test(`${provider} submission send carries attachments, Reply-To, Message-ID and References`, async () => {
     await withProvider(provider, async (calls) => {
       const { job, attempt } = await queueOne()
       assert.equal(job.state, "sent")
@@ -748,6 +748,7 @@ for (const [provider, url, key, from, replyToKey] of [
       assert.deepEqual(body.to, ["alpha@funders.example.test"])
       const ref = parseEmailAttemptRef(attempt?.external_ref)
       assert.equal(ref?.attemptedMessageId, (body.headers as Record<string, string>)["Message-ID"])
+      assert.equal((body.headers as Record<string, string>).References, (body.headers as Record<string, string>)["Message-ID"])
       assert.equal(ref?.messageId, "")
       assert.equal(ref?.threadId, "")
       assert.deepEqual(ref?.references, [])
