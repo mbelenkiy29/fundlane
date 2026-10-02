@@ -77,7 +77,10 @@ export async function recordOnboardingEmailEvidence(expected: SuperAdminActor, i
     if (!frozenIdentity(mail) || mail.provider !== parsed.provider || mail.provider_account_id !== parsed.providerConfigurationId) throw conflict("onboarding_email_identity_mismatch", "Review the exact frozen provider configuration.")
     await db.queryOne("SELECT pg_advisory_xact_lock(105,hashtext(?))", [`email-evidence:${evidenceHash}`])
     const duplicate = await db.queryOne<Receipt>("SELECT * FROM mca_onboarding_service_email_receipts WHERE provider=? AND provider_account_id=? AND event_key=?", [mail.provider, mail.provider_account_id, evidenceHash])
-    const messageId = parsed.providerMessageId ?? mail.provider_message_id
+    const recordedMessages = (await db.query<{ provider_message_id: string }>("SELECT DISTINCT provider_message_id FROM mca_onboarding_service_email_receipts WHERE enrollment_id=? AND email_id=? AND provider=? AND provider_account_id=? AND provider_message_id IS NOT NULL LIMIT 2", [row.id, mail.id, mail.provider, mail.provider_account_id])).rows
+    const knownMessageId = mail.provider_message_id ?? recordedMessages[0]?.provider_message_id ?? null
+    if (recordedMessages.some(receipt => receipt.provider_message_id !== knownMessageId)) throw conflict("onboarding_email_message_mismatch", "Review the conflicting recorded provider message binding.")
+    const messageId = parsed.providerMessageId ?? knownMessageId
     if (duplicate) {
       if (duplicate.enrollment_id !== row.id || duplicate.email_id !== mail.id || duplicate.state !== parsed.outcome || duplicate.provider_message_id !== messageId) throw conflict("onboarding_email_evidence_conflict", "This evidence reference already describes another event.")
       return
@@ -85,12 +88,12 @@ export async function recordOnboardingEmailEvidence(expected: SuperAdminActor, i
     if (row.revision !== parsed.expectedRevision) throw conflict("enrollment_revision_conflict", "Reload the enrollment before reviewing email evidence.")
     await expireSending(mail, db)
     if (mail.claim_token || mail.lease_until) throw conflict("onboarding_email_dispatch_live", "Wait for dispatch reconciliation before review.")
-    if ((["accepted", "delivered"].includes(parsed.outcome) && !messageId) || (mail.provider_message_id && messageId !== mail.provider_message_id) || (!["accepted", "delivered"].includes(parsed.outcome) && parsed.providerMessageId && !mail.provider_message_id)) throw conflict("onboarding_email_message_mismatch", "Match the known provider message identifier.")
+    if ((["accepted", "delivered"].includes(parsed.outcome) && !messageId) || (knownMessageId && messageId !== knownMessageId) || (!["accepted", "delivered"].includes(parsed.outcome) && parsed.providerMessageId && !knownMessageId)) throw conflict("onboarding_email_message_mismatch", "Match the known provider message identifier.")
     const positiveHistory = await db.queryOne("SELECT id FROM mca_onboarding_service_email_receipts WHERE email_id=? AND state IN ('accepted','delivered') LIMIT 1", [mail.id])
     if (!["accepted", "delivered"].includes(parsed.outcome) && (["accepted", "delivered"].includes(mail.state) || positiveHistory || mail.provider_message_id)) throw conflict("onboarding_email_history_conflict", "Known acceptance or delivery cannot be downgraded.")
     if (messageId) {
       await db.queryOne("SELECT pg_advisory_xact_lock(105,hashtext(?))", [`email-message:${mail.provider}:${mail.provider_account_id}:${messageId}`])
-      if (await db.queryOne("SELECT id FROM mca_onboarding_service_emails WHERE provider=? AND provider_account_id=? AND provider_message_id=? AND id<>?", [mail.provider, mail.provider_account_id, messageId, mail.id])) throw conflict("onboarding_email_message_mismatch", "This provider message belongs to another email.")
+      if (await db.queryOne("SELECT id FROM mca_onboarding_service_emails WHERE provider=? AND provider_account_id=? AND provider_message_id=? AND id<>?", [mail.provider, mail.provider_account_id, messageId, mail.id]) || await db.queryOne("SELECT id FROM mca_onboarding_service_email_receipts WHERE provider=? AND provider_account_id=? AND provider_message_id=? AND email_id<>? LIMIT 1", [mail.provider, mail.provider_account_id, messageId, mail.id])) throw conflict("onboarding_email_message_mismatch", "This provider message belongs to another email.")
     }
     const deliveredHistory = await db.queryOne("SELECT id FROM mca_onboarding_service_email_receipts WHERE email_id=? AND state='delivered' LIMIT 1", [mail.id])
     const state = mail.state === "delivered" || deliveredHistory ? "delivered" : parsed.outcome

@@ -91,6 +91,11 @@ async function auditFailure(action: string, callback: () => Promise<void>) {
 async function receiptCount(emailId: string) {
   return (await getDatabase().queryOne<{ count: number }>("SELECT count(*)::int count FROM mca_onboarding_service_email_receipts WHERE email_id=?", [emailId]))!.count
 }
+async function restoredAcceptance(id: string) {
+  const mail = await freeze(id, "failed"), messageId = `restored-message-${mail.id}`, receiptId = randomUUID()
+  await getDatabase().execute("INSERT INTO mca_onboarding_service_email_receipts(id,enrollment_id,email_id,provider,provider_account_id,event_key,state,provider_message_id,evidence_type,occurred_at,observed_at) VALUES(?,?,?,?,?,?,'accepted',?,'operator_review',?,?)", [receiptId, id, mail.id, mail.provider, mail.provider_account_id, `restored-proof-${receiptId}`, messageId, nowIso(), nowIso()])
+  return { mail, messageId, receiptId }
+}
 
 test("protected read exposes sanitized email age, receipt distinction and configuration identity without mutating", async () => {
   const f = await activatedEnrollment(), actor = await operator(), mail = await freeze(f.id)
@@ -238,6 +243,62 @@ test("duplicate operator proof is idempotent; the same proof or message cannot a
   assert.equal((await command(other.id, { ...evidence(second), evidence: input.evidence })).status, 409)
   assert.equal((await command(other.id, { ...evidence(second), providerMessageId: input.providerMessageId })).status, 409)
   assert.equal(await receiptCount(second.id), 0)
+})
+
+test("restored own receipt rejects replacement message despite missing projection", async () => {
+  const f = await activatedEnrollment(), restored = await restoredAcceptance(f.id)
+  await operator()
+  const response = await command(f.id, evidence(restored.mail, { providerMessageId: "replacement-message-M2" }))
+  assert.equal(response.status, 409, await response.text())
+  const row = (await mails(f.id)).at(-1)!
+  assert.equal(row.state, "failed")
+  assert.equal(row.provider_message_id, null)
+  assert.equal(await receiptCount(row.id), 1)
+  assert.equal((await findEnrollment(f.id))!.revision, restored.mail.revision)
+})
+
+for (const supplied of [true, false]) test(`restored own receipt resolves original message ${supplied ? "with explicit ID" : "by inference"} without replacing history`, async () => {
+  const f = await activatedEnrollment(), restored = await restoredAcceptance(f.id)
+  await operator()
+  const input = evidence(restored.mail, { outcome: "delivered", providerMessageId: supplied ? restored.messageId : undefined })
+  const response = await command(f.id, input)
+  assert.equal(response.status, 200, await response.text())
+  const row = (await mails(f.id)).at(-1)!
+  assert.equal(row.state, "delivered")
+  assert.equal(row.provider_message_id, restored.messageId)
+  assert.equal(row.attempts, 1)
+  assert.equal(await receiptCount(row.id), 2)
+  assert.equal((await getDatabase().queryOne<{ provider_message_id: string }>("SELECT provider_message_id FROM mca_onboarding_service_email_receipts WHERE id=?", [restored.receiptId]))!.provider_message_id, restored.messageId)
+  assert.equal((await command(f.id, input)).status, 200)
+  assert.equal(await receiptCount(row.id), 2)
+  assert.equal((await findEnrollment(f.id))!.revision, restored.mail.revision + 1)
+})
+
+test("restored receipt ownership rejects cross-email alias when owner projection is missing", async () => {
+  const owner = await activatedEnrollment(), restored = await restoredAcceptance(owner.id)
+  const foreign = await activatedEnrollment(), mail = await freeze(foreign.id, "failed")
+  await operator()
+  const response = await command(foreign.id, evidence(mail, { providerMessageId: restored.messageId }))
+  assert.equal(response.status, 409, await response.text())
+  assert.equal((await mails(foreign.id)).at(-1)!.provider_message_id, null)
+  assert.equal((await mails(foreign.id)).at(-1)!.state, "failed")
+  assert.equal(await receiptCount(mail.id), 0)
+  assert.equal(await receiptCount(restored.mail.id), 1)
+})
+
+test("parallel original resolution and foreign claim preserve restored receipt ownership", async () => {
+  const owner = await activatedEnrollment(), restored = await restoredAcceptance(owner.id)
+  const foreign = await activatedEnrollment(), mail = await freeze(foreign.id, "failed")
+  await operator()
+  const results = await Promise.all([
+    command(foreign.id, evidence(mail, { providerMessageId: restored.messageId })),
+    command(owner.id, evidence(restored.mail, { providerMessageId: restored.messageId })),
+  ])
+  assert.deepEqual(results.map(result => result.status), [409, 200])
+  assert.equal((await mails(owner.id)).at(-1)!.provider_message_id, restored.messageId)
+  assert.equal((await mails(foreign.id)).at(-1)!.provider_message_id, null)
+  assert.equal(await receiptCount(mail.id), 0)
+  assert.equal(await receiptCount(restored.mail.id), 2)
 })
 
 test("known message binding and delivered history cannot be replaced, downgraded or reopened for retry", async () => {
