@@ -227,7 +227,7 @@ export function IntakePanel() {
       <div className="space-y-2"><Label htmlFor="usesend-display-name">Connection name</Label><Input id="usesend-display-name" name="displayName" required placeholder="Production useSend intake" /></div>
       <div className="space-y-2"><Label htmlFor="usesend-inbound">Workspace intake address</Label><Input id="usesend-inbound" name="inboundAddress" type="email" required placeholder="leads@fundlane.io" /></div>
       <div className="space-y-2"><Label htmlFor="usesend-from">Receipt From address</Label><Input id="usesend-from" name="fromAddress" required placeholder="MCA Intake &lt;intake@fundlane.io&gt;" /></div>
-      <div className="space-y-2"><Label htmlFor="usesend-origin">Public HTTPS app origin</Label><Input id="usesend-origin" name="publicOrigin" type="url" required placeholder="https://fundlane.io" /></div>
+      <div className="space-y-2"><Label htmlFor="usesend-origin">Public HTTPS app origin</Label><Input id="usesend-origin" name="publicOrigin" type="url" required placeholder="https://app.fundlane.io" /></div>
       <div className="space-y-2 md:col-span-2"><Label htmlFor="usesend-key">useSend API key</Label><Input id="usesend-key" name="apiKey" type="password" required autoComplete="off" /></div>
       <div className="space-y-2"><Label htmlFor="usesend-senders">Allowed senders or domains</Label><Input id="usesend-senders" name="senderRules" placeholder="@trusted.example" /></div>
       <div className="space-y-2"><Label htmlFor="usesend-pool">Assignment pool member IDs</Label><Input id="usesend-pool" name="assignmentPool" placeholder="UUID, UUID" /></div>
