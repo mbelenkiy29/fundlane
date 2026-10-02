@@ -7,6 +7,7 @@ import { saveRenewalPolicy } from "../src/lib/mca/renewals/service"
 import { runScheduledCommsJobs } from "../src/lib/mca/comms/scheduler"
 import { notificationInput } from "../src/lib/mca/notifications/service"
 import type { NotificationRow } from "../src/lib/mca/notifications/contracts"
+import { runScheduledNotifications, setNotificationTransportForTests } from "../src/lib/mca/notifications/worker"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -87,4 +88,18 @@ test("an over-long multiline action text is normalized to the notification limit
   const { payload } = notificationInput(row)
   assert.ok(payload!.title.length <= 200 && !/[\r\n]/.test(payload!.title)); assert.ok(payload!.message.length <= 2000)
   assert.equal((await alerts()).length, 2)
+})
+
+test("a queued alert is suppressed, not sent, once its action is no longer eligible", async () => {
+  const db = getDatabase(); let sent = 0
+  setNotificationTransportForTests(async () => { sent++; return { state: "accepted" } })
+  process.env.MCA_NOTIFICATION_RUNTIME = "enabled"
+  try {
+    // adv-renew: action dismissed; adv-long: policy version moved on.
+    await db.prepare("UPDATE mca_renewal_actions SET state='dismissed' WHERE source_advance_id='adv-renew'").run()
+    await saveRenewalPolicy(actor, { paidInThresholdBasisPoints: 5000, minimumDaysSinceFunding: 1 })
+    await runScheduledNotifications(new Date().toISOString(), 25, { deadlineMs: Date.now() + 230_000 })
+    const rows = await db.prepare<{ state: string }>("SELECT state FROM mca_notifications WHERE kind='renewal'").all()
+    assert.equal(rows.length, 2); assert.ok(rows.every((r) => r.state === "suppressed")); assert.equal(sent, 0)
+  } finally { setNotificationTransportForTests(); delete process.env.MCA_NOTIFICATION_RUNTIME }
 })
