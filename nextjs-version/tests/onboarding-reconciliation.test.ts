@@ -99,6 +99,99 @@ test("early, duplicate and reordered signed events retain one receipt and conver
     "trialing"
   )
 })
+test("early invoice receipts use subscription enrollment metadata before customer binding", async () => {
+  const f = await fixture()
+  const metadata = f.state.subscription.metadata
+  for (const ownMetadata of [
+    {},
+    { external_reference: "synthetic" },
+    metadata,
+  ]) {
+    const invoice = {
+      ...f.invoice(),
+      metadata: ownMetadata,
+      parent: {
+        subscription_details: {
+          subscription: f.state.subscription.id,
+          metadata,
+        },
+      },
+    }
+    const incoming = {
+      id: newId(),
+      type: "invoice.paid",
+      livemode: false,
+      data: { object: invoice },
+    } as unknown as Stripe.Event
+    await getDatabase().execute(
+      "UPDATE mca_enrollments SET next_reconcile_at=?,revision=revision+1 WHERE id=?",
+      [new Date(Date.now() + 3600000).toISOString(), f.id]
+    )
+    assert.equal((await findEnrollment(f.id))?.customerId, null)
+    assert.deepEqual(await captureEnrollmentStripeEvent(incoming), {
+      handled: true,
+      enrollmentId: f.id,
+    })
+    await captureEnrollmentStripeEvent(incoming)
+    assert.deepEqual(
+      await getDatabase().queryOne(
+        "SELECT enrollment_id,stripe_customer_id FROM stripe_billing_events WHERE event_id=?",
+        [incoming.id]
+      ),
+      { enrollment_id: f.id, stripe_customer_id: f.state.customer.id }
+    )
+    assert.ok(
+      Date.parse((await findEnrollment(f.id))!.nextReconcileAt!) <= Date.now()
+    )
+    assert.equal((await findEnrollment(f.id))?.activatedAt, null)
+  }
+  assert.equal(
+    (await reconcileEnrollment(f.id, f.client)).billingState,
+    "trialing"
+  )
+})
+for (const field of [
+  "enrollment_id",
+  "request_id",
+  "request_generation",
+] as const) {
+  test(`conflicting invoice enrollment attribution rejects both sources: ${field}`, async () => {
+    const f = await fixture()
+    const metadata = f.state.subscription.metadata
+    const conflicting = {
+      ...metadata,
+      [field]: field === "request_generation" ? "999" : newId(),
+    }
+    const incoming = {
+      id: newId(),
+      type: "invoice.paid",
+      livemode: false,
+      data: {
+        object: {
+          ...f.invoice(),
+          metadata,
+          parent: {
+            subscription_details: {
+              subscription: f.state.subscription.id,
+              metadata: conflicting,
+            },
+          },
+        },
+      },
+    } as unknown as Stripe.Event
+    await assert.rejects(captureEnrollmentStripeEvent(incoming), {
+      code: "enrollment_session_mismatch",
+    })
+    assert.equal(
+      await getDatabase().queryOne(
+        "SELECT event_id FROM stripe_billing_events WHERE event_id=?",
+        [incoming.id]
+      ),
+      undefined
+    )
+    assert.equal((await findEnrollment(f.id))?.activatedAt, null)
+  })
+}
 test("wrong account, mode, customer, price, generation, card or trial dates cannot activate", async () => {
   for (const mutation of [
     "account",
@@ -213,6 +306,60 @@ test("compensation cancels only a blocked exact uncharged trial, verifies respon
     "operator_required"
   )
 })
+for (const phase of ["before", "after"] as const) {
+  for (const loss of ["expired", "superseded"] as const) {
+    test(`compensation lease ownership survives history reads: ${phase} cancel ${loss}`, async () => {
+      const f = await fixture()
+      await reconcileEnrollment(f.id, f.client)
+      await getDatabase().execute(
+        "UPDATE mca_enrollments SET claim_state='blocked',finalization_state='blocked',recovery_state='pending',revision=revision+1 WHERE id=?",
+        [f.id]
+      )
+      let historyReads = 0
+      const newerToken = newId()
+      f.client.charges.list = (async () => {
+        historyReads++
+        if (historyReads === (phase === "before" ? 1 : 2)) {
+          if (loss === "expired")
+            await getDatabase().execute(
+              "UPDATE mca_enrollments SET lease_until=?,revision=revision+1 WHERE id=?",
+              [new Date(Date.now() - 1000).toISOString(), f.id]
+            )
+          else
+            await getDatabase().execute(
+              "UPDATE mca_enrollments SET claim_token=?,lease_until=?,revision=revision+1 WHERE id=?",
+              [newerToken, new Date(Date.now() + 600000).toISOString(), f.id]
+            )
+        }
+        return { data: [], has_more: false }
+      }) as unknown as typeof f.client.charges.list
+      await assert.rejects(compensateEnrollment(f.id, f.client), {
+        code: "enrollment_busy",
+      })
+      assert.equal(f.state.cancelCalls, phase === "before" ? 0 : 1)
+      const row = (await findEnrollment(f.id))!
+      assert.equal(
+        row.recoveryState,
+        phase === "before" ? "pending" : "canceling"
+      )
+      assert.equal(row.billingState, "trialing")
+      assert.equal(row.errorCode, null)
+      assert.ok(row.claimToken)
+      if (loss === "superseded") assert.equal(row.claimToken, newerToken)
+      else {
+        assert.ok(Date.parse(row.leaseUntil!) < Date.now())
+        // A fresh owner resolves the durable provider outcome without repeating cancellation.
+        f.client.charges.list = (async () => ({
+          data: [],
+          has_more: false,
+        })) as unknown as typeof f.client.charges.list
+        await compensateEnrollment(f.id, f.client)
+        assert.equal((await findEnrollment(f.id))?.recoveryState, "canceled")
+        assert.equal(f.state.cancelCalls, 1)
+      }
+    })
+  }
+}
 test("receipt before create response persists and obsolete generations cannot bind the current enrollment", async () => {
   const f = stripeFixture(),
     secret = resumeSecret()

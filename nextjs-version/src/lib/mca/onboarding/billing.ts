@@ -340,14 +340,17 @@ export async function compensateEnrollment(
       const permitted = await withImmediateTransaction(async (db) => {
         const current = await db.queryOne<{
           claim_token: string | null
+          lease_until: string | null
           claim_state: string
           workspace_id: string | null
         }>(
-          "SELECT claim_token,claim_state,workspace_id FROM mca_enrollments WHERE id=? FOR UPDATE",
+          "SELECT claim_token,lease_until,claim_state,workspace_id FROM mca_enrollments WHERE id=? FOR UPDATE",
           [id]
         )
         if (
           current?.claim_token !== token ||
+          !current.lease_until ||
+          Date.parse(current.lease_until) <= Date.now() ||
           current.claim_state !== "blocked" ||
           current.workspace_id
         )
@@ -389,10 +392,19 @@ export async function compensateEnrollment(
   } catch {
     /* Persist the sanitized operator work item; no blind cancellation retry. */
   }
-  await getDatabase().execute(
-    "UPDATE mca_enrollments SET recovery_state=?,billing_state=CASE WHEN ?='canceled' THEN 'canceled' ELSE billing_state END,error_code=?,revision=revision+1,updated_at=? WHERE id=? AND claim_token=?",
-    [result, result, errorCode, nowIso(), id, token]
+  const now = nowIso()
+  const completed = await getDatabase().execute(
+    "UPDATE mca_enrollments SET recovery_state=?,billing_state=CASE WHEN ?='canceled' THEN 'canceled' ELSE billing_state END,error_code=?,revision=revision+1,updated_at=? WHERE id=? AND claim_token=? AND lease_until>?",
+    [result, result, errorCode, now, id, token, now]
   )
+  // Preserve the pending/canceling saga and its lease for a fresh worker when
+  // ownership is lost, including after the provider accepted cancellation.
+  if (completed !== 1)
+    throw new AppError(
+      409,
+      "enrollment_busy",
+      "A newer operation must resolve enrollment compensation."
+    )
   await releaseEnrollmentOperation(id, token, errorCode)
 }
 

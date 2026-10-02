@@ -45,8 +45,25 @@ export async function captureEnrollmentStripeEvent(
     metadata?: Record<string, string>
     parent?: { subscription_details?: { metadata?: Record<string, string> } }
   }
-  const metadata =
-    object.metadata ?? object.parent?.subscription_details?.metadata
+  const ownMetadata = object.metadata
+  const subscriptionMetadata = object.parent?.subscription_details?.metadata
+  if (
+    ownMetadata?.enrollment_id &&
+    subscriptionMetadata?.enrollment_id &&
+    ["enrollment_id", "request_id", "request_generation"].some(
+      (key) => ownMetadata[key] !== subscriptionMetadata[key]
+    )
+  )
+    throw new AppError(
+      400,
+      "enrollment_session_mismatch",
+      "Webhook enrollment attribution conflicts."
+    )
+  const metadata = ownMetadata?.enrollment_id
+    ? ownMetadata
+    : subscriptionMetadata?.enrollment_id
+      ? subscriptionMetadata
+      : undefined
   const customerId =
     event.type === "customer.updated"
       ? object.id
