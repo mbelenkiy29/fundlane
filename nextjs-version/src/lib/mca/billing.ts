@@ -11,6 +11,7 @@ import { recordOperationalError } from "./operations/telemetry"
 import { cardRequiredTrial, isStripeCheckoutTrialConfigured, readPriceIds, readStripeSecretKey, stripeSecretKeyPattern, trialRequiresCard } from "./stripe-checkout-trial"
 import { recordTrialGrant, releaseTrialReservation, reserveTrialForCheckout, trialAbuseLimitsEnabled, trialAllowedForOwner } from "./trial-abuse"
 import { stripeTrialLifecycleEnabled } from "./billing-flags"
+import { workspaceOwnsStripeCustomer } from "./billing-customer-binding"
 import { stripeTaxBehavior } from "./billing-tax"
 export { stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured } from "./stripe-checkout-trial"
 
@@ -34,7 +35,7 @@ export async function licensedSeatCount(workspaceId: string, db: DbExecutor = ge
 export const BILLING_ADMIN_ROLE = "org:mca_billing_admin"
 export const BILLING_EMPLOYEE_ROLE = "org:mca_employee"
 export const billingRole = (role: string) => ["admin", "super_admin"].includes(role) ? BILLING_ADMIN_ROLE : BILLING_EMPLOYEE_ROLE
-export type StripeBillingClient = Pick<Stripe, "customers" | "subscriptions" | "subscriptionSchedules" | "prices" | "checkout" | "billingPortal" | "webhooks" | "invoices" | "invoicePayments" | "paymentIntents" | "paymentMethods" | "setupIntents" | "charges" | "refunds" | "disputes">
+export type StripeBillingClient = Pick<Stripe, "customers" | "subscriptions" | "subscriptionSchedules" | "prices" | "checkout" | "billingPortal" | "webhooks" | "invoices" | "invoicePayments" | "paymentIntents" | "paymentMethods" | "setupIntents" | "charges" | "refunds" | "disputes"> & Partial<Pick<Stripe, "accounts">>
 
 export function assertBillingMappingMode(mapping: {livemode:number}) {
   if (Boolean(mapping.livemode) !== stripeLiveMode()) throw new AppError(409,"billing_mode_cutover_required","This company has a customer in the other Stripe mode. A platform operator must complete an explicit billing cutover; existing access and records are retained.")
@@ -206,6 +207,14 @@ export function subscriptionEntitlement(subscription: BillingSubscription): Bill
     seatLimit: 1 + (additional?.quantity ?? 0), paymentPastDue: !["active", "trialing"].includes(subscription.status) || Boolean(subscription.pause_collection) }
 }
 
+/** Shared paid-evidence gate for legacy and pre-company projections. */
+export function paidInvoiceEntitlement(current: BillingEntitlement, hasPaidInvoice: boolean, hasUnpaidInvoices: boolean, previousSeats = 1): BillingEntitlement {
+  const result = { ...current };
+  if (result.status === "active" && !hasPaidInvoice) { result.status = "incomplete"; result.paymentPastDue = true; result.seatLimit = previousSeats; }
+  if (hasUnpaidInvoices && result.status !== "trialing" && result.seatLimit > previousSeats) result.seatLimit = previousSeats;
+  return result;
+}
+
 function currentEntitlement(subscriptions: BillingSubscription[], customerId: string) {
   for (const subscription of subscriptions) {
     if ((typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id) !== customerId || subscription.livemode !== stripeLiveMode())
@@ -234,7 +243,7 @@ export async function readSyncedSubscriptions(customerId: string, db = getDataba
   })
 }
 
-async function persistEntitlement(workspaceId: string, current: BillingEntitlement, source: "free" | "stripe_api" | "sync_engine", db: DbExecutor) {
+export async function persistEntitlement(workspaceId: string, current: BillingEntitlement, source: "free" | "stripe_api" | "sync_engine", db: DbExecutor) {
   const syncedAt = nowIso()
   const previous = await db.prepare<{status:string;seat_limit:number;stripe_subscription_id:string|null;period_end:string|null;payment_past_due:number}>("SELECT status,seat_limit,stripe_subscription_id,period_end,payment_past_due FROM workspace_billing_entitlements WHERE workspace_id=?").get(workspaceId)
   await db.prepare(`INSERT INTO workspace_billing_entitlements (workspace_id, stripe_subscription_id, stripe_price_id, plan_slug, plan_name, status, period_start, period_end, seat_limit, payment_past_due, source, synced_at)
@@ -319,8 +328,7 @@ export async function syncWorkspaceBilling(workspaceId: string, providedClient?:
     const paid = current.subscriptionId ? await db.prepare<{paid_at:string|null}>(excludeTrialStartZero
       ? "SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' AND NOT (amount_due=0 AND billing_reason='subscription_create') ORDER BY created_at LIMIT 1"
       : "SELECT paid_at FROM company_billing_invoices WHERE workspace_id=? AND stripe_subscription_id=? AND status='paid' ORDER BY created_at LIMIT 1").get(workspaceId, current.subscriptionId) : null
-    if (current.status === "active" && !paid) { current.status = "incomplete"; current.paymentPastDue = true; current.seatLimit = previous?.seat_limit ?? 1 }
-    if (unpaid && current.status !== "trialing" && current.seatLimit > (previous?.seat_limit ?? 1)) current.seatLimit = previous?.seat_limit ?? 1
+    Object.assign(current, paidInvoiceEntitlement(current, Boolean(paid), unpaid, previous?.seat_limit ?? 1))
     if (subscription?.status === "trialing") await db.prepare("UPDATE company_subscription_state SET selected_seats=?, updated_at=? WHERE workspace_id=?").run(current.seatLimit, nowIso(), workspaceId)
     if (subscription && current.status === "active" && !unpaid) {
       await captureCompanyPauseBoundary(workspaceId,db,paid?.paid_at ? Date.parse(paid.paid_at) : Date.now())
@@ -515,7 +523,8 @@ export async function createBillingPortal(workspaceId: string, onboarding = fals
   if (!mapping) throw new AppError(409, "billing_customer_required", "Choose a paid plan before opening payment settings.")
   assertBillingMappingMode(mapping)
   const customer = await client.customers.retrieve(mapping.stripe_customer_id)
-   if (customer.deleted || customer.livemode !== stripeLiveMode() || customer.metadata.workspace_id !== workspaceId) throw new AppError(503, "billing_customer_mismatch", "Company billing identity could not be verified.")
+   if (!await workspaceOwnsStripeCustomer(workspaceId, customer, stripeLiveMode())) throw new AppError(503, "billing_customer_mismatch", "Company billing identity could not be verified.")
+  if (!customer.deleted && !customer.metadata.workspace_id && (!client.accounts || (await client.accounts.retrieve(null)).id !== process.env.MCA_STRIPE_EXPECTED_ACCOUNT_ID)) throw new AppError(503,"enrollment_account_mismatch","Stripe account could not be verified.")
   const portal = await client.billingPortal.sessions.create({ customer: mapping.stripe_customer_id, return_url: billingReturnUrl(onboarding), configuration })
   return { url: portal.url }
 }

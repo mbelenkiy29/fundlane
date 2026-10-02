@@ -54,7 +54,19 @@ type Action = Parameters<typeof handleSupabaseAuth>[1]
 function request(action: Action, body: unknown = input) {
   return handleSupabaseAuth(new Request("http://localhost/api/auth/test", { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body) }), action)
 }
-beforeEach(() => { delete process.env.MCA_SIGNUP_MODE; providerError = null; hasIdentity = true; migrationPending = true; calls.length = 0 })
+beforeEach(() => { delete process.env.MCA_SIGNUP_MODE; delete process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED; providerError = null; hasIdentity = true; migrationPending = true; calls.length = 0 })
+
+test("Stripe-first policy rejects generic signup before provider calls but preserves a verified matching invitation", async () => {
+  process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED = "true"
+  for (const next of [undefined, "/onboarding?setup=1", "/enrollment?enrollment=11111111-1111-4111-8111-111111111111"]) {
+    const blocked = await request("company-signup", { ...input, next })
+    assert.equal(blocked.status, 403)
+    assert.equal((await blocked.json()).error.code, "signup_enrollment_required")
+    assert.deepEqual(calls, [])
+  }
+  assert.equal((await request("company-signup", { ...input, next: `/accept-invite?token=${invitationToken}` })).status, 200)
+  assert.deepEqual(calls, ["invitation", "signup"])
+})
 
 test("company sign-up stays open by default and rejects invite-only before calling Supabase", async () => {
   assert.equal((await request("company-signup")).status, 200)

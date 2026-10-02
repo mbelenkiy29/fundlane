@@ -150,15 +150,30 @@ export function postmarkConnectionConfigured(workspaceId: string): boolean {
   return process.env.MCA_CLOSING_EMAIL_PROVIDER === "postmark" && postmarkConnectionsFromEnvironment().some((entry) => entry.workspaceId === workspaceId && typeof entry.senderId === "string" && Boolean(entry.senderId) && typeof entry.fromAddress === "string" && Boolean(entry.fromAddress) && typeof entry.serverToken === "string" && Boolean(entry.serverToken))
 }
 
-export function configuredPostmarkClosingTransport(request: ClosingTransportRequest, fetchImpl?: typeof fetch): ClosingTransport {
+type PostmarkBinding = Pick<ClosingTransportRequest, "workspaceId" | "senderId" | "sender">
+function selectedPostmarkConfiguration(request: PostmarkBinding) {
   const connections = postmarkConnectionsFromEnvironment()
   const connection = connections.find((entry) => entry.workspaceId === request.workspaceId && entry.senderId === request.senderId && typeof entry.fromAddress === "string" && entry.fromAddress.toLowerCase() === request.sender?.fromAddress.toLowerCase())
-  return createPostmarkClosingTransport({
+  return {
     serverToken: typeof connection?.serverToken === "string" ? connection.serverToken : "",
     allowedFromAddresses: typeof connection?.fromAddress === "string" ? [connection.fromAddress] : [],
     messageStream: typeof connection?.messageStream === "string" ? connection.messageStream : process.env.MCA_CLOSING_POSTMARK_MESSAGE_STREAM,
-    fetchImpl,
-  })
+  }
+}
+
+/** Server-only configuration identity for evidence; excludes other bindings and all raw credentials. */
+export function postmarkTransportIdentity(request: PostmarkBinding) {
+  const selected = selectedPostmarkConfiguration(request)
+  return {
+    workspaceId: request.workspaceId, senderId: request.senderId,
+    allowedFromAddresses: selected.allowedFromAddresses.map(address => address.trim().toLowerCase()),
+    serverTokenHash: createHash("sha256").update(selected.serverToken.trim()).digest("hex"),
+    messageStream: selected.messageStream?.trim() || "outbound",
+  }
+}
+
+export function configuredPostmarkClosingTransport(request: ClosingTransportRequest, fetchImpl?: typeof fetch): ClosingTransport {
+  return createPostmarkClosingTransport({ ...selectedPostmarkConfiguration(request), fetchImpl })
 }
 
 const liveTransport: ClosingTransport = {

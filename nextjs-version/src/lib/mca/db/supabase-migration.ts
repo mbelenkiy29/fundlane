@@ -1,5 +1,6 @@
 import { pgTable, text, integer, unique, index, check, foreignKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { mcaEnrollments } from './onboarding';
 import { workspaces } from './schema';
 
 export const authSessionRevocations = pgTable('auth_session_revocations', {
@@ -20,8 +21,8 @@ export const workspaceBillingEntitlements = pgTable('workspace_billing_entitleme
   check('workspace_billing_entitlements_source_check',sql`${table.source} IN ('free','stripe_api','sync_engine')`),
 ]);
 export const stripeBillingEvents = pgTable('stripe_billing_events', {
-  event_id:text().primaryKey(),event_type:text().notNull(),stripe_customer_id:text(),workspace_id:text(),received_at:text().notNull(),
-}, t=>[foreignKey({name:'stripe_billing_events_workspace_id_fkey',columns:[t.workspace_id],foreignColumns:[workspaces.id]})]);
+  enrollment_id:text().references(() => mcaEnrollments.id),event_id:text().primaryKey(),event_type:text().notNull(),stripe_customer_id:text(),workspace_id:text(),received_at:text().notNull(),
+}, t=>[index('stripe_billing_events_enrollment_idx').on(t.enrollment_id).where(sql`${t.enrollment_id} IS NOT NULL`),foreignKey({name:'stripe_billing_events_workspace_id_fkey',columns:[t.workspace_id],foreignColumns:[workspaces.id]})]);
 export const mcaBackgroundJobs=pgTable('mca_background_jobs',{
   id:text().primaryKey(),workspace_id:text().notNull(),kind:text().notNull(),resource_id:text().notNull(),idempotency_key:text().notNull(),
   actor_json:text().notNull(),payload_json:text().notNull(),payload_hash:text().notNull(),state:text().notNull(),attempts:integer().notNull().default(0),

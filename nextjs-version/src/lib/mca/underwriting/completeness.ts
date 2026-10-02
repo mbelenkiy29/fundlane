@@ -7,7 +7,7 @@ import { assertTrustedMutation, requireMembershipAccess, requireWorkspaceAccess 
 import { newId, nowIso, recordAuditEvent } from "../db"
 import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DealActor } from "../deals/schema"
-import { listDocuments } from "../documents/service"
+import { listDocumentRecords } from "../documents/repository"
 import type { DocumentSummary } from "../documents/contracts"
 import { AppError } from "../errors"
 import { requestCorrelationId } from "../http"
@@ -81,15 +81,21 @@ export async function listReadinessEvents(actor: DealActor, dealId: string): Pro
   return listReadinessEventRecords(deal.workspaceId, deal.id)
 }
 
-export async function checkCompleteness(actor: DealActor, dealId: string): Promise<CompletenessResult> {
-  const deal = await getDealForDocument(actor, dealId)
-  const documents = await listDocuments(actor, deal.id)
-  const requiredStatementMonths = await readRequiredStatementMonths(actor.workspaceId)
-  const settings = await getWorkspaceSettings(actor.workspaceId)
+/** Server-internal current facts only; no cached results, readiness events, audit or automatic submission writes. */
+export async function readCurrentCompleteness(workspaceId: string, dealId: string) {
+  const documents = await listDocumentRecords(workspaceId, dealId)
+  const requiredStatementMonths = await readRequiredStatementMonths(workspaceId)
+  const settings = await getWorkspaceSettings(workspaceId)
   const timeZone = settings.timezone || "America/New_York"
   const lookback = closedLookbackMonths(requiredStatementMonths, timeZone)
-  const statementMonths = await listCheckingStatementMonths(deal.workspaceId, deal.id)
+  const statementMonths = await listCheckingStatementMonths(workspaceId, dealId)
   const findings = evaluateFindings(documents, lookback, statementMonths)
+  return { findings, requiredStatementMonths, timeZone, lookback }
+}
+
+export async function checkCompleteness(actor: DealActor, dealId: string): Promise<CompletenessResult> {
+  const deal = await getDealForDocument(actor, dealId)
+  const { findings, requiredStatementMonths, timeZone, lookback } = await readCurrentCompleteness(deal.workspaceId, deal.id)
   const findingsFingerprint = fingerprint(findings)
   const previous = await findLatestCompletenessResult(deal.workspaceId, deal.id)
   if (previous && previous.findingsFingerprint === findingsFingerprint) return previous.result

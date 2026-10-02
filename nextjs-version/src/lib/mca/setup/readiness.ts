@@ -1,7 +1,7 @@
 import type { Role } from "../types"
 
 export type ReadinessPhase = "needs_setup" | "configured" | "tested" | "live_ready"
-export type ReadinessId = "company_team" | "form_intake" | "documents" | "sender" | "pilot_funder" | "billing" | "synthetic_deal"
+export type ReadinessId = "company_team" | "form_intake" | "documents" | "sender" | "pilot_funder" | "billing" | "synthetic_deal" | "business_details" | "sender_test" | "default_sender"
 
 export interface ReadinessItem {
   id: ReadinessId
@@ -11,9 +11,16 @@ export interface ReadinessItem {
   action: string
   href: string
   helpHref: string
+  evidence?: "none" | "preview" | "accepted" | "received"
 }
 
 export interface ReadinessFacts {
+  safeSubmissionReady?: boolean
+  safeSubmissionAccepted?: boolean
+  basicDetailsSupplied?: boolean
+  basicDetailsRegistered?: boolean
+  senderEvidence?: "none" | "preview" | "accepted" | "received"
+  defaultSubmissionSender?: boolean
   companyNamed: boolean
   teamMembers: number
   pendingInvitations: number
@@ -60,10 +67,28 @@ export function deriveReadiness(f: ReadinessFacts, role: Role | null): Readiness
     { id: "billing", title: "Billing", phase: f.billingAccessAllowed && (f.billingExempt || f.billingStatus === "active") ? "live_ready" : f.billingAccessAllowed && f.billingStatus === "trialing" ? "configured" : "needs_setup",
       detail: !f.billingAccessAllowed && (f.billingExempt || f.billingStatus === "active" || f.billingStatus === "trialing") ? "Billing access is paused or expired. Open billing to review the account." : f.billingExempt ? "This workspace has an existing billing exemption." : f.billingStatus === "past_due" ? "Payment is past due. Open billing to update the payment method." : f.billingStatus ? "Review the current plan and payment state." : "Complete billing setup.",
       action: "Open billing", href: "/settings/billing", helpHref: help("set-up-your-company") },
-    { id: "synthetic_deal", title: "Synthetic test deal", phase: f.sandboxSentJobs ? "tested" : f.syntheticDeals && f.sandboxFunders ? "configured" : "needs_setup",
-      detail: f.sandboxFailedJobs ? "The sandbox submission failed. Open Submissions to inspect its state and retry." : f.sandboxSentJobs ? "A sandbox submission completed. This does not prove live lender delivery." : "Create a synthetic deal, enable the sandbox funder, then submit to it without contacting a real lender.",
+    { id: "synthetic_deal", title: "Synthetic test deal", phase: f.safeSubmissionReady !== undefined ? f.safeSubmissionAccepted ? "tested" : f.safeSubmissionReady ? "configured" : "needs_setup" : f.sandboxSentJobs ? "tested" : f.syntheticDeals && f.sandboxFunders ? "configured" : "needs_setup",
+      detail: f.safeSubmissionReady !== undefined ? f.safeSubmissionAccepted ? "A sandbox transport completed a synthetic submission. This does not prove live lender delivery." : f.safeSubmissionReady ? "A complete synthetic deal, ready documents and the internal sandbox route are available. Open Submissions and explicitly select the sandbox funder." : "Prepare a complete synthetic deal with ready documents and enable the sandbox funder’s internal route before testing. No submission runs automatically." : f.sandboxFailedJobs ? "The sandbox submission failed. Open Submissions to inspect its state and retry." : f.sandboxSentJobs ? "A sandbox submission completed. This does not prove live lender delivery." : "Create a synthetic deal, enable the sandbox funder, then submit to it without contacting a real lender.",
       action: f.syntheticDeals ? "Open submissions" : "Create test deal", href: f.syntheticDeals ? "/submissions" : "/pipeline?create=1", helpHref: help("track-submissions-and-offers") },
   ]
+  if (admin && (f.basicDetailsSupplied !== undefined || f.senderEvidence !== undefined)) {
+    items.unshift({ id: "business_details", title: "Business details", phase: f.basicDetailsSupplied ? "configured" : "needs_setup",
+      detail: f.basicDetailsRegistered ? "An existing approved business identity is preserved." : f.basicDetailsSupplied ? "Legal name and EIN supplied securely. SMS approval remains separate." : "Supply the legal name and EIN when convenient. You can keep using the CRM.",
+      action: "Open business details", href: "/settings/business", helpHref: help("set-up-your-company") })
+    const evidence = f.senderEvidence ?? "none"
+    const senderIndex = items.findIndex(i => i.id === "sender") + 1
+    items.splice(senderIndex, 0,
+      { id: "sender_test", title: "Test your own inbox", phase: evidence === "received" ? "tested" : evidence === "none" ? "needs_setup" : "configured", evidence,
+        detail: evidence === "received" ? "Customer-confirmed receipt for this sender configuration and controlled inbox. Future delivery is not guaranteed." : evidence === "accepted" ? "Provider accepted the test. Confirm receipt after checking your own inbox." : evidence === "preview" ? "Preview only; no live message was sent." : "Choose an address you control, confirm it, and explicitly send a test. Uncertain attempts are held for review.",
+        action: "Test sender", href: "/settings/connections", helpHref: help("invite-a-client-to-apply") },
+      { id: "default_sender", title: "Submission default sender", phase: f.defaultSubmissionSender ? "configured" : "needs_setup",
+        detail: f.defaultSubmissionSender ? "A usable sender is selected for submissions." : "Choose a usable default sender for the submission purpose in Connections.", action: "Choose default", href: "/settings/connections", helpHref: help("track-submissions-and-offers") })
+  }
+  if (admin && (f.basicDetailsSupplied !== undefined || f.senderEvidence !== undefined)) {
+    const order = ["business_details", "sender", "sender_test", "default_sender", "synthetic_deal", "billing", "company_team", "form_intake", "documents", "pilot_funder"]
+    items.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+    for (const item of items) if (["company_team", "form_intake", "documents", "pilot_funder"].includes(item.id)) item.title += " (optional)"
+  }
   return admin ? items : items.filter((item) => item.id === "form_intake" || item.id === "documents" || item.id === "synthetic_deal")
 }
 

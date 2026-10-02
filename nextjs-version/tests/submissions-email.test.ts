@@ -15,7 +15,7 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { createSender, testSend, updateSender } from "../src/lib/mca/senders/service"
+import { createSender, updateSender } from "../src/lib/mca/senders/service"
 import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
 import {
   parseEmailAttemptRef,
@@ -152,7 +152,7 @@ before(async () => {
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: SMTP_PASSWORD },
   })
   senderId = sender.id
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   alphaFunderId = (await createFunder(actor(), {
     idempotencyKey: "alpha-email-funder",
     legalName: "Alpha Capital LLC",
@@ -424,7 +424,7 @@ test("MIC-153: unauthorized sender is 403, preview is deals:read, templates are 
     fromAddress: "other@example.test",
     smtp: { host: "smtp.example.test", port: 587, username: "other", password: SMTP_PASSWORD },
   })
-  await testSend(actor(ids.otherWorkspace), otherSender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), otherSender.workspaceId, otherSender.id)
 
   const forged = await previewPost(cookieRequest("/api/mca/submissions/email/preview", "rep-session-token", {
     method: "POST",

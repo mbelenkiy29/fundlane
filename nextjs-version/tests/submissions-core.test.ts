@@ -16,7 +16,7 @@ import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import type { FunderRoute } from "../src/lib/mca/funders/contracts"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { originalsForRoute } from "../src/lib/mca/submissions/jobs"
 import {
   getSubmissionSelection,
@@ -137,7 +137,7 @@ before(async () => {
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: SMTP_PASSWORD },
   })
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   emailFunderId = (await createFunder(actor(), {
     idempotencyKey: "email-funder",
     legalName: "Email Capital LLC",

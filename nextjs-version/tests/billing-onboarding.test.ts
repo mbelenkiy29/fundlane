@@ -192,16 +192,20 @@ test("card-required flag keeps a misconfigured new company in finish_setup witho
 test("enabling card requirement does not pause an existing local trial",async()=>{
   clearStripeEnv()
   const existing=await completeCompanyOnboarding("Existing local trial company",3)
+  const originalTrialEnd=(await getCompanyAccess(existing.workspaceId)).trialEndsAt
   process.env.MCA_TRIAL_REQUIRES_CARD="true"
+  process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED="true"
   try {
     const selected=await json(await POST(new Request("http://localhost/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({workspaceId:existing.workspaceId})})))
     assert.equal(selected.status,200)
     assert.equal(selected.body.checkoutUnavailable,false)
     assert.equal((await getCompanyAccess(existing.workspaceId)).status,"trial")
-  } finally {delete process.env.MCA_TRIAL_REQUIRES_CARD}
+    assert.equal((await getCompanyAccess(existing.workspaceId)).trialEndsAt,originalTrialEnd)
+  } finally {delete process.env.MCA_TRIAL_REQUIRES_CARD;delete process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED}
 })
 test("configured onboarding returns a mocked Checkout URL and finish_setup access",async()=>{
   setStripeEnv()
+  let checkoutCreations=0
   const client={
     customers:{create:async()=>({id:"cus_onboard",livemode:false})},
     prices:{retrieve:async(id:string)=>({id,active:true,livemode:false,currency:"usd",unit_amount:id==="price_base"?BILLING_CATALOG.base.unitAmountCents:null,billing_scheme:id==="price_base"?"per_unit":"tiered",tiers_mode:"graduated",tiers:BILLING_CATALOG.additionalSeats.tiers.map(tier=>({up_to:tier.upTo,unit_amount:tier.unitAmountCents})),recurring:{interval:"month",interval_count:1,usage_type:"licensed"}})},
@@ -209,7 +213,7 @@ test("configured onboarding returns a mocked Checkout URL and finish_setup acces
     invoices:{list:async()=>({data:[],has_more:false})},
     invoicePayments:{list:async()=>({data:[],has_more:false})},
     charges:{list:async()=>({data:[],has_more:false})},
-    checkout:{sessions:{create:async()=>({id:"cs_onboard",livemode:false,url:"https://checkout.stripe.com/test"}),retrieve:async()=>({id:"cs_onboard",status:"open",url:"https://checkout.stripe.com/test"})}},
+    checkout:{sessions:{create:async()=>{checkoutCreations++;return {id:"cs_onboard",livemode:false,url:"https://checkout.stripe.com/test"}},retrieve:async()=>({id:"cs_onboard",status:"open",url:"https://checkout.stripe.com/test",payment_method_types:["card"]})}},
   }
   try {
     const context=await completeCompanyOnboarding("Checkout onboarding company",8)
@@ -217,5 +221,11 @@ test("configured onboarding returns a mocked Checkout URL and finish_setup acces
     assert.equal(access.allowed,false);assert.equal(access.reason,"finish_setup")
     const checkoutUrl=await createOnboardingCheckoutUrl(context.workspaceId,context.role,1,client as never)
     assert.equal(checkoutUrl,"https://checkout.stripe.com/test")
-  } finally {clearStripeEnv()}
+    process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED="true"
+    const reused=await completeCompanyOnboarding("Checkout onboarding company",12)
+    assert.equal(reused.workspaceId,context.workspaceId)
+    assert.equal(await createOnboardingCheckoutUrl(reused.workspaceId,reused.role,1,client as never),checkoutUrl)
+    assert.equal(checkoutCreations,1,"durable legacy Checkout is reused without another purchase")
+    assert.equal((await getDatabase().queryOne<{selected_seats:number}>("SELECT selected_seats FROM company_subscription_state WHERE workspace_id=?",[context.workspaceId]))?.selected_seats,8)
+  } finally {clearStripeEnv();delete process.env.MCA_STRIPE_FIRST_ONBOARDING_ENABLED}
 })

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { RequestError, requestJson } from "@/lib/mca/client"
 import type { HomeKpis } from "@/lib/mca/home/kpi-contracts"
@@ -25,12 +26,16 @@ export function Dashboard2Shell({
   firstName,
   canCreateDeal = true,
   readinessEnabled = false,
+  progressiveSetup = false,
+  trialEndsAt = null,
 }: {
   initialKpis: HomeKpis | null
   initialSetup?: WorkspaceSetup | null
   firstName?: string
   canCreateDeal?: boolean
   readinessEnabled?: boolean
+  progressiveSetup?: boolean
+  trialEndsAt?: string | null
 }) {
   const newDeal = useNewDeal()
   const [dateRange, setDateRange] = React.useState<Dashboard2DateRange>("30d")
@@ -44,18 +49,20 @@ export function Dashboard2Shell({
   const period = periodForDateRange(dateRange)
   const view = mapDashboard2(kpis, { dateRange })
   const lastUpdated = kpis?.asOf ? formatDashboardTimestamp(kpis.asOf, kpis.timezone) : "—"
+  const setupPath = progressiveSetup ? "/api/mca/setup?progressive=1" : "/api/mca/setup"
+  const trialEnd = trialEndsAt && Number.isFinite(Date.parse(trialEndsAt)) ? trialEndsAt : null
 
   const loadSetup = React.useCallback(async () => {
     setSetupLoading(true)
     setSetupError(false)
     try {
-      setSetup(await requestJson<WorkspaceSetup>("/api/mca/setup"))
+      setSetup(await requestJson<WorkspaceSetup>(setupPath))
     } catch {
       setSetupError(true)
     } finally {
       setSetupLoading(false)
     }
-  }, [])
+  }, [setupPath])
 
   const refresh = React.useCallback(async () => {
     setRefreshing(true)
@@ -63,7 +70,7 @@ export function Dashboard2Shell({
     try {
       const [nextKpis, nextSetup] = await Promise.all([
         requestJson<HomeKpis>(`/api/mca/home/kpis?period=${period}`),
-        requestJson<WorkspaceSetup>("/api/mca/setup").catch(() => {
+        requestJson<WorkspaceSetup>(setupPath).catch(() => {
           if (readinessEnabled) setSetupError(true)
           return null
         }),
@@ -75,7 +82,7 @@ export function Dashboard2Shell({
     } finally {
       setRefreshing(false)
     }
-  }, [period, readinessEnabled])
+  }, [period, readinessEnabled, setupPath])
 
   React.useEffect(() => { if (readinessEnabled && !initialSetup) void loadSetup() }, [readinessEnabled, initialSetup, loadSetup])
 
@@ -106,11 +113,13 @@ export function Dashboard2Shell({
           lastUpdated={lastUpdated}
         />
         {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+        {trialEnd && <p className="text-sm">Your trial ends <time dateTime={trialEnd}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(trialEnd))} UTC</time>. <Link className="underline" href="/settings/billing">Manage or cancel billing</Link>.</p>}
+        {progressiveSetup && <p className="text-sm text-muted-foreground">Getting started is optional. <Link className="underline" href="/settings/business">Business details</Link> and teammate invitations can wait while you use your CRM.</p>}
 
         <div className="@container/main space-y-6">
           <MetricsOverview metrics={view.metrics} />
 
-          {setup && !setup.dismissed ? (
+          {setup ? (
             <SetupChecklist
               setup={setup}
               dismissing={dismissing}
@@ -118,7 +127,7 @@ export function Dashboard2Shell({
                 setDismissing(true)
                 void requestJson<WorkspaceSetup>("/api/mca/setup", {
                   method: "POST",
-                  body: JSON.stringify({ dismissed: true }),
+                  body: JSON.stringify({ dismissed: true, ...(progressiveSetup ? { progressive: true } : {}) }),
                 }).then((next) => setSetup(next)).catch((caught) => {
                   setError(caught instanceof RequestError ? caught.message : "Could not hide the setup checklist.")
                 }).finally(() => setDismissing(false))

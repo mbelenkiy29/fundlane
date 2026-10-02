@@ -13,7 +13,7 @@ import {
   UsersRound,
   ChevronDown,
 } from "lucide-react"
-import { MarketingShell, DemoLink } from "./shell"
+import { MarketingShell, DemoLink, GetStartedLink } from "./shell"
 import { marketingFeatures } from "./catalog"
 import { BentoVisual } from "./bento-visual"
 import { ActivityStream } from "./activity-stream"
@@ -104,7 +104,7 @@ export function MarketingHome() {
               <p className="fl-audience"><span />The workspace for MCA brokerages</p>
               <h1>Run your MCA brokerage from application to renewal.</h1>
               <p className="fl-hero-description">{MARKETING_DESCRIPTION}</p>
-              <div className="fl-actions"><DemoLink /><Link href="#workflow" className="fl-text-link">Explore the workflow <ArrowRight size={17} aria-hidden="true" /></Link></div>
+              <div className="fl-actions"><GetStartedLink /><DemoLink /><Link href="#workflow" className="fl-text-link">Explore the workflow <ArrowRight size={17} aria-hidden="true" /></Link></div>
             </div>
             <div className="fl-hero-foot"><span>One connected deal workflow</span><a href="#activity">Explore Fundlane <span aria-hidden="true">↓</span></a></div>
           </div>
@@ -249,7 +249,7 @@ export function MarketingHome() {
                   Team, funder, and lead-source reporting
                 </li>
               </ul>
-              <DemoLink />
+              <div className="fl-actions"><GetStartedLink /><DemoLink /></div>
             </div>
             <figure className="fl-team-image">
               <Image
@@ -298,7 +298,7 @@ export function MarketingHome() {
               </h2>
               <p>See how Fundlane brings your deal workflow together.</p>
             </div>
-            <DemoLink />
+            <div className="fl-actions"><GetStartedLink /><DemoLink /></div>
           </div>
         </section>
       </main>

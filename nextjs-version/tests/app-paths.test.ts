@@ -36,6 +36,8 @@ test("public marketing and auth pages stay public while logged out", () => {
     "/verify-company",
     "/account-security",
     "/onboarding",
+    "/pricing",
+    "/enrollment?enrollment=11111111-1111-4111-8111-111111111111",
     "/errors/forbidden",
     "/errors/not-found",
     "/apply/form_1",
@@ -76,7 +78,6 @@ test("real app routes still require sign-in when logged out", () => {
     "/settings",
     "/settings/billing",
     "/settings/team",
-    "/pricing",
     "/review/token",
     "/platform",
     "/platform/companies/ws_1",
@@ -158,4 +159,13 @@ test("public and protected prefix lists do not overlap", () => {
   }
   assert.equal(isProtectedAppPath("/"), false)
   assert.equal(isPublicPagePath("/dashboard"), false)
+})
+
+test('business setup and resumable getting-started are authenticated application destinations', () => {
+  for (const path of ['/settings/business', '/getting-started']) {
+    assert.equal(anonymousRequestDisposition(path), 'sign-in')
+    const gate = unauthenticatedPageGate(path)
+    assert.equal(gate.action, 'sign-in')
+    if (gate.action === 'sign-in') assert.equal(new URL(gate.location, 'http://localhost').searchParams.get('returnTo'), path)
+  }
 })

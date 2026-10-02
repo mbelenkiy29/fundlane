@@ -9,6 +9,8 @@ import type { PageVisibility } from "@/lib/mca/types"
 
 const sections = [
   { href: "/settings", label: "Workspace", icon: Building2, page: "workspace" },
+  { href: "/settings/business", label: "Business details", icon: Building2, page: "integrations" },
+  { href: "/getting-started", label: "Getting started", icon: Building2, page: "integrations" },
   { href: "/settings/team", label: "Team", icon: UsersRound, page: "users" },
   { href: "/settings/access", label: "Access", icon: ShieldCheck, page: "users" },
   { href: "/settings/api-keys", label: "API keys", icon: KeyRound, page: "integrations" },

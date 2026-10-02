@@ -13,11 +13,11 @@ export async function POST(request: Request, context: RouteContext) {
     const actor = await requireSenderUse(request)
     const senderId = (await context.params).id
     await consumeRequestRateLimit(clientRateKey(request, `sender-test:${actor.workspaceId}:${senderId}`), 10)
-    let input: { to?: string } = {}
+    let input: unknown = {}
     const contentType = request.headers.get("content-type") ?? ""
     if (contentType.includes("application/json")) {
       try {
-        input = await request.json() as { to?: string }
+        input = await request.json()
       } catch {
         throw new AppError(400, "invalid_json", "Request body must be valid JSON.")
       }

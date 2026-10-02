@@ -17,7 +17,7 @@ export function SetupChecklist({
   dismissing?: boolean
   onDismiss: () => void
 }) {
-  if (setup.dismissed) return null
+  if (setup.dismissed) return <Link href="/getting-started" className="text-sm underline">Resume getting started</Link>
   if (setup.readiness) return <ReadinessChecklist setup={setup} dismissing={dismissing} onDismiss={onDismiss} />
   const progress = setup.totalCount ? Math.round((setup.completedCount / setup.totalCount) * 100) : 0
 
@@ -98,7 +98,7 @@ function ReadinessChecklist({ setup, dismissing, onDismiss }: { setup: Workspace
     <CardHeader className="border-b">
       <div className="flex items-start justify-between gap-3">
         <div><CardTitle className="flex items-center gap-2"><ListChecks className="size-5" />Workspace setup</CardTitle>
-          <CardDescription>Needs setup → configured → tested → live ready. A saved connection is configured; a synthetic run is tested. Live ready appears only when the recorded state supports it. {tested} of {items.length} steps tested or live ready.</CardDescription></div>
+          <CardDescription>Optional setup. Saved details and provider acceptance are configured. Inbox receipt is customer-confirmed; sandbox testing does not prove live lender delivery. {tested} of {items.length} steps tested or live ready.</CardDescription></div>
         <Button type="button" variant="ghost" size="sm" disabled={dismissing} onClick={onDismiss} aria-label={SETUP_COPY.dismissAria}><X />Hide checklist</Button>
       </div>
     </CardHeader>

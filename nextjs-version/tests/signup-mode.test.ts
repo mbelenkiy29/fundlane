@@ -6,6 +6,8 @@ import { migratedAccountNoticeEnabled, signupMode } from "../src/lib/mca/signup-
 function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false, polish = false, legalDrafts = false) {
   const script = `
     const React = require("react");
+    const { mock } = require("node:test");
+    mock.module("server-only", { exports: {} });
     const { renderToStaticMarkup } = require("react-dom/server");
     const SignUpPage = require("./src/app/(auth)/sign-up/page.tsx").default;
     const { SignInForm } = require("./src/app/(auth)/sign-in/sign-in-form.tsx");
@@ -19,19 +21,20 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
   env.MCA_MAGIC_LINK_ENABLED = String(magicLink)
   env.MCA_MARKETING_POLISH_ENABLED = String(polish)
   env.MCA_LEGAL_DRAFT_PAGES_ENABLED = String(legalDrafts)
-  const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", env })
+  const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], { encoding: "utf8", env })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout) as { signup: string; signin: string }
 }
 
-test("unset and invalid signup modes retain the existing open copy", () => {
+test("unset and invalid signup modes retain legacy signup while Login has no creation link", () => {
   for (const value of [undefined, "OPEN", "closed", "true"]) {
     if (value === undefined) delete process.env.MCA_SIGNUP_MODE
     else process.env.MCA_SIGNUP_MODE = value
     assert.equal(signupMode(), "open")
     const markup = renderAuth(value, undefined)
     assert.match(markup.signup, /Create your company workspace/)
-    assert.match(markup.signin, /Create a company workspace/)
+    assert.match(markup.signin, />Next</)
+    assert.doesNotMatch(markup.signin, /Create a company workspace|href="\/sign-up"/)
   }
   delete process.env.MCA_SIGNUP_MODE
 })
@@ -68,9 +71,11 @@ test("migrated-account helper defaults to shown and can be hidden", () => {
   delete process.env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE
 })
 
-test("invite-only sign-in can show magic link while hiding the migrated-account helper", () => {
+test("invite-only Login starts with email Next and hides the migrated-account helper", () => {
   const markup = renderAuth("invite_only", "false", true).signin
-  assert.match(markup, /Email me a sign-in link/)
+  assert.match(markup, />Next</)
+  assert.match(markup, /Continue with Google/)
+  assert.doesNotMatch(markup, /Email me a sign-in link/)
   assert.match(markup, /New team members join through an invitation/)
   assert.doesNotMatch(markup, /Create a company workspace|migrated account/)
 })
