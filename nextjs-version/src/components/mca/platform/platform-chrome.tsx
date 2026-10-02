@@ -11,6 +11,7 @@ import { ModeToggle } from "@/components/mode-toggle"
 import { SiteFooter } from "@/components/site-footer"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { PlatformLiveRefresh } from "./live-refresh"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 
@@ -66,7 +67,7 @@ function PlatformHeader() {
     <div className="flex w-full min-w-0 items-center gap-3 px-4 lg:px-6">
       <SidebarTrigger className="-ml-1" />
       <Breadcrumb className="min-w-0"><BreadcrumbList><BreadcrumbItem>{section ? <BreadcrumbLink asChild><Link href="/platform">Platform</Link></BreadcrumbLink> : <BreadcrumbPage>Platform overview</BreadcrumbPage>}</BreadcrumbItem>{section && <><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{titles[section] ?? "Platform"}</BreadcrumbPage></BreadcrumbItem></>}</BreadcrumbList></Breadcrumb>
-      <div className="ml-auto flex shrink-0 items-center gap-2"><Badge variant="outline" className="hidden sm:inline-flex"><ShieldCheck /> Super admin</Badge><Button variant="ghost" size="sm" asChild><Link href="/dashboard"><ArrowLeft className="size-4" /><span className="hidden md:inline">Dashboard</span><span className="sr-only md:hidden">Return to dashboard</span></Link></Button><ModeToggle /></div>
+      <div className="ml-auto flex shrink-0 items-center gap-2"><PlatformLiveRefresh /><Badge variant="outline" className="hidden sm:inline-flex"><ShieldCheck /> Super admin</Badge><Button variant="ghost" size="sm" asChild><Link href="/dashboard"><ArrowLeft className="size-4" /><span className="hidden md:inline">Dashboard</span><span className="sr-only md:hidden">Return to dashboard</span></Link></Button><ModeToggle /></div>
     </div>
   </header>
 }

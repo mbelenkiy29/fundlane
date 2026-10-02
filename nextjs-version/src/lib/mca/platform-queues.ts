@@ -3,6 +3,7 @@ import { z } from "zod"
 import { getDatabase } from "./db"
 import { AppError } from "./errors"
 import { requireSuperAdmin, type SuperAdminActor } from "./platform-auth"
+import { platformBillingObservations } from "./platform-console"
 import { getCompanyAccess } from "./company-access"
 import { ownerQueueQuerySchema, type OwnerQueueQuery, type CompanyOperationsRow, type SmsReviewItem, type Page, type RegistrationSummary } from "./platform-contracts"
 
@@ -39,14 +40,15 @@ async function readQueue(actor:SuperAdminActor, input:OwnerQueueQuery, kind:"com
 function blockedReasons(row:Row) {return [...(row.suspended?["sms_suspended"]:[]),...(row.review_state!=="approved"?["sms_review_required"]:[]),"provider_observation_unverified"]}
 export async function listCompanyOperations(actor:SuperAdminActor,query:OwnerQueueQuery):Promise<Page<CompanyOperationsRow>> {
   const page=await readQueue(actor,query,"companies")
+  const observations=await platformBillingObservations(page.rows.map(row=>row.id))
   return {items:await Promise.all(page.rows.map(async row=>{
     const access=await getCompanyAccess(row.id)
-    return {workspaceId:row.id,name:row.name,ownerEmail:row.owner_email,occupiedSeats:row.occupied_seats,purchasedSeats:row.purchased_seats,subscriptionStatus:row.subscription_status??"none",accessState:access.status,smsReviewState:row.review_state,
+    return {billingObservation:observations.find(observation=>observation.workspaceId===row.id),workspaceId:row.id,name:row.name,ownerEmail:row.owner_email,occupiedSeats:row.occupied_seats,purchasedSeats:row.purchased_seats,subscriptionStatus:row.subscription_status??"none",accessState:access.status,smsReviewState:row.review_state,
       // Legacy timestamps include local writes; they are not proven provider observations.
       providerState:"unknown",observedAt:null,blockedReasons:[...(!access.allowed&&access.reason?[access.reason]:[]),...blockedReasons(row)]}
-  })),nextCursor:page.nextCursor}
+  })),nextCursor:page.nextCursor,snapshotAt:new Date().toISOString()}
 }
 export async function listSmsReviewQueue(actor:SuperAdminActor,query:OwnerQueueQuery):Promise<Page<SmsReviewItem>> {
   const page=await readQueue(actor,query,"sms")
-  return {items:page.rows.map(row=>({workspaceId:row.id,companyName:row.name,submissionId:null,version:null,latestOperation:row.latest_operation,reviewState:row.review_state,submittedAt:row.submitted_at,registrationSummary:row.registrations,blockedReasons:blockedReasons(row)})),nextCursor:page.nextCursor}
+  return {items:page.rows.map(row=>({workspaceId:row.id,companyName:row.name,submissionId:null,version:null,latestOperation:row.latest_operation,reviewState:row.review_state,submittedAt:row.submitted_at,registrationSummary:row.registrations,blockedReasons:blockedReasons(row)})),nextCursor:page.nextCursor,snapshotAt:new Date().toISOString()}
 }

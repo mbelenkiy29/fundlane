@@ -442,8 +442,8 @@ export async function createOnboardingCheckoutUrl(workspaceId: string, role: str
 
 /** Every request-parameter variant needs its own key; Stripe rejects a reused key with different parameters. */
 export function checkoutIdempotencyKey(workspaceId: string, slug: string, previousSessionId: string | null, promotionCodes: boolean, onboarding: boolean, slot: number) {
-  // "mp0" marks the explicit Managed Payments opt-out so keys used by earlier requests are never replayed.
-  return `fundlane-checkout-${workspaceId}-${slug}-${previousSessionId ?? "initial"}-${promotionCodes ? "promo-" : ""}${onboarding ? "onboarding-" : ""}mp0-${slot}`
+  // Version the card-only request so Stripe never replays earlier payment-method defaults.
+  return `fundlane-checkout-${workspaceId}-${slug}-${previousSessionId ?? "initial"}-${promotionCodes ? "promo-" : ""}${onboarding ? "onboarding-" : ""}mp0-card1-${slot}`
 }
 
 export async function createBillingCheckout(workspaceId: string, selectedSeats: number, onboarding = false, providedClient?: StripeBillingClient) {
@@ -474,7 +474,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
     if (mapping.checkout_session_id) {
       const pending = await client.checkout.sessions.retrieve(mapping.checkout_session_id)
       if (pending.status === "open") {
-        if (mapping.checkout_plan_slug === slug && pending.url && (pending.automatic_tax?.enabled === true) === stripeTaxEnabled() && (pending.allow_promotion_codes === true) === promotionCodes && pending.managed_payments?.enabled !== true) return { url: pending.url }
+        if (mapping.checkout_plan_slug === slug && pending.url && pending.payment_method_types?.length === 1 && pending.payment_method_types[0] === "card" && (pending.automatic_tax?.enabled === true) === stripeTaxEnabled() && (pending.allow_promotion_codes === true) === promotionCodes && pending.managed_payments?.enabled !== true) return { url: pending.url }
         await client.checkout.sessions.expire(pending.id)
         await releaseTrialReservation(workspaceId,pending.id,db)
       } else if (pending.status === "complete") {
@@ -501,7 +501,7 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
       // accounts can default Checkout to Managed Payments, which rejects our untaxed-code
       // catalog ("product tax code is missing"), so opt out explicitly.
       managed_payments: { enabled: false },
-      client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always",
+      client_reference_id: workspaceId, metadata: { workspace_id: workspaceId }, payment_method_collection: "always", payment_method_types: ["card"],
       subscription_data: { metadata: { workspace_id: workspaceId }, billing_mode: { type: "flexible" }, ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: MISSING_TRIAL_PAYMENT_METHOD } } } : {}) },
       line_items: [{ price: ids.base, quantity: 1 }, ...(selectedSeats > 1 ? [{ price: ids.seats, quantity: selectedSeats - 1 }] : [])],
       success_url: returnUrl, cancel_url: returnUrl, expires_at: expiresAt,

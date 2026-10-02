@@ -7,13 +7,14 @@ test("platform shell scopes navigation, highlights company details and gates Roa
   const result = spawnSync(process.execPath, ["--import", "tsx", "-e", `
     const React = require('react'); const {renderToStaticMarkup} = require('react-dom/server');
     require.extensions['.css'] = () => {};
+    const {AppRouterContext} = require('next/dist/shared/lib/app-router-context.shared-runtime');
     const {PathnameContext} = require('next/dist/shared/lib/hooks-client-context.shared-runtime');
     const {ThemeProvider} = require('./src/components/theme-provider.tsx');
     const {PlatformChrome} = require('./src/components/mca/platform/platform-chrome.tsx');
     const {CurrencyTotals} = require('./src/components/mca/platform/tables.tsx');
     const render = (path, enabled) => renderToStaticMarkup(React.createElement(ThemeProvider, null,
-      React.createElement(PathnameContext.Provider, {value:path}, React.createElement(PlatformChrome,
-        {email:'operator@example.test',roadmapEnabled:enabled}, React.createElement('h1',null,'Synthetic page')))));
+      React.createElement(AppRouterContext.Provider, {value:{refresh(){}}}, React.createElement(PathnameContext.Provider, {value:path}, React.createElement(PlatformChrome,
+        {email:'operator@example.test',roadmapEnabled:enabled}, React.createElement('h1',null,'Synthetic page'))))));
     const {default:SmsReview} = require('./src/components/mca/platform/sms-review.tsx');
     const smsLoading = renderToStaticMarkup(React.createElement(SmsReview));
     const totals = renderToStaticMarkup(React.createElement(CurrencyTotals, {cards:true,totals:[
@@ -33,7 +34,7 @@ test("platform shell scopes navigation, highlights company details and gates Roa
   assert.match(totals, />USD<\/h3>/)
   assert.match(totals, />EUR<\/h3>/)
   assert.match(totals, /not net revenue/)
-  assert.match(totals, /text and invoice-status filters do not/)
+  assert.match(totals, /across all pages/)
   assert.match(smsLoading, /Loading SMS reviews/)
   assert.doesNotMatch(smsLoading, /No companies available for review/)
 })

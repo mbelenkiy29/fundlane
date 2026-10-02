@@ -11,7 +11,7 @@ await esbuild.build({ entryPoints: ['tests/browser/platform/entry.tsx'], outfile
   setup(build) {
     build.onResolve({ filter: /^(next\/(navigation|link)|@\/lib\/(mca\/(errors|platform-console|platform-page-access|platform-audit|roadmap-admin|jobs\/document-runtime)|marketing\/(demo-storage|launch-switches)))$/ }, args => ({ path: args.path, namespace: 'synthetic' }))
     build.onLoad({ filter: /.*/, namespace: 'synthetic' }, args => {
-      if (args.path === 'next/navigation') return { contents: `export const usePathname=()=>location.pathname; export const useRouter=()=>({refresh(){}}); export const notFound=()=>{throw new Error('Not found')}`, loader: 'js', resolveDir: process.cwd() }
+      if (args.path === 'next/navigation') return { contents: `const router={refresh(){globalThis.platformServerReads=(globalThis.platformServerReads??0)+1}}; export const usePathname=()=>location.pathname; export const useRouter=()=>router; export const notFound=()=>{throw new Error('Not found')}`, loader: 'js', resolveDir: process.cwd() }
       if (args.path === 'next/link') return { contents: `import React from ${JSON.stringify(resolve('node_modules/react/index.js'))}; export default React.forwardRef(function Link({href,children,...props},ref){return React.createElement('a',{...props,href,ref},children)})`, loader: 'js', resolveDir: process.cwd() }
       return { contents: `export * from ${JSON.stringify(fixtures)}`, loader: 'js', resolveDir: process.cwd() }
     })
