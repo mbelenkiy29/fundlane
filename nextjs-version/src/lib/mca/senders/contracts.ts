@@ -25,13 +25,17 @@ export interface EmailSender {
   ownerMembershipId?: string
   conversationReady?: boolean
   canReconnect?: boolean
+  testEvidence?: { testId: string; state: "sending" | "preview" | "accepted" | "received" | "uncertain" | "failed"; evidenceSource?: "user_confirmed" | "provider_delivered"; canConfirm: boolean }
   memberIds: string[]
   createdAt: string
   updatedAt: string
 }
 
 export interface SenderTestSendResult {
-  delivery: "sent" | "preview" | "failed"
+  delivery: "sent" | "preview" | "failed" | "uncertain"
+  evidence?: "sending" | "preview" | "accepted" | "received" | "uncertain" | "failed"
+  testId?: string
+  evidenceSource?: "user_confirmed" | "provider_delivered"
   correlationId: string
   providerMessageId?: string
   previewUrl?: string

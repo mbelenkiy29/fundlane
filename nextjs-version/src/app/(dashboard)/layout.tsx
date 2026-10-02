@@ -22,7 +22,7 @@ function pageForPath(pathname: string): PageKey | null {
   if (pathname === "/reports" || pathname.startsWith("/reports/")) return "reports"
   if (pathname === "/payments" || pathname.startsWith("/payments/")) return "payments"
   if (pathname === "/settings/team" || pathname === "/settings/access") return "users"
-  if (pathname === "/settings/api-keys") return "integrations"
+  if (pathname === "/settings/api-keys" || pathname === "/settings/business" || pathname === "/getting-started") return "integrations"
   if (pathname.startsWith("/settings/connections")) return "integrations"
   if (pathname === "/settings" || pathname.startsWith("/settings/templates")) return "workspace"
   return null

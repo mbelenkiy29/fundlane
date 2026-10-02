@@ -13,7 +13,7 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import {
@@ -212,7 +212,7 @@ before(async () => {
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: SMTP_PASSWORD },
   })
   senderId = sender.id
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   funderId = (await createFunder(actor(), {
     idempotencyKey: "extract-alpha-funder",
     legalName: "Alpha Capital LLC",

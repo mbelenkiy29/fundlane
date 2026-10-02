@@ -7,6 +7,9 @@ import { buildWorkspaceSetup, type WorkspaceSetup } from "./contracts"
 import { deriveReadiness, type ReadinessFacts } from "./readiness"
 import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../sandbox/labels"
 import { getCompanyAccess } from "../company-access"
+import { listSendersByWorkspace } from "../senders/repository"
+import { latestSenderTestEvidence } from "../senders/test-evidence"
+import { getSafeSubmissionReadiness } from "../onboarding/readiness"
 
 interface SetupRow {
   name: string
@@ -22,7 +25,7 @@ interface SetupRow {
 
 export function setupReadinessEnabled(): boolean { return process.env.MCA_SETUP_READINESS_ENABLED === "true" }
 
-export async function getWorkspaceSetup(workspaceId: string, role: Role | null = null): Promise<WorkspaceSetup> {
+export async function getWorkspaceSetup(workspaceId: string, role: Role | null = null, progressive = false): Promise<WorkspaceSetup> {
   const row = await getDatabase().prepare<SetupRow>(`
     SELECT
       w.name,
@@ -49,7 +52,7 @@ export async function getWorkspaceSetup(workspaceId: string, role: Role | null =
     enabledIntakeCount: row.intake_enabled,
     connectedDatamerchCount: row.datamerch,
   })
-  if (setupReadinessEnabled() && role) {
+  if ((setupReadinessEnabled() || progressive) && role) {
     setup.readiness = deriveReadiness(await getReadinessFacts(workspaceId), role)
     setup.canDownloadDiagnostics = role === "admin" || role === "super_admin"
   }
@@ -97,7 +100,18 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
   `).get(now, now, now, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, SANDBOX_FUNDER_IDEMPOTENCY_KEY, workspaceId)
   if (!row) throw new Error("Workspace not found.")
   const billingAccessAllowed = (await getCompanyAccess(workspaceId)).allowed
+  const basic = await getDatabase().prepare<{ supplied: boolean; registered: boolean }>(`SELECT
+    EXISTS(SELECT 1 FROM company_basic_profiles b WHERE b.workspace_id=w.id) OR EXISTS(SELECT 1 FROM sms_companies c WHERE c.workspace_id=w.id AND c.profile_cipher IS NOT NULL) supplied,
+    EXISTS(SELECT 1 FROM sms_companies c WHERE c.workspace_id=w.id AND c.profile_cipher IS NOT NULL AND (c.review_state='approved' OR c.provider_cipher IS NOT NULL OR c.registration_state<>'not_started')) registered
+    FROM workspaces w WHERE w.id=?`).get(workspaceId)
+  const senders = (await listSendersByWorkspace(workspaceId)).filter(s => s.credentialCipher && !["expired", "revoked"].includes(s.state))
+  const chosen = senders.find(s => s.purpose === "submission" && s.isDefault) ?? senders.find(s => s.purpose === "submission") ?? senders[0]
+  const testEvidence = chosen ? await latestSenderTestEvidence(chosen) : undefined
+  const senderEvidence = testEvidence && ["preview", "accepted", "received"].includes(testEvidence.state) ? testEvidence.state as "preview" | "accepted" | "received" : "none"
+  const safeSubmission = await getSafeSubmissionReadiness(workspaceId)
   return {
+    safeSubmissionReady: safeSubmission === "ready", safeSubmissionAccepted: safeSubmission === "accepted",
+    basicDetailsSupplied: basic?.supplied ?? false, basicDetailsRegistered: basic?.registered ?? false, senderEvidence, defaultSubmissionSender: senders.some(s => s.purpose === "submission" && s.isDefault && s.state === "verified"),
     companyNamed: row.company_named, teamMembers: row.team_members, pendingInvitations: row.pending_invitations,
     enabledForms: row.enabled_forms, brokenForms: row.broken_forms, createdIntakes: row.created_intakes, failedIntakes: row.failed_intakes,
     readyDocuments: row.ready_documents, failedDocuments: row.failed_documents, verifiedSenders: row.verified_senders,
@@ -108,10 +122,9 @@ export async function getReadinessFacts(workspaceId: string): Promise<ReadinessF
   }
 }
 
-export async function dismissWorkspaceSetup(context: AuthContext): Promise<WorkspaceSetup> {
+export async function dismissWorkspaceSetup(context: AuthContext, dismissed = true, progressive = false): Promise<WorkspaceSetup> {
   const dismissedAt = nowIso()
-  await getDatabase()
-    .prepare("UPDATE workspaces SET setup_checklist_dismissed_at = COALESCE(setup_checklist_dismissed_at, ?) WHERE id = ?")
-    .run(dismissedAt, context.workspaceId)
-  return getWorkspaceSetup(context.workspaceId)
+  if (dismissed) await getDatabase().prepare("UPDATE workspaces SET setup_checklist_dismissed_at = COALESCE(setup_checklist_dismissed_at, ?) WHERE id = ?").run(dismissedAt, context.workspaceId)
+  else await getDatabase().prepare("UPDATE workspaces SET setup_checklist_dismissed_at=NULL WHERE id=?").run(context.workspaceId)
+  return getWorkspaceSetup(context.workspaceId, context.role, progressive)
 }

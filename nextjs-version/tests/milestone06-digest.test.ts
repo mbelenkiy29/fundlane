@@ -9,7 +9,7 @@ import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal, updateDealRecord } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { Role } from "../src/lib/mca/types"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { runCommsJobs } from "../src/lib/mca/comms/jobs"
 import {
   DEFAULT_DIGEST_LOCAL_SEND_HOUR,
@@ -141,7 +141,7 @@ before(async () => {
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "digest", password: SMTP_PASSWORD },
   })
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
 })
 
 beforeEach(async () => {

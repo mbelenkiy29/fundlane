@@ -9,7 +9,7 @@ import { hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { Role } from "../src/lib/mca/types"
-import { createSender, expireSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender, expireSender } from "../src/lib/mca/senders/service"
 import { createMessageTemplate } from "../src/lib/mca/comms/templates"
 import {
   SENDER_FALLBACK_COPY,
@@ -116,7 +116,7 @@ before(async () => {
     smtp: { host: "smtp.example.test", port: 587, username: "originator", password: SMTP_PASSWORD },
   })
   originatorSenderId = originator.id
-  await testSend(actor(), originator.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), originator.workspaceId, originator.id)
   const fallback = await createSender(actor(), {
     provider: "smtp",
     purpose: "fallback",
@@ -126,7 +126,7 @@ before(async () => {
     smtp: { host: "smtp.example.test", port: 587, username: "fallback", password: SMTP_PASSWORD },
   })
   fallbackSenderId = fallback.id
-  await testSend(actor(), fallback.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), fallback.workspaceId, fallback.id)
   const submission = await createSender(actor(), {
     provider: "smtp",
     purpose: "submission",
@@ -136,7 +136,7 @@ before(async () => {
     smtp: { host: "smtp.example.test", port: 587, username: "submissions", password: SMTP_PASSWORD },
   })
   submissionSenderId = submission.id
-  await testSend(actor(), submission.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), submission.workspaceId, submission.id)
   const otherFallback = await createSender(actor(ids.otherWorkspace), {
     provider: "smtp",
     purpose: "fallback",
@@ -145,7 +145,7 @@ before(async () => {
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "other", password: SMTP_PASSWORD },
   })
-  await testSend(actor(ids.otherWorkspace), otherFallback.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), otherFallback.workspaceId, otherFallback.id)
   templateId = (await createMessageTemplate(actor(), {
     name: "Missing documents follow-up",
     channel: "email",

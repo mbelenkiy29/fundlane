@@ -116,7 +116,7 @@ test("Postmark closing transport reconciles HTTP 5xx and rejects mismatched sear
   assert.deepEqual(await transport.deliver(request()), { state: "sent", correlationId: "delivery-correlation-42", externalId: "untrusted-message" })
 })
 
-test("Postmark sender verification uses the exact workspace/sender mapping and requires provider acknowledgement", async () => {
+test("Postmark sender test uses the exact workspace/sender mapping and requires provider acknowledgement", async () => {
   const priorProvider = process.env.MCA_CLOSING_EMAIL_PROVIDER
   const priorConnections = process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON
   try {
@@ -126,7 +126,7 @@ test("Postmark sender verification uses the exact workspace/sender mapping and r
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       assert.equal(body.From, "MCA Closing <mike@sentineltechsolutions.io>")
       assert.equal(body.To, "authorized-recipient@example.test")
-      assert.equal(body.Subject, "Fundlane sender verification")
+      assert.equal(body.Subject, "Fundlane sender test")
       return new Response(JSON.stringify({ ErrorCode: 0, MessageID: "postmark-test-message" }), { status: 200 })
     })
     const result = await deliverSenderTest({ workspaceId: "workspace-a", senderId: "sender-a", provider: "smtp", purpose: "merchant", fromName: "MCA Closing", fromAddress: "mike@sentineltechsolutions.io", recipient: "authorized-recipient@example.test" })

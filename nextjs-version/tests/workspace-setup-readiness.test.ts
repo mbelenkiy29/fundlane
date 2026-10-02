@@ -73,3 +73,15 @@ test("diagnostic bundle uses only allowlisted states and safe local identifiers"
   ])
   assert.doesNotMatch(JSON.stringify(bundle), /password|bankAccount|123456|merchant@|token=abc/)
 })
+
+test('progressive readiness distinguishes supplied basics, preview, acceptance and receipt without a CRM gate', () => {
+  const supplied = deriveReadiness({ ...empty, basicDetailsSupplied: true, senderEvidence: 'accepted', defaultSubmissionSender: true }, 'admin')
+  assert.equal(supplied.find(i => i.id === 'business_details')?.phase, 'configured')
+  assert.equal(supplied.find(i => i.id === 'sender_test')?.evidence, 'accepted')
+  assert.equal(supplied.find(i => i.id === 'sender_test')?.phase, 'configured')
+  assert.match(supplied.find(i => i.id === 'sender_test')?.detail ?? '', /receipt/i)
+  const received = deriveReadiness({ ...empty, senderEvidence: 'received' }, 'admin').find(i => i.id === 'sender_test')
+  assert.equal(received?.phase, 'tested')
+  assert.match(received?.detail ?? '', /customer.confirmed/i)
+  assert.equal(deriveReadiness({ ...empty, senderEvidence: 'preview' }, 'admin').find(i => i.id === 'sender_test')?.phase, 'configured')
+})
