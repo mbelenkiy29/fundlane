@@ -3,10 +3,10 @@ import postcss from 'postcss'
 import tailwind from '@tailwindcss/postcss'
 import fs from 'node:fs/promises'
 import { resolve } from 'node:path'
-const out = 'output/playwright/platform-redesign'
+const out = process.env.PLATFORM_BROWSER_OUT || 'output/playwright/platform-redesign'
 const fixtures = resolve('tests/browser/platform/fixtures.mjs')
 await fs.mkdir(out, { recursive: true })
-await esbuild.build({ entryPoints: ['tests/browser/platform/entry.tsx'], outfile: `${out}/app.js`, bundle: true, jsx: 'automatic', alias: { '@': './src' }, define: { 'process.env.NODE_ENV': '"development"' }, plugins: [{
+await esbuild.build({ entryPoints: [process.env.PLATFORM_BROWSER_ENTRY || 'tests/browser/platform/entry.tsx'], outfile: `${out}/app.js`, bundle: true, jsx: 'automatic', alias: { '@': './src' }, define: { 'process.env.NODE_ENV': '"development"' }, plugins: [{
   name: 'synthetic-platform-services',
   setup(build) {
     build.onResolve({ filter: /^(next\/(navigation|link)|@\/lib\/(mca\/(errors|platform-console|platform-page-access|platform-audit|roadmap-admin|jobs\/document-runtime)|marketing\/(demo-storage|launch-switches)))$/ }, args => ({ path: args.path, namespace: 'synthetic' }))
