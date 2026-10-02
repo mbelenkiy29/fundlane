@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs/config";
+import { retiredPublicRedirects } from "./src/lib/mca/retired-public-redirects";
 import { sampleRouteRedirects } from "./src/lib/mca/sample-route-redirects";
 import { nextConfigHeaders } from "./src/lib/mca/security-headers";
 import { SENTRY_TUNNEL_ROUTE } from "./src/lib/observability/sentry-options";
@@ -62,6 +63,7 @@ const nextConfig: NextConfig = {
         destination: '/pipeline?create=1',
         permanent: false,
       },
+      ...retiredPublicRedirects,
       ...sampleRouteRedirects,
     ];
   },

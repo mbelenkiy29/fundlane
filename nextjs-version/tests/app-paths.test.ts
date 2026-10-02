@@ -145,7 +145,7 @@ test("unknown first segments no longer match a dashboard catch-all, so the 404 p
 })
 
 test("API routes are not HTML-redirected to sign-in", () => {
-  for (const path of ["/api/auth/session", "/api/mca/deals", "/api/marketing/demo", "/api/webhooks/stripe"]) {
+  for (const path of ["/api/auth/session", "/api/mca/deals", "/api/webhooks/stripe"]) {
     assert.equal(anonymousRequestDisposition(path), "api", path)
     assert.equal(requiresSignInRedirect(path), false, path)
   }

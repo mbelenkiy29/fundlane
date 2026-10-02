@@ -136,7 +136,7 @@ test("sitemap includes lastmod for each public marketing URL", () => {
   const entries = sitemap()
   assert.deepEqual(
     entries.map((entry) => entry.url),
-    [MARKETING_ORIGIN, `${MARKETING_ORIGIN}/features`, `${MARKETING_ORIGIN}/changelog`, `${MARKETING_ORIGIN}/demo`, `${MARKETING_ORIGIN}/help`, ...helpArticles.map(article => `${MARKETING_ORIGIN}/help/${article.slug}`)],
+    [MARKETING_ORIGIN, `${MARKETING_ORIGIN}/features`, `${MARKETING_ORIGIN}/changelog`, `${MARKETING_ORIGIN}/help`, ...helpArticles.map(article => `${MARKETING_ORIGIN}/help/${article.slug}`)],
   )
   for (const entry of entries) {
     assert.deepEqual(entry.lastModified, MARKETING_SITEMAP_LASTMOD)
@@ -152,7 +152,6 @@ test("robots allows each public marketing URL listed in the sitemap", () => {
   assert.ok(allow.includes("/$"))
   assert.ok(allow.includes("/features$"))
   assert.ok(allow.includes("/changelog$"))
-  assert.ok(allow.includes("/demo$"))
   assert.ok(allow.includes("/help"))
   assert.ok(!allow.includes("/terms$"))
   assert.ok(!allow.includes("/privacy$"))

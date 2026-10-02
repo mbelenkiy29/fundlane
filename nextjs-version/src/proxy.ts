@@ -7,7 +7,7 @@ export default async function proxy(request:NextRequest){
   const paused=await maintenanceResponse(request)
   if(paused)return paused
   if(request.nextUrl.pathname==="/login" || request.nextUrl.pathname==="/register") {
-    const target=new URL(request.nextUrl.pathname==="/login" ? "/sign-in" : "/sign-up",request.url)
+    const target=new URL(request.nextUrl.pathname==="/login" ? "/sign-in" : "/",request.url)
     if(request.nextUrl.searchParams.has("next"))target.searchParams.set("next",authContinuation(request.nextUrl.searchParams.getAll("next").length===1 ? request.nextUrl.searchParams.get("next") : null))
     return NextResponse.redirect(target)
   }

@@ -58,7 +58,7 @@ try {
       await page.locator('main').waitFor()
       await page.waitForFunction(theme => document.documentElement.classList.contains(theme), theme)
     }
-    const screens = ['/platform', '/platform/companies', '/platform/companies/company-a', '/platform/payments', '/platform/monitoring', '/platform/sms', '/platform/sms?view=review', '/platform/audit', '/platform/audit?tab=super-admin', '/platform/demo-requests', '/platform/roadmap']
+    const screens = ['/platform', '/platform/companies', '/platform/companies/company-a', '/platform/payments', '/platform/monitoring', '/platform/sms', '/platform/sms?view=review', '/platform/audit', '/platform/audit?tab=super-admin', '/platform/roadmap']
     for (const path of screens) {
       await visit(path)
       await page.locator('main h1').waitFor()

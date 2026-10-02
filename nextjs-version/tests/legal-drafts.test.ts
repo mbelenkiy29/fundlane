@@ -3,7 +3,6 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
-import { SignupLegalAgreement } from "../src/app/(auth)/sign-up/components/signup-legal-agreement"
 import { getDemoConfiguration } from "../src/lib/marketing/config"
 import { legalDraftPagesEnabled } from "../src/lib/marketing/legal-draft-flag"
 import { legalPlaceholders, privacySections, termsSections } from "../src/lib/marketing/legal-drafts"
@@ -97,9 +96,6 @@ test("unset and non-true flag preserve original legal and demo behavior", () => 
         assert.ok(!allow.allow.includes("/terms$"))
         assert.ok(!allow.allow.includes("/privacy$"))
       }
-      const agreement = JSON.stringify(SignupLegalAgreement({ legalDraftsEnabled: false }))
-      assert.match(agreement, /I agree to the terms of service and privacy policy\./)
-      assert.doesNotMatch(agreement, /"href":"\/(terms|privacy)"/)
     })
   }
 })
@@ -157,12 +153,6 @@ test("enabled drafts cannot authorize demo collection at /privacy", () => {
       assert.ok(rules.allow.includes("/terms$"))
       assert.ok(rules.allow.includes("/privacy$"))
     }
-    const agreement = JSON.stringify(SignupLegalAgreement({ legalDraftsEnabled: true }))
-    assert.match(agreement, /Terms of Service/)
-    assert.doesNotMatch(agreement, /\(draft\)/)
-    assert.match(agreement, /Privacy Policy/)
-    assert.match(agreement, /"href":"\/terms"/)
-    assert.match(agreement, /"href":"\/privacy"/)
   })
   for (const url of ["https://preview.example.test/privacy/", "https://fundlane.io/privacy?from=demo", "https://fundlane.io/%70rivacy"]) {
     for (const databaseEnabled of ["false", "true"]) {
