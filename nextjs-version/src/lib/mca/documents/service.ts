@@ -109,6 +109,10 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
     metadata: { state, malwareScanPerformed, provider: result.provider },
     correlationId: actor.correlationId,
   })
+  if (result.status === "clean" && process.env.MCA_DEAL_AGENT_ENABLED === "true") {
+    try { await (await import("../deal-agent/run")).enqueueDealAgentRun(updated) }
+    catch { console.error(JSON.stringify({ event: "deal_agent_enqueue_failed", documentId: record.id })) }
+  }
   return updated
 }
 
