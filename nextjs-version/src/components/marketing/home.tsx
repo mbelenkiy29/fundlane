@@ -13,7 +13,7 @@ import {
   UsersRound,
   ChevronDown,
 } from "lucide-react"
-import { MarketingShell, DemoLink, GetStartedLink } from "./shell"
+import { MarketingShell, GetStartedLink } from "./shell"
 import { marketingFeatures } from "./catalog"
 import { BentoVisual } from "./bento-visual"
 import { ActivityStream } from "./activity-stream"
@@ -69,7 +69,7 @@ const faqs: readonly (readonly [string, string])[] = [
   ],
   [
     "Can we bring our existing deals?",
-    "Fundlane includes spreadsheet imports, field mapping, and review tools. In your demo, we can walk through how your current records and document packages would fit the import workflow.",
+    "Fundlane includes spreadsheet imports, field mapping, and review tools. Start your trial to review how your current records and document packages fit the import workflow.",
   ],
   [
     "How does funder matching work?",
@@ -77,15 +77,15 @@ const faqs: readonly (readonly [string, string])[] = [
   ],
   [
     "Can we connect our application forms and communication tools?",
-    "Fundlane supports configurable intake and communication workflows. Availability depends on the provider, credentials, and activation requirements. We’ll review the tools your brokerage uses during the demo.",
+    "Fundlane supports configurable intake and communication workflows. Availability depends on the provider, credentials, and activation requirements. Follow the setup guides to connect the tools your brokerage uses.",
   ],
   [
     "Can I control what my team sees?",
-    "Company roles, deal assignments, and financial visibility controls help you give each teammate the access they need. The demo can cover how owners, managers, and reps work together.",
+    "Company roles, deal assignments, and financial visibility controls help you give each teammate the access they need. Set up roles for owners, managers, and reps inside your workspace.",
   ],
   [
-    "What happens when I request a demo?",
-    "Tell us about your brokerage and what you’d like to improve. We’ll use those details to follow up about a walkthrough of the product and your team’s requirements.",
+    "What happens when I get started?",
+    "Get Started opens secure Stripe Checkout for a 14-day free trial with a card required. The plan includes the first user at $399 per month after the trial unless you cancel; applicable discounts and tax follow your Checkout terms. Verify your identity to enter your CRM, then complete optional business details and setup at your own pace.",
   ],
 ]
 
@@ -104,7 +104,7 @@ export function MarketingHome() {
               <p className="fl-audience"><span />The workspace for MCA brokerages</p>
               <h1>Run your MCA brokerage from application to renewal.</h1>
               <p className="fl-hero-description">{MARKETING_DESCRIPTION}</p>
-              <div className="fl-actions"><GetStartedLink /><DemoLink /><Link href="#workflow" className="fl-text-link">Explore the workflow <ArrowRight size={17} aria-hidden="true" /></Link></div>
+              <div className="fl-actions"><GetStartedLink /><Link href="#workflow" className="fl-text-link">Explore the workflow <ArrowRight size={17} aria-hidden="true" /></Link></div>
             </div>
             <div className="fl-hero-foot"><span>One connected deal workflow</span><a href="#activity">Explore Fundlane <span aria-hidden="true">↓</span></a></div>
           </div>
@@ -167,10 +167,7 @@ export function MarketingHome() {
                         <Check size={16} aria-hidden="true" />
                         {stage.action}
                       </div>
-                      <Link className="fl-text-link" href="/demo">
-                        See it in your demo
-                        <ArrowRight size={16} aria-hidden="true" />
-                      </Link>
+                      <GetStartedLink className="fl-text-link" />
                     </div>
                     <figure>
                       <Image
@@ -249,7 +246,7 @@ export function MarketingHome() {
                   Team, funder, and lead-source reporting
                 </li>
               </ul>
-              <div className="fl-actions"><GetStartedLink /><DemoLink /></div>
+              <div className="fl-actions"><GetStartedLink /></div>
             </div>
             <figure className="fl-team-image">
               <Image
@@ -266,14 +263,12 @@ export function MarketingHome() {
         <section id="faq" className="fl-section fl-container fl-faq">
           <div className="fl-section-heading">
             <p className="fl-section-label">A few things to know</p>
-            <h2>Before we meet.</h2>
+            <h2>Before you get started.</h2>
             <p>
               Have a question specific to your brokerage?
               <br />
-              <Link href="/demo" className="fl-inline-link">
-                Bring it to your demo.
-              </Link>
             </p>
+            <GetStartedLink className="fl-inline-link" />
           </div>
           <div className="fl-faq-items">
             {faqs.map(([question, answer]) => (
@@ -298,7 +293,7 @@ export function MarketingHome() {
               </h2>
               <p>See how Fundlane brings your deal workflow together.</p>
             </div>
-            <div className="fl-actions"><GetStartedLink /><DemoLink /></div>
+            <div className="fl-actions"><GetStartedLink /></div>
           </div>
         </section>
       </main>

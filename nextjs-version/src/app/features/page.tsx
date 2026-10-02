@@ -1,6 +1,6 @@
 import { Check, ArrowRight } from "lucide-react"
 import Link from "next/link"
-import { MarketingShell, DemoLink } from "@/components/marketing/shell"
+import { MarketingShell, GetStartedLink } from "@/components/marketing/shell"
 import { marketingFeatures } from "@/components/marketing/catalog"
 import { FeatureVisual } from "@/components/marketing/feature-visual"
 import { marketingMetadata } from "@/lib/marketing/metadata"
@@ -16,7 +16,7 @@ export default function FeaturesPage() {
       <p className="fl-section-label">The Fundlane workspace</p>
       <h1>Every part of the deal.<br />Connected.</h1>
       <p>From the first document to the next renewal, explore the tools that keep your brokerage moving together.</p>
-      <div className="fl-actions"><DemoLink /><Link href="/#workflow" className="fl-text-link">Follow the workflow <ArrowRight size={16} aria-hidden="true" /></Link></div>
+      <div className="fl-actions"><GetStartedLink /><Link href="/#workflow" className="fl-text-link">Follow the workflow <ArrowRight size={16} aria-hidden="true" /></Link></div>
     </section>
     <nav className="fl-container fl-feature-jumps" aria-label="Feature categories">
       {marketingFeatures.map(feature => <a href={`#${feature.id}`} key={feature.id}>{feature.title}</a>)}
@@ -31,12 +31,12 @@ export default function FeaturesPage() {
             <p>{feature.summary}</p>
             <ul className="fl-capabilities">{feature.capabilities.map(capability => <li key={capability}><Check size={16} aria-hidden="true" />{capability}</li>)}</ul>
             {feature.note && <p className="fl-feature-note">{feature.note}</p>}
-            <Link href="/demo" className="fl-text-link">Explore this in your demo <ArrowRight size={16} aria-hidden="true" /></Link>
+            <GetStartedLink className="fl-text-link" />
           </div>
           <FeatureVisual feature={feature} />
         </section>
       })}
     </div>
-    <section className="fl-closing"><div className="fl-container"><div><p className="fl-section-label">See it come together</p><h2>Your deals. Your team.<br />One clear workflow.</h2><p>Walk through Fundlane with your brokerage’s needs in mind.</p></div><DemoLink /></div></section>
+    <section className="fl-closing"><div className="fl-container"><div><p className="fl-section-label">See it come together</p><h2>Your deals. Your team.<br />One clear workflow.</h2><p>Walk through Fundlane with your brokerage’s needs in mind.</p></div><GetStartedLink /></div></section>
   </main></MarketingShell>
 }

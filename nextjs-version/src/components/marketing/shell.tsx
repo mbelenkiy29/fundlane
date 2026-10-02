@@ -1,5 +1,4 @@
 import Link from "next/link"
-import { ArrowUpRight } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { marketingFontClasses } from "@/lib/marketing/fonts"
 import { marketingJsonLd } from "@/lib/marketing/metadata"
@@ -12,6 +11,7 @@ import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 import "./marketing.css"
 
 import { MobileNav } from "./mobile-nav"
+import { TrialCheckoutStart } from "./trial-checkout-start"
 
 export function Brand() {
   return (
@@ -22,27 +22,8 @@ export function Brand() {
   )
 }
 
-export function DemoLink({
-  children = "Book a demo",
-  secondary = false,
-}: {
-  children?: React.ReactNode
-  secondary?: boolean
-}) {
-  return (
-    <Link
-      className={`fl-button${secondary ? " fl-button-secondary" : ""}`}
-      href="/demo"
-    >
-      {children}
-      {!marketingPolishEnabled() && <ArrowUpRight size={16} aria-hidden="true" />}
-    </Link>
-  )
-}
-
-export function GetStartedLink() {
-  if (!marketingTrialEnrollmentEnabled()) return null
-  return <Link className="fl-button fl-button-secondary" href="/pricing">Get Started</Link>
+export function GetStartedLink({ className = "fl-button" }: { className?: string } = {}) {
+  return <TrialCheckoutStart available={marketingTrialEnrollmentEnabled()} label="Get Started" className={className} compact />
 }
 
 export function MarketingJsonLd({ title, path, description, faq }: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }) {
@@ -93,7 +74,6 @@ export async function MarketingShell({
             <Link href="/sign-in" className="fl-signin">
               Login
             </Link>
-            <DemoLink />
             <GetStartedLink />
           </div>
           <MobileNav polished={polished} showPricing={showPricing} showRoadmap={showRoadmap} showTrialCta={showTrialCta} />
@@ -113,9 +93,8 @@ export async function MarketingShell({
               <Link href="/changelog">Changelog</Link>
               <Link href="/help">Help center</Link>
               <Link href="/#workflow">How it works</Link>
-              <Link href="/demo">Book a demo</Link>
+              <GetStartedLink className="fl-inline-link" />
               <Link href="/sign-in">Login</Link>
-              {showTrialCta && <Link href="/pricing">Get Started</Link>}
               {publicStatusPageEnabled() ? <Link href="/status">System status</Link> : statusUrl && <a href={statusUrl}>System status</a>}
               {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}

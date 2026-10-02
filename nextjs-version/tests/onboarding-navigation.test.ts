@@ -50,7 +50,7 @@ test("shared app path metadata still loads in a browser consumer", () => {
   assert.deepEqual(result, { title: "Deals", signIn: "public" })
 })
 
-test("desktop, mobile and footer separate existing Login from Get Started pricing", () => {
+test("desktop, mobile and footer separate Login from direct Get Started Checkout", () => {
   const markup = runClient(`${renderSetup}
     const { MarketingShell } = require("./src/components/marketing/shell.tsx");
     (async () => console.log(JSON.stringify(renderToStaticMarkup(await MarketingShell({ children: null })))))();
@@ -60,19 +60,35 @@ test("desktop, mobile and footer separate existing Login from Get Started pricin
   const footer = markup.match(/<nav aria-label="Footer navigation">([\s\S]*?)<\/nav>/)?.[1] ?? ""
   for (const surface of [desktop, mobile, footer]) {
     assert.match(surface, /href="\/sign-in"[^>]*>Login<\/a>/)
-    assert.match(surface, /href="\/pricing"[^>]*>Get Started<\/a>/)
-    assert.doesNotMatch(surface, /href="\/sign-up"|Start free trial/)
+    assert.match(surface, /<button[^>]*>Get Started<\/button>/)
+    assert.doesNotMatch(surface, /href="\/(?:demo|sign-up)"|href="\/pricing"[^>]*>Get Started/)
   }
 })
 
-test("home purchase CTAs open pricing without an account, company or seat form", () => {
+test("every home purchase CTA uses Get Started without a demo or registration step", () => {
   const markup = runClient(`${renderSetup}
     const { MarketingHome } = require("./src/components/marketing/home.tsx");
     (async () => { const page = MarketingHome(); console.log(JSON.stringify(renderToStaticMarkup(await page.type(page.props)))); })();
   `, launchEnv) as string
   const main = markup.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ""
-  assert.equal((main.match(/href="\/pricing"[^>]*>Get Started<\/a>/g) ?? []).length, 3)
-  assert.doesNotMatch(main, /href="\/sign-up"|<input[^>]+name="(?:email|password|companyName|seats)"/)
+  assert.equal((main.match(/<button[^>]*>Get Started<\/button>/g) ?? []).length, 9)
+  assert.doesNotMatch(main, /href="\/(?:demo|sign-up)"|Book a demo|your demo|<input[^>]+name="(?:email|password|companyName|seats)"/)
+})
+
+test("features and changelog replace repeated demo acquisition links", () => {
+  const result = runClient(`${renderSetup}
+    const Features = require("./src/app/features/page.tsx").default;
+    const Changelog = require("./src/app/changelog/page.tsx").default;
+    (async () => {
+      const markup = await Promise.all([Features, Changelog].map(async Page => { const page = Page(); return renderToStaticMarkup(await page.type(page.props)); }));
+      console.log(JSON.stringify(markup));
+    })();
+  `, launchEnv) as string[]
+  for (const markup of result) {
+    assert.match(markup, /<button[^>]*>Get Started<\/button>/)
+    assert.match(markup, /href="\/sign-in"[^>]*>Login<\/a>/)
+    assert.doesNotMatch(markup, /href="\/demo"|Book a demo|your demo/)
+  }
 })
 
 test("pricing discloses the first-user offer, required card and automatic conversion", () => {

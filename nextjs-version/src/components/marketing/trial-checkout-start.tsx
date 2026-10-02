@@ -35,17 +35,19 @@ async function openCheckout() {
   window.location.assign(checkout.toString())
 }
 
-export function TrialCheckoutStart({ available }: { available: boolean }) {
+export function TrialCheckoutStart({ available, label, className, compact = false }: { available: boolean; label?: string; className?: string; compact?: boolean }) {
   const browser = useSyncExternalStore(subscribeToBrowser, browserStatus, serverBrowserStatus)
   const [unavailable, setUnavailable] = useState(false)
   async function start() {
     if (!browserCoordinator()) { setUnavailable(true); return }
     await openCheckout()
   }
-  if (!available) return <TrialStartButton available={false} />
+  const presentation = { label, className, compact }
+  if (!available) return <TrialStartButton available={false} {...presentation} />
+  if (compact && (unavailable || browser !== "supported")) return <TrialStartButton available={false} {...presentation} unavailableMessage={browser === "checking" && !unavailable ? "Checking secure trial enrollment in this browser…" : "Your browser cannot safely start a new trial. Use a compatible browser or get help."} />
   if (unavailable || browser !== "supported") return <div>
     <p className="fl-form-notice" role="status">{browser === "checking" && !unavailable ? "Checking secure trial enrollment in this browser…" : "Your browser cannot safely start a new trial. Use a compatible browser or get help."}{" "}<Link className="fl-inline-link" href="/help/set-up-your-company">Get help</Link>.{" "}<Link className="fl-inline-link" href="/sign-in">Login</Link> to your existing account.</p>
-    <button className="fl-button" type="button" disabled>Start 14-day free trial</button>
+    <button className={className ?? "fl-button"} type="button" disabled>{label ?? "Start 14-day free trial"}</button>
   </div>
-  return <TrialStartButton available onStart={start} />
+  return <TrialStartButton available onStart={start} {...presentation} />
 }
