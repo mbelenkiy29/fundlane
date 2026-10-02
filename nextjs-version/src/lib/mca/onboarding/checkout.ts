@@ -1,5 +1,6 @@
 import "server-only"
 import type Stripe from "stripe"
+import { BILLING_CATALOG } from "../billing-catalog"
 import {
   getDatabase,
   newId,
@@ -491,7 +492,7 @@ export async function startEnrollmentCheckout(
         basePriceId: ids.base,
         seatPriceId: ids.seats,
         currency: "usd",
-        baseAmount: 39900,
+        baseAmount: BILLING_CATALOG.base.unitAmountCents,
         quantity: 1,
         trialDays: 14,
         livemode: stripeLiveMode(),

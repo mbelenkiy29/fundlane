@@ -1,6 +1,7 @@
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { BILLING_CATALOG } from "../billing-catalog";
 import { assertTransactionExecutor, getDatabase, newId, nowIso, type DbExecutor } from "../db";
 import { decryptSensitive, encryptSensitive, hashOpaqueToken, hmacScopedToken } from "../crypto";
 import { AppError } from "../errors";
@@ -11,7 +12,7 @@ import { enqueueOnboardingEmailIntents } from "./email-intents";
 const offerSchema = z.object({
   version: z.literal(1), accountId: z.string().regex(/^acct_[A-Za-z0-9]+$/),
   basePriceId: z.string().regex(/^price_[A-Za-z0-9]+$/), seatPriceId: z.string().regex(/^price_[A-Za-z0-9]+$/),
-  currency: z.literal("usd"), baseAmount: z.literal(39900), quantity: z.literal(1), trialDays: z.literal(14),
+  currency: z.literal("usd"), baseAmount: z.literal(BILLING_CATALOG.base.unitAmountCents), quantity: z.literal(1), trialDays: z.literal(14),
   livemode: z.boolean(), promotionCodes: z.boolean(), automaticTax: z.boolean(),
 }).strict().refine(value => value.basePriceId !== value.seatPriceId);
 const activationSchema = z.object({

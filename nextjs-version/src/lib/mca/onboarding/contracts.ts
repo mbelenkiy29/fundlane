@@ -1,3 +1,5 @@
+import type { BILLING_CATALOG } from "../billing-catalog";
+
 /** Server-selected catalog snapshot. Never accept this contract from request JSON. */
 export interface EnrollmentOffer {
   version: 1;
@@ -5,7 +7,7 @@ export interface EnrollmentOffer {
   basePriceId: string;
   seatPriceId: string;
   currency: "usd";
-  baseAmount: 39900;
+  baseAmount: typeof BILLING_CATALOG.base.unitAmountCents;
   quantity: 1;
   trialDays: 14;
   livemode: boolean;
