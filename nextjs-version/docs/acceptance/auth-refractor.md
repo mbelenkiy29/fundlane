@@ -1,6 +1,6 @@
-# auth-refractor acceptance evidence — local Task 7 checks
+# auth-refractor local acceptance evidence
 
-This maps the approved A01–A20 criteria to concrete local regression anchors. It is not final-head, hosted, release or delivery acceptance. Task 7's operator consumers have focused synthetic browser evidence; controller integration, independent whole-branch review and aggregate checks remain separate gates. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
+This maps the approved A01–A20 criteria to concrete local regression anchors and combined-branch checks. It proves local code behavior, not hosted release or delivery acceptance. Independent whole-branch review is required before draft publication. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
 
 | Criterion | Concrete regression anchor | Core evidence / remaining acceptance |
 | --- | --- | --- |
@@ -33,7 +33,27 @@ New core GREEN: `onboarding-migrations.test.ts`, `onboarding-operator.test.ts`, 
 
 The exact core command, static results and SQL/journal byte comparison are retained in `task-7-core-report.md`. The follow-up starts from reviewed combined base `94397e74ac9bd5e85196764e41f147d59d5635f5` and consumes the existing protected detail/recovery/evidence services without changing server authority. Its installed-Chrome runner passed **22 named checks, 10 explicit synthetic POSTs and zero page errors**, including four light/dark width combinations. The affected `onboarding-operator`, `onboarding-acceptance`, `platform-console`, `platform-queues`, `platform-refresh` and `platform-shell` set passed **31/31**, zero failures/skips, 5299.025 ms. Exact final commands, static results and scoped SHA belong in `task-7-followup-report.md`.
 
-Root will add final aggregate counts/build/combined browser/Graphify/provider evidence to this draft on the reviewed combined head; those checks have not been claimed here. The retained Task 4/3 service suites prove authority, lease, audit and receipt behavior and were not repeated merely to test these UI consumers.
+The final operator fix adds five actual-component StrictMode checks with zero POSTs/page errors: replacement startup, abandoned-finalizer ownership, duplicate reads, stale/draft retention and denied clearing. A meaningful RED reproduced the missing replacement request. The retained Task 4/3 service suites prove authority, lease, audit and receipt behavior and were not repeated merely to test these UI consumers.
+
+## Combined-branch verification
+
+Code candidate `99e0ea36a5f6dd2b6b523ce6f34ba1556540c312`; reviewed candidate `f8e5b5546219a75bb100effe3cb5f706fdf025a0` differs only in plan/evidence documentation and generated Graphify artifacts. Current main `d8cd10252a43db3d8a5b78ba37d481d1d13c4a70` is included. Node24.18.0/pnpm11.1.2; task-owned PostgreSQL14.23 on loopback55436, unique synthetic test databases and mocked external providers. CI uses PostgreSQL17. No application envfiles or production credentials/data were used.
+
+From `nextjs-version/`, a clean environment with only the disposable `MCA_TEST_DATABASE_ADMIN_URL` ran:
+
+| Check | Result |
+| --- | --- |
+| `pnpm test` | **2186 tests: 2185 pass, 0 fail, 1 skip**, 317922.360042ms. Skip is the unchanged opt-in live synthetic assistant-provider acceptance case. |
+| `pnpm typecheck` | Exit0. |
+| `pnpm lint` | Exit0; zero errors,16 inherited warnings. |
+| `pnpm build` | Normal Next16.1.1/Turbopack exit0; compiled11.5s,274staticpages. Telemetry disabled; only existing public font build access. |
+| `node scripts/operations/build-monitor.mjs` plus tracked generated-file parity | Exit0; no generated monitor diff. |
+| Deno2.9.7 `check --node-modules-dir=none --unstable-sloppy-imports scripts/operations/edge-entry.ts` | Exit0 with task-owned cached dependencies/copied lock; no product lock changes. |
+| Graphify update and `cluster-only . --no-label` | Exit0;16173nodes,51686edges,790communities. HTML regenerated with30000-node limit. Main had13564nodes/41904edges; no shrink warning.31 files yielded zero AST nodes, including data-only JSON. |
+
+The first combined candidate had one failure: completion copy repeated a price literal. The unchanged catalog guard caught it; a reviewed one-component change now derives the displayed USD first-user price from the canonical catalog. The corrected combined guard passes3/3 and the complete rerun above passes. No assertion or guard was weakened. Experimental/deprecated module-mock warnings and expected sanitized synthetic failure diagnostics remain disclosed.
+
+Actual controlled Chrome evidence: public entry19cases, then3focused unsupported/supported coordination cases; operator22checks/10explicit syntheticPOSTs, then5focused StrictMode checks; zero pageerrors in all. APIs/providers are intercepted synthetic fixtures. These are real component/browser checks, not live Auth/Stripe/mail acceptance. Each implementation slice and concrete fix passed independent spec/quality review. Whole-branch review and exact published SHA/CI/available preview verification are publication gates.
 
 ## Hosted evidence still required
 
