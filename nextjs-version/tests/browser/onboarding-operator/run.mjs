@@ -26,11 +26,17 @@ try {
   const page = await context.newPage()
   page.setDefaultTimeout(5000)
   await page.clock.install()
-  await page.addInitScript(() => {
+  await page.addInitScript(({ strictRead }) => {
     const original = window.fetch
     window.operatorRequests = []
-    window.fetch = (url, options) => { window.operatorRequests.push({ url: String(url), method: options?.method ?? 'GET', cache: options?.cache, credentials: options?.credentials }); return original(url, options) }
-  })
+    let detailStarts = 0
+    window.fetch = (url, options) => {
+      window.operatorRequests.push({ url: String(url), method: options?.method ?? 'GET', cache: options?.cache, credentials: options?.credentials })
+      // Hold the abandoned first effect's rejection until its replacement is active.
+      if (strictRead && /^\/api\/platform\/onboarding\//.test(String(url)) && (options?.method ?? 'GET') === 'GET' && ++detailStarts === 1) return new Promise((_resolve, reject) => { window.settleAbandonedRead = () => reject(new DOMException('Abandoned synthetic read', 'AbortError')) })
+      return original(url, options)
+    }
+  }, { strictRead: process.env.OPERATOR_STRICT_READ === '1' })
   page.on('pageerror', error => errors.push(error.message))
   const details = { [a]: detailFixture(a), [b]: detailFixture(b) }
   let readStatus = 200, queueStatus = 200, conflict = false, postGate, readGate
@@ -63,8 +69,42 @@ try {
   const reason = () => page.getByLabel('Action reason', { exact: true }).fill('Synthetic independent review reason')
   const purchase = () => page.getByLabel('Purchase evidence reference', { exact: true }).fill('purchase-case-123')
   const refreshDetail = () => page.getByRole('button', { name: 'Refresh detail', exact: true }).click()
+  let releaseReplacement
+  if (process.env.OPERATOR_STRICT_READ === '1') readGate = new Promise(done => { releaseReplacement = done })
   await visit()
   await inspect(a)
+  if (process.env.OPERATOR_STRICT_READ === '1') {
+    await page.waitForFunction(() => window.operatorRequests.filter(request => /^\/api\/platform\/onboarding\//.test(request.url)).length === 2)
+    checks.push('StrictMode setup-cleanup-setup starts a replacement detail read')
+    await page.evaluate(() => window.settleAbandonedRead())
+    assert.equal(await page.getByRole('button', { name: 'Refresh detail', exact: true }).isDisabled(), true, 'Old finalization cannot clear replacement loading')
+    await page.evaluate(() => { window.dispatchEvent(new Event('mca:platform-refresh')); window.dispatchEvent(new Event('mca:platform-refresh')) })
+    assert.equal(await page.evaluate(() => window.operatorRequests.filter(request => /^\/api\/platform\/onboarding\//.test(request.url)).length), 2, 'Late abandoned finalization cannot clear the replacement promise/deduplication latch')
+    checks.push('late abandoned rejection preserves replacement loading and duplicate-read ownership')
+    readGate = null; releaseReplacement()
+    await section.getByText('Revision 7', { exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Review target verification', exact: true }).click()
+    await page.getByLabel('Corrected target email', { exact: true }).fill('strict-draft@example.test')
+    await reason(); await purchase()
+    checks.push('replacement completes and enables explicit action drafts without a mutation')
+    readStatus = 500; await refreshDetail()
+    await section.getByRole('alert').filter({ hasText: 'Stale diagnostics' }).waitFor()
+    assert.equal(await page.getByLabel('Corrected target email', { exact: true }).inputValue(), 'strict-draft@example.test')
+    assert.equal(await page.getByRole('button', { name: 'Submit verify target', exact: true }).isDisabled(), true)
+    readStatus = 200; await refreshDetail()
+    await section.getByText('Revision 7', { exact: true }).waitFor()
+    assert.equal(await page.getByLabel('Corrected target email', { exact: true }).inputValue(), 'strict-draft@example.test')
+    checks.push('StrictMode same-ID failed/successful reads preserve draft and stale action fencing')
+    readStatus = 403; await refreshDetail()
+    await section.getByText(/Access denied/).waitFor()
+    assert.equal(await page.getByLabel('Corrected target email', { exact: true }).count(), 0)
+    assert.equal(await section.getByText('Revision 7', { exact: true }).count(), 0)
+    assert.equal(actions.length, 0)
+    assert.equal(errors.length, 0, errors.join('\n'))
+    checks.push('StrictMode denied read clears diagnostics/private draft; zero POSTs or page errors')
+    await fs.writeFile(resolve(out, 'strict-read-report.json'), JSON.stringify({ checks, actions, reads, errors }, null, 2))
+    console.log(JSON.stringify({ strictReadChecks: checks.length, actions: actions.length, errors }, null, 2))
+  } else {
   await section.getByText('Revision 7', { exact: true }).waitFor()
   checks.push('selected detail reads reviewed sanitized DTO; explicit action controls exist')
   if (process.env.OPERATOR_RED === '1') { console.log(JSON.stringify({ checks }, null, 2)); process.exitCode = 0 }
@@ -271,6 +311,7 @@ try {
     assert.equal(errors.length, 0, errors.join('\n'))
     await fs.writeFile(resolve(out, 'report.json'), JSON.stringify({ checks, actions, reads, errors }, null, 2))
     console.log(JSON.stringify({ checks: checks.length, actions: actions.length, errors }, null, 2))
+  }
   }
 } catch (error) {
   await fs.writeFile(resolve(out, 'failed-report.json'), JSON.stringify({ checks, actions, reads, errors, failure: String(error) }, null, 2))
