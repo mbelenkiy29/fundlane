@@ -42,7 +42,7 @@ test("public pricing and trial CTA default off and parse flags strictly", () => 
   withEnv({ MCA_PUBLIC_PRICING_ENABLED: undefined, MCA_MARKETING_TRIAL_CTA_ENABLED: undefined, MCA_SIGNUP_MODE: "open" }, () => {
     assert.equal(publicPricingEnabled(), false)
     assert.equal(marketingTrialEnrollmentEnabled(), false)
-    assert.equal(anonymousRequestDisposition("/pricing"), "sign-in")
+    assert.equal(anonymousRequestDisposition("/pricing"), "public")
     assert.equal(sitemap().some(entry => entry.url === `${MARKETING_ORIGIN}/pricing`), false)
     assert.equal((robots().rules as { allow: string[] }).allow.includes("/pricing$"), false)
   })
@@ -93,7 +93,7 @@ function renderLaunch(env: Record<string, string | undefined>) {
   return JSON.parse(result.stdout) as { shell: string; mobile: string; pricing: string; footer: string }
 }
 
-test("disabled launch flags keep pricing private and marketing links absent", () => {
+test("disabled launch flags keep unavailable pricing readable and marketing links absent", () => {
   const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: undefined, MCA_MARKETING_TRIAL_CTA_ENABLED: undefined, MCA_SUPPORT_EMAIL: undefined })
   assert.match(result.pricing, /trial enrollment is currently unavailable/i)
   assert.doesNotMatch(result.shell, /href="\/pricing"|Get Started/)

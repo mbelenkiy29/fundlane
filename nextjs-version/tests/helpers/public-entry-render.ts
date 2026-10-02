@@ -33,7 +33,7 @@ export const interactionSetup = `
   const calls = [], navigations = [], states = [], effects = [];
   let cursor = 0, response = async () => ({});
   global.window = { location: { href: "https://fundlane.test/sign-in?next=%2Faccept-invite%3Ftoken%3Dabcdefghijklmnopqrst", search: "", assign: url => navigations.push(url) } };
-  mock.module("./src/lib/mca/client.ts", { namedExports: { requestJson: async (path, options) => { calls.push({ path, input: JSON.parse(options.body) }); return response(path); } } });
+  mock.module("./src/lib/mca/client.ts", { namedExports: { requestJson: async (path, options) => { calls.push({ path, input: options?.body ? JSON.parse(options.body) : null }); return response(path); } } });
   const dispatcher = {
     useState(initial) { const index = cursor++; if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial; return [states[index], value => { states[index] = typeof value === "function" ? value(states[index]) : value; }]; },
     useRef(initial) { const index = cursor++; return states[index] ??= { current: initial }; },

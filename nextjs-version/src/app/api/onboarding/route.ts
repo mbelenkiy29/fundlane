@@ -4,7 +4,7 @@ import { completeCompanyOnboarding, listSupabaseWorkspaces, setActiveWorkspace, 
 import { getTotpAccessState } from "@/lib/mca/totp-service"
 import { assertTrustedMutation, clientRateKey, consumeRequestRateLimit } from "@/lib/mca/auth"
 import { signupMode } from "@/lib/mca/signup-mode"
-import { requireOpenSignup } from "@/lib/mca/signup-guard"
+import { stripeFirstSignupRequired } from "@/lib/mca/signup-guard"
 import { readJson } from "@/lib/mca/http"
 import { billingEnabled, billingTrialDays, createOnboardingCheckoutUrl, isStripeCheckoutTrialConfigured, stripeTrialLifecycleEnabled } from "@/lib/mca/billing"
 import { apiError, AppError } from "@/lib/mca/errors"
@@ -15,7 +15,7 @@ export async function GET() {
     const identity=await supabaseIdentity({ allowPasswordSetup:true })
     if (!identity) return NextResponse.json({ authenticated:false,workspaces:[] },{ headers:{ "Cache-Control":"no-store" } })
     const requiresCard=cardRequiredTrial()
-    return NextResponse.json({ authenticated:true,passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial:requiresCard,checkoutUnavailable:trialRequiresCard()&&!isStripeCheckoutTrialConfigured(),trialLifecycleEnabled:stripeTrialLifecycleEnabled(),...(requiresCard?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
+    return NextResponse.json({ authenticated:true,stripeFirstRequired:stripeFirstSignupRequired(),passwordSetupRequired:identity.user.app_metadata.mca_migration_pending === true,workspaces:await listSupabaseWorkspaces(identity),companyName:typeof identity.user.user_metadata.companyName === "string" ? identity.user.user_metadata.companyName : "",signupMode:signupMode(),cardRequiredTrial:requiresCard,checkoutUnavailable:trialRequiresCard()&&!isStripeCheckoutTrialConfigured(),trialLifecycleEnabled:stripeTrialLifecycleEnabled(),...(requiresCard?{trialDays:billingTrialDays()}:{}) },{ headers:{ "Cache-Control":"no-store" } })
   } catch(error) { return apiError(error) }
 }
 export async function POST(request: Request) {
@@ -24,7 +24,6 @@ export async function POST(request: Request) {
     const input=await readJson(request,z.union([z.object({ workspaceId:z.uuid() }),z.object({ name:z.string().trim().min(2).max(200), selectedSeats:z.number().int().min(1).max(100000).default(1) })]))
     if ("name" in input) {
       await consumeRequestRateLimit(clientRateKey(request,"company-create"),10)
-      requireOpenSignup()
     }
     const identity=await supabaseIdentity()
     if (!identity) throw new AppError(401,"authentication_required","Sign in to continue.")

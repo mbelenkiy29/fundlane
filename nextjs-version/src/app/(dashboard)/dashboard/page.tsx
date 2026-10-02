@@ -7,6 +7,8 @@ import { getSessionResponse } from "@/lib/mca/sessions"
 import { HomeWorkspace } from "@/components/mca/home/home-workspace"
 import type { WorkspaceSetup } from "@/lib/mca/setup/contracts"
 import { getWorkspaceSetup, setupReadinessEnabled } from "@/lib/mca/setup/service"
+import { stripeFirstSignupRequired } from "@/lib/mca/signup-guard"
+import { getCompanyAccess } from "@/lib/mca/company-access"
 
 export default async function DashboardPage() {
   const context = await authenticateSupabaseSession()
@@ -14,6 +16,8 @@ export default async function DashboardPage() {
   const firstName = session?.user?.name.split(" ")[0] ?? "there"
   let initialKpis: HomeKpis | null = null
   let initialSetup: WorkspaceSetup | null = null
+  let trialEndsAt: string | null = null
+  const progressiveSetup = stripeFirstSignupRequired()
   if (context) {
     try {
       initialKpis = await getHomeKpis(await actorForDeals(context), { period: "mtd", nowIso: nowIso() })
@@ -21,10 +25,11 @@ export default async function DashboardPage() {
       initialKpis = null
     }
     try {
-      initialSetup = await getWorkspaceSetup(context.workspaceId, context.role)
+      initialSetup = await getWorkspaceSetup(context.workspaceId, context.role, progressiveSetup)
     } catch {
       initialSetup = null
     }
+    try { trialEndsAt = (await getCompanyAccess(context.workspaceId)).trialEndsAt } catch { trialEndsAt = null }
   }
   return (
     <HomeWorkspace
@@ -32,7 +37,9 @@ export default async function DashboardPage() {
       canCreateDeal={Boolean(session?.permissions?.actions.createDeal)}
       initialKpis={initialKpis}
       initialSetup={initialSetup}
-      readinessEnabled={setupReadinessEnabled()}
+      readinessEnabled={setupReadinessEnabled() || progressiveSetup}
+      progressiveSetup={progressiveSetup}
+      trialEndsAt={trialEndsAt}
     />
   )
 }

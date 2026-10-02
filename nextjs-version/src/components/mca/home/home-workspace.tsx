@@ -10,12 +10,16 @@ export function HomeWorkspace({
   initialKpis,
   initialSetup = null,
   readinessEnabled = false,
+  progressiveSetup = false,
+  trialEndsAt = null,
 }: {
   firstName: string
   canCreateDeal: boolean
   initialKpis: HomeKpis | null
   initialSetup?: WorkspaceSetup | null
   readinessEnabled?: boolean
+  progressiveSetup?: boolean
+  trialEndsAt?: string | null
 }) {
   return (
     <Dashboard2Shell
@@ -24,6 +28,8 @@ export function HomeWorkspace({
       initialKpis={initialKpis}
       initialSetup={initialSetup}
       readinessEnabled={readinessEnabled}
+      progressiveSetup={progressiveSetup}
+      trialEndsAt={trialEndsAt}
     />
   )
 }

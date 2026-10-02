@@ -205,6 +205,7 @@ export function SignInForm({ magicLinkEnabled = false, showMigratedAccountNotice
             setMagicSent(false)
             setGoogleError("")
             setMagicError("")
+            flow.clearError()
           }}>Change email</button>}
         </div>
         {stage === "password" && <div>

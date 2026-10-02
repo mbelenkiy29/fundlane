@@ -1,5 +1,5 @@
 import { MarketingShell } from "@/components/marketing/shell"
-import { TrialStartButton } from "@/components/marketing/trial-start-button"
+import { TrialCheckoutStart } from "@/components/marketing/trial-checkout-start"
 import { BILLING_CATALOG, TRIAL_DAYS } from "@/lib/mca/billing-catalog"
 import { marketingTrialEnrollmentEnabled } from "@/lib/marketing/trial-availability"
 import { getSupportConfig } from "@/lib/marketing/support-config"
@@ -36,7 +36,7 @@ export default function PricingPage() {
       <p>Onboarding: set up on your own with our guides{supportEmail && <>, or <a className="fl-inline-link" href={`mailto:${supportEmail}`}>email us</a> for help getting your company set up</>}.</p>
       <p>Start with a {TRIAL_DAYS}-day free trial. A card is required to start. Your subscription automatically converts to {dollars(BILLING_CATALOG.base.unitAmountCents)} per month unless you cancel before the trial ends.</p>
       <p>Stripe will show your first scheduled charge date before you start your trial.</p>
-      <TrialStartButton available={marketingTrialEnrollmentEnabled()} />
+      <TrialCheckoutStart available={marketingTrialEnrollmentEnabled()} />
       {supportEmail && <p>Questions? Email <a className="fl-inline-link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.</p>}
     </main>
   </MarketingShell>
