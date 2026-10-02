@@ -4,5 +4,5 @@ import { publicPricingEnabled, publicRoadmapEnabled, publicStatusPageEnabled } f
 import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 
 export default function robots(): MetadataRoute.Robots {
-  return { rules: { userAgent: "*", allow: ["/$", "/demo$", "/features$", ...(publicPricingEnabled() ? ["/pricing$"] : []), "/changelog$", ...(publicRoadmapEnabled() ? ["/roadmap$"] : []), ...(publicStatusPageEnabled() ? ["/status$"] : []), "/help", ...(legalDraftPagesEnabled() ? ["/terms$", "/privacy$"] : []), "/marketing/", "/_next/"], disallow: "/" }, sitemap: `${MARKETING_ORIGIN}/sitemap.xml` }
+  return { rules: { userAgent: "*", allow: ["/$", "/features$", ...(publicPricingEnabled() ? ["/pricing$"] : []), "/changelog$", ...(publicRoadmapEnabled() ? ["/roadmap$"] : []), ...(publicStatusPageEnabled() ? ["/status$"] : []), "/help", ...(legalDraftPagesEnabled() ? ["/terms$", "/privacy$"] : []), "/marketing/", "/_next/"], disallow: "/" }, sitemap: `${MARKETING_ORIGIN}/sitemap.xml` }
 }

@@ -8,7 +8,7 @@ export function stripeFirstSignupRequired(): boolean {
 }
 
 function signupDenied(): never {
-  if (signupMode() === "invite_only") throw new AppError(403, "signup_invite_only", "Fundlane is invite-only. Book a demo to get started.")
+  if (signupMode() === "invite_only") throw new AppError(403, "signup_invite_only", "Fundlane is invite-only. Use Get Started or Login, or open your invitation link to join your team.")
   throw new AppError(403, "signup_enrollment_required", "Start your free trial from Pricing before creating a company.")
 }
 

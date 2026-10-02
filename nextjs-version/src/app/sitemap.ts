@@ -12,7 +12,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${MARKETING_ORIGIN}/changelog`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.8 },
     ...(publicRoadmapEnabled() ? [{ url: `${MARKETING_ORIGIN}/roadmap`, lastModified: new Date("2026-09-28"), changeFrequency: "weekly" as const, priority: 0.7 }] : []),
     ...(publicStatusPageEnabled() ? [{ url: `${MARKETING_ORIGIN}/status`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "daily" as const, priority: 0.6 }] : []),
-    { url: `${MARKETING_ORIGIN}/demo`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly", priority: 0.8 },
     ...(legalDraftPagesEnabled() ? [
       { url: `${MARKETING_ORIGIN}/terms`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly" as const, priority: 0.5 },
       { url: `${MARKETING_ORIGIN}/privacy`, lastModified: MARKETING_SITEMAP_LASTMOD, changeFrequency: "monthly" as const, priority: 0.5 },

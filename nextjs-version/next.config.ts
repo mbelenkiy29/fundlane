@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { retiredPublicRedirects } from "./src/lib/mca/retired-public-redirects";
 import { sampleRouteRedirects } from "./src/lib/mca/sample-route-redirects";
 import { nextConfigHeaders } from "./src/lib/mca/security-headers";
 
@@ -60,6 +61,7 @@ const nextConfig: NextConfig = {
         destination: '/pipeline?create=1',
         permanent: false,
       },
+      ...retiredPublicRedirects,
       ...sampleRouteRedirects,
     ];
   },
