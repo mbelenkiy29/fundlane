@@ -16,6 +16,7 @@ import {
 } from "@/lib/mca/onboarding/http"
 import { findEnrollment } from "@/lib/mca/onboarding/store"
 import { requireEnrollmentRuntime } from "@/lib/mca/onboarding/claim"
+import { onboardingEmailEvidenceSchema, readOnboardingEmailDetails, recordOnboardingEmailEvidence, reissueOnboardingEmails } from "@/lib/mca/onboarding/email-recovery"
 
 type Context = { params: Promise<{ id: string }> }
 const evidence = {
@@ -31,6 +32,8 @@ const actionSchema = z.discriminatedUnion("action", [
       ...evidence,
     })
     .strict(),
+  onboardingEmailEvidenceSchema.extend({ action: z.literal("record_email_evidence") }).strict(),
+  z.object({ action: z.literal("reissue_emails"), ...evidence }).strict(),
   z
     .object({
       action: z.literal("approve_identity"),
@@ -51,7 +54,6 @@ function responseError(error: unknown) {
 export async function GET(request: Request, context: Context) {
   try {
     await requireSuperAdmin(request)
-    requireEnrollmentRuntime()
     const { id } = await context.params,
       row = await findEnrollment(z.uuid().parse(id))
     if (!row)
@@ -78,6 +80,7 @@ export async function GET(request: Request, context: Context) {
         subscriptionId: row.subscriptionId,
         livemode: row.offer.livemode,
         targetVerification,
+        ...await readOnboardingEmailDetails(row),
       },
       { headers: enrollmentHttpHeaders }
     )
@@ -102,8 +105,15 @@ export async function POST(request: Request, context: Context) {
         { enrollmentId, ...input },
         request
       )
-    else
+    else if (input.action === "approve_identity")
       await recoverEnrollmentContact(actor, { enrollmentId, ...input }, request)
+    else if (input.action === "record_email_evidence") {
+      const { action: _action, ...command } = input
+      void _action
+      await recordOnboardingEmailEvidence(actor, { enrollmentId, ...command }, request)
+    } else {
+      await reissueOnboardingEmails(actor, { enrollmentId, ...input }, request)
+    }
     return NextResponse.json(
       { success: true },
       { headers: enrollmentHttpHeaders }

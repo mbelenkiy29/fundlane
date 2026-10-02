@@ -71,7 +71,7 @@ function evidenceHash(input: EnrollmentRecoveryEvidence): string {
     input.purchaseEvidence
   )
 }
-async function operatorPermission(
+export async function operatorPermission(
   expected: SuperAdminActor,
   request: Request
 ): Promise<{ actor: SuperAdminActor; stepUpAt: string }> {
@@ -92,7 +92,7 @@ async function operatorPermission(
   await consumeRequestRateLimit(`enrollment-recovery:${actor.userId}`, 10)
   return { actor, stepUpAt: await requirePlatformStepUp(actor) }
 }
-async function assertOperatorInTransaction(
+export async function assertOperatorInTransaction(
   actor: SuperAdminActor,
   db: DbExecutor
 ): Promise<void> {
