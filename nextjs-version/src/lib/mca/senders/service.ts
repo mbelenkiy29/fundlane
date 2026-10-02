@@ -17,6 +17,10 @@ import {
   type SenderTestSendResult,
 } from "./contracts"
 import { deliverSenderTest } from "./delivery"
+import { claimSenderTest, finishSenderTest, confirmTestReceipt, latestSenderTestEvidence, senderTestFingerprint } from "./test-evidence"
+import { assertCompanyOperational } from "../company-access"
+import { assertSessionTotpAccess } from "../totp-service"
+import { getDatabase } from "../db"
 import {
   exchangeSenderAuthorizationCode,
   senderAuthorizationUrl,
@@ -209,12 +213,6 @@ function asMemberIds(value: unknown): string[] | undefined {
   return [...new Set(value.map((item) => item.trim()).filter(Boolean))]
 }
 
-function asRecipient(value: unknown, fallback: string): string {
-  if (value == null || value === "") return fallback
-  if (typeof value !== "string" || !EMAIL_PATTERN.test(value.trim())) invalid("to", "Enter a valid test recipient.")
-  return value.trim()
-}
-
 async function normalizeMemberIds(workspaceId: string, memberIds: string[] | undefined): Promise<string[]> {
   const requested = memberIds ?? []
   if (!requested.length) return []
@@ -310,7 +308,7 @@ async function audit(actor: DealActor, action: string, sender: StoredEmailSender
 export async function listSenders(actor: DealActor): Promise<SenderListResult> {
   const stored = await listSendersByWorkspace(actor.workspaceId)
   return {
-    senders: stored.filter((sender) => canView(actor, sender)).map(sender => ({ ...toConnection(sender), canReconnect: sender.ownerMembershipId ? sender.ownerMembershipId === actor.membershipId : isAdmin(actor) })),
+    senders: await Promise.all(stored.filter((sender) => canView(actor, sender)).map(async sender => ({ ...toConnection(sender), testEvidence: await latestSenderTestEvidence(sender, actor.userId), canReconnect: sender.ownerMembershipId ? sender.ownerMembershipId === actor.membershipId : isAdmin(actor) }))),
     oauth: { google: senderOAuthConfigured("google"), microsoft: senderOAuthConfigured("microsoft") },
     canManage: isAdmin(actor),
   }
@@ -426,38 +424,51 @@ function assertTestable(sender: StoredEmailSender): void {
   }
 }
 
-export async function testSend(actor: DealActor, senderId: string, input: { to?: string } = {}): Promise<SenderTestSendResult> {
-  const sender = assertCanUse(actor, await findSenderById(actor.workspaceId, senderId))
-  assertTestable(sender)
-  const recipient = asRecipient(input.to, sender.fromAddress)
-  const result = await deliverSenderTest({
-    workspaceId: actor.workspaceId,
-    senderId: sender.id,
-    provider: sender.provider,
-    purpose: sender.purpose,
-    fromName: sender.fromName,
-    fromAddress: sender.fromAddress,
-    recipient,
+async function assertTestActor(actor: DealActor): Promise<void> {
+  if (actor.source !== "user" || !actor.userId || !actor.membershipId || !actor.sessionId) denied("An interactive session is required to test a sender.")
+  const member = await getDatabase().prepare<{ role: string }>("SELECT role FROM memberships WHERE workspace_id=? AND id=? AND user_id=? AND status='active' FOR SHARE").get(actor.workspaceId, actor.membershipId, actor.userId)
+  if (!member || member.role !== actor.role) denied()
+  await assertCompanyOperational(actor.workspaceId)
+  await assertSessionTotpAccess({ userId: actor.userId!, sessionId: actor.sessionId!, workspaceId: actor.workspaceId })
+}
+export async function testSend(actor: DealActor, senderId: string, input: unknown = {}): Promise<SenderTestSendResult> {
+  await assertTestActor(actor)
+  const { sender, claim } = await withTransaction(async db => {
+    await db.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, senderId)
+    await assertTestActor(actor)
+    const sender = assertCanUse(actor, await findSenderById(actor.workspaceId, senderId, db))
+    assertTestable(sender)
+    return { sender, claim: await claimSenderTest(actor, sender, input) }
   })
-  if (result.delivery === "sent" || result.delivery === "preview") {
+  if (claim.previous) return claim.previous
+  let delivery: SenderTestSendResult
+  try {
+    delivery = await deliverSenderTest({ workspaceId: actor.workspaceId, senderId: sender.id, provider: sender.provider, purpose: sender.purpose, fromName: sender.fromName, fromAddress: sender.fromAddress, recipient: claim.recipient, attemptId: claim.id })
+  } catch {
+    delivery = { delivery: "uncertain", correlationId: claim.id, error: "Provider outcome is uncertain. This attempt will not resend." }
+  }
+  const result = await finishSenderTest(actor, sender.id, claim.id, claim.claimToken!, delivery)
+  if (result.evidence === "accepted") {
     const now = nowIso()
-    await updateSenderRecord({
-      id: sender.id,
-      workspaceId: actor.workspaceId,
-      state: "verified",
-      verifiedAt: now,
-      lastError: null,
-      updatedAt: now,
-    })
-  } else {
-    await updateSenderRecord({
-      id: sender.id,
-      workspaceId: actor.workspaceId,
-      lastError: result.error ?? "Test send failed.",
-      updatedAt: nowIso(),
+    await withTransaction(async db => {
+      await db.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, sender.id)
+      const current = await findSenderById(actor.workspaceId, sender.id, db)
+      if (current && !["expired", "revoked"].includes(current.state) && senderTestFingerprint(current) === claim.fingerprint)
+        await updateSenderRecord({ id: sender.id, workspaceId: actor.workspaceId, state: "verified", verifiedAt: now, lastError: null, updatedAt: now }, db)
     })
   }
-  await audit(actor, "sender.test_sent", sender, { delivery: result.delivery })
+  await audit(actor, "sender.test_attempted", sender, { evidence: result.evidence, testId: result.testId })
+  return result
+}
+export async function confirmSenderTestReceipt(actor: DealActor, senderId: string, testId: string, input: unknown): Promise<SenderTestSendResult> {
+  await assertTestActor(actor)
+  const { sender, result } = await withTransaction(async db => {
+    await db.prepare("SELECT id FROM mca_email_senders WHERE workspace_id=? AND id=? FOR UPDATE").get(actor.workspaceId, senderId)
+    await assertTestActor(actor)
+    const sender = assertCanUse(actor, await findSenderById(actor.workspaceId, senderId, db))
+    return { sender, result: await confirmTestReceipt(actor, sender, testId, input) }
+  })
+  await audit(actor, "sender.test_receipt_confirmed", sender, { testId, evidenceSource: "user_confirmed" })
   return result
 }
 

@@ -12,7 +12,7 @@ import { createFunder } from "../src/lib/mca/funders/directory"
 import { upsertAdapterCredential } from "../src/lib/mca/submissions/adapters/credentials"
 import { registerAdapter } from "../src/lib/mca/submissions/adapters/registry"
 import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { parseEmailAttemptRef, setEmailDeliveryFetchForTests, setSubmissionEmailProductionForTests } from "../src/lib/mca/submissions/email-templates"
 import { assertProductionDeliveryNotPreview, processJobDelivery, reconcileUncertainEmailDelivery } from "../src/lib/mca/submissions/outbox"
 import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
@@ -175,7 +175,7 @@ before(async () => {
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: "smtp-outbox-password" },
   })
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   emailFunderId = (await createFunder(actor(), {
     idempotencyKey: "outbox-email-funder",
     legalName: "Outbox Email Capital LLC",

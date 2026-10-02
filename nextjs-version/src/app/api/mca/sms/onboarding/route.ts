@@ -9,7 +9,7 @@ import {
   onboardingStatus,
   ensureCompany,
   submitProfile,
-  profileSchema,
+  registrationProfileInput,
   sendVerification,
 } from "@/lib/mca/sms/onboarding"
 import { consumeRequestRateLimit } from "@/lib/mca/auth"
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       request,
       z.discriminatedUnion("action", [
         z.object({ action: z.literal("verify_email") }),
-        z.object({ action: z.literal("submit"), profile: profileSchema }),
+        z.object({ action: z.literal("submit"), profile: registrationProfileInput, useStoredEin: z.boolean().optional(), basicRevision: z.number().int().nonnegative().optional() }).strict(),
       ])
     )
     if (input.action === "verify_email") {
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       await ensureCompany(actor)
       return json(await sendVerification(actor.workspaceId, actor.userId!))
     }
-    return json(await submitProfile(actor, input.profile))
+    return json(await submitProfile(actor, input.profile, { useStoredEin: input.useStoredEin, basicRevision: input.basicRevision }))
   } catch (e) {
     return apiError(e)
   }

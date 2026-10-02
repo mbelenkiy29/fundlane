@@ -13,7 +13,7 @@ import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests, type DocumentStorage } from "../src/lib/mca/documents/storage"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { setClock } from "../src/lib/mca/submissions/clock"
 import { packageFingerprint, submissionMerchantIdentityKey } from "../src/lib/mca/submissions/identity"
 import { assertDuplicatePolicy } from "../src/lib/mca/submissions/duplicate-policy"
@@ -162,7 +162,7 @@ before(async () => {
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: SMTP_PASSWORD },
   })
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   process.env.MCA_EMAIL_WEBHOOK_URL = "https://email-duplicates.example.test/deliver"
   setEmailDeliveryFetchForTests(async () => new Response("Fixture provider failure", { status: 400 }))
   emailFunderId = (await createFunder(actor(), {

@@ -21,6 +21,7 @@ import type { AuthContext } from "../types"
 import { requireSuperAdmin, requireSmsApprover } from "../platform-auth"
 import { requirePlatformStepUp } from "../platform-step-up"
 import { insertSuperAdminAudit, withSuperAdminAction } from "../platform-audit"
+import { businessBasicsForRegistration } from "../onboarding/business-profile"
 
 export const signupSchema = z
   .object({
@@ -323,7 +324,14 @@ export async function onboardingStatus(actor: DealActor) {
   const { managedReadiness } = await import("./managed")
   const visibleNumbers = manageable ? numbers : numbers.filter((n) => n.membership_id === null || n.membership_id === actor.membershipId)
   const readyNumbers = await Promise.all(visibleNumbers.map(async (n) => ({ ...n, readiness: await managedReadiness(actor.workspaceId, String(n.account_id)) })))
+  const storedProfile = manageable && c?.profile_cipher ? JSON.parse(decryptSensitive(c.profile_cipher, actor.workspaceId)) as BusinessProfile : null
+  const { getBusinessBasics } = await import("../onboarding/business-profile")
+  const basics = manageable ? await getBusinessBasics(actor) : null
+  const { ein: storedEin, ...sanitizedProfile } = storedProfile ?? {}
   return {
+    einPresent: Boolean(storedEin || basics?.einPresent),
+    basicRevision: basics?.revision ?? 0,
+    legalName: basics?.legalName,
     emailVerified: !!c?.email_verified_at,
     reviewState: c?.review_state ?? "draft",
     reviewNote: c?.review_note,
@@ -332,10 +340,7 @@ export async function onboardingStatus(actor: DealActor) {
     platformReady: platformReady(),
     canManage: manageable,
     isOperator: await isPlatformOperator(actor.userId),
-    profile:
-      manageable && c?.profile_cipher
-        ? JSON.parse(decryptSensitive(c.profile_cipher, actor.workspaceId))
-        : null,
+    profile: storedProfile ? sanitizedProfile : null,
     limits: {
       numbers: c?.number_limit ?? 0,
       monthlyCents: c?.monthly_limit_cents ?? 0,
@@ -346,23 +351,39 @@ export async function onboardingStatus(actor: DealActor) {
     operations,
   }
 }
-export async function submitProfile(actor: DealActor, input: BusinessProfile) {
+export const registrationProfileInput = profileSchema.omit({ ein: true }).extend({ ein: profileSchema.shape.ein.optional() }).strict()
+export interface StoredEinOptions { useStoredEin?: boolean; basicRevision?: number }
+export async function resolveFullBusinessProfile(actor: DealActor, input: unknown, options: StoredEinOptions = {}): Promise<BusinessProfile> {
+  let full = input
+  if (options.useStoredEin) {
+    if (!Number.isInteger(options.basicRevision)) throw new AppError(422, "validation_failed", "Reload business details before using the saved EIN.")
+    const basics = await businessBasicsForRegistration(actor, options.basicRevision!)
+    if (!basics) throw new AppError(409, "business_basics_missing", "Save business details or enter an EIN in the complete registration form.")
+    if (!input || typeof input !== "object" || Array.isArray(input) || "ein" in input) throw new AppError(422, "validation_failed", "Choose the saved EIN or enter a replacement, then submit the complete form.")
+    full = { ...input, ein: basics.ein }
+  }
+  const parsed = profileSchema.safeParse(full)
+  if (!parsed.success) throw new AppError(422, "validation_failed", "Complete all required SMS registration fields.")
+  return parsed.data
+}
+export async function submitProfile(actor: DealActor, input: unknown, options: StoredEinOptions = {}) {
   admin(actor)
-  const profile = profileSchema.parse(input)
   await ensureCompany(actor)
   await withImmediateTransaction(async (db) => {
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(actor.workspaceId)
     const c = await db
       .prepare<Company>(
         "SELECT * FROM sms_companies WHERE workspace_id=? FOR UPDATE"
       )
       .get(actor.workspaceId)
+    const profile = await resolveFullBusinessProfile(actor, input, options)
     if (!c?.email_verified_at)
       throw new AppError(
         409,
         "email_verification_required",
         "Verify the company owner's email first."
       )
-    if (c.provider_cipher)
+    if (c.provider_cipher || c.registration_state !== "not_started" || c.provisioning_state !== "not_started")
       throw new AppError(
         409,
         "registration_started",

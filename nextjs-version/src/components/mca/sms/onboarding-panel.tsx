@@ -17,6 +17,9 @@ import { smsChannelStatus } from "@/lib/mca/integrations/connection-status"
 import { ConnectionStatusBadge } from "@/components/mca/integrations/connection-status"
 import type { SmsReadiness } from "@/lib/mca/sms/contracts"
 type Status = {
+  einPresent: boolean
+  basicRevision: number
+  legalName?: string
   optOutReady: boolean
   emailVerified: boolean
   reviewState: string
@@ -65,6 +68,7 @@ export function SmsOnboardingPanel() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
+    [replaceEin, setReplaceEin] = useState(false),
     [area, setArea] = useState("212"),
     [available, setAvailable] = useState<
       { phone: string; monthlyCents: number }[]
@@ -201,7 +205,8 @@ export function SmsOnboardingPanel() {
                   className="space-y-4"
                   onSubmit={(e) => {
                     e.preventDefault()
-                    const f = new FormData(e.currentTarget),
+                    const form = e.currentTarget
+                    const f = new FormData(form),
                       profile: Record<string, unknown> = {}
                     for (const [key, value] of f.entries()) profile[key] = value
                     profile.samples = [f.get("sample1"), f.get("sample2")]
@@ -209,24 +214,27 @@ export function SmsOnboardingPanel() {
                     delete profile.sample2
                     profile.applicationUpdatesOnly =
                       f.get("applicationUpdatesOnly") === "on"
+                    const useStoredEin = status.einPresent && !replaceEin
                     void act(
-                      () =>
-                        post("/api/mca/sms/onboarding", {
-                          action: "submit",
-                          profile,
-                        }),
+                      async () => {
+                        try { return await post("/api/mca/sms/onboarding", { action: "submit", profile, useStoredEin, basicRevision: status.basicRevision }) }
+                        finally { const field = form.elements.namedItem("ein"); if (field instanceof HTMLInputElement) field.value = "" }
+                      },
                       "Business details submitted for review."
                     )
                   }}
                 >
-                  <h3 className="font-medium">Business verification</h3>
+                  <h3 className="font-medium">Full SMS business registration</h3>
+                  {status.einPresent && <div className="space-y-2"><p>EIN supplied securely. It is composed server-side with this complete registration form.</p><Button type="button" variant="outline" onClick={() => setReplaceEin(value => !value)}>{replaceEin ? "Use saved EIN" : "Replace EIN for registration"}</Button></div>}
                   <div className="grid gap-4 md:grid-cols-2">
-                    {fields.map(([name, label]) => (
+                    {fields.filter(([name]) => name !== "ein" || !status.einPresent || replaceEin).map(([name, label]) => (
                       <Label key={name} className="grid gap-2">
                         {label}
                         <Input
                           name={name}
-                          defaultValue={String(status.profile?.[name] ?? "")}
+                          defaultValue={name === "ein" ? "" : String(status.profile?.[name] ?? (name === "legalName" ? status.legalName : "") ?? "")}
+                          type={name === "ein" ? "password" : "text"}
+                          autoComplete={name === "ein" ? "off" : undefined}
                           required
                         />
                       </Label>

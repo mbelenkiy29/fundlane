@@ -56,7 +56,7 @@ import {
 import { createSmsAccount, recordSmsConsent } from "../src/lib/mca/sms/service"
 import { persistInbound } from "../src/lib/mca/sms/inbox"
 import { createFunder } from "../src/lib/mca/funders/directory"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import { storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { getSubmissionSelection } from "../src/lib/mca/submissions/queue"
@@ -712,7 +712,7 @@ for (const outcome of ["success","expired","legacy","postclaim_expired"] as cons
       password: "synthetic-only",
     },
   })
-  await testSend(f.actor, senderRecord.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), senderRecord.workspaceId, senderRecord.id)
   const funder = (
     await createFunder(f.actor, {
       idempotencyKey: newId(),

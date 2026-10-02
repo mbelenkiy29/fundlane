@@ -29,6 +29,7 @@ type SenderConnection = {
   verifiedAt?: string
   lastError?: string
   hasCredential: boolean
+  testEvidence?: { testId: string; state: "sending" | "preview" | "accepted" | "received" | "uncertain" | "failed"; canConfirm: boolean }
   memberIds: string[]
   createdAt: string
   updatedAt: string
@@ -36,7 +37,9 @@ type SenderConnection = {
 }
 
 type SenderTestSendResult = {
-  delivery: "sent" | "preview" | "failed"
+  delivery: "sent" | "preview" | "failed" | "uncertain"
+  testId?: string
+  evidence?: "sending" | "preview" | "accepted" | "received" | "uncertain" | "failed"
   correlationId: string
   providerMessageId?: string
   previewUrl?: string
@@ -55,7 +58,7 @@ const PROVIDERS: SenderProvider[] = ["google", "microsoft", "smtp", "sendgrid"]
 const PURPOSES: SenderPurpose[] = ["merchant", "submission", "fallback"]
 
 function stateLabel(state: SenderState): string {
-  if (state === "verified") return "Verified"
+  if (state === "verified") return "Configured"
   if (state === "pending") return "Pending"
   if (state === "expired") return "Expired"
   return "Revoked"
@@ -103,6 +106,8 @@ export function SenderConnectionsPanel() {
   const [memberships, setMemberships] = React.useState<MembershipOption[]>([])
   const [form, setForm] = React.useState(emptyForm)
   const [testTo, setTestTo] = React.useState<Record<string, string>>({})
+  const [testControl, setTestControl] = React.useState<Record<string, boolean>>({})
+  const testKeys = React.useRef<Record<string, { key: string; to: string }>>({})
   const [smtpPassword, setSmtpPassword] = React.useState<Record<string, string>>({})
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState<string>()
@@ -222,18 +227,30 @@ export function SenderConnectionsPanel() {
     setError(undefined)
     setMessage(undefined)
     try {
+      const to = (testTo[id] ?? "").trim()
+      if (!to || !testControl[id]) throw new Error("Enter an address you control and confirm control before testing.")
+      if (!testKeys.current[id] || testKeys.current[id].to !== to) testKeys.current[id] = { key: crypto.randomUUID(), to }
       const result = await requestJson<SenderTestSendResult>(`/api/mca/senders/${encodeURIComponent(id)}/test`, {
         method: "POST",
-        body: JSON.stringify({ to: testTo[id] || undefined }),
+        body: JSON.stringify({ to, recipientControlConfirmed: true, requestKey: testKeys.current[id].key }),
       })
       if (result.delivery === "failed") setError(result.error ?? "Test send failed.")
-      else setMessage(result.delivery === "preview" ? "Test send previewed without a live provider." : result.providerMessageId ? `Test send accepted. Provider message ID: ${result.providerMessageId}` : "Test send accepted.")
+      else setMessage(result.delivery === "uncertain" ? "Acceptance is uncertain or still pending. Check your inbox; this attempt will not resend." : result.delivery === "preview" ? "Preview only. No live message was sent and the sender was not verified." : "Provider accepted the test. Check your controlled inbox, then explicitly confirm receipt. This test uses the configured deployment mail transport.")
       await load()
     } catch (caught) {
       setError(errorMessage(caught, "Test send failed."))
     } finally {
       setBusy(undefined)
     }
+  }
+
+  async function confirmReceipt(id: string, testId: string) {
+    setBusy(`confirm:${id}`); setError(undefined)
+    try {
+      await requestJson(`/api/mca/senders/${encodeURIComponent(id)}/test/${encodeURIComponent(testId)}/confirm`, { method: "POST", body: JSON.stringify({ received: true }) })
+      setMessage("Customer-confirmed receipt recorded for this sender configuration and inbox. Future delivery is not guaranteed.")
+      await load()
+    } catch (caught) { setError(errorMessage(caught, "Receipt could not be confirmed.")) } finally { setBusy(undefined) }
   }
 
   const senders = payload?.senders ?? []
@@ -322,10 +339,12 @@ export function SenderConnectionsPanel() {
                   disabled={Boolean(busy)}
                 />
               </div>
-              <Button variant="outline" onClick={() => void sendTest(sender.id)} disabled={Boolean(busy)} aria-label={`Send test from ${sender.fromName}`}>
+              <Button variant="outline" onClick={() => void sendTest(sender.id)} disabled={Boolean(busy) || !testControl[sender.id] || !testTo[sender.id]?.trim() || ["sending", "uncertain"].includes(sender.testEvidence?.state ?? "")} aria-label={`Send test from ${sender.fromName}`}>
                 <Mail className="size-4" />{busy === `test:${sender.id}` ? "Sending…" : "Send test"}
               </Button>
             </div>
+            <Label className="flex items-center gap-2"><input type="checkbox" checked={testControl[sender.id] ?? false} onChange={event => setTestControl(current => ({ ...current, [sender.id]: event.target.checked }))} />I control this recipient inbox.</Label>
+            {sender.testEvidence && <div className="space-y-2 text-sm"><p>{sender.testEvidence.state === "received" ? "Customer-confirmed receipt recorded." : sender.testEvidence.state === "accepted" ? "Provider accepted this test; inbox receipt has not been confirmed." : sender.testEvidence.state === "preview" ? "Preview only; no live delivery evidence." : ["sending", "uncertain"].includes(sender.testEvidence.state) ? "Pending or uncertain test held. Check your inbox before any further action." : "The provider rejected the test."}</p>{sender.testEvidence.canConfirm && <Button variant="outline" disabled={Boolean(busy)} onClick={() => void confirmReceipt(sender.id, sender.testEvidence!.testId)}>I received this exact test in my controlled inbox</Button>}</div>}
             {canManage && (
               <div className="flex flex-wrap gap-2">
                 {!sender.isDefault && (

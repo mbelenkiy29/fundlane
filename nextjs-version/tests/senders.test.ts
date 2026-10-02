@@ -1,6 +1,7 @@
 import "./helpers/business-auth";
 import test, { after, before, beforeEach } from "node:test"
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { decryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
@@ -52,6 +53,7 @@ const actor = (workspaceId = ids.workspace, role: Role | null = "admin"): DealAc
   activeMembershipIds: [],
   source: role ? "user" : "api_key",
   correlationId: `corr-${workspaceId}-${role ?? "key"}`,
+  sessionId: "sender-test-session",
 })
 
 const smtpInput = (suffix: string, extra: Record<string, unknown> = {}) => ({
@@ -171,6 +173,7 @@ before(async () => {
 })
 
 beforeEach(async () => {
+  await getDatabase().execute("DELETE FROM mca_sender_test_runs")
   await getDatabase().execute("DELETE FROM mca_email_oauth_states")
   await getDatabase().execute("DELETE FROM mca_email_senders")
   setSenderOAuthFetchForTests()
@@ -212,7 +215,7 @@ test("MIC-121: admin creates SMTP sender, lists it, and test-send previews", asy
 
   const preview = await testPost(cookieRequest(`/api/mca/senders/${sender.id}/test`, "admin-session-token", {
     method: "POST",
-    body: JSON.stringify({ to: "ops@example.test" }),
+    body: JSON.stringify({ to: "ops@example.test", recipientControlConfirmed: true, requestKey: randomUUID() }),
   }), params(sender.id))
   assert.equal(preview.status, 200)
   const result = await preview.json() as SenderTestSendResult
@@ -221,7 +224,7 @@ test("MIC-121: admin creates SMTP sender, lists it, and test-send previews", asy
   assertNoSecret(result)
 
   const verified = await senderGet(cookieRequest(`/api/mca/senders/${sender.id}`, "admin-session-token"), params(sender.id))
-  assert.equal((await verified.json() as EmailSender).state, "verified")
+  assert.equal((await verified.json() as EmailSender).state, "pending")
 })
 
 test("MIC-121: unauthorized rep cannot PATCH or test-send by forging a sender id", async () => {
@@ -271,15 +274,12 @@ test("MIC-121: admin shares a sender with a rep and the rep can test-send", asyn
 
   const preview = await testPost(cookieRequest(`/api/mca/senders/${sender.id}/test`, "rep-session-token", {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify({ to: "senders-rep@example.test", recipientControlConfirmed: true, requestKey: randomUUID() }),
   }), params(sender.id))
   assert.equal(preview.status, 200)
   assert.equal((await preview.json() as SenderTestSendResult).delivery, "preview")
 
-  const usable = await assertSenderUsable(actor(ids.workspace, "rep"), sender.id, "submission")
-  assert.equal(usable.id, sender.id)
-  assert.equal(usable.state, "verified")
-  assertNoSecret(usable)
+  await assert.rejects(() => assertSenderUsable(actor(ids.workspace, "rep"), sender.id, "submission"), { code: "sender_not_usable" })
 })
 
 test("MIC-121: expired sender returns reconnect payload and keeps id and members", async () => {
@@ -488,7 +488,7 @@ test("MIC-121: webhook test-send posts a redacted payload", async () => {
     return new Response("ok", { status: 202 })
   })
   const sender = await createSender(actor(), smtpInput("webhook"))
-  const result = await testSend(actor(), sender.id, { to: "qa@example.test" })
+  const result = await testSend(actor(), sender.id, { to: "qa@example.test", recipientControlConfirmed: true, requestKey: randomUUID() })
   assert.equal(result.delivery, "sent")
   assert.equal(captured.length, 1)
   assert.equal(captured[0].url, "https://mail.example.test/webhook")
@@ -507,7 +507,9 @@ test("MIC-121: list is isolated across workspaces and purpose mismatch is reject
     () => getSender(actor(), remote.id),
     (error: { status?: number; code?: string }) => error.status === 403 && error.code === "permission_denied",
   )
-  await testSend(actor(), local.id)
+  process.env.MCA_EMAIL_WEBHOOK_URL = "https://mail.example.test/webhook"
+  setSenderDeliveryFetchForTests(async () => new Response("ok", { status: 202 }))
+  await testSend(actor(), local.id, { to: "qa@example.test", recipientControlConfirmed: true, requestKey: randomUUID() })
   await assert.rejects(
     () => assertSenderUsable(actor(), local.id, "merchant"),
     (error: { status?: number; code?: string }) => error.status === 422 && error.code === "sender_purpose_mismatch",

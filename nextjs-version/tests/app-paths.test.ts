@@ -159,3 +159,12 @@ test("public and protected prefix lists do not overlap", () => {
   assert.equal(isProtectedAppPath("/"), false)
   assert.equal(isPublicPagePath("/dashboard"), false)
 })
+
+test('business setup and resumable getting-started are authenticated application destinations', () => {
+  for (const path of ['/settings/business', '/getting-started']) {
+    assert.equal(anonymousRequestDisposition(path), 'sign-in')
+    const gate = unauthenticatedPageGate(path)
+    assert.equal(gate.action, 'sign-in')
+    if (gate.action === 'sign-in') assert.equal(new URL(gate.location, 'http://localhost').searchParams.get('returnTo'), path)
+  }
+})

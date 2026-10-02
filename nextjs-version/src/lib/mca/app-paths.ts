@@ -34,6 +34,7 @@ export const PUBLIC_PAGE_PREFIXES = [
  * API handlers are listed separately so they keep their own 401/403 responses.
  */
 export const PROTECTED_APP_PREFIXES = [
+  "/getting-started",
   "/dashboard",
   "/dashboard-2",
   "/home",

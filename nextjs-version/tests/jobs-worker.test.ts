@@ -16,7 +16,7 @@ import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
-import { createSender, testSend } from "../src/lib/mca/senders/service"
+import { createSender } from "../src/lib/mca/senders/service"
 import type { SubmissionJob } from "../src/lib/mca/submissions/contracts"
 import { insertAttempt, persistNewDestination, updateJobRecord } from "../src/lib/mca/submissions/repository"
 import { queueSubmissions, setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
@@ -148,7 +148,7 @@ test("queueSubmissions with jobs enabled enqueues submission_delivery and leaves
     isDefault: true,
     smtp: { host: "smtp.example.test", port: 587, username: "broker", password: "smtp-jobs-password" },
   })
-  await testSend(actor(), sender.id, { to: "ops@example.test" })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), sender.workspaceId, sender.id)
   const funderId = (await createFunder(actor(), {
     idempotencyKey: "jobs-email-funder",
     legalName: "Jobs Email Capital LLC",

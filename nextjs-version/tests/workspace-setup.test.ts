@@ -201,7 +201,7 @@ test("flagged readiness reads scoped rows and diagnostics require an admin sessi
     assert.equal(response.headers.get("cache-control"), "no-store")
     const body = await response.json() as { workspaceId: string; readiness: unknown[]; requests: unknown[] }
     assert.equal(body.workspaceId, ids.workspace)
-    assert.equal(body.readiness.length, 7)
+    assert.equal(body.readiness.length, 10)
     assert.deepEqual(body.requests, [{ kind: "intake", requestId: "intake-setup-diagnostic", state: "error" }])
     assert.doesNotMatch(JSON.stringify(body), /secret-document|bank-account|external-request/)
   } finally {
@@ -316,6 +316,7 @@ test("a sandbox send counts as a synthetic test only for a synthetic deal in the
   assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "needs_setup")
 
   await db.prepare("UPDATE deals SET legal_name='[SYNTHETIC] Test Merchant' WHERE id=?").run("deal-setup-sandbox")
+  await db.prepare("UPDATE mca_submission_jobs SET route_json=? WHERE id=?").run(JSON.stringify({ kind: "api", destination: "fundlane-sandbox" }), "job-setup-sandbox")
   facts = await getReadinessFacts(workspaceId)
   assert.equal(facts.sandboxSentJobs, 1)
   assert.equal(deriveReadiness(facts, "admin").find((item) => item.id === "synthetic_deal")?.phase, "tested")
@@ -375,7 +376,8 @@ test("GET and POST /api/mca/setup require a workspace session and do not store",
     method: "POST",
     body: JSON.stringify({ dismissed: false }),
   }))
-  assert.equal(invalid.status, 400)
+  assert.equal(invalid.status, 200)
+  assert.equal((await invalid.json() as { dismissed: boolean }).dismissed, false)
 })
 
 function searchParams(entries: Record<string, string | undefined>) {
