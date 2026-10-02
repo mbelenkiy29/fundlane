@@ -24,14 +24,15 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
   return JSON.parse(result.stdout) as { signup: string; signin: string }
 }
 
-test("unset and invalid signup modes retain the existing open copy", () => {
+test("unset and invalid signup modes retain legacy signup while Login has no creation link", () => {
   for (const value of [undefined, "OPEN", "closed", "true"]) {
     if (value === undefined) delete process.env.MCA_SIGNUP_MODE
     else process.env.MCA_SIGNUP_MODE = value
     assert.equal(signupMode(), "open")
     const markup = renderAuth(value, undefined)
     assert.match(markup.signup, /Create your company workspace/)
-    assert.match(markup.signin, /Create a company workspace/)
+    assert.match(markup.signin, />Next</)
+    assert.doesNotMatch(markup.signin, /Create a company workspace|href="\/sign-up"/)
   }
   delete process.env.MCA_SIGNUP_MODE
 })
@@ -68,9 +69,11 @@ test("migrated-account helper defaults to shown and can be hidden", () => {
   delete process.env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE
 })
 
-test("invite-only sign-in can show magic link while hiding the migrated-account helper", () => {
+test("invite-only Login starts with email Next and hides the migrated-account helper", () => {
   const markup = renderAuth("invite_only", "false", true).signin
-  assert.match(markup, /Email me a sign-in link/)
+  assert.match(markup, />Next</)
+  assert.match(markup, /Continue with Google/)
+  assert.doesNotMatch(markup, /Email me a sign-in link/)
   assert.match(markup, /New team members join through an invitation/)
   assert.doesNotMatch(markup, /Create a company workspace|migrated account/)
 })

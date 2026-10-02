@@ -6,7 +6,8 @@ import { marketingJsonLd } from "@/lib/marketing/metadata"
 import { companyLegalName, marketingPolishEnabled } from "@/lib/marketing/polish"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { getSupportConfig } from "@/lib/marketing/support-config"
-import { marketingTrialCtaEnabled, publicPricingEnabled, publicRoadmapEnabled, publicStatusPageEnabled } from "@/lib/marketing/launch-switches"
+import { publicPricingEnabled, publicRoadmapEnabled, publicStatusPageEnabled } from "@/lib/marketing/launch-switches"
+import { marketingTrialEnrollmentEnabled } from "@/lib/marketing/trial-availability"
 import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
 import "./marketing.css"
 
@@ -39,6 +40,11 @@ export function DemoLink({
   )
 }
 
+export function GetStartedLink() {
+  if (!marketingTrialEnrollmentEnabled()) return null
+  return <Link className="fl-button fl-button-secondary" href="/pricing">Get Started</Link>
+}
+
 export function MarketingJsonLd({ title, path, description, faq }: { title: string; path: string; description?: string; faq?: readonly (readonly [string, string])[] }) {
   return (
     <script
@@ -64,7 +70,7 @@ export async function MarketingShell({
   const legalName = polished ? companyLegalName() : null
   const showPricing = publicPricingEnabled()
   const showRoadmap = publicRoadmapEnabled()
-  const showTrialCta = marketingTrialCtaEnabled()
+  const showTrialCta = marketingTrialEnrollmentEnabled()
   return (
     <div className={`fundlane ${fontClasses}${polished ? " fl-polished" : ""}${immersive ? " fl-immersive" : ""}`}>
       {jsonLd && <MarketingJsonLd {...jsonLd} />}
@@ -85,10 +91,10 @@ export async function MarketingShell({
           </nav>
           <div className="fl-nav-actions">
             <Link href="/sign-in" className="fl-signin">
-              Sign in
+              Login
             </Link>
             <DemoLink />
-            {showTrialCta && <Link className="fl-button fl-button-secondary" href="/sign-up">Start free trial</Link>}
+            <GetStartedLink />
           </div>
           <MobileNav polished={polished} showPricing={showPricing} showRoadmap={showRoadmap} showTrialCta={showTrialCta} />
         </div>
@@ -108,7 +114,8 @@ export async function MarketingShell({
               <Link href="/help">Help center</Link>
               <Link href="/#workflow">How it works</Link>
               <Link href="/demo">Book a demo</Link>
-              <Link href="/sign-in">Sign in</Link>
+              <Link href="/sign-in">Login</Link>
+              {showTrialCta && <Link href="/pricing">Get Started</Link>}
               {publicStatusPageEnabled() ? <Link href="/status">System status</Link> : statusUrl && <a href={statusUrl}>System status</a>}
               {showRoadmap ? <Link href="/roadmap">Roadmap</Link> : roadmapUrl && <a href={roadmapUrl}>Roadmap</a>}
               {supportEmail && <a href={`mailto:${supportEmail}`}>Support email</a>}
