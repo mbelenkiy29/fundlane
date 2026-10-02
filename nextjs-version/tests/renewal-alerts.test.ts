@@ -9,6 +9,7 @@ import { notificationInput } from "../src/lib/mca/notifications/service"
 import type { NotificationRow } from "../src/lib/mca/notifications/contracts"
 import { runScheduledNotifications, setNotificationTransportForTests } from "../src/lib/mca/notifications/worker"
 import type { DealActor } from "../src/lib/mca/deals/schema"
+import { checkNotificationCondition } from "../src/lib/mca/notifications/conditions"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const now = "2026-01-01T00:00:00.000Z"
@@ -88,6 +89,16 @@ test("an over-long multiline action text is normalized to the notification limit
   const { payload } = notificationInput(row)
   assert.ok(payload!.title.length <= 200 && !/[\r\n]/.test(payload!.title)); assert.ok(payload!.message.length <= 2000)
   assert.equal((await alerts()).length, 2)
+})
+
+test("dispatch guard rejects an alert whose advance was reversed", async () => {
+  const db = getDatabase()
+  const { id, policy_version } = (await db.prepare<{ id: string; policy_version: number }>("SELECT id,policy_version FROM mca_renewal_actions WHERE source_advance_id='adv-long'").get())!
+  const condition = { type: "renewal", key: id, version: String(policy_version) }
+  await checkNotificationCondition(actor, condition)
+  await db.prepare("UPDATE mca_advances SET reversed_at=? WHERE id='adv-long'").run(late)
+  try { await assert.rejects(checkNotificationCondition(actor, condition), { code: "notification_condition_resolved" }) }
+  finally { await db.prepare("UPDATE mca_advances SET reversed_at=NULL WHERE id='adv-long'").run() }
 })
 
 test("a queued alert is suppressed, not sent, once its action is no longer eligible", async () => {
