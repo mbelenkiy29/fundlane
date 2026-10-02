@@ -12,6 +12,7 @@ const decisionSchema = z.object({
   actionId: z.string().min(1).max(128),
   decision: z.enum(["review", "approve", "dismiss"]),
   senderId: z.string().max(128).optional(),
+  previewId: z.string().max(128).optional(),
   note: z.string().trim().max(500).optional(),
 }).strict()
 

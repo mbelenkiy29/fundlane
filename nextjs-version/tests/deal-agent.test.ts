@@ -277,6 +277,8 @@ test("never sends even when automatic_send and auto_submit are configured", asyn
   assert.equal((await runsFor(dealId))[0].state, "completed")
   assert.ok((await actionsFor(dealId)).some(action => action.kind === "submit_to_funder"))
   assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_submission_jobs WHERE deal_id=?").get(dealId))?.n, 0)
+  // The agent's completeness check must not hand the deal to auto-submit either.
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_background_jobs WHERE workspace_id=? AND kind='auto_submit'").get(workspaceId))?.n, 0)
 })
 
 test("lender fit without underwriting data is recorded and does not fail the run", async () => {
@@ -403,7 +405,7 @@ async function seedMember(workspaceId: string, role: "admin" | "manager" | "rep"
   return { workspaceId, userId, membershipId, role, managedMembershipIds: [], activeMembershipIds: [membershipId], source: "user", sessionId: `session-${seq}`, scopes: [], correlationId: `corr-${seq}` }
 }
 
-const decide = (actor: DealActor, dealId: string, actionId: string, decision: "review" | "approve" | "dismiss", extra: { senderId?: string; note?: string } = {}) =>
+const decide = (actor: DealActor, dealId: string, actionId: string, decision: "review" | "approve" | "dismiss", extra: { senderId?: string; note?: string; previewId?: string } = {}) =>
   withAgentEnv("true", () => decideDealAgentAction(actor, { dealId, actionId, decision, origin: "https://app.example.test", ...extra }))
 
 test("dismiss records decider, time and note", async () => {
@@ -480,6 +482,14 @@ before(() => {
 })
 after(() => { setEmailDeliveryFetchForTests(); setSenderDeliveryFetchForTests(); setClosingTransportForTests() })
 
+async function seedMerchantSender(workspaceId: string, broker: DealActor): Promise<string> {
+  const now = new Date().toISOString()
+  const senderId = `merchant-sender-${++seq}`
+  await getDatabase().prepare("INSERT INTO mca_email_senders (id,workspace_id,provider,purpose,from_name,from_address,signature,credential_cipher,state,is_default,verified_at,last_error,created_by_user_id,created_at,updated_at) VALUES (?,?,'smtp','merchant','Closer','closer@example.test',NULL,?,'verified',1,?,NULL,?,?,?)")
+    .run(senderId, workspaceId, encryptSensitive(JSON.stringify({ kind: "smtp", host: "smtp.example.test", port: 587, username: "u", password: "secret", secure: false }), workspaceId), now, broker.userId, now, now)
+  return senderId
+}
+
 const submissionJobs = (dealId: string) => getDatabase().prepare<{ state: string; confirmation_key: string }>("SELECT state,confirmation_key FROM mca_submission_jobs WHERE deal_id=?").all(dealId)
 
 test("approve before review is rejected", async () => {
@@ -498,22 +508,22 @@ test("review then approve hands off to confirmSubmissions", async () => {
   assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.preview_id, preview.id)
   assert.equal(reviewed.action.status, "pending")
   assert.equal(reviewed.action.hasPreview, true)
-  const approved = await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve"))
+  const approved = await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve", { previewId: preview.id }))
   assert.equal(approved.action.status, "approved")
   const jobs = await submissionJobs(dealId)
   assert.equal(jobs.length, 1)
   assert.equal(jobs[0].confirmation_key, preview.id)
   assert.equal(jobs[0].state, "queued")
   assert.equal(outboundFetches.length, fetchesBefore)
-  await assert.rejects(decide(broker, dealId, action.id, "approve"), { status: 409, code: "action_not_pending" })
+  await assert.rejects(decide(broker, dealId, action.id, "approve", { previewId: preview.id }), { status: 409, code: "action_not_pending" })
   assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE action='deal_agent.action_approved' AND resource_id=?").get(action.id))?.n, 1)
 })
 
 test("stale submission preview returns action to pending", async () => {
   const { dealId, action, broker } = await completeDealWithSubmitAction()
-  await decide(broker, dealId, action.id, "review")
+  const reviewed = await decide(broker, dealId, action.id, "review")
   await getDatabase().prepare("UPDATE deals SET version=version+1 WHERE id=?").run(dealId)
-  await assert.rejects(withQueuedDelivery(() => decide(broker, dealId, action.id, "approve")), { status: 409, code: "submission_preview_stale" })
+  await assert.rejects(withQueuedDelivery(() => decide(broker, dealId, action.id, "approve", { previewId: (reviewed.preview as { id: string }).id })), { status: 409, code: "submission_preview_stale" })
   const row = (await actionsFor(dealId)).find(item => item.id === action.id)!
   assert.equal(row.status, "pending")
   assert.equal(row.error_code, "submission_preview_stale")
@@ -529,10 +539,7 @@ test("api-key actor cannot review a submission", async () => {
 test("request_documents review creates stipulations and a closing preview; approve sends once via sendRequestPreview", async () => {
   const { workspaceId, dealId } = await incompleteDealWithRun()
   const broker = await seedMember(workspaceId, "admin")
-  const now = new Date().toISOString()
-  const senderId = `merchant-sender-${++seq}`
-  await getDatabase().prepare("INSERT INTO mca_email_senders (id,workspace_id,provider,purpose,from_name,from_address,signature,credential_cipher,state,is_default,verified_at,last_error,created_by_user_id,created_at,updated_at) VALUES (?,?,'smtp','merchant','Closer','closer@example.test',NULL,?,'verified',1,?,NULL,?,?,?)")
-    .run(senderId, workspaceId, encryptSensitive(JSON.stringify({ kind: "smtp", host: "smtp.example.test", port: 587, username: "u", password: "secret", secure: false }), workspaceId), now, broker.userId, now, now)
+  const senderId = await seedMerchantSender(workspaceId, broker)
   const action = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
   const items = (JSON.parse(action.payload_json) as { items: unknown[] }).items
   await assert.rejects(decide(broker, dealId, action.id, "review"), { status: 422, code: "sender_required" })
@@ -545,7 +552,9 @@ test("request_documents review creates stipulations and a closing preview; appro
   const delivered: string[] = []
   setClosingTransportForTests({ async deliver(request) { delivered.push(request.body ?? ""); return { state: "sent", correlationId: request.correlationId, externalId: "agent-mail-1" } } })
   try {
-    const approved = await decide(broker, dealId, action.id, "approve")
+    await assert.rejects(decide(broker, dealId, action.id, "approve", { previewId: "some-other-preview" }), { status: 409, code: "preview_changed" })
+    assert.equal(delivered.length, 0)
+    const approved = await decide(broker, dealId, action.id, "approve", { previewId: preview.id })
     assert.equal(approved.action.status, "approved")
   } finally { setClosingTransportForTests() }
   assert.equal(delivered.length, 1)
@@ -565,4 +574,48 @@ test("approve schedule_follow_up creates one calendar followup assigned to appro
   assert.equal(rows[0].assignee_id, broker.membershipId)
   assert.equal(Number(rows[0].all_day), 1)
   assert.match(rows[0].starts_at, /^\d{4}-\d{2}-\d{2}$/)
+})
+
+test("superseded proposal is revived when proposed again", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET status='superseded' WHERE deal_id=?").run(dealId)
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "other_stip"))
+  await runAgent(dealId)
+  const actions = await actionsFor(dealId)
+  assert.equal(actions.length, 2)
+  assert.ok(actions.every(action => action.status === "pending"))
+})
+
+test("statement months are not requested while uploaded statements have unknown periods", () => {
+  const [request] = documentProposals({ dealId: "d", ready: false, version: 6, ruleSnapshot: "{}", checkedAt: "", findings: [
+    { code: "missing_driver_license", message: "Upload a ready driver license." },
+    { code: "missing_statement_2026-08", message: "Missing checking statement for 2026-08.", period: "2026-08" },
+    { code: "unknown_statement_period", message: "The statement period could not be determined.", documentId: "doc" },
+  ] }, { displayId: "D-1" })
+  assert.deepEqual((request.payload.items as Array<{ category: string }>).map(item => item.category), ["driver_license"])
+  assert.deepEqual(request.payload.otherFindings, ["Missing checking statement for 2026-08.", "The statement period could not be determined."])
+})
+
+test("document request reuses open stipulations from an earlier request", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const first = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  await decide(broker, dealId, first.id, "review", { senderId })
+  const stipulations = async () => (await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_stipulations WHERE deal_id=?").get(dealId))?.n
+  const before = await stipulations()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const second = (await actionsFor(dealId)).find(row => row.kind === "request_documents" && row.status === "pending")!
+  assert.notEqual(second.id, first.id)
+  await decide(broker, dealId, second.id, "review", { senderId })
+  assert.equal(await stipulations(), before)
+})
+
+test("an older run does not overwrite proposals while a newer run is in flight", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  for (const [id, createdAt] of [["older", "2026-01-01T00:00:00.000Z"], ["newer", "2026-01-01T00:01:00.000Z"]]) await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at)
+    VALUES (?,?,?,?,'running',?,?)`).run(`${id}-${dealId}`, workspaceId, dealId, id, createdAt, createdAt)
+  const result = await upsertProposals(documentScanActor({ workspaceId, dealId, id: "race" }), dealId, `older-${dealId}`, [{ kind: "request_documents", targetKey: "request_documents", fingerprint: "c1", payload: {} }])
+  assert.deepEqual(result, { skipped: "newer_run" })
 })

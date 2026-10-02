@@ -71,7 +71,7 @@ export function DealAgentPanel({ dealId, onChanged }: { dealId: string; onChange
     setBusy(action.id)
     setError(undefined)
     try {
-      const result = await requestJson<{ preview?: unknown }>(url, { method: "POST", body: JSON.stringify({ actionId: action.id, decision, ...(decision === "review" && action.kind === "request_documents" ? { senderId } : {}), ...(decision === "dismiss" && notes[action.id]?.trim() ? { note: notes[action.id].trim() } : {}) }) })
+      const result = await requestJson<{ preview?: unknown }>(url, { method: "POST", body: JSON.stringify({ actionId: action.id, decision, ...(decision === "review" && action.kind === "request_documents" ? { senderId } : {}), ...(decision === "approve" && previews[action.id] ? { previewId: (previews[action.id] as { id: string }).id } : {}), ...(decision === "dismiss" && notes[action.id]?.trim() ? { note: notes[action.id].trim() } : {}) }) })
       if (decision === "review") setPreviews(current => ({ ...current, [action.id]: result.preview }))
       if (decision !== "review") onChanged()
     } catch (caught) {

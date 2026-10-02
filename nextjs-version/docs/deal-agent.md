@@ -11,7 +11,7 @@ No LLM is added; the only model use is the existing statement extraction provide
 | `MCA_DEAL_AGENT_ENABLED=true` | Environment (exactly `true`) | Global kill switch for enqueue, job processing, `deal_agent` in the default cron kinds, the API and the panel. |
 | `featureFlags.dealAgent` | Settings → Workspace → "Deal Agent" switch (admins) | Per-company opt-in. Existing companies read as off. |
 
-Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto-submit `auto_submit`) do not affect the agent: the job contains no send calls.
+Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto-submit `auto_submit`) do not affect the agent: the job contains no send calls, and its completeness check passes `skipAutoSubmit` so a deal it finds ready is not handed to auto-submit.
 
 ## Trigger and run
 
@@ -25,7 +25,7 @@ Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto
 
 | Kind | Proposed when | Review (no external effect) | Approve |
 | --- | --- | --- | --- |
-| `request_documents` | Completeness has missing application / ID / voided check / statement months | Creates the open stipulations and the existing closing request preview (needs a verified merchant sender) | `sendRequestPreview` — secure `/merchant-upload/` links, delivery ledger |
+| `request_documents` | Completeness has missing application / ID / voided check / statement months (months are not requested while an uploaded statement has an unknown period) | Creates (or reuses still-open) stipulations and the existing closing request preview (needs a verified merchant sender) | `sendRequestPreview` — secure `/merchant-upload/` links, delivery ledger |
 | `schedule_follow_up` | With every document request | — | `saveActivity` follow-up for the approver, all-day, +2 days in the company timezone |
 | `submit_to_funder` | Complete deal; matched funder within top N; preflight clean; no prior non-failed submission | `prepareDealSubmission` exact package preview | `confirmSubmissions` with that preview (duplicate guard, broker-approved delivery) |
 
@@ -33,7 +33,7 @@ States: `pending → executing → approved | failed`, `pending → dismissed`, 
 
 ## Permissions
 
-`GET/POST /api/mca/deal-agent/[dealId]` uses `requireClosingActor`: `deals:read` for GET; POST requires an interactive session, `deals:write` and the Deals page. The deal must be visible to the user (reps see their own deals); another company's deal or action is a 404. Submission review/approve additionally require a broker (`assertBroker`), the document request requires a usable merchant sender, and follow-ups use the calendar's own assignment checks. The client sends only `{actionId, decision, senderId?, note?}`.
+`GET/POST /api/mca/deal-agent/[dealId]` uses `requireClosingActor`: `deals:read` for GET; POST requires an interactive session, `deals:write` and the Deals page. The deal must be visible to the user (reps see their own deals); another company's deal or action is a 404. Submission review/approve additionally require a broker (`assertBroker`), the document request requires a usable merchant sender, and follow-ups use the calendar's own assignment checks. The client sends only `{actionId, decision, senderId?, note?, previewId?}`; `previewId` is only compared with the stored preview (409 `preview_changed` if someone reviewed again elsewhere), never used as the thing to send.
 
 ## Migration and rollout
 

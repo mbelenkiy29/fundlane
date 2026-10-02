@@ -57,10 +57,12 @@ export function documentProposals(completeness: CompletenessResult, deal: Pick<D
   if (completeness.ready) return []
   const items: Array<{ category: string; label: string; code: string; period?: string }> = []
   const otherFindings: string[] = []
+  // Unextracted statements leave every month "missing"; asking the merchant again would request files already on hand.
+  const periodsUnknown = completeness.findings.some(finding => finding.code === "unknown_statement_period")
   for (const finding of completeness.findings) {
     const known = STIPULATIONS[finding.code]
     if (known) items.push({ ...known, code: finding.code })
-    else if (finding.code.startsWith("missing_statement_") && finding.period) items.push({ category: "statement", label: `Business bank statement for ${finding.period}`, code: finding.code, period: finding.period })
+    else if (finding.code.startsWith("missing_statement_") && finding.period && !periodsUnknown) items.push({ category: "statement", label: `Business bank statement for ${finding.period}`, code: finding.code, period: finding.period })
     else otherFindings.push(finding.message)
   }
   if (!items.length) return []
@@ -100,7 +102,7 @@ export async function upsertProposals(actor: DealActor, dealId: string, runId: s
   return withTransaction(async (database) => {
     await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`deal-agent:${actor.workspaceId}:${dealId}`)
     const newer = await database.prepare(`SELECT 1 FROM mca_deal_agent_runs newer JOIN mca_deal_agent_runs mine ON mine.workspace_id=newer.workspace_id AND mine.id=?
-      WHERE newer.workspace_id=? AND newer.deal_id=? AND newer.state='completed' AND newer.created_at>mine.created_at`).get(runId, actor.workspaceId, dealId)
+      WHERE newer.workspace_id=? AND newer.deal_id=? AND newer.state<>'failed' AND newer.created_at>mine.created_at`).get(runId, actor.workspaceId, dealId)
     if (newer) return { skipped: "newer_run" as const }
     const now = nowIso()
     let inserted = 0, superseded = 0, unchanged = 0
@@ -108,9 +110,11 @@ export async function upsertProposals(actor: DealActor, dealId: string, runId: s
       superseded += (await database.prepare(`UPDATE mca_deal_agent_actions SET status='superseded',updated_at=?
         WHERE workspace_id=? AND deal_id=? AND target_key=? AND fingerprint<>? AND status='pending'`).run(now, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint)).changes
       // An executing approval for the same target keeps its slot; the next run proposes again.
+      // A superseded twin comes back; dismissed/approved ones stay decided.
       const added = await database.prepare(`INSERT INTO mca_deal_agent_actions (id,workspace_id,deal_id,run_id,kind,target_key,fingerprint,payload_json,status,created_at,updated_at)
         SELECT ?,?,?,?,?,?,?,?,'pending',?,? WHERE NOT EXISTS (SELECT 1 FROM mca_deal_agent_actions WHERE workspace_id=? AND deal_id=? AND target_key=? AND status='executing')
-        ON CONFLICT (workspace_id,deal_id,target_key,fingerprint) DO NOTHING`)
+        ON CONFLICT (workspace_id,deal_id,target_key,fingerprint) DO UPDATE SET status='pending',run_id=EXCLUDED.run_id,payload_json=EXCLUDED.payload_json,
+          preview_id=NULL,error_code=NULL,updated_at=EXCLUDED.updated_at WHERE mca_deal_agent_actions.status='superseded'`)
         .run(newId(), actor.workspaceId, dealId, runId, proposal.kind, proposal.targetKey, proposal.fingerprint, JSON.stringify(proposal.payload), now, now, actor.workspaceId, dealId, proposal.targetKey)
       if (added.changes) inserted += 1
       else unchanged += 1
@@ -155,7 +159,7 @@ export async function processDealAgentJob(job: BackgroundJob, actor: DealActor):
       }
     }
 
-    const completeness = await checkCompleteness(actor, deal.id)
+    const completeness = await checkCompleteness(actor, deal.id, { skipAutoSubmit: true })
     await record({ step: "completeness", outcome: "ok", summary: completeness.ready ? `Complete (version ${completeness.version}).` : `${completeness.findings.length} open finding(s) (version ${completeness.version}).` })
 
     let submissions: ReturnType<typeof submissionProposals> = { proposals: [], skipped: [] }

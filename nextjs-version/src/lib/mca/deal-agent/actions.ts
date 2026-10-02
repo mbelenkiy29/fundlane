@@ -67,10 +67,12 @@ async function review(actor: DealActor, dealId: string, action: ActionRow, input
   if (action.kind !== "request_documents") throw new AppError(422, "review_not_applicable", "This action has no preview; approve or dismiss it.")
   if (!input.senderId) throw new AppError(422, "sender_required", "Choose a merchant sender before reviewing the request.")
   // Open stipulations are what the existing request preview is built from; they stay visible in Closing.
+  // Reuse an item still open from an earlier request so the merchant never holds two live links for one document.
   const stipulationIds: string[] = []
   for (const item of payload.items as Array<{ category: string; label: string; period?: string }>) {
-    const stipulation = await createStipulation(actor, { dealId, documentCategory: item.category, label: item.label, idempotencyKey: `deal-agent:${action.id}:${item.category}${item.period ? `:${item.period}` : ""}` })
-    stipulationIds.push(stipulation.id)
+    const open = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? AND status='open' AND document_category=? AND label=? ORDER BY created_at LIMIT 1")
+      .get(actor.workspaceId, dealId, item.category, item.label)
+    stipulationIds.push(open?.id ?? (await createStipulation(actor, { dealId, documentCategory: item.category, label: item.label, idempotencyKey: `deal-agent:${action.id}:${item.category}${item.period ? `:${item.period}` : ""}` })).id)
   }
   return previewStipulationRequest(actor, { dealId, stipulationIds, senderId: input.senderId, channel: "email", idempotencyKey: `deal-agent:${action.id}:${input.senderId}`, origin: input.origin })
 }
@@ -85,7 +87,7 @@ async function execute(actor: DealActor, dealId: string, action: ActionRow & { p
 }
 
 /** Only an interactive broker reaches this; every external effect is the existing manual path, run as that broker. */
-export async function decideDealAgentAction(actor: DealActor, input: { dealId: string; actionId: string; decision: "review" | "approve" | "dismiss"; senderId?: string; note?: string; origin: string }): Promise<{ action: ActionView; preview?: unknown; result?: unknown }> {
+export async function decideDealAgentAction(actor: DealActor, input: { dealId: string; actionId: string; decision: "review" | "approve" | "dismiss"; senderId?: string; note?: string; previewId?: string; origin: string }): Promise<{ action: ActionView; preview?: unknown; result?: unknown }> {
   const deal = await getDealForDocument(actor, input.dealId)
   const action = await readAction(actor, deal.id, input.actionId)
   if (action.status !== "pending") throw new AppError(409, "action_not_pending", "This action was already decided.")
@@ -106,7 +108,11 @@ export async function decideDealAgentAction(actor: DealActor, input: { dealId: s
     return { action: toView(await readAction(actor, deal.id, action.id)), preview }
   }
 
-  if (action.kind !== "schedule_follow_up" && !action.preview_id) throw new AppError(409, "review_required", "Review the exact preview before approving.")
+  if (action.kind !== "schedule_follow_up") {
+    if (!action.preview_id) throw new AppError(409, "review_required", "Review the exact preview before approving.")
+    // The client only echoes the preview it displayed; the stored one is what gets sent.
+    if (input.previewId !== action.preview_id) throw new AppError(409, "preview_changed", "This proposal was reviewed again elsewhere. Review it before approving.")
+  }
   const claimed = await getDatabase().prepare<ActionRow & { preview_id: string | null }>(`UPDATE mca_deal_agent_actions SET status='executing',updated_at=?
     WHERE workspace_id=? AND deal_id=? AND id=? AND status='pending' RETURNING *`).get(now, actor.workspaceId, deal.id, action.id)
   if (!claimed) throw new AppError(409, "action_not_pending", "This action was already decided.")
