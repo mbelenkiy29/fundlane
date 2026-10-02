@@ -636,7 +636,7 @@ test("scheduled funder reply ingest needs both flags and isolates each workspace
   })
   await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), other.workspaceId, other.id)
   const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
-  const far = Date.now() + 60_000
+  const far = Date.now() + 300_000
   const calls: number[] = []
   setReplyMailboxForTests({ async listMessages() { calls.push(1); return { messages: [], nextCursor: "empty" } } })
   await runReplyIngest(actor(), { senderId, enabled: true })
@@ -656,6 +656,7 @@ test("scheduled funder reply ingest needs both flags and isolates each workspace
     assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 0 })
     assert.equal(calls.length, 2)
     assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() - 1))?.workspaces, 0)
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000))?.workspaces, 0) // under the 60s start budget
     calls.length = 0
     setReplyMailboxForTests({ async listMessages() { calls.push(1); if (calls.length === 1) throw new Error("boom"); return { messages: [], nextCursor: "empty" } } })
     assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 1 })

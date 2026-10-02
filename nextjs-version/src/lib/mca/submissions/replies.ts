@@ -1127,17 +1127,20 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
   }
 }
 
-/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Opted-in workspaces only, least recently touched first; stops starting workspaces at the deadline (a started mailbox scan is not interrupted). */
+const SCHEDULED_INGEST_MIN_BUDGET_MS = 60_000
+
+/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Opted-in workspaces only, ordered by their most recently touched checkpoint (so a skipped expired sender cannot pin a workspace to the front); stops starting workspaces within 60s of the deadline (a started mailbox scan is not interrupted). */
 export async function runScheduledReplyIngest(nowIsoValue: string, deadlineMs: number): Promise<{ workspaces: number; created: number; failed: number } | undefined> {
   if (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED !== "true" || process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED !== "true") return undefined
   // The checkpoint encoder writes compact JSON, so this matches exactly the opted-in checkpoints.
   const rows = await db().prepare<{ workspace_id: string }>(
     `SELECT workspace_id FROM mca_funder_replies WHERE provider_message_id = ? AND match_evidence LIKE '%"optedIn":true%'
-     GROUP BY workspace_id ORDER BY MIN(updated_at), workspace_id LIMIT 25`,
+     GROUP BY workspace_id ORDER BY MAX(updated_at), workspace_id LIMIT 25`,
   ).all(CHECKPOINT_PROVIDER_MESSAGE_ID)
   const result = { workspaces: 0, created: 0, failed: 0 }
   for (const { workspace_id: workspaceId } of rows) {
-    if (Date.now() >= deadlineMs) break
+    // A mailbox scan is not interruptible, so only start one with real budget left.
+    if (deadlineMs - Date.now() < SCHEDULED_INGEST_MIN_BUDGET_MS) break
     result.workspaces += 1
     try {
       const ingest = await runReplyIngest({
