@@ -16,7 +16,7 @@ export function useSignInFlow() {
     setWorking(true);setError("")
     try { await action() } catch(error) { setError(authErrorMessage(error)) } finally { setWorking(false) }
   }
-  return { error,busy:working,codeSent,mfaRequired,finish,run,
+  return { error,busy:working,codeSent,mfaRequired,finish,run,clearError:()=>setError(""),
     password:(email:string,password:string)=>run(async()=>{ const result=await requestJson<{mfaRequired?:boolean}>("/api/auth/sign-in",{method:"POST",body:JSON.stringify({email,password})}); if(result.mfaRequired){ setMfaRequired(true); return } await finish() }),
     sendCode:(email:string)=>run(async()=>{ setEmail(email);await requestJson("/api/auth/resend",{method:"POST",body:JSON.stringify({email,next:currentAuthContinuation()})});setCodeSent(true) }),
     verify:(code:string)=>run(async()=>{ await requestJson("/api/auth/verify",{method:"POST",body:JSON.stringify({email,code})});await finish() }),

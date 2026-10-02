@@ -13,7 +13,6 @@ import { getCompanyAccess } from "@/lib/mca/company-access"
 import { isCompanyRecoveryPage } from "@/lib/mca/company-recovery"
 import { CompanyPaused } from "@/components/mca/company-paused"
 import { unauthenticatedPageGate } from "@/lib/mca/app-paths"
-import { publicPricingEnabled } from "@/lib/marketing/launch-switches"
 import { getSupportConfig } from "@/lib/marketing/support-config"
 
 function pageForPath(pathname: string): PageKey | null {
@@ -31,7 +30,7 @@ function pageForPath(pathname: string): PageKey | null {
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const headerStore = await headers()
   const pathname = headerStore.get("x-mca-pathname") ?? "/dashboard"
-  if (pathname === "/pricing" && publicPricingEnabled()) return children
+  if (pathname === "/pricing") return children
   const context = await authenticateSupabaseSession()
   if (!context && await supabaseIdentity({ allowPasswordSetup: true })) redirect("/onboarding")
   if (!context) {

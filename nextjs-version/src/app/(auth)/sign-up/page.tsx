@@ -4,8 +4,11 @@ import Link from "next/link"
 import { signupMode } from "@/lib/mca/signup-mode"
 import { marketingPolishEnabled } from "@/lib/marketing/polish"
 import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
+import { redirect } from "next/navigation"
+import { stripeFirstSignupRequired } from "@/lib/mca/signup-guard"
 
 export default function SignUpPage() {
+  if (signupMode() === "open" && stripeFirstSignupRequired()) redirect("/pricing")
   return (
     <div className="bg-muted flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
       <div className="flex w-full max-w-sm flex-col gap-6">

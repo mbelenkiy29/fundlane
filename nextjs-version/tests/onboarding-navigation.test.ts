@@ -2,6 +2,29 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { interactionSetup, renderSetup, runClient } from "./helpers/public-entry-render"
 
+test("changing Login email clears stale password errors", () => {
+  const result = runClient(`${interactionSetup}
+    const { SignInForm } = require("./src/app/(auth)/sign-in/sign-in-form.tsx");
+    (async () => {
+      let view = render(SignInForm);
+      input(view.tree, "email").props.onChange({ target: { value: "unknown@example.test" } });
+      await submit(render(SignInForm).tree);
+      response = async () => { throw new Error("Email or password is incorrect."); };
+      await submit(render(SignInForm).tree);
+      view = render(SignInForm); assert.match(view.markup, /role="alert"/);
+      button(view.tree, "Change email").props.onClick();
+      console.log(JSON.stringify(render(SignInForm).markup));
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `) as string
+  assert.doesNotMatch(result, /role="alert"/)
+  assert.match(result, />Next</)
+})
+
+test("pricing and only the exact enrollment route remain public with rollout switches disabled", () => {
+  const result = runClient(`const paths=require('./src/lib/mca/app-paths.ts');console.log(JSON.stringify(['/pricing','/enrollment','/enrollment/extra'].map(paths.anonymousRequestDisposition)));`, { MCA_PUBLIC_PRICING_ENABLED: "false" })
+  assert.deepEqual(result, ["public", "public", "not-found"])
+})
+
 const launchEnv = {
   MCA_PUBLIC_PRICING_ENABLED: "true",
   MCA_MARKETING_TRIAL_CTA_ENABLED: "true",

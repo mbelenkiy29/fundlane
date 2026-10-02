@@ -6,6 +6,8 @@ import { migratedAccountNoticeEnabled, signupMode } from "../src/lib/mca/signup-
 function renderAuth(mode: string | undefined, showNotice: string | undefined, magicLink = false, polish = false, legalDrafts = false) {
   const script = `
     const React = require("react");
+    const { mock } = require("node:test");
+    mock.module("server-only", { exports: {} });
     const { renderToStaticMarkup } = require("react-dom/server");
     const SignUpPage = require("./src/app/(auth)/sign-up/page.tsx").default;
     const { SignInForm } = require("./src/app/(auth)/sign-in/sign-in-form.tsx");
@@ -19,7 +21,7 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
   env.MCA_MAGIC_LINK_ENABLED = String(magicLink)
   env.MCA_MARKETING_POLISH_ENABLED = String(polish)
   env.MCA_LEGAL_DRAFT_PAGES_ENABLED = String(legalDrafts)
-  const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", env })
+  const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--import", "tsx", "-e", script], { encoding: "utf8", env })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout) as { signup: string; signin: string }
 }

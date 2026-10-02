@@ -107,7 +107,6 @@ export async function listSupabaseWorkspaces(identity: SupabaseIdentity) {
 }
 
 export async function completeCompanyOnboarding(name: string, selectedSeats = 1) {
-  requireOpenSignup()
   const requiresCard = cardRequiredTrial()
   if (requiresCard) monthlyPriceCents(selectedSeats)
   const identity = await supabaseIdentity()
@@ -121,6 +120,9 @@ export async function completeCompanyOnboarding(name: string, selectedSeats = 1)
       JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=w.id
       WHERE m.user_id=? AND m.status='active' AND lower(w.name)=lower(?)`).get(userId,name)
     if (existing) return existing.id
+    // Durable owner reuse above services legitimate legacy Checkout. Identity alone
+    // (including Google and editable metadata) cannot authorize a new tenant.
+    requireOpenSignup()
     const id = newId(), now = nowIso()
     await db.prepare(`INSERT INTO workspaces (id,name,timezone,seat_limit,feature_flags,page_visibility,action_visibility,created_at,updated_at)
       VALUES (?,?,'America/New_York',1,?,?,?,?,?)`).run(id,name,JSON.stringify(DEFAULT_FEATURE_FLAGS),JSON.stringify(DEFAULT_PAGE_VISIBILITY),JSON.stringify(DEFAULT_ACTION_VISIBILITY),now,now)
