@@ -5,6 +5,8 @@ import { createDeal } from "../src/lib/mca/deals/service"
 import { retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
+import { documentProposals } from "../src/lib/mca/deal-agent/run"
+import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
 import { getWorkspaceSettings } from "../src/lib/mca/workspaces"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
@@ -115,4 +117,70 @@ test("enabled: clean upload enqueues one deal_agent job, available ~120s later",
   assert.ok(Date.parse(jobs[0].available_at) - Date.parse(jobs[0].created_at) >= 110_000)
   await withAgentEnv("true", () => retryDocumentScan(adminActor(workspaceId), document.id))
   assert.equal((await agentJobs(dealId)).length, 1)
+})
+
+async function runAgent(dealId: string): Promise<Array<Record<string, unknown>>> {
+  await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=? WHERE kind='deal_agent' AND resource_id=? AND state='queued'").run("2000-01-01T00:00:00.000Z", dealId)
+  return withAgentEnv("true", async () => {
+    while (await runNextBackgroundJob(["deal_agent"])) { /* drain due jobs */ }
+    const rows = await getDatabase().prepare<{ result_json: string | null }>("SELECT result_json FROM mca_background_jobs WHERE kind='deal_agent' AND resource_id=? ORDER BY created_at").all(dealId)
+    return rows.map(row => JSON.parse(row.result_json ?? "null"))
+  })
+}
+
+type RunRow = { id: string; state: string; steps_json: string; error_code: string | null; created_at: string }
+type ActionRow = { id: string; kind: string; target_key: string; fingerprint: string; status: string; payload_json: string; preview_id: string | null; error_code: string | null; decided_by_user_id: string | null }
+const runsFor = (dealId: string) => getDatabase().prepare<RunRow>("SELECT id,state,steps_json,error_code,created_at FROM mca_deal_agent_runs WHERE deal_id=? ORDER BY created_at").all(dealId)
+const actionsFor = (dealId: string) => getDatabase().prepare<ActionRow>("SELECT id,kind,target_key,fingerprint,status,payload_json,preview_id,error_code,decided_by_user_id FROM mca_deal_agent_actions WHERE deal_id=? ORDER BY created_at,target_key").all(dealId)
+
+async function enabledDeal(): Promise<{ workspaceId: string; dealId: string }> {
+  const workspaceId = await seedWorkspace({ dealAgent: true })
+  return { workspaceId, dealId: await seedBareDeal(workspaceId) }
+}
+
+test("incomplete deal: run records steps and queues request_documents + schedule_follow_up with reasons", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "application"))
+  const [result] = await runAgent(dealId)
+  const [run] = await runsFor(dealId)
+  assert.equal(run.state, "completed")
+  assert.equal(result.runId, run.id)
+  const steps = JSON.parse(run.steps_json) as Array<{ step: string; outcome: string; code?: string; summary: string }>
+  assert.deepEqual(steps.map(step => step.step), ["statements", "completeness", "lender_fit", "proposals", "write"])
+  assert.equal(steps[0].outcome, "skipped")
+  assert.equal(steps[0].code, "provider_unavailable")
+  const actions = await actionsFor(dealId)
+  assert.deepEqual(actions.map(action => [action.kind, action.status]).sort(), [["request_documents", "pending"], ["schedule_follow_up", "pending"]])
+  const request = JSON.parse(actions.find(action => action.kind === "request_documents")!.payload_json) as { items: Array<{ category: string; label: string; code: string }> }
+  assert.ok(request.items.some(item => item.category === "driver_license"))
+  assert.ok(request.items.some(item => item.category === "voided_check"))
+  assert.ok(!request.items.some(item => item.category === "application"))
+  const statements = request.items.filter(item => item.category === "statement")
+  assert.ok(statements.length > 0)
+  for (const item of statements) assert.match(item.label, /^Business bank statement for \d{4}-\d{2}$/)
+  const followUp = JSON.parse(actions.find(action => action.kind === "schedule_follow_up")!.payload_json) as { title: string; dueInDays: number }
+  assert.match(followUp.title, /^Follow up: missing documents for /)
+  assert.equal(followUp.dueInDays, 2)
+})
+
+test("run produces no external effects", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "application"))
+  await runAgent(dealId)
+  assert.equal((await runsFor(dealId))[0].state, "completed")
+  for (const table of ["mca_closing_stipulations", "mca_closing_previews", "mca_closing_deliveries", "mca_submission_jobs", "mca_calendar_activities"]) {
+    const row = await getDatabase().prepare<{ n: number }>(`SELECT count(*)::int n FROM ${table} WHERE workspace_id=?`).get(workspaceId)
+    assert.equal(row?.n, 0, table)
+  }
+})
+
+test("documentProposals maps findings to stipulation categories", () => {
+  const proposals = documentProposals({ dealId: "d", ready: false, version: 3, ruleSnapshot: "{}", checkedAt: "", findings: [
+    { code: "missing_statement_2026-08", message: "Missing checking statement for 2026-08.", period: "2026-08" },
+    { code: "period_mismatch", message: "Mismatch.", documentId: "doc" },
+  ] }, { displayId: "D-1" })
+  assert.deepEqual(proposals.map(proposal => [proposal.kind, proposal.targetKey, proposal.fingerprint]), [["request_documents", "request_documents", "c3"], ["schedule_follow_up", "follow_up", "c3"]])
+  assert.deepEqual(proposals[0].payload, { items: [{ category: "statement", label: "Business bank statement for 2026-08", code: "missing_statement_2026-08", period: "2026-08" }], otherFindings: ["Mismatch."] })
+  assert.deepEqual(documentProposals({ dealId: "d", ready: false, version: 4, ruleSnapshot: "{}", checkedAt: "", findings: [{ code: "period_mismatch", message: "Mismatch.", documentId: "doc" }] }, { displayId: "D-1" }), [])
+  assert.deepEqual(documentProposals({ dealId: "d", ready: true, version: 5, ruleSnapshot: "{}", checkedAt: "", findings: [] }, { displayId: "D-1" }), [])
 })
