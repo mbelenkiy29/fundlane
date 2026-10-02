@@ -21,7 +21,7 @@ Enrollment repair defaults to 25 due unclaimed records and a 20-second duration 
 
 | Consumer | Kinds eligible when explicitly listed | Activation and ownership |
 | --- | --- | --- |
-| Existing default cron | `export_create`, `export`; `auto_submit` only with its feature flag | Same current behavior until the operator changes the allowlist. |
+| Existing default cron | `export_create`, `export`; `auto_submit` only with its feature flag; `deal_agent` only with `MCA_DEAL_AGENT_ENABLED=true` | Same current behavior until the operator changes the allowlist. |
 | Business cron, same route | `submission_delivery` | Accept one synthetic send per provider first. Use the frozen submission package and provider correlation ID. A reclaimed `sending` submission becomes `delivery_uncertain`. Never automatically replay an unknown send. |
 | Business cron, same route | `import_commit`, `import_update_commit`, `drive_preview`, `drive_apply`, `email_intake`, `intake_replay`, `multipart_task` | Eligible only after bounded runtime, permissions, private Storage and per-endpoint scanner requirements are checked in staging. Multipart scan endpoints need the native host from #36; leave them unlisted on Vercel until a suitable runtime exists. |
 | Separate billing cron | `billing_reconcile` | Already owned by `/api/cron/billing`; never claimed here. |
@@ -77,6 +77,7 @@ Runtime shorthand: **J** = `/api/cron/jobs`, every minute, `MCA_JOB_RUNTIME=verc
 | `export_create` | No enqueue call found; dispatcher snapshots and creates private CSV export | J; database/CSV; producer still absent | J; #37 |
 | `export` | No enqueue call found; dispatcher finalizes private CSV | J; private CSV; producer still absent | J; #37 |
 | `auto_submit` | Deal creation/edit or ready completeness result when the feature and workspace mode are enabled; score and optionally queue an API submission | J; score and optionally queue separate delivery | J + `MCA_AUTO_SUBMIT_ENABLED=true`; #37 |
+| `deal_agent` | Clean deal document when `MCA_DEAL_AGENT_ENABLED=true` and the workspace `dealAgent` switch is on; debounced 120 s; reruns analysis/completeness/lender fit and queues proposals for broker approval (never sends) | J; no scanner needed | J + `MCA_DEAL_AGENT_ENABLED=true`; see `docs/deal-agent.md` |
 | `document_upload` | `documents/direct-uploads.ts`; validate private staged upload and promote | D/native; validate and promote private upload, up to 25 MiB; current deal uploads do not require malware scan | D; #36 |
 | `document_scan` | `documents/scan-job.ts`; scan deal document before clean state | D/native; explicit scan of private document, up to 25 MiB | D; #36 |
 | `draft_scan` | No enqueue call found; dispatcher scans private draft PDF | D/native; private PDF scan, up to 25 MiB | D; #36 |
