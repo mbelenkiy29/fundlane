@@ -728,26 +728,30 @@ async function queueOne(documents = 0) {
   return { job: queued.jobs[0]!, attempt: await attemptRow(queued.jobs[0]!.jobId) }
 }
 
-test("useSend submission send carries attachments, Reply-To and Message-ID", async () => {
-  await withProvider("usesend", async (calls) => {
-    const { job, attempt } = await queueOne()
-    assert.equal(job.state, "sent")
-    assert.equal(calls.length, 1)
-    const { url, headers, body } = calls[0]!
-    assert.ok(url.endsWith("/api/v1/emails"))
-    assert.equal(headers.get("authorization"), "Bearer us_test_key")
-    assert.equal(headers.get("idempotency-key"), attempt?.correlation_id)
-    assert.equal(body.from, "Fundlane <system@mail.example.test>")
-    assert.equal(body.replyTo, "broker@example.test")
-    assert.deepEqual(body.to, ["alpha@funders.example.test"])
-    const messageId = (body.headers as Record<string, string>)["Message-ID"]
-    assert.equal(parseEmailAttemptRef(attempt?.external_ref)?.messageId, messageId)
-    const files = body.attachments as Array<{ filename: string; content: string }>
-    assert.equal(files.length, 1)
-    assert.equal(files[0]!.filename, "statement.pdf")
-    assert.ok(Buffer.from(files[0]!.content, "base64").length > 0)
+for (const [provider, url, key, from, replyToKey] of [
+  ["usesend", "https://app.usesend.com/api/v1/emails", "us_test_key", "Fundlane <system@mail.example.test>", "replyTo"],
+  ["resend", "https://api.resend.com/emails", "re_test_key", "Fundlane <system@resend.example.test>", "reply_to"],
+] as const) {
+  test(`${provider} submission send carries attachments, Reply-To and Message-ID`, async () => {
+    await withProvider(provider, async (calls) => {
+      const { job, attempt } = await queueOne()
+      assert.equal(job.state, "sent")
+      assert.equal(calls.length, 1)
+      const { url: sentUrl, headers, body } = calls[0]!
+      assert.equal(sentUrl, url)
+      assert.equal(headers.get("authorization"), `Bearer ${key}`)
+      assert.equal(headers.get("idempotency-key"), attempt?.correlation_id)
+      assert.equal(body.from, from)
+      assert.equal(body[replyToKey], "broker@example.test")
+      assert.deepEqual(body.to, ["alpha@funders.example.test"])
+      assert.equal(parseEmailAttemptRef(attempt?.external_ref)?.messageId, (body.headers as Record<string, string>)["Message-ID"])
+      const files = body.attachments as Array<{ filename: string; content: string }>
+      assert.equal(files.length, 1)
+      assert.equal(files[0]!.filename, "statement.pdf")
+      assert.ok(Buffer.from(files[0]!.content, "base64").length > 0)
+    })
   })
-})
+}
 
 test("useSend submission send fails closed above ten attachments without calling the provider", async () => {
   await withProvider("usesend", async (calls) => {
@@ -786,26 +790,6 @@ test("webhook stays preferred; flag off keeps production unconfigured", async ()
       assert.equal(calls.length, 0)
     })
   }
-})
-
-test("Resend submission send posts to api.resend.com with reply_to, base64 attachments and Message-ID", async () => {
-  await withProvider("resend", async (calls) => {
-    const { job, attempt } = await queueOne()
-    assert.equal(job.state, "sent")
-    assert.equal(calls.length, 1)
-    const { url, headers, body } = calls[0]!
-    assert.equal(url, "https://api.resend.com/emails")
-    assert.equal(headers.get("authorization"), "Bearer re_test_key")
-    assert.equal(headers.get("idempotency-key"), attempt?.correlation_id)
-    assert.equal(body.from, "Fundlane <system@resend.example.test>")
-    assert.equal(body.reply_to, "broker@example.test")
-    assert.equal(body.replyTo, undefined)
-    assert.deepEqual(body.to, ["alpha@funders.example.test"])
-    assert.equal(parseEmailAttemptRef(attempt?.external_ref)?.messageId, (body.headers as Record<string, string>)["Message-ID"])
-    const files = body.attachments as Array<{ filename: string; content: string }>
-    assert.equal(files[0]!.filename, "statement.pdf")
-    assert.ok(Buffer.from(files[0]!.content, "base64").length > 0)
-  })
 })
 
 test("Resend submission send fails closed above 40MB and maps errors", async () => {

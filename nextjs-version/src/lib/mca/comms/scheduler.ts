@@ -87,7 +87,6 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
     const {runScheduledNotifications}=await import("../notifications/worker")
     result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
   }
-  const funderReplies = await (await import("../submissions/replies")).runScheduledReplyIngest(nowIsoValue)
-  if (funderReplies) result.funderReplies = funderReplies
+  result.funderReplies = await (await import("../submissions/replies")).runScheduledReplyIngest(nowIsoValue, notificationDeadline)
   return result
 }

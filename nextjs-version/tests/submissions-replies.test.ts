@@ -636,6 +636,7 @@ test("scheduled funder reply ingest needs both flags and isolates each workspace
   })
   await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), other.workspaceId, other.id)
   const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
+  const far = Date.now() + 60_000
   const calls: number[] = []
   setReplyMailboxForTests({ async listMessages() { calls.push(1); return { messages: [], nextCursor: "empty" } } })
   await runReplyIngest(actor(), { senderId, enabled: true })
@@ -647,18 +648,20 @@ test("scheduled funder reply ingest needs both flags and isolates each workspace
     for (const [a, b] of [["true", undefined], [undefined, "true"], ["false", "true"]] as const) {
       if (a) process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = a; else delete process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED
       if (b) process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = b; else delete process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED
-      assert.equal(await runScheduledReplyIngest(), undefined)
+      assert.equal(await runScheduledReplyIngest(new Date().toISOString(), far), undefined)
     }
     assert.equal(calls.length, 0)
     process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = "true"
     process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = "true"
-    assert.deepEqual(await runScheduledReplyIngest(), { workspaces: 2, created: 0, failed: 0 })
+    assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 0 })
     assert.equal(calls.length, 2)
-    assert.equal((await runScheduledReplyIngest(undefined, 1))?.workspaces, 1)
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() - 1))?.workspaces, 0)
     calls.length = 0
     setReplyMailboxForTests({ async listMessages() { calls.push(1); if (calls.length === 1) throw new Error("boom"); return { messages: [], nextCursor: "empty" } } })
-    assert.deepEqual(await runScheduledReplyIngest(), { workspaces: 2, created: 0, failed: 1 })
+    assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 1 })
     assert.equal(calls.length, 2)
+    await runReplyIngest(actor(ids.otherWorkspace), { senderId: other.id, enabled: false })
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), far))?.workspaces, 1)
   } finally {
     for (const [key, value] of [["MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED", live], ["MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED", scheduled]] as const) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value

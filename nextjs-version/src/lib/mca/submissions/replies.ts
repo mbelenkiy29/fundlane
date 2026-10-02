@@ -1127,15 +1127,17 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
   }
 }
 
-/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Oldest checkpoint first; one workspace failing never blocks the rest. */
-export async function runScheduledReplyIngest(nowIsoValue = nowIso(), limit = 25): Promise<{ workspaces: number; created: number; failed: number } | undefined> {
+/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Opted-in workspaces only, least recently touched first; stops starting workspaces at the deadline (a started mailbox scan is not interrupted). */
+export async function runScheduledReplyIngest(nowIsoValue: string, deadlineMs: number): Promise<{ workspaces: number; created: number; failed: number } | undefined> {
   if (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED !== "true" || process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED !== "true") return undefined
+  // The checkpoint encoder writes compact JSON, so this matches exactly the opted-in checkpoints.
   const rows = await db().prepare<{ workspace_id: string }>(
-    `SELECT workspace_id FROM mca_funder_replies WHERE provider_message_id = ?
-     GROUP BY workspace_id ORDER BY MIN(updated_at), workspace_id LIMIT ?`,
-  ).all(CHECKPOINT_PROVIDER_MESSAGE_ID, limit)
+    `SELECT workspace_id FROM mca_funder_replies WHERE provider_message_id = ? AND match_evidence LIKE '%"optedIn":true%'
+     GROUP BY workspace_id ORDER BY MIN(updated_at), workspace_id LIMIT 25`,
+  ).all(CHECKPOINT_PROVIDER_MESSAGE_ID)
   const result = { workspaces: 0, created: 0, failed: 0 }
   for (const { workspace_id: workspaceId } of rows) {
+    if (Date.now() >= deadlineMs) break
     result.workspaces += 1
     try {
       const ingest = await runReplyIngest({
@@ -1143,7 +1145,11 @@ export async function runScheduledReplyIngest(nowIsoValue = nowIso(), limit = 25
         source: "system", correlationId: `cron-funder-replies:${workspaceId}:${nowIsoValue}`,
       })
       result.created += ingest.createdCount
-    } catch { result.failed += 1 }
+    } catch {
+      result.failed += 1
+      // A failing workspace may not have saved a checkpoint; touch it so it rotates behind the others.
+      await db().prepare("UPDATE mca_funder_replies SET updated_at = ? WHERE workspace_id = ? AND provider_message_id = ?").run(nowIso(), workspaceId, CHECKPOINT_PROVIDER_MESSAGE_ID)
+    }
   }
   return result
 }

@@ -74,10 +74,7 @@ Both flags default off; only `"true"` enables them.
 - `MCA_EMAIL_WEBHOOK_URL` is always used first and is unchanged. With no webhook, `MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED=true` sends through the system email provider (`sendSystemEmail`).
 - **Resend:** `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY`, and `MCA_RESEND_FROM` (falls back to `MCA_USESEND_FROM`). The send goes to `https://api.resend.com/emails`.
 - **useSend** (default selector): `MCA_USESEND_API_KEY`, `MCA_USESEND_FROM`, optional `MCA_USESEND_BASE_URL`.
-- **Message contents:** From is the system sender. Reply-To is the submission sender mailbox, so funder replies reach the mailbox that reply ingest reads. The generated `Message-ID` goes out as a custom header, and the Idempotency-Key is the attempt correlation id. Attachments are the packaged bytes, base64 encoded.
-- **Provider limits, failing closed without dropping files:**
-  - useSend allows 10 attachments (`email_attachment_limit_exceeded`).
-  - Resend allows 40MB of base64 per email (`email_attachment_size_exceeded`).
-- **Error mapping:** a definitive 4xx gives `email_delivery_failed`. A 5xx, 408 or network error gives `delivery_uncertain` under the existing unknown-send-guard conditions (approved package, or `MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED=true`).
-- The useSend `emailId` is not stored, because `EmailAttemptRef` has no field for it.
-- **Scheduled reply ingest:** `runScheduledReplyIngest` runs from the existing `GET /api/cron/comms` tick when both `MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED=true` and `MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED=true`. It covers up to 25 workspaces with an opted-in mailbox per tick, oldest checkpoint first. It uses a system actor, and a failure in one workspace does not stop the others.
+- Reply-To is the submission sender mailbox, so replies reach the mailbox reply ingest reads. The generated `Message-ID` is sent as a custom header.
+- **Provider limits (fail closed, no dropped files):** useSend allows 10 attachments (`email_attachment_limit_exceeded`); Resend allows 40MB of base64 per email (`email_attachment_size_exceeded`).
+- A 5xx, 408 or network error is `delivery_uncertain` only under the existing unknown-send-guard conditions; a definitive 4xx is `email_delivery_failed`. The provider `emailId` is not stored.
+- **Scheduled reply ingest:** `GET /api/cron/comms` runs `runScheduledReplyIngest` when both `MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED=true` and `MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED=true`. It takes up to 25 workspaces with an opted-in mailbox, least recently touched first, stops starting new ones at the tick's 230s deadline, and isolates failures per workspace.
