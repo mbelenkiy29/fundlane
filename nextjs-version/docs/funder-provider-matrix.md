@@ -72,8 +72,8 @@ Issue #40 remains blocked on a real provider. Start with an **email-first pilot 
 Both flags default off; only `"true"` enables them.
 
 - `MCA_EMAIL_WEBHOOK_URL` is always used first and is unchanged. With no webhook, `MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED=true` sends through the system email provider (`sendSystemEmail`).
-- **Resend:** `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY`, and `MCA_RESEND_FROM` (falls back to `MCA_USESEND_FROM`). The send goes to `https://api.resend.com/emails`.
-- **useSend** (default selector): `MCA_USESEND_API_KEY`, `MCA_USESEND_FROM`, optional `MCA_USESEND_BASE_URL`.
+- **Resend (primary):** `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM` (e.g. `Fundlane <noreply@fundlane.io>`; falls back to `MCA_USESEND_FROM`). Selected by `MCA_SYSTEM_EMAIL_PROVIDER=resend`, or by an unset selector when `MCA_RESEND_API_KEY` is set. The send goes to `https://api.resend.com/emails`.
+- **useSend (fallback):** `MCA_SYSTEM_EMAIL_PROVIDER=usesend` (or an unset selector with no Resend key), `MCA_USESEND_API_KEY`, `MCA_USESEND_FROM`, optional `MCA_USESEND_BASE_URL`.
 - Reply-To is the submission sender mailbox, so replies reach the mailbox reply ingest reads. The generated `Message-ID` is sent as a custom header.
 - **Provider limits (fail closed, no dropped files):** useSend allows 10 attachments (`email_attachment_limit_exceeded`); Resend allows 40MB of base64 per email (`email_attachment_size_exceeded`).
 - A 5xx, 408 or network error is `delivery_uncertain` only under the existing unknown-send-guard conditions; a definitive 4xx is `email_delivery_failed`. The provider `emailId` is not stored.

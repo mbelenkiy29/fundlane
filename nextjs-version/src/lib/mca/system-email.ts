@@ -7,8 +7,10 @@ import { hmacScopedToken } from "./crypto"
 
 type SystemEmailInput = Parameters<typeof sendUsesendEmail>[0]
 
+/** Resend is primary: `resend` selects it, unset selects it whenever MCA_RESEND_API_KEY is set, and any other value (e.g. `usesend`) keeps the useSend fallback. */
 export function resendSystemEmailEnabled(): boolean {
-  return process.env.MCA_SYSTEM_EMAIL_PROVIDER === "resend"
+  const selected = process.env.MCA_SYSTEM_EMAIL_PROVIDER?.trim()
+  return selected ? selected === "resend" : Boolean(process.env.MCA_RESEND_API_KEY?.trim())
 }
 
 export function systemEmailCredentials(provider?: SystemProvider): { apiKey: string; from: string } | undefined {

@@ -93,3 +93,18 @@ test("billing and demo call sites route through Resend", async () => withEnv(asy
     ["https://api.resend.com/emails", "sales@example.test", "demo-key"],
   ])
 }))
+
+test("Resend is primary when its key is set; usesend keeps the fallback", async () => withEnv(async () => {
+  process.env.MCA_RESEND_API_KEY = "resend-key"
+  process.env.MCA_RESEND_FROM = "Fundlane <noreply@example.test>"
+  process.env.MCA_USESEND_API_KEY = "usesend-key"
+  process.env.MCA_USESEND_FROM = "UseSend <old@example.test>"
+  const urls: string[] = []
+  globalThis.fetch = async (input) => { urls.push(String(input)); return Response.json({ id: "resend-id", emailId: "usesend-id" }) }
+  assert.deepEqual(await sendSystemEmail(message), { emailId: "resend-id" })
+  assert.equal(systemEmailCredentials()?.from, "Fundlane <noreply@example.test>")
+  process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
+  assert.deepEqual(await sendSystemEmail(message), { emailId: "usesend-id" })
+  assert.equal(systemEmailCredentials()?.from, "UseSend <old@example.test>")
+  assert.deepEqual(urls, ["https://api.resend.com/emails", "https://app.usesend.com/api/v1/emails"])
+}))

@@ -701,7 +701,7 @@ async function withProvider(provider: "usesend" | "resend", run: (calls: Array<{
     process.env.MCA_SYSTEM_EMAIL_PROVIDER = "resend"
     process.env.MCA_RESEND_API_KEY = "re_test_key"
     process.env.MCA_RESEND_FROM = "Fundlane <system@resend.example.test>"
-  } else delete process.env.MCA_SYSTEM_EMAIL_PROVIDER
+  } else process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
   process.env.MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED = "true"
   process.env.MCA_USESEND_API_KEY = "us_test_key"
   process.env.MCA_USESEND_FROM = "Fundlane <system@mail.example.test>"
