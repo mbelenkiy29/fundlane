@@ -3,11 +3,13 @@ import { z } from "zod";
 import { getDatabase, newId, nowIso, withTransaction, type DbExecutor } from "../db";
 import { decryptSensitive, encryptSensitive, hmacScopedToken } from "../crypto";
 import { AppError } from "../errors";
+import { evaluateCompanyAccess, getCompanyAccess } from "../company-access";
 import type { OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
 import { onboardingEmailEnabled } from "./config";
 import { onboardingEmailEncryptionScope } from "./email-intents";
 import { enrollmentEmailHash, findEnrollment } from "./store";
 import { renderOnboardingEmail } from "./email-content";
+import { readVerifiedEnrollmentBilling } from "./evidence";
 import { dispatchOnboardingEmail, onboardingEmailConfiguration, onboardingEmailProviderIdentity, type FrozenOnboardingEmailConfiguration, type OnboardingEmailDispatchOutcome } from "./email-transport";
 
 interface EmailRow {
@@ -20,6 +22,11 @@ interface EmailRow {
 }
 const payloadSchema = z.object({ version: z.literal(1), enrollmentId: z.string(), generation: z.number().int().positive(), purpose: z.enum(["business_information_requested", "getting_started"]), email: z.email(), trialEndsAt: z.iso.datetime({ offset: true }) }).strict();
 const contentSchema = z.object({ subject: z.string().min(1).max(200), text: z.string().min(1), html: z.string().min(1) }).strict();
+const configurationFields = { replyTo: z.email().nullable(), endpoint: z.url().refine(value => new URL(value).protocol === "https:"), keyIdentity: z.string().min(1).max(128) };
+const configurationSchema = z.union([
+  z.object({ provider: z.enum(["usesend", "resend"]), from: z.string().min(1), ...configurationFields }).strict(),
+  z.object({ provider: z.literal("webhook"), from: z.string().nullable(), ...configurationFields }).strict(),
+]);
 const safeCode = (value?: string) => value && /^[a-z0-9_]{1,80}$/.test(value) ? value : "onboarding_email_preflight_failed";
 const scope = (row: EmailRow) => onboardingEmailEncryptionScope(row.enrollment_id, row.generation);
 const afterMinutes = (clock: string, minutes: number) => new Date(Date.parse(clock) + minutes * 60000).toISOString();
@@ -34,6 +41,19 @@ async function eligibility(db: DbExecutor, row: EmailRow) {
   const enrollment = await findEnrollment(row.enrollment_id, db);
   if (!enrollment?.activatedAt || enrollment.checkoutState !== "complete" || enrollment.emailGeneration !== row.generation || row.superseded_by_generation || enrollment.emailHash !== row.recipient_hash) throw new AppError(409, "onboarding_email_superseded", "The email intent is no longer current.");
   if (enrollment.billingState === "blocked" || ["canceling", "canceled", "uncertain", "operator_required"].includes(enrollment.recoveryState)) throw new AppError(409, "onboarding_email_suppressed", "The enrollment requires recovery review.");
+  let access;
+  if (enrollment.workspaceId) {
+    // After finalization, the company projection is updated independently of the enrollment.
+    access = await getCompanyAccess(enrollment.workspaceId);
+  } else {
+    const evidence = await readVerifiedEnrollmentBilling(enrollment.id, db);
+    if (!evidence || evidence.accountId !== enrollment.providerAccountId || evidence.livemode !== enrollment.offer.livemode || evidence.sessionId !== enrollment.checkoutSessionId || evidence.customerId !== enrollment.customerId || evidence.subscriptionId !== enrollment.subscriptionId || evidence.requestGeneration !== enrollment.checkoutGeneration || evidence.trialStartedAt !== enrollment.trialStartedAt || evidence.trialEndsAt !== enrollment.trialEndsAt || evidence.entitlement.status !== enrollment.billingState) throw new AppError(409, "onboarding_email_suppressed", "Verified current enrollment billing is required.");
+    const periodEnd = enrollment.billingState === "trialing" && evidence.entitlement.periodEnd && enrollment.trialEndsAt
+      ? new Date(Math.min(Date.parse(evidence.entitlement.periodEnd), Date.parse(enrollment.trialEndsAt))).toISOString()
+      : evidence.entitlement.periodEnd;
+    access = evaluateCompanyAccess({ state_present: 1, legacy_exempt: 0, trial_ends_at: null, manual_paused: 0, access_extended_until: null, grace_ends_at: evidence.graceEndsAt, processing_extension_until: evidence.processingExtensionUntil, pending_seats: null, status: evidence.entitlement.status, period_end: periodEnd, seat_limit: evidence.entitlement.seatLimit });
+  }
+  if (!access.allowed || (access.status === "trialing" && (!enrollment.trialEndsAt || Date.parse(enrollment.trialEndsAt) <= Date.now()))) throw new AppError(409, "onboarding_email_suppressed", "The current billing lifecycle does not permit onboarding email.");
   // Safety blocks apply to the address across configuration changes; merchant consent is unrelated.
   if (await db.queryOne("SELECT recipient_hash FROM mca_service_email_suppressions WHERE recipient_hash=? AND active=true LIMIT 1", [row.recipient_hash])) throw new AppError(409, "onboarding_email_suppressed", "Service email delivery to this address is suppressed.");
   return enrollment;
@@ -139,8 +159,19 @@ export async function runOnboardingEmails(options?: { limit?: number; deadlineMs
       continue;
     }
     if (!row) continue;
+    let content: ReturnType<typeof renderOnboardingEmail>, recipient: string, configuration: FrozenOnboardingEmailConfiguration;
+    try {
+      content = contentSchema.parse(JSON.parse(decryptSensitive(row.content_cipher!, scope(row))));
+      recipient = z.email().max(320).parse(decryptSensitive(row.recipient_cipher!, scope(row)));
+      configuration = configurationSchema.parse(JSON.parse(decryptSensitive(row.provider_config_cipher!, scope(row))));
+      if (enrollmentEmailHash(recipient) !== row.recipient_hash || configuration.provider !== row.provider || onboardingEmailProviderIdentity(configuration) !== row.provider_account_id) throw new Error("Invalid frozen email snapshot.");
+    } catch {
+      // An unsupported restored snapshot is operator work, never a retry or fabricated receipt.
+      await recordOnboardingEmailDispatchOutcome(row.id, row.claim_token!, { state: "failed", errorCode: "onboarding_email_snapshot_unreadable" });
+      continue;
+    }
     let attempted = false;
-    let outcome = await dispatchOnboardingEmail({ content: contentSchema.parse(JSON.parse(decryptSensitive(row.content_cipher!, scope(row)))), recipient: decryptSensitive(row.recipient_cipher!, scope(row)), purpose: row.purpose, deliveryKey: row.delivery_key, configuration: JSON.parse(decryptSensitive(row.provider_config_cipher!, scope(row))) as FrozenOnboardingEmailConfiguration, deadlineMs: deadline, beforeSend: async () => { await beforeSend(row!); attempted = true; } });
+    let outcome = await dispatchOnboardingEmail({ content, recipient, purpose: row.purpose, deliveryKey: row.delivery_key, configuration, deadlineMs: deadline, beforeSend: async () => { await beforeSend(row!); attempted = true; } });
     if (attempted) result.attempted++;
     let recorded: boolean;
     try { recorded = await recordOnboardingEmailDispatchOutcome(row.id, row.claim_token!, outcome); }

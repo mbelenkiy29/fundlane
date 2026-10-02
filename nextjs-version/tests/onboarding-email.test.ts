@@ -5,10 +5,16 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
 import { assertTransactionExecutor, closeDatabaseForTests, getDatabase, withTransaction } from "../src/lib/mca/db";
-import { decryptSensitive } from "../src/lib/mca/crypto";
+import { decryptSensitive, encryptSensitive } from "../src/lib/mca/crypto";
 import { createEnrollment, findEnrollment, recordEnrollmentActivation } from "../src/lib/mca/onboarding/store";
 import { enqueueOnboardingEmailIntents } from "../src/lib/mca/onboarding/email-intents";
-import type { EnrollmentActivation, EnrollmentOffer } from "../src/lib/mca/onboarding/contracts";
+import type { EnrollmentActivation, EnrollmentOffer, EnrollmentRecord } from "../src/lib/mca/onboarding/contracts";
+import { enrollmentEvidenceScope, readVerifiedEnrollmentBilling, type VerifiedEnrollmentBilling } from "../src/lib/mca/onboarding/evidence";
+import { onboardingEmailConfiguration, onboardingEmailProviderIdentity } from "../src/lib/mca/onboarding/email-transport";
+import { enrollmentTestEnv, resumeSecret, stripeFixture } from "./helpers/onboarding-billing";
+import { startEnrollmentCheckout } from "../src/lib/mca/onboarding/checkout";
+import { reconcileEnrollment } from "../src/lib/mca/onboarding/reconcile";
+import { persistEntitlement } from "../src/lib/mca/billing";
 import { renderOnboardingEmail } from "../src/lib/mca/onboarding/email-content";
 import { runOnboardingEmails, recordOnboardingEmailDispatchOutcome } from "../src/lib/mca/onboarding/email-worker";
 import { runScheduledCommsJobs } from "../src/lib/mca/comms/scheduler";
@@ -39,8 +45,20 @@ after(async () => {
 async function activate() {
   const row = await createEnrollment({ resumeSecret: randomUUID() + randomUUID(), offer }), id = randomUUID();
   const activation: EnrollmentActivation = { sessionId: `cs_${id}`, customerId: `cus_${id}`, subscriptionId: `sub_${id}`, email: "owner@example.test", businessName: "Synthetic company", trialStartedAt: instant, trialEndsAt: end, verifiedAt: instant, billingStatus: "trialing", livemode: false };
-  await withTransaction(db => recordEnrollmentActivation(row.id, activation, db));
+  await withTransaction(async db => {
+    await recordEnrollmentActivation(row.id, activation, db);
+    const evidence: VerifiedEnrollmentBilling = { version: 1, enrollmentId: row.id, accountId: "acct_synthetic", livemode: false, requestGeneration: 1, sessionId: activation.sessionId, customerId: activation.customerId, subscriptionId: activation.subscriptionId, verifiedAt: instant, trialStartedAt: instant, trialEndsAt: end, paymentMethodVerified: true, cardFingerprint: null, entitlement: { subscriptionId: activation.subscriptionId, planId: "price_base", planSlug: "fundlane:1", planName: "Fundlane", status: "trialing", periodStart: instant, periodEnd: end, seatLimit: 1, paymentPastDue: false }, invoices: [], hasUnpaidInvoices: false, delinquentSince: null, delinquentInvoiceId: null, graceEndsAt: null, processingExtensionUntil: null, processingExtensionGrantedAt: null, collectionPaused: false };
+    await db.execute("INSERT INTO mca_enrollment_billing_evidence(enrollment_id,provider_account_id,revision,snapshot_cipher,verified_at) VALUES (?,?,1,?,?)", [row.id, "acct_synthetic", encryptSensitive(JSON.stringify(evidence), enrollmentEvidenceScope(row.id)), instant]);
+  });
   return { row, activation };
+}
+async function updateBilling(id: string, status: EnrollmentRecord["billingState"], details: { periodEnd?: string; graceEndsAt?: string | null; processingExtensionUntil?: string | null } = {}) {
+  const evidence = (await readVerifiedEnrollmentBilling(id))!;
+  const next: VerifiedEnrollmentBilling = { ...evidence, verifiedAt: new Date().toISOString(), entitlement: { ...evidence.entitlement, status, periodEnd: details.periodEnd ?? evidence.entitlement.periodEnd, paymentPastDue: !["trialing", "active"].includes(status) }, graceEndsAt: details.graceEndsAt ?? null, processingExtensionUntil: details.processingExtensionUntil ?? null };
+  await withTransaction(async db => {
+    await db.execute("UPDATE mca_enrollments SET billing_state=?,revision=revision+1 WHERE id=?", [status, id]);
+    await db.execute("UPDATE mca_enrollment_billing_evidence SET snapshot_cipher=?,verified_at=?,revision=revision+1 WHERE enrollment_id=?", [encryptSensitive(JSON.stringify(next), enrollmentEvidenceScope(id)), next.verifiedAt, id]);
+  });
 }
 async function emails(id?: string) {
   return (await getDatabase().query<MailRow>(`SELECT * FROM mca_onboarding_service_emails ${id ? "WHERE enrollment_id=?" : ""} ORDER BY purpose`, id ? [id] : [])).rows;
@@ -350,4 +368,161 @@ for (const missing of ["origin", "malformed_endpoint", "webhook_token"] as const
   assert.equal((await runOnboardingEmails({ clock: instant })).attempted, 0);
   assert.equal(calls, 0);
   assert.ok((await emails()).every(mail => mail.state === "queued" && mail.attempts === 0 && mail.next_attempt_at === "2030-01-01T12:15:00.000Z"));
+});
+
+for (const state of ["canceled", "paused", "unpaid", "incomplete", "incomplete_expired"] as const) test(`${state} enrollment lifecycle suppresses first send without CRM mutations`, async () => {
+  const { row } = await activate();
+  await updateBilling(row.id, state);
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ emailId: "must-not-send" }); };
+  const counts = await runOnboardingEmails({ clock: instant });
+  assert.equal(calls, 0);
+  assert.equal(counts.suppressed, 2);
+  assert.ok((await emails(row.id)).every(mail => mail.state === "suppressed" && mail.attempts === 0));
+  assert.equal((await findEnrollment(row.id))?.workspaceId, null);
+  assert.equal((await findEnrollment(row.id))?.recoveryState, "none");
+});
+
+test("ordinary cancellation between attempts suppresses frozen retries without changing accepted history", async t => {
+  const { row } = await activate();
+  globalThis.fetch = async (_url, init) => JSON.parse(String(init?.body)).subject === "Get started with Fundlane" ? Response.json({ emailId: "already-accepted" }) : Response.json({}, { status: 429 });
+  await runOnboardingEmails({ clock: instant });
+  const frozen = await emails(row.id);
+  t.mock.timers.setTime(Date.parse("2030-01-01T12:15:00.000Z"));
+  await updateBilling(row.id, "canceled");
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ emailId: "must-not-retry" }); };
+  assert.equal((await runOnboardingEmails({ clock: "2030-01-01T12:15:00.000Z" })).suppressed, 1);
+  assert.equal(calls, 0);
+  const final = await emails(row.id);
+  assert.deepEqual(final.map(mail => mail.state), ["suppressed", "accepted"]);
+  assert.deepEqual(final.map(mail => mail.content_cipher), frozen.map(mail => mail.content_cipher));
+  assert.equal(final[1].provider_message_id, "already-accepted");
+  assert.equal((await emails(row.id)).length, 2);
+});
+
+for (const [label, details, allowed] of [
+  ["no grace", {}, false],
+  ["live grace", { graceEndsAt: "2030-01-01T12:30:00.000Z" }, true],
+  ["expired grace", { graceEndsAt: "2030-01-01T11:59:59.000Z" }, false],
+  ["verified processing extension", { graceEndsAt: "2030-01-01T11:59:59.000Z", processingExtensionUntil: "2030-01-01T12:30:00.000Z" }, true],
+] as const) test(`past_due with ${label} follows the existing entitlement policy`, async () => {
+  const { row } = await activate();
+  await updateBilling(row.id, "past_due", details);
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => { calls++; return Response.json({ emailId: `policy-${new Headers(init?.headers).get("idempotency-key")}` }); };
+  const counts = await runOnboardingEmails({ clock: instant });
+  assert.equal(calls, allowed ? 2 : 0);
+  assert.equal(counts.accepted, allowed ? 2 : 0);
+  assert.equal(counts.suppressed, allowed ? 0 : 2);
+});
+
+test("delayed paid conversion can receive setup guidance without active-trial or future-conversion promises", async t => {
+  const { row } = await activate();
+  t.mock.timers.setTime(Date.parse("2030-01-16T12:00:00.000Z"));
+  await updateBilling(row.id, "active", { periodEnd: "2030-02-15T12:00:00.000Z" });
+  const copy: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    copy.push(body.text);
+    return Response.json({ emailId: `converted-${new Headers(init?.headers).get("idempotency-key")}` });
+  };
+  assert.equal((await runOnboardingEmails({ clock: "2030-01-16T12:00:00.000Z" })).accepted, 2);
+  const welcome = copy.find(text => text.includes("default sender"))!;
+  assert.match(welcome, /Original trial end: 2030-01-15T12:00:00.000Z/);
+  assert.doesNotMatch(welcome, /trial is active|cancel before|automatic paid subscription begins/i);
+});
+
+test("stale trialing evidence cannot extend the original trial boundary", async t => {
+  const { row } = await activate();
+  t.mock.timers.setTime(Date.parse(end));
+  await updateBilling(row.id, "trialing", { periodEnd: "2030-02-15T12:00:00.000Z" });
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ emailId: "stale-trial" }); };
+  assert.equal((await runOnboardingEmails({ clock: end })).suppressed, 2);
+  assert.equal(calls, 0);
+});
+
+test("frozen retry crossing paid conversion retains truthful original content", async t => {
+  const { row } = await activate();
+  t.mock.timers.setTime(Date.parse("2030-01-15T11:50:00.000Z"));
+  const bodies: string[] = [];
+  globalThis.fetch = async (_url, init) => { bodies.push(String(init?.body)); return Response.json({}, { status: 429 }); };
+  await runOnboardingEmails({ clock: "2030-01-15T11:50:00.000Z" });
+  const frozen = await emails(row.id);
+  t.mock.timers.setTime(Date.parse("2030-01-15T12:05:00.000Z"));
+  await updateBilling(row.id, "active", { periodEnd: "2030-02-15T12:00:00.000Z" });
+  globalThis.fetch = async (_url, init) => { bodies.push(String(init?.body)); return Response.json({ emailId: `after-conversion-${new Headers(init?.headers).get("idempotency-key")}` }); };
+  assert.equal((await runOnboardingEmails({ clock: "2030-01-15T12:05:00.000Z" })).accepted, 2);
+  assert.deepEqual(bodies.slice(0, 2).sort(), bodies.slice(2, 4).sort());
+  assert.doesNotMatch(bodies.join(" "), /trial is active|cancel before|automatic paid subscription begins/i);
+  assert.deepEqual((await emails(row.id)).map(mail => mail.content_cipher), frozen.map(mail => mail.content_cipher));
+});
+
+test("valid trial scheduled for period-end cancellation remains eligible until original end", async () => {
+  Object.assign(process.env, enrollmentTestEnv, { MCA_APP_ORIGIN: "https://app.example.test", MCA_ONBOARDING_EMAIL_ENABLED: "true" });
+  const f = stripeFixture(), checkout = await startEnrollmentCheckout({ resumeSecret: resumeSecret() }, f.client);
+  f.complete();
+  await reconcileEnrollment(checkout.enrollmentId, f.client);
+  f.state.subscription.cancel_at_period_end = true;
+  await reconcileEnrollment(checkout.enrollmentId, f.client);
+  const counts = await runOnboardingEmails({ clock: instant });
+  assert.equal(counts.accepted, 2);
+  assert.equal((await findEnrollment(checkout.enrollmentId))?.billingState, "trialing");
+  assert.equal((await findEnrollment(checkout.enrollmentId))?.trialEndsAt, end);
+});
+
+test("current company projection supersedes stale enrollment trial status", async () => {
+  const { row } = await activate(), workspaceId = randomUUID(), evidence = (await readVerifiedEnrollmentBilling(row.id))!;
+  await withTransaction(async db => {
+    await db.execute("INSERT INTO workspaces(id,name,feature_flags,page_visibility,created_at,updated_at) VALUES (?,'Synthetic canceled company','{}','{}',?,?)", [workspaceId, instant, instant]);
+    await db.execute("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,state_kind,updated_at) VALUES (?,0,'customer',?)", [workspaceId, instant]);
+    await persistEntitlement(workspaceId, { ...evidence.entitlement, status: "canceled", periodEnd: end }, "stripe_api", db);
+    await db.execute("UPDATE mca_enrollments SET workspace_id=?,revision=revision+1 WHERE id=?", [workspaceId, row.id]);
+  });
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ emailId: "stale-company-status" }); };
+  assert.equal((await runOnboardingEmails({ clock: instant })).suppressed, 2);
+  assert.equal(calls, 0);
+});
+
+for (const corruption of ["malformed", "wrong_aad"] as const) test(`${corruption} frozen snapshot is held independently without provider I/O or fabricated receipt`, async () => {
+  const { row } = await activate(), broken = (await emails(row.id))[0], configuration = onboardingEmailConfiguration();
+  const privateValue = "synthetic-private-snapshot-detail";
+  const contentCipher = corruption === "malformed" ? encryptSensitive(JSON.stringify({ subject: privateValue }), scope(broken)) : encryptSensitive(JSON.stringify({ subject: privateValue, text: privateValue, html: privateValue }), "foreign-restored-scope");
+  await getDatabase().execute("UPDATE mca_onboarding_service_emails SET recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=? WHERE id=?", [encryptSensitive("owner@example.test", scope(broken)), contentCipher, encryptSensitive(JSON.stringify(configuration), scope(broken)), configuration.provider, onboardingEmailProviderIdentity(configuration), instant, broken.id]);
+  const sent: string[] = [];
+  globalThis.fetch = async (_url, init) => { sent.push(String(init?.body)); return Response.json({ emailId: "independent-valid-intent" }); };
+  const counts = await runOnboardingEmails({ clock: instant });
+  assert.equal(counts.attempted, 1);
+  assert.equal(counts.accepted, 1);
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent.join(" "), new RegExp(privateValue));
+  const final = await emails(row.id);
+  assert.deepEqual(final.map(mail => mail.state), ["failed", "accepted"]);
+  assert.equal(final[0].attempts, 0);
+  assert.equal(final[0].error_code, "onboarding_email_snapshot_unreadable");
+  assert.equal((await getDatabase().queryOne<{ count: number }>("SELECT count(*)::int count FROM mca_onboarding_service_email_receipts WHERE email_id=?", [broken.id]))?.count, 0);
+  assert.equal((await runOnboardingEmails({ clock: end })).attempted, 0);
+});
+
+test("billing cancellation after freezing is rechecked immediately before provider I/O", async t => {
+  await activate();
+  const original = pg.Client.prototype.query;
+  let changed = false, calls = 0;
+  t.mock.method(pg.Client.prototype, "query", (async function(this: pg.Client, ...args: unknown[]) {
+    const input = args[0], text = typeof input === "string" ? input : input && typeof input === "object" && "text" in input ? String(input.text) : "";
+    const result = await Reflect.apply(original, this, args);
+    if (!changed && text.includes("UPDATE mca_onboarding_service_emails SET recipient_cipher=")) {
+      changed = true;
+      await fixture.query("UPDATE mca_enrollments SET billing_state='canceled',revision=revision+1 WHERE id=$1", [result.rows[0].enrollment_id]);
+    }
+    return result;
+  }) as typeof original);
+  globalThis.fetch = async () => { calls++; return Response.json({ emailId: "canceled-during-freeze" }); };
+  const counts = await runOnboardingEmails({ clock: instant });
+  assert.equal(changed, true);
+  assert.equal(calls, 0);
+  assert.equal(counts.attempted, 0);
+  assert.equal(counts.suppressed, 2);
 });

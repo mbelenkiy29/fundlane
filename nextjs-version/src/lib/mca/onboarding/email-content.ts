@@ -25,12 +25,12 @@ export function renderOnboardingEmail(input: { purpose: OnboardingEmailPurpose; 
     "Confirm or correct the business name supplied at Checkout and add your EIN in Fundlane’s secure form.",
     "Do not reply with your EIN. Phone and SMS require additional registration and approval; saving these details does not verify your business.",
   ] : [
-    "Your Fundlane trial is active. These getting-started steps are optional and do not block CRM access.",
+    "Welcome to Fundlane. These getting-started steps are optional and do not block CRM access.",
     "1. Connect an email sender that you are authorized to use.",
     "2. Explicitly send a test to your own address you control, then check your inbox and confirm that it was received. Provider acceptance alone does not prove receipt.",
     "3. Choose the default sender for the purpose you intend to use.",
     "4. Review the sender, permissions, and submission prerequisites in the in-app getting-started checklist. Explicitly initiate a safe synthetic submission using synthetic deal data and a sandbox funder; do not send to a live funder as a test.",
-    `Your original trial ends at ${value.trialEndsAt}. Open Plans & Billing in Fundlane to manage billing or cancel before the automatic paid subscription begins.`,
+    `Original trial end: ${value.trialEndsAt}. Open Plans & Billing in Fundlane to review your current subscription, charges, and cancellation options.`,
   ];
   paragraphs.push("Sign in and verify your identity to continue. Opening this link does not create a company, submit details, or send a test.");
   const cta = business ? "Add business details" : "Open Fundlane";
