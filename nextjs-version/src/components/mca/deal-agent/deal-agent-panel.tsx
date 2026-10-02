@@ -86,7 +86,7 @@ export function DealAgentPanel({ dealId, onChanged }: { dealId: string; onChange
   const decided = view.actions.filter(action => !pending.includes(action))
   return <Card>
     <CardHeader>
-      <CardTitle className="flex items-center gap-2"><Bot className="size-5" />Deal Agent · nothing is sent without your approval</CardTitle>
+      <CardTitle className="flex items-center gap-2"><Bot className="size-5" />Deal Agent · nothing is sent without your approval<Button variant="ghost" size="sm" className="ml-auto" disabled={Boolean(busy)} onClick={() => void load()}>Refresh</Button></CardTitle>
       <CardDescription>Proposals from the latest document analysis, completeness check and lender fit. Review shows the exact message or package; Approve hands it to the normal send path.</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">

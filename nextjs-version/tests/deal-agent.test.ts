@@ -412,8 +412,7 @@ test("dismiss records decider, time and note", async () => {
   const { workspaceId, dealId } = await incompleteDealWithRun()
   const broker = await seedMember(workspaceId, "admin")
   const request = (await actionsFor(dealId)).find(action => action.kind === "request_documents")!
-  const result = await decide(broker, dealId, request.id, "dismiss", { note: "Merchant is sending by courier" })
-  assert.equal(result.action.status, "dismissed")
+  await decide(broker, dealId, request.id, "dismiss", { note: "Merchant is sending by courier" })
   const row = await getDatabase().prepare<{ status: string; decided_by_user_id: string; decided_at: string; decision_note: string }>("SELECT status,decided_by_user_id,decided_at,decision_note FROM mca_deal_agent_actions WHERE id=?").get(request.id)
   assert.equal(row?.status, "dismissed")
   assert.equal(row?.decided_by_user_id, broker.userId)
@@ -506,10 +505,9 @@ test("review then approve hands off to confirmSubmissions", async () => {
   const preview = reviewed.preview as { id: string; destinations: Array<{ funderId: string }> }
   assert.equal(preview.destinations[0].funderId, funderIds[0])
   assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.preview_id, preview.id)
-  assert.equal(reviewed.action.status, "pending")
-  assert.equal(reviewed.action.hasPreview, true)
-  const approved = await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve", { previewId: preview.id }))
-  assert.equal(approved.action.status, "approved")
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "pending")
+  await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve", { previewId: preview.id }))
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "approved")
   const jobs = await submissionJobs(dealId)
   assert.equal(jobs.length, 1)
   assert.equal(jobs[0].confirmation_key, preview.id)
@@ -549,13 +547,17 @@ test("request_documents review creates stipulations and a closing preview; appro
   const again = await decide(broker, dealId, action.id, "review", { senderId })
   assert.equal((again.preview as { id: string }).id, preview.id)
   assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_stipulations WHERE deal_id=?").get(dealId))?.n, items.length)
+  await getDatabase().prepare("UPDATE deals SET dba_name='Renamed Merchant',version=version+1 WHERE id=?").run(dealId)
+  const edited = (await decide(broker, dealId, action.id, "review", { senderId })).preview as { id: string; body: string }
+  assert.notEqual(edited.id, preview.id)
+  assert.match(edited.body, /Renamed Merchant/)
   const delivered: string[] = []
   setClosingTransportForTests({ async deliver(request) { delivered.push(request.body ?? ""); return { state: "sent", correlationId: request.correlationId, externalId: "agent-mail-1" } } })
   try {
-    await assert.rejects(decide(broker, dealId, action.id, "approve", { previewId: "some-other-preview" }), { status: 409, code: "preview_changed" })
+    await assert.rejects(decide(broker, dealId, action.id, "approve", { previewId: preview.id }), { status: 409, code: "preview_changed" })
     assert.equal(delivered.length, 0)
-    const approved = await decide(broker, dealId, action.id, "approve", { previewId: preview.id })
-    assert.equal(approved.action.status, "approved")
+    await decide(broker, dealId, action.id, "approve", { previewId: edited.id })
+    assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "approved")
   } finally { setClosingTransportForTests() }
   assert.equal(delivered.length, 1)
   assert.match(delivered[0], /\/merchant-upload\//)
@@ -566,8 +568,8 @@ test("approve schedule_follow_up creates one calendar followup assigned to appro
   const { workspaceId, dealId } = await incompleteDealWithRun()
   const broker = await seedMember(workspaceId, "admin")
   const action = (await actionsFor(dealId)).find(row => row.kind === "schedule_follow_up")!
-  const approved = await decide(broker, dealId, action.id, "approve")
-  assert.equal(approved.action.status, "approved")
+  await decide(broker, dealId, action.id, "approve")
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "approved")
   const rows = await getDatabase().prepare<{ kind: string; assignee_id: string; all_day: number; starts_at: string }>("SELECT kind,assignee_id,all_day,starts_at FROM mca_calendar_activities WHERE deal_id=?").all(dealId)
   assert.equal(rows.length, 1)
   assert.equal(rows[0].kind, "followup")
