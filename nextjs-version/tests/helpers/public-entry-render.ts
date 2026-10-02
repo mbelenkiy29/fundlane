@@ -37,6 +37,7 @@ export const interactionSetup = `
   const dispatcher = {
     useState(initial) { const index = cursor++; if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial; return [states[index], value => { states[index] = typeof value === "function" ? value(states[index]) : value; }]; },
     useRef(initial) { const index = cursor++; return states[index] ??= { current: initial }; },
+    useId() { const index = cursor++; return states[index] ??= "test-id-" + index; },
     useEffect(action, dependencies) { const index = cursor++; const previous = states[index]; if (!previous || !dependencies || dependencies.some((value, i) => value !== previous[i])) { states[index] = dependencies; effects.push(action); } },
   };
   function render(Component, props = {}) {
