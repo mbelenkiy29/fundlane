@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, foreignKey, index, integer, pgTable, primaryKey, text, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { BILLING_CATALOG } from "../billing-catalog";
 import { memberships, mca_email_senders, users, workspaces } from "./schema";
 import type { EnrollmentBillingState, EnrollmentCheckoutState, EnrollmentClaimState, EnrollmentFinalizationState, EnrollmentRecoveryState, OnboardingEmailPurpose, OnboardingEmailState } from "../onboarding/contracts";
 
@@ -45,7 +46,7 @@ export const mcaEnrollments = pgTable("mca_enrollments", {
   check("mca_enrollments_claim_complete_check", sql`claim_state <> 'claimed' OR (workspace_id IS NOT NULL AND user_id IS NOT NULL AND claimed_provider_user_id IS NOT NULL AND finalization_state='complete' AND activated_at IS NOT NULL)`),
   check("mca_enrollments_finalization_complete_check", sql`finalization_state <> 'complete' OR claim_state='claimed'`),
   check("mca_enrollments_activation_check", sql`activated_at IS NULL OR (checkout_session_id IS NOT NULL AND customer_id IS NOT NULL AND subscription_id IS NOT NULL AND contact_cipher IS NOT NULL AND provider_snapshot_cipher IS NOT NULL AND email_hash IS NOT NULL AND email_domain_hash IS NOT NULL AND activation_email_hash IS NOT NULL AND activation_email_domain_hash IS NOT NULL AND trial_started_at IS NOT NULL AND trial_ends_at IS NOT NULL AND verified_at IS NOT NULL)`),
-  check("mca_enrollments_offer_check", sql`COALESCE(jsonb_typeof(offer_json::jsonb)='object' AND (offer_json::jsonb @> '{"version":1,"currency":"usd","baseAmount":39900,"quantity":1,"trialDays":14}') AND offer_json::jsonb->>'accountId'=provider_account_id AND provider_account_id ~ '^acct_[A-Za-z0-9]+$' AND offer_json::jsonb->>'basePriceId' ~ '^price_[A-Za-z0-9]+$' AND offer_json::jsonb->>'seatPriceId' ~ '^price_[A-Za-z0-9]+$' AND offer_json::jsonb->>'basePriceId'<>offer_json::jsonb->>'seatPriceId' AND jsonb_typeof(offer_json::jsonb->'livemode')='boolean' AND jsonb_typeof(offer_json::jsonb->'promotionCodes')='boolean' AND jsonb_typeof(offer_json::jsonb->'automaticTax')='boolean',false)`),
+  check("mca_enrollments_offer_check", sql`COALESCE(jsonb_typeof(offer_json::jsonb)='object' AND (offer_json::jsonb @> '{"version":1,"currency":"usd","baseAmount":${sql.raw(String(BILLING_CATALOG.base.unitAmountCents))},"quantity":1,"trialDays":14}') AND offer_json::jsonb->>'accountId'=provider_account_id AND provider_account_id ~ '^acct_[A-Za-z0-9]+$' AND offer_json::jsonb->>'basePriceId' ~ '^price_[A-Za-z0-9]+$' AND offer_json::jsonb->>'seatPriceId' ~ '^price_[A-Za-z0-9]+$' AND offer_json::jsonb->>'basePriceId'<>offer_json::jsonb->>'seatPriceId' AND jsonb_typeof(offer_json::jsonb->'livemode')='boolean' AND jsonb_typeof(offer_json::jsonb->'promotionCodes')='boolean' AND jsonb_typeof(offer_json::jsonb->'automaticTax')='boolean',false)`),
 ]);
 
 export type EnrollmentDatabaseRow = typeof mcaEnrollments.$inferSelect;
