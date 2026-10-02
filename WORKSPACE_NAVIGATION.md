@@ -30,6 +30,7 @@ All paths below are relative to `nextjs-version/`.
 | Authentication and workspace isolation | `src/lib/mca/auth.ts`, `supabase-auth.ts`, `src/lib/supabase/`, `src/proxy.ts`, `policy.ts`, `workspaces.ts`, `memberships.ts`, `docs/supabase-auth.md` |
 | Database and schema | `src/lib/mca/db.ts`, `src/lib/mca/db/schema.ts`, `drizzle/` |
 | Company billing | `src/lib/mca/billing.ts`, `/api/billing`, `/api/webhooks/stripe`, `docs/supabase-billing.md` |
+| Stripe-first trial enrollment and operator diagnostics | `src/lib/mca/onboarding/`, `/api/enrollments`, `/platform/onboarding`, `/api/platform/onboarding`, `docs/stripe-first-onboarding.md`, `docs/acceptance/auth-refractor.md`; repair uses existing billing cron, service mail uses existing comms cron |
 | Deals and pipeline | `src/lib/mca/deals/` |
 | Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
 | Intake, application review, documents and imports | `src/lib/mca/intake/` (`review.ts`, `notifications.ts`, `submission-review.ts`), `src/components/mca/intake/application-review.tsx`, `documents/`, `imports/`, `docs/application-intake.md` |
