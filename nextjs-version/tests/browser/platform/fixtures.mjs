@@ -2,7 +2,8 @@
 export const stamp = '2026-10-01T12:00:00.000Z'
 export const companyId = 'company-a'
 export const actor = { email: 'operator@example.test' }
-export const company = { id: companyId, name: 'Synthetic Capital Partners', purchasedSeats: 8, selectedSeats: 8, occupiedSeats: 6, subscriptionStatus: 'active', billingState: 'customer', access: { status: 'active', seatLimit: 8, manualPaused: false, trialEndsAt: null, graceEndsAt: null } }
+export const billingObservation={workspaceId:companyId,companyName:'Synthetic Capital Partners',livemode:false,syncedAt:stamp,source:'stripe_api',pending:false,failed:false}
+export const company = {billingObservation, id: companyId, name: 'Synthetic Capital Partners', purchasedSeats: 8, selectedSeats: 8, occupiedSeats: 6, subscriptionStatus: 'active', billingState: 'customer', access: { status: 'active', seatLimit: 8, manualPaused: false, trialEndsAt: null, graceEndsAt: null } }
 export const totals = [
   { currency: 'usd', due: '1280000', paid: '960000', remaining: '320000', refunded: '12000', disputed: '5000' },
   { currency: 'eur', due: '480000', paid: '400000', remaining: '80000', refunded: '0', disputed: '0' },
@@ -31,7 +32,7 @@ export const documentRuntimeEnabled = () => false
 export const platformCompanies = async query => query.q === 'no-match' ? [] : Array.from({ length: 50 }, (_, i) => ({ ...company, id: i ? `company-${i}` : companyId, name: i ? `Synthetic Brokerage ${i}` : company.name }))
 export const listBillingStateExceptions = async () => [{ id: companyId, name: company.name, legacyExempt: false }]
 export const platformCompany = async () => detail
-export const platformPayments = async query => ({ totals, invoices: query.q === 'no-match' ? [] : [invoice], payments: [payment], adjustments: [adjustment] })
+export const platformPayments = async query => ({ snapshotAt:stamp,billingObservations:[billingObservation],observationsTruncated:false,totals, invoices: query.q === 'no-match' ? [] : [invoice], payments: [payment], adjustments: [adjustment] })
 export const platformAudit = async () => [audit]
 export const listSuperAdminActions = async () => [adminAudit]
 export const listDemoSubmissions = async () => [demo]

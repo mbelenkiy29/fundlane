@@ -1,5 +1,6 @@
 import { z } from "zod"
-export type Page<T> = { items: T[]; nextCursor: string | null }
+import type { BillingObservation } from "./platform-refresh"
+export type Page<T> = { items: T[]; nextCursor: string | null; snapshotAt?: string }
 export const ownerQueueQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).max(200).optional(),
   state: z.enum(["draft", "pending", "approved", "rejected", "not_started"]).optional(),
@@ -10,7 +11,7 @@ export type OwnerQueueQuery = z.infer<typeof ownerQueueQuerySchema>
 export type CompanyOperationsRow = {
   workspaceId: string; name: string; ownerEmail: string | null; occupiedSeats: number; purchasedSeats: number
   subscriptionStatus: string; accessState: string; smsReviewState: string; providerState: string
-  blockedReasons: string[]; observedAt: string | null
+  blockedReasons: string[]; observedAt: string | null; billingObservation?: BillingObservation
 }
 export type RegistrationSummary = { id: string; kind: string; attempt: number; state: string }
 export type SmsReviewItem = {

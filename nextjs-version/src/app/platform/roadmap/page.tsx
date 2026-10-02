@@ -9,5 +9,6 @@ export const dynamic = "force-dynamic"
 export default async function PlatformRoadmapPage() {
   if (!publicRoadmapEnabled()) notFound()
   await requirePlatformPage()
-  return <div className="space-y-6"><PlatformHeading title="Roadmap" description="Manage product updates and publication status." /><RoadmapEditor initialItems={await listRoadmapItems()} /></div>
+  const items = await listRoadmapItems()
+  return <div className="space-y-6"><PlatformHeading snapshotAt={new Date().toISOString()} title="Roadmap" description="Manage product updates and publication status." /><RoadmapEditor initialItems={items} /></div>
 }

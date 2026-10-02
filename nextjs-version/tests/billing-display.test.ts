@@ -16,6 +16,9 @@ test("money retains cents and distinguishes currencies",()=>{
   assert.equal(formatBillingMoney(BILLING_CATALOG.base.unitAmountCents),"$399.00")
   assert.equal(formatBillingMoney("12345","eur"),"€123.45")
   assert.equal(formatBillingMoney(0),"$0.00")
+  assert.equal(formatBillingMoney("900719925474099301"),"$9,007,199,254,740,993.01")
+  assert.equal(formatBillingMoney("-12345"),"-$123.45")
+  assert.throws(()=>formatBillingMoney(Number.MAX_SAFE_INTEGER+1),/safe integer/)
 })
 test("paid increase confirmation requires a matching verified amount, including zero",()=>{
   assert.equal(quotedSeatIncrease(null,6),false)

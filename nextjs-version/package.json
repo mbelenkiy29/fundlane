@@ -24,7 +24,8 @@
     "messaging:worker:build": "node scripts/messaging/build.mjs",
     "ops:email-dns-check": "node --import tsx scripts/ops/email-dns-check.ts",
     "sms:readiness": "node scripts/sms/readiness.mjs",
-    "stripe:tax-readiness": "node --conditions=react-server --import tsx scripts/stripe/tax-readiness.ts"
+    "stripe:tax-readiness": "node --conditions=react-server --import tsx scripts/stripe/tax-readiness.ts",
+    "ops:platform-fresh-start": "node --import tsx scripts/ops/platform-fresh-start.ts"
   },
   "engines": {
     "node": "24.x"

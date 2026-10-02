@@ -38,7 +38,7 @@ test("missing provider observations remain unknown and legacy submissions have n
  assert.equal(company.providerState,"unknown");assert.equal(company.observedAt,null)
  const sms=(await queues.listSmsReviewQueue(actor,{workspaceId:"queue-101",limit:50})).items[0]
  assert.equal(sms.submissionId,null);assert.equal(sms.version,null)
- assert.deepEqual(Object.keys(company).sort(),["workspaceId","name","ownerEmail","occupiedSeats","purchasedSeats","subscriptionStatus","accessState","smsReviewState","providerState","blockedReasons","observedAt"].sort())
+ assert.deepEqual(Object.keys(company).sort(),["workspaceId","name","ownerEmail","occupiedSeats","purchasedSeats","subscriptionStatus","accessState","smsReviewState","providerState","blockedReasons","observedAt","billingObservation"].sort())
  assert.doesNotMatch(JSON.stringify([company,sms]),/SECRET|PRIVATE|cipher|profile_payload/)
 })
 test("HTTP validates bounds and rejects tenant roles, revoked grants and API keys regardless of requested company",async()=>{

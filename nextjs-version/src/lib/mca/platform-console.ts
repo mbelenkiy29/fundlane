@@ -6,6 +6,7 @@ import { getCompanyAccess } from "./company-access"
 import { AppError } from "./errors"
 import { z } from "zod"
 import { BILLING_CATALOG, monthlyPriceCents } from "./billing-catalog"
+import type { BillingObservation } from "./platform-refresh"
 
 export const platformQuerySchema = z.object({ q:z.string().trim().max(200).default(""),status:z.string().max(40).default(""),offset:z.coerce.number().int().min(0).max(1000000).default(0),currency:z.union([z.literal(""),z.string().regex(/^[a-zA-Z]{3}$/)]).transform(value=>value.toLowerCase()).optional(),from:z.union([z.literal(""),z.iso.date()]).optional(),to:z.union([z.literal(""),z.iso.date()]).optional() }).refine(query=>!query.from||!query.to||query.from<=query.to,{message:"Start date must not be after end date.",path:["to"]})
 export const platformActionSchema = z.discriminatedUnion("action",[
@@ -55,7 +56,8 @@ export async function platformCompanies(query:PlatformQuery) {
       WHEN COALESCE(e.status,'none') IN ('none','incomplete','incomplete_expired') AND s.trial_ends_at::timestamptz>now() THEN 'trial'
       ELSE 'paused' END=?)
     ORDER BY w.created_at DESC,w.id LIMIT 50 OFFSET ?`).all(`%${query.q}%`,`%${query.q}%`,`%${query.q}%`,query.status,missingStateFilter,query.status,query.status,missingStateFilter,query.status,query.offset)
-  return Promise.all(rows.map(async row=>({id:row.id,name:row.name,purchasedSeats:row.subscription_status?row.seat_limit:0,selectedSeats:row.selected_seats??row.seat_limit,occupiedSeats:row.occupied_seats,subscriptionStatus:row.subscription_status??"none",billingState:!(row.state_workspace_id??row.workspace_id)?"missing_state":row.legacy_exempt?"legacy_exempt":row.state_kind??"customer",access:await getCompanyAccess(row.id)})))
+  const observations=await platformBillingObservations(rows.map(row=>row.id))
+  return Promise.all(rows.map(async row=>({billingObservation:observations.find(observation=>observation.workspaceId===row.id)!,id:row.id,name:row.name,purchasedSeats:row.subscription_status?row.seat_limit:0,selectedSeats:row.selected_seats??row.seat_limit,occupiedSeats:row.occupied_seats,subscriptionStatus:row.subscription_status??"none",billingState:!(row.state_workspace_id??row.workspace_id)?"missing_state":row.legacy_exempt?"legacy_exempt":row.state_kind??"customer",access:await getCompanyAccess(row.id)})))
 }
 export type PlatformCompany = Awaited<ReturnType<typeof platformCompanies>>[number]
 export type Invoice = {stripe_invoice_id:string;workspace_id:string;company_name:string;status:string;currency:string;amount_due:string|number;amount_paid:string|number;amount_remaining:string|number;created_at:string;invoice_url:string|null}
@@ -65,19 +67,54 @@ export type CurrencyTotal = {currency:string;due:string;paid:string;remaining:st
 function financialRange(query:PlatformQuery) {
   return {currency:query.currency??"",from:query.from?`${query.from}T00:00:00.000Z`:"0001-01-01T00:00:00.000Z",to:query.to?new Date(Date.parse(`${query.to}T00:00:00.000Z`)+86400000).toISOString():"9999-12-31T23:59:59.999Z"}
 }
+/** These timestamps describe successful provider reads, never local maintenance attempts. */
+export async function platformBillingObservations(companyIds?: string[]): Promise<BillingObservation[]> {
+  if (companyIds?.length === 0) return []
+  return getDatabase().prepare<BillingObservation>(`SELECT w.id "workspaceId",w.name "companyName",
+    CASE WHEN c.workspace_id IS NULL THEN NULL ELSE c.livemode=1 END livemode,e.synced_at "syncedAt",e.source,
+    EXISTS(SELECT 1 FROM mca_background_jobs j WHERE j.workspace_id=w.id AND j.kind='billing_reconcile' AND j.state IN ('queued','running')) pending,
+    EXISTS(SELECT 1 FROM mca_background_jobs j WHERE j.workspace_id=w.id AND j.kind='billing_reconcile' AND j.state IN ('queued','running','failed') AND j.error_code IS NOT NULL AND j.updated_at::timestamptz>COALESCE(e.synced_at::timestamptz,'-infinity'::timestamptz)) OR EXISTS(SELECT 1 FROM audit_events a WHERE a.workspace_id=w.id AND a.action='billing.recovery_verification_failed' AND a.created_at::timestamptz>COALESCE(e.synced_at::timestamptz,'-infinity'::timestamptz)) failed
+    FROM workspaces w LEFT JOIN workspace_stripe_customers c ON c.workspace_id=w.id
+    LEFT JOIN workspace_billing_entitlements e ON e.workspace_id=w.id
+    WHERE (?::text[] IS NULL OR w.id=ANY(?::text[])) ORDER BY w.created_at,w.id LIMIT 101`).all(companyIds??null,companyIds??null)
+}
 export async function platformPayments(query:PlatformQuery,companyId="") {
   const pattern=`%${query.q}%`, db=getDatabase(),range=financialRange(query)
-  const [invoices,payments,adjustments,totals]=await Promise.all([
-    db.prepare<Invoice>(`SELECT i.stripe_invoice_id,i.workspace_id,w.name company_name,i.status,i.currency,i.amount_due,i.amount_paid,i.amount_remaining,i.created_at,i.invoice_url FROM company_billing_invoices i JOIN workspaces w ON w.id=i.workspace_id WHERE (?='' OR i.workspace_id=?) AND (w.name ILIKE ? OR i.stripe_invoice_id ILIKE ?) AND (?='' OR i.status=?) AND (?='' OR i.currency=?) AND i.created_at::timestamptz>=?::timestamptz AND i.created_at::timestamptz<?::timestamptz ORDER BY i.created_at DESC,i.stripe_invoice_id LIMIT 50 OFFSET ?`).all(companyId,companyId,pattern,pattern,query.status,query.status,range.currency,range.currency,range.from,range.to,query.offset),
-    db.prepare<Payment>(`SELECT p.stripe_payment_id,p.stripe_invoice_id,p.workspace_id,w.name company_name,p.status,p.currency,p.amount_paid,p.synced_at FROM company_billing_payments p JOIN workspaces w ON w.id=p.workspace_id JOIN company_billing_invoices i ON i.stripe_invoice_id=p.stripe_invoice_id AND i.workspace_id=p.workspace_id WHERE (?='' OR p.workspace_id=?) AND (w.name ILIKE ? OR p.stripe_invoice_id ILIKE ? OR p.stripe_payment_id ILIKE ?) AND (?='' OR p.currency=?) AND COALESCE(i.paid_at,i.created_at)::timestamptz>=?::timestamptz AND COALESCE(i.paid_at,i.created_at)::timestamptz<?::timestamptz ORDER BY p.synced_at DESC,p.stripe_payment_id LIMIT 50 OFFSET ?`).all(companyId,companyId,pattern,pattern,pattern,range.currency,range.currency,range.from,range.to,query.offset),
-    db.prepare<Adjustment>(`SELECT a.id,a.workspace_id,w.name company_name,a.kind,a.status,a.amount,a.currency,a.reason,a.livemode,a.created_at,a.synced_at FROM company_billing_adjustments a JOIN workspaces w ON w.id=a.workspace_id WHERE (?='' OR a.workspace_id=?) AND (w.name ILIKE ? OR a.id ILIKE ?) AND (?='' OR a.currency=?) AND a.created_at::timestamptz>=?::timestamptz AND a.created_at::timestamptz<?::timestamptz ORDER BY a.created_at DESC,a.id LIMIT 50 OFFSET ?`).all(companyId,companyId,pattern,pattern,range.currency,range.currency,range.from,range.to,query.offset),
-    db.prepare<CurrencyTotal>(`WITH amounts AS (
-      SELECT currency,amount_due due,0::bigint paid,CASE WHEN status='open' THEN amount_remaining ELSE 0 END remaining,0::bigint refunded,0::bigint disputed FROM company_billing_invoices WHERE (?='' OR workspace_id=?) AND created_at::timestamptz>=?::timestamptz AND created_at::timestamptz<?::timestamptz
-      UNION ALL SELECT currency,0,amount_paid,0,0,0 FROM company_billing_invoices WHERE (?='' OR workspace_id=?) AND COALESCE(paid_at,created_at)::timestamptz>=?::timestamptz AND COALESCE(paid_at,created_at)::timestamptz<?::timestamptz
-      UNION ALL SELECT currency,0,0,0,CASE WHEN kind='refund' AND status='succeeded' THEN amount ELSE 0 END,CASE WHEN kind='dispute' THEN amount ELSE 0 END FROM company_billing_adjustments WHERE (?='' OR workspace_id=?) AND created_at::timestamptz>=?::timestamptz AND created_at::timestamptz<?::timestamptz)
-      SELECT currency,SUM(due)::text due,SUM(paid)::text paid,SUM(remaining)::text remaining,SUM(refunded)::text refunded,SUM(disputed)::text disputed FROM amounts WHERE (?='' OR currency=?) GROUP BY currency ORDER BY currency`).all(companyId,companyId,range.from,range.to,companyId,companyId,range.from,range.to,companyId,companyId,range.from,range.to,range.currency,range.currency),
+  // Reuse the same unpaginated selection for rows and totals. Search by a payment ID selects its invoice.
+  const selection=`WITH selected_invoices AS (
+    SELECT i.*,w.name company_name FROM company_billing_invoices i JOIN workspaces w ON w.id=i.workspace_id
+    WHERE (?='' OR i.workspace_id=?) AND (w.name ILIKE ? OR i.stripe_invoice_id ILIKE ? OR EXISTS
+      (SELECT 1 FROM company_billing_payments p WHERE p.workspace_id=i.workspace_id AND p.stripe_invoice_id=i.stripe_invoice_id AND p.stripe_payment_id ILIKE ?) OR EXISTS
+      (SELECT 1 FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=w.id AND u.email ILIKE ?))
+    AND (?='' OR i.status=?) AND (?='' OR i.currency=?)
+  ), selected_adjustments AS (
+    SELECT a.*,w.name company_name FROM company_billing_adjustments a JOIN workspaces w ON w.id=a.workspace_id
+    WHERE (?='' OR a.workspace_id=?) AND (w.name ILIKE ? OR a.id ILIKE ? OR EXISTS
+      (SELECT 1 FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=w.id AND u.email ILIKE ?))
+    AND (?='' OR a.currency=?) AND a.created_at::timestamptz>=?::timestamptz AND a.created_at::timestamptz<?::timestamptz
+  )`
+  const values=[companyId,companyId,pattern,pattern,pattern,pattern,query.status,query.status,range.currency,range.currency,
+    companyId,companyId,pattern,pattern,pattern,range.currency,range.currency,range.from,range.to]
+  const [invoices,payments,adjustments,totals,billingObservations]=await Promise.all([
+    db.prepare<Invoice>(`${selection} SELECT stripe_invoice_id,workspace_id,company_name,status,currency,amount_due,amount_paid,amount_remaining,created_at,invoice_url
+      FROM selected_invoices WHERE created_at::timestamptz>=?::timestamptz AND created_at::timestamptz<?::timestamptz
+      ORDER BY created_at DESC,stripe_invoice_id LIMIT 50 OFFSET ?`).all(...values,range.from,range.to,query.offset),
+    db.prepare<Payment>(`${selection} SELECT p.stripe_payment_id,p.stripe_invoice_id,p.workspace_id,i.company_name,p.status,p.currency,p.amount_paid,p.synced_at
+      FROM company_billing_payments p JOIN selected_invoices i ON i.stripe_invoice_id=p.stripe_invoice_id AND i.workspace_id=p.workspace_id
+      WHERE COALESCE(i.paid_at,i.created_at)::timestamptz>=?::timestamptz AND COALESCE(i.paid_at,i.created_at)::timestamptz<?::timestamptz
+      ORDER BY p.synced_at DESC,p.stripe_payment_id LIMIT 50 OFFSET ?`).all(...values,range.from,range.to,query.offset),
+    db.prepare<Adjustment>(`${selection} SELECT id,workspace_id,company_name,kind,status,amount,currency,reason,livemode,created_at,synced_at
+      FROM selected_adjustments ORDER BY created_at DESC,id LIMIT 50 OFFSET ?`).all(...values,query.offset),
+    db.prepare<CurrencyTotal>(`${selection}, amounts AS (
+      SELECT currency,amount_due due,0::bigint paid,CASE WHEN status='open' THEN amount_remaining ELSE 0 END remaining,0::bigint refunded,0::bigint disputed
+      FROM selected_invoices WHERE created_at::timestamptz>=?::timestamptz AND created_at::timestamptz<?::timestamptz
+      UNION ALL SELECT currency,0,amount_paid,0,0,0 FROM selected_invoices WHERE COALESCE(paid_at,created_at)::timestamptz>=?::timestamptz AND COALESCE(paid_at,created_at)::timestamptz<?::timestamptz
+      UNION ALL SELECT currency,0,0,0,CASE WHEN kind='refund' AND status='succeeded' THEN amount ELSE 0 END,CASE WHEN kind='dispute' THEN amount ELSE 0 END FROM selected_adjustments)
+      SELECT currency,SUM(due)::text due,SUM(paid)::text paid,SUM(remaining)::text remaining,SUM(refunded)::text refunded,SUM(disputed)::text disputed FROM amounts GROUP BY currency ORDER BY currency`)
+      .all(...values,range.from,range.to,range.from,range.to),
+    platformBillingObservations(companyId?[companyId]:undefined),
   ])
-  return {invoices:invoices.map(safeInvoice),payments,adjustments,totals}
+  return {invoices:invoices.map(safeInvoice),payments,adjustments,totals,snapshotAt:nowIso(),billingObservations:billingObservations.slice(0,100),observationsTruncated:billingObservations.length>100}
 }
 function safeInvoice(row:Invoice):Invoice {
   let url:string|null=null
@@ -95,7 +132,8 @@ export async function platformCompany(id:string) {
   const seats=await getDatabase().prepare<{occupied:number}>(`SELECT count(*)::int occupied FROM memberships WHERE workspace_id=? AND status IN ('active','pending')`).get(id)
   // Explicit projection avoids leaking provider payloads, notification data or transport errors.
   const state=detail.state
-  return {company,memberships:memberships.slice(0,100),membershipsTruncated:memberships.length>100,seats:{occupied:seats?.occupied??0,purchased:subscription?.seatLimit??0},owner:owner??null,ownerCandidates,subscription:subscription??null,billingState:state?{kind:String(state.state_kind??(state.legacy_exempt?"legacy_exempt":"customer")),legacyExempt:Boolean(state.legacy_exempt)}:null,pricing:{version:BILLING_CATALOG.version,selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
+  const [billingObservation] = await platformBillingObservations([id])
+  return {snapshotAt:nowIso(),billingObservation,company,memberships:memberships.slice(0,100),membershipsTruncated:memberships.length>100,seats:{occupied:seats?.occupied??0,purchased:subscription?.seatLimit??0},owner:owner??null,ownerCandidates,subscription:subscription??null,billingState:state?{kind:String(state.state_kind??(state.legacy_exempt?"legacy_exempt":"customer")),legacyExempt:Boolean(state.legacy_exempt)}:null,pricing:{version:BILLING_CATALOG.version,selectedMonthlyCents:monthlyPriceCents(Number(state?.selected_seats??1)),purchasedMonthlyCents:subscription?.planSlug==="fundlane"?monthlyPriceCents(subscription.seatLimit):null},access:detail.access,state:state?{selectedSeats:Number(state.selected_seats),pendingSeats:state.pending_seats==null?null:Number(state.pending_seats),pendingSeatsAt:String(state.pending_seats_at??""),accessExtendedUntil:String(state.access_extended_until??"")}:null,
     adjustments:await getDatabase().prepare<Adjustment>(`SELECT a.id,a.workspace_id,w.name company_name,a.kind,a.status,a.amount,a.currency,a.reason,a.livemode,a.created_at,a.synced_at FROM company_billing_adjustments a JOIN workspaces w ON w.id=a.workspace_id WHERE a.workspace_id=? ORDER BY a.created_at DESC,a.id LIMIT 200`).all(id),
     invoices:detail.invoices.map(row=>safeInvoice({stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_due:String(row.amount_due),amount_paid:String(row.amount_paid),amount_remaining:String(row.amount_remaining),created_at:String(row.created_at),invoice_url:row.invoice_url?String(row.invoice_url):null})),
     payments:detail.payments.map(row=>({stripe_payment_id:String(row.stripe_payment_id),stripe_invoice_id:String(row.stripe_invoice_id),workspace_id:id,company_name:company.name,status:String(row.status),currency:String(row.currency),amount_paid:String(row.amount_paid),synced_at:String(row.synced_at)})),

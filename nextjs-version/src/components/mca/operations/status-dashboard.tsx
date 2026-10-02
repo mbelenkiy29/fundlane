@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   Line,
   LineChart,
@@ -12,6 +12,7 @@ import {
   Bar,
   Legend,
 } from "recharts"
+import { PLATFORM_REFRESH_EVENT } from "@/lib/mca/platform-refresh"
 import { Card, CardContent } from "@/components/ui/card"
 import { PlatformSection } from "@/components/mca/platform/presentation"
 import { Button } from "@/components/ui/button"
@@ -34,9 +35,13 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
   const [errors, setErrors] = useState<ErrorEvent[]>([]),
     [next, setNext] = useState<string | null>(null),
     [component, setComponent] = useState("")
+  const errorPages = useRef(1)
+  const inFlight = useRef<{ signal?: AbortSignal } | null>(null)
   const load = useCallback(
     async (signal?: AbortSignal) => {
-      if (preview) return
+      if (preview || (inFlight.current && !inFlight.current.signal?.aborted)) return
+      const request = { signal }
+      inFlight.current = request
       setBusy(true)
       try {
         const [status, events] = await Promise.all([
@@ -55,7 +60,14 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
               ? "Owner access is required."
               : "Status could not be loaded. Check native platform logs."
           )
-        const [body, list] = await Promise.all([status.json(), events.json()])
+        const [body, firstPage] = await Promise.all([status.json(), events.json()])
+        const list = { ...firstPage, errors: [...firstPage.errors] }
+        for (let page = 1; page < errorPages.current && list.next; page++) {
+          const response = await fetch(`/api/admin/status/errors?window=${window}&component=${component}&before=${list.next}`, { signal, cache: "no-store" })
+          if (!response.ok) throw new Error("Error history could not be refreshed.")
+          const nextPage = await response.json()
+          list.errors.push(...nextPage.errors); list.next = nextPage.next
+        }
         if (signal?.aborted) return
         setData(body)
         setErrors(list.errors)
@@ -69,23 +81,25 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           setError(e instanceof Error ? e.message : "Status unavailable")
         }
       } finally {
-        if (!signal?.aborted) setBusy(false)
+        if (inFlight.current === request) { inFlight.current = null; if (!signal?.aborted) setBusy(false) }
       }
     },
     [window, component, preview]
   )
   useEffect(() => {
     const controller = new AbortController()
+    errorPages.current = 1
     void load(controller.signal)
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void load(controller.signal)
-    }, 60000)
+    const refresh = () => { void load(controller.signal) }
+    globalThis.window.addEventListener(PLATFORM_REFRESH_EVENT, refresh)
     return () => {
       controller.abort()
-      clearInterval(timer)
+      globalThis.window.removeEventListener(PLATFORM_REFRESH_EVENT, refresh)
     }
   }, [load])
   const more = async () => {
+    if (inFlight.current || busy || !next) return
+    const request = {}; inFlight.current = request; setBusy(true)
     try {
       const r = await fetch(
         `/api/admin/status/errors?window=${window}&component=${component}&before=${next}`,
@@ -95,9 +109,10 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
       const body = await r.json()
       setErrors((x) => [...x, ...body.errors])
       setNext(body.next)
+      errorPages.current++
     } catch {
       setError("More errors could not be loaded.")
-    }
+    } finally { if (inFlight.current === request) { inFlight.current = null; setBusy(false) } }
   }
   const latest = data?.latest,
     stale = data?.stale || Boolean(error),
@@ -123,6 +138,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
           <p className="mt-2 text-sm text-muted-foreground">
             Health, delivery, and activity across Fundlane.
           </p>
+          {data && <p className="mt-2 text-xs text-muted-foreground">Database snapshot: <time dateTime={data.asOf}>{data.asOf}</time>. Updates every 30 seconds while visible.</p>}
           {preview && (
             <p className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-300">
               Sample data · Design preview
@@ -131,6 +147,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         </div>
         <div className="flex flex-wrap gap-2">
           <select
+            disabled={busy}
             aria-label="Time range"
             value={window}
             onChange={(e) => setWindow(e.target.value as Window)}
@@ -483,7 +500,7 @@ export function StatusDashboard({ preview, documentRuntimeEnabled = false }: { p
         <label className="mb-4 block text-sm">
           Component{" "}
           <select
-            aria-label="Error component"
+            disabled={busy} aria-label="Error component"
             value={component}
             onChange={(e) => setComponent(e.target.value)}
             className="ml-2 h-9 rounded-md border border-input bg-background px-3"
