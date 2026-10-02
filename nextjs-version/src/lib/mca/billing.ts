@@ -554,6 +554,14 @@ export async function processStripeBillingEvent(event: Stripe.Event, providedCli
   if (event.livemode !== stripeLiveMode()) throw new AppError(400, "billing_mode_mismatch", "Webhook mode mismatch.")
   if (event.type === "customer.updated" && !stripeTrialLifecycleEnabled()) return { ignored: true }
   if (event.type !== "customer.updated" && !BILLING_WEBHOOK_EVENTS.has(event.type)) return { ignored: true }
+  if (event.type === "checkout.session.completed") {
+    const { completeSignupSetup, sendSignupRecovery } = await import("./stripe-first-signup")
+    const session = event.data.object as Stripe.Checkout.Session
+    if (await completeSignupSetup(session.id, providedClient)) {
+      await sendSignupRecovery(session.id)
+      return { signupReady: true }
+    }
+  }
   const object = event.data.object as unknown as { id?: string; customer?: string | { id: string }; charge?:string|{id:string}; hosted_invoice_url?:string|null; trial_end?:number|null }
   let customerId = typeof object.customer === "string" ? object.customer : object.customer?.id
   if (event.type === "customer.updated") customerId = object.id

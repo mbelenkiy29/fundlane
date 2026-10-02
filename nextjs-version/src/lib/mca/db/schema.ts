@@ -2045,3 +2045,13 @@ export const retention_holds = pgTable("retention_holds", {
   check("retention_holds_note_check", sql`char_length(${table.note}) BETWEEN 1 AND 2000 AND ${table.note} = btrim(${table.note})`),
   check("retention_holds_release_check", sql`(${table.released_at} IS NULL) = (${table.released_by} IS NULL)`),
 ]);
+
+export const company_signup_intents = pgTable("company_signup_intents", {
+ id: text().primaryKey(), token_hash: text().notNull().unique(), token_cipher: text().notNull(),
+ checkout_session_id: text().unique(), checkout_email: text(), payment_method_id: text(),
+ livemode: integer().notNull(), state: text().notNull(),
+ workspace_id: text().unique().references(() => workspaces.id), user_id: text().references(() => users.id),
+ activation_started_at: text(), subscription_id: text().unique(), email_sent_at: text(), email_retry_until: text(),
+ expires_at: text().notNull(), created_at: text().notNull(), updated_at: text().notNull(),
+}, table => [check("company_signup_intents_mode_check", sql`${table.livemode} IN (0,1)`),
+ check("company_signup_intents_state_check", sql`${table.state} IN ('pending','ready','activating','paid_required','active')`)])

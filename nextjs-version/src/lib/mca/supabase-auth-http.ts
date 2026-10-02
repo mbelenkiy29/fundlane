@@ -57,6 +57,13 @@ export async function handleSupabaseAuth(request: Request, action: "sign-in" | "
     } else if (action === "company-signup") {
       const input = credentials.extend({ password:newPassword, name:z.string().trim().min(2).max(200), companyName:z.string().trim().max(200).optional() }).parse(body)
       await assertAccountSignupAllowed(input.email, input.next)
+      if (authContinuation(input.next ?? null) === "/activate") {
+        const { SIGNUP_COOKIE, requireSignupEmail }=await import("./stripe-first-signup")
+        const token=(await cookies()).get(SIGNUP_COOKIE)?.value
+        if (!token) throw new AppError(410,"signup_intent_expired","Open your signup recovery email or get started again.")
+        await requireSignupEmail(token,input.email)
+        if (!body || typeof body!=="object" || !("terms" in body) || body.terms!=="on") throw new AppError(400,"legal_agreement_required","Accept the terms of service and privacy policy.")
+      }
       const { data,error } = await client.auth.signUp({ email:input.email, password:input.password, options: { data:{ name:input.name,companyName:input.companyName }, emailRedirectTo:`${authOrigin(request)}/auth/callback?next=${encodeURIComponent(authContinuation(input.next ?? null))}` } })
       authError(error)
       return NextResponse.json({ success:true, verificationRequired:!data.session })

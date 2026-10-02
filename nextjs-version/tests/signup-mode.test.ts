@@ -9,7 +9,7 @@ function renderAuth(mode: string | undefined, showNotice: string | undefined, ma
     const { renderToStaticMarkup } = require("react-dom/server");
     const SignUpPage = require("./src/app/(auth)/sign-up/page.tsx").default;
     const { SignInForm } = require("./src/app/(auth)/sign-in/sign-in-form.tsx");
-    console.log(JSON.stringify({ signup: renderToStaticMarkup(React.createElement(SignUpPage)), signin: renderToStaticMarkup(React.createElement(SignInForm, { magicLinkEnabled: process.env.MCA_MAGIC_LINK_ENABLED === "true", inviteOnly: process.env.MCA_SIGNUP_MODE === "invite_only", showMigratedAccountNotice: process.env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE !== "false" })) }));
+    (async()=>{ console.log(JSON.stringify({ signup: renderToStaticMarkup(await SignUpPage({ searchParams: Promise.resolve({}) })), signin: renderToStaticMarkup(React.createElement(SignInForm, { magicLinkEnabled: process.env.MCA_MAGIC_LINK_ENABLED === "true", inviteOnly: process.env.MCA_SIGNUP_MODE === "invite_only", showMigratedAccountNotice: process.env.MCA_SHOW_MIGRATED_ACCOUNT_NOTICE !== "false" })) })); })().catch(error=>{console.error(error);process.exitCode=1});
   `
   const env = { ...process.env }
   if (mode === undefined) delete env.MCA_SIGNUP_MODE
@@ -36,10 +36,10 @@ test("unset and invalid signup modes retain the existing open copy", () => {
   delete process.env.MCA_SIGNUP_MODE
 })
 
-test("invite-only page offers a demo and sign-in hides the creation link", () => {
+test("invite-only page offers login and sign-in hides the creation link", () => {
   const markup = renderAuth("invite_only", undefined)
   assert.match(markup.signup, /Fundlane is invite-only/)
-  assert.match(markup.signup, /href="\/demo"/)
+  assert.match(markup.signup, /href="\/sign-in"/)
   assert.doesNotMatch(markup.signup, /Create your company workspace/)
   assert.match(markup.signin, /New team members join through an invitation/)
   assert.doesNotMatch(markup.signin, /Create a company workspace/)

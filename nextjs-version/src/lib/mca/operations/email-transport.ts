@@ -30,6 +30,7 @@ export type TransactionalTemplate =
   | "application_invitation"
   | "application_invitation_reminder"
   | "operations_alert"
+  | "signup_activation"
 export type TransactionalMessage = {
   recipient: string
   template: TransactionalTemplate
@@ -123,6 +124,12 @@ export function renderEmailContent(
         if (typeof value === "string" || typeof value === "number")
           details.push(`${label}: ${String(value)}.`)
       }
+      break
+    }
+    case "signup_activation": {
+      subject = "Finish setting up Fundlane"
+      paragraph = "Your card is saved. Finish signup and verify your email to activate your account and start your eligible 14-day trial. Saving a card has not started a subscription or a charge."
+      cta = "Finish signup"
       break
     }
     case "operations_alert": {

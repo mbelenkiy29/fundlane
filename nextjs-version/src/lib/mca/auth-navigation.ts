@@ -32,6 +32,7 @@ export function authContinuation(value: string | null): string {
     if (token && /^[A-Za-z0-9_-]{16,256}$/.test(token)) return `/accept-invite?token=${encodeURIComponent(token)}`
   }
   if (url.pathname === "/account-security") return "/account-security"
+  if (url.pathname === "/activate") return "/activate"
   if (url.pathname === "/onboarding") {
     const target = safeAuthReturnTo(url.searchParams.get("returnTo"))
     return `/onboarding?returnTo=${encodeURIComponent(target)}`

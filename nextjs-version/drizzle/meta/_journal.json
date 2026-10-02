@@ -484,6 +484,13 @@
       "when": 1790819000076,
       "tag": "0077_email_sync_error_time",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790819000077,
+      "tag": "0078_stripe_first_signup",
+      "breakpoints": true
     }
   ]
 }
