@@ -45,11 +45,42 @@ test("completion claim preserves canonical locator and MFA context without raw e
 test("live trial start bootstraps before Checkout with empty bodies and external navigation", () => {
   const result = runClient(`${interactionSetup}
     let mod;try{mod=require('./src/components/marketing/trial-checkout-start.tsx')}catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error}assert.ok(mod?.TrialCheckoutStart,'live trial start is implemented');
+    dispatcher.useSyncExternalStore=(_subscribe,getSnapshot)=>getSnapshot();
+    Object.defineProperty(globalThis,'navigator',{configurable:true,value:{locks:{request:async(_name,action)=>action(null)}}});
     response=async()=>({checkoutUrl:'https://checkout.stripe.test/synthetic',enrollmentId:'11111111-1111-4111-8111-111111111111'});
-    (async()=>{const tree=mod.TrialCheckoutStart({available:true});await tree.props.onStart();console.log(JSON.stringify({calls,navigations}));})().catch(error=>{console.error(error);process.exitCode=1});
+    (async()=>{render(mod.TrialCheckoutStart,{available:true});const tree=render(mod.TrialCheckoutStart,{available:true}).tree;await tree.props.onStart();console.log(JSON.stringify({calls,navigations}));})().catch(error=>{console.error(error);process.exitCode=1});
   `)
   assert.deepEqual(result.calls, [{ path: "/api/enrollment/session", input: {} }, { path: "/api/enrollment/start", input: {} }])
   assert.deepEqual(result.navigations, ["https://checkout.stripe.test/synthetic"])
+})
+
+test("unsupported cross-tab coordination disables new Checkout before browser binding requests", () => {
+  const result = runClient(`${interactionSetup}
+    dispatcher.useSyncExternalStore=(_subscribe,getSnapshot)=>getSnapshot();
+    Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});
+    const { TrialCheckoutStart }=require('./src/components/marketing/trial-checkout-start.tsx');
+    render(TrialCheckoutStart,{available:true});const view=render(TrialCheckoutStart,{available:true});
+    console.log(JSON.stringify({html:view.markup,calls,navigations}));
+  `)
+  assert.match(result.html, /browser cannot safely start a new trial/i)
+  assert.match(result.html, /<button[^>]*disabled/)
+  assert.match(result.html, /href="\/sign-in"[^>]*>Login/)
+  assert.match(result.html, /href="\/help\/set-up-your-company"/)
+  assert.deepEqual(result.calls, [])
+  assert.deepEqual(result.navigations, [])
+})
+
+test("removing coordinator support before an existing handler runs still makes no enrollment request", () => {
+  const result = runClient(`${interactionSetup}
+    dispatcher.useSyncExternalStore=(_subscribe,getSnapshot)=>getSnapshot();
+    Object.defineProperty(globalThis,'navigator',{configurable:true,value:{locks:{request:async(_name,action)=>action(null)}}});
+    const { TrialCheckoutStart }=require('./src/components/marketing/trial-checkout-start.tsx');
+    response=async()=>({enrollmentId:'11111111-1111-4111-8111-111111111111',checkoutUrl:'https://checkout.stripe.test/synthetic'});
+    (async()=>{render(TrialCheckoutStart,{available:true});const tree=render(TrialCheckoutStart,{available:true}).tree;navigator.locks=undefined;await tree.props.onStart();console.log(JSON.stringify({html:render(TrialCheckoutStart,{available:true}).markup,calls,navigations}));})().catch(error=>{console.error(error);process.exitCode=1});
+  `)
+  assert.deepEqual(result.calls, [])
+  assert.deepEqual(result.navigations, [])
+  assert.match(result.html, /browser cannot safely start a new trial/i)
 })
 
 test("generic signup routes to pricing under the dedicated rollout without provider readiness", () => {

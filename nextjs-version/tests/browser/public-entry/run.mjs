@@ -21,6 +21,7 @@ const readiness = { dismissed: false, dismissedAt: null, completedCount: 0, tota
 
 async function fixture(screen, scenario = "ready", viewport = { width: 1440, height: 900 }) {
   const context = await browser.newContext({ viewport })
+  if (scenario === "unsupported") await context.addInitScript(() => { Object.defineProperty(navigator, "locks", { configurable: true, value: undefined }) })
   const calls = [], navigations = []
   const state = { scenario, statusCalls: 0, claimCalls: 0, sessionCalls: 0, startCalls: 0, holdStart: null, releaseStart: null, holdClaim: null, releaseClaim: null }
   await context.route("**/*", async route => {
@@ -61,7 +62,7 @@ async function fixture(screen, scenario = "ready", viewport = { width: 1440, hei
   return {page,context,calls,navigations,state}
 }
 async function check(name, action) {
-  if (process.env.MCA_BROWSER_CASE && !name.includes(process.env.MCA_BROWSER_CASE)) return
+  if (process.env.MCA_BROWSER_CASE && !new RegExp(process.env.MCA_BROWSER_CASE).test(name)) return
   try { await action(); results.push({name,status:"PASS"}); console.log(`PASS ${name}`) }
   catch(error) { results.push({name,status:"FAIL",error:error.message}); console.error(`FAIL ${name}: ${error.message}`) }
 }
@@ -74,6 +75,9 @@ try {
   })
   await check("live start guards repeated click, keeps empty bodies and retries with the same browser binding",async()=>{
     const f=await fixture("start","start-failed");f.state.holdStart=new Promise(resolve=>{f.state.releaseStart=resolve});await f.page.getByRole("button",{name:"Start 14-day free trial"}).evaluate(button=>{button.click();button.click()});await f.page.getByRole("button",{name:"Opening secure Checkout…"}).waitFor();await f.page.waitForFunction(()=>document.querySelector("button").disabled);f.state.releaseStart();await f.page.getByRole("alert").waitFor();assert.equal(f.state.startCalls,1);await f.page.getByRole("button",{name:"Start 14-day free trial"}).click();await f.page.waitForURL("https://checkout.stripe.test/synthetic");assert.equal(f.state.startCalls,2);assert.equal(f.state.sessionCalls,2);assert.ok(f.calls.every(call=>JSON.stringify(call.body)==="{}"));assert.equal((await f.context.cookies(origin)).find(c=>c.name==="mca_enrollment_binding")?.httpOnly,true);await f.context.close()
+  })
+  await check("unsupported browser cannot start a purchase and preserves Login/help and existing completion",async()=>{
+    const f=await fixture("start","unsupported");await f.page.getByText(/browser cannot safely start a new trial/i).waitFor();const button=f.page.getByRole("button",{name:"Start 14-day free trial"});assert.equal(await button.isDisabled(),true);await button.evaluate(button=>{button.click();button.click()});assert.equal(f.state.sessionCalls,0);assert.equal(f.state.startCalls,0);assert.equal(f.navigations.length,0);assert.equal(await f.page.getByRole("link",{name:"Login",exact:true}).getAttribute("href"),"/sign-in");await f.page.getByRole("link",{name:"Get help"}).waitFor();await f.page.goto(`${origin}/?screen=enrollment`,{waitUntil:"networkidle"});await f.page.getByRole("button",{name:"Enter your CRM"}).waitFor();assert.equal(f.state.sessionCalls,0);assert.equal(f.state.startCalls,0);await f.context.close()
   })
   await check("ready purchase requires explicit claim, guards repeats and preserves destination on refresh/back",async()=>{
     const f=await fixture("enrollment");assert.equal(f.state.claimCalls,0);assert.match(await f.page.locator("time").innerText(),/Oct 15, 2026.*UTC/);await f.page.reload({waitUntil:"networkidle"});assert.equal(f.state.claimCalls,0);f.state.holdClaim=new Promise(resolve=>{f.state.releaseClaim=resolve});await f.page.getByRole("button",{name:"Enter your CRM"}).evaluate(button=>{button.click();button.click()});await f.page.getByRole("button",{name:"Finishing secure access…"}).waitFor();f.state.releaseClaim();await f.page.waitForURL(`${origin}/settings/business`);assert.equal(f.state.claimCalls,1);assert.deepEqual(f.calls.find(c=>c.path.endsWith("/claim")).body,{enrollmentId:id,destination:"business",generation:3});await f.page.goBack({waitUntil:"networkidle"});await f.page.getByRole("button",{name:"Continue to your workspace"}).waitFor();assert.equal(f.state.claimCalls,1);await f.context.close()
