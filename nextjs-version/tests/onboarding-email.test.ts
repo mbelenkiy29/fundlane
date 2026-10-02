@@ -64,6 +64,12 @@ async function emails(id?: string) {
   return (await getDatabase().query<MailRow>(`SELECT * FROM mca_onboarding_service_emails ${id ? "WHERE enrollment_id=?" : ""} ORDER BY purpose`, id ? [id] : [])).rows;
 }
 const scope = (row: MailRow) => `onboarding:email:${row.enrollment_id}:${row.generation}`;
+function namedReplyToConfiguration(provider: "usesend" | "resend" | "webhook") {
+  process.env.MCA_SYSTEM_EMAIL_REPLY_TO = "  Replies <Reply@Example.test>  ";
+  if (provider === "resend") Object.assign(process.env, { MCA_SYSTEM_EMAIL_PROVIDER: "resend", MCA_RESEND_API_KEY: "synthetic-resend", MCA_RESEND_FROM: "Fundlane <service@example.test>" });
+  if (provider === "webhook") Object.assign(process.env, { MCA_EMAIL_WEBHOOK_URL: "https://hook.example.test/service", MCA_EMAIL_WEBHOOK_TOKEN: "synthetic-token" });
+  return onboardingEmailConfiguration();
+}
 
 test("distinct service messages use auth-required locators, secure details and authoritative trial guidance", () => {
   const business = renderOnboardingEmail({ purpose: "business_information_requested", enrollmentId: "opaque-id", generation: 2, trialEndsAt: end, origin: "https://app.example.test" });
@@ -119,6 +125,54 @@ test("pre-company intents freeze encrypted content and accept independently with
   }
   assert.equal((await findEnrollment(row.id))?.finalizationState, "pending");
 });
+
+for (const provider of ["usesend", "resend", "webhook"] as const) {
+  test(`${provider} first send preserves supported named Reply-To`, async () => {
+    const { row } = await activate(), configuration = namedReplyToConfiguration(provider);
+    const requests: string[] = [];
+    globalThis.fetch = async (_url, init) => {
+      requests.push(String(init?.body));
+      const id = new Headers(init?.headers).get("idempotency-key");
+      return Response.json(provider === "resend" ? { id } : { emailId: id });
+    };
+    assert.deepEqual(await runOnboardingEmails({ clock: instant }), { attempted: 2, accepted: 2, uncertain: 0, suppressed: 0 });
+    assert.equal(requests.length, 2);
+    for (const body of requests) assert.equal(JSON.parse(body)[provider === "resend" ? "reply_to" : "replyTo"], "Replies <Reply@Example.test>");
+    for (const mail of await emails(row.id)) {
+      assert.equal(mail.state, "accepted");
+      assert.equal(mail.attempts, 1);
+      assert.equal(decryptSensitive(mail.provider_config_cipher!, scope(mail)), JSON.stringify(configuration));
+    }
+  });
+
+  test(`${provider} frozen retry preserves supported named Reply-To and unchanged payload`, async t => {
+    const { row, activation } = await activate(), configuration = namedReplyToConfiguration(provider);
+    // A supported snapshot already frozen by a prior worker, after known nonacceptance.
+    for (const mail of await emails(row.id)) {
+      const content = renderOnboardingEmail({ purpose: mail.purpose, enrollmentId: row.id, generation: mail.generation, trialEndsAt: end, origin: "https://app.example.test" });
+      await getDatabase().execute("UPDATE mca_onboarding_service_emails SET state='retry',attempts=1,error_code='onboarding_email_rate_limited',recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=? WHERE id=?", [encryptSensitive(activation.email, scope(mail)), encryptSensitive(JSON.stringify(content), scope(mail)), encryptSensitive(JSON.stringify(configuration), scope(mail)), provider, onboardingEmailProviderIdentity(configuration), instant, mail.id]);
+    }
+    const frozen = await emails(row.id), requests: { key: string; body: string }[] = [];
+    globalThis.fetch = async (_url, init) => {
+      requests.push({ key: new Headers(init?.headers).get("idempotency-key")!, body: String(init?.body) });
+      return Response.json({}, { status: 429 });
+    };
+    assert.deepEqual(await runOnboardingEmails({ clock: instant }), { attempted: 2, accepted: 0, uncertain: 0, suppressed: 0 });
+    assert.ok((await emails(row.id)).every(mail => mail.state === "retry" && mail.attempts === 2 && mail.next_attempt_at === "2030-01-01T12:30:00.000Z"));
+    globalThis.fetch = async (_url, init) => {
+      const key = new Headers(init?.headers).get("idempotency-key")!;
+      requests.push({ key, body: String(init?.body) });
+      return Response.json(provider === "resend" ? { id: key } : { emailId: key });
+    };
+    t.mock.timers.setTime(Date.parse("2030-01-01T12:30:00.000Z"));
+    assert.deepEqual(await runOnboardingEmails({ clock: "2030-01-01T12:30:00.000Z" }), { attempted: 2, accepted: 2, uncertain: 0, suppressed: 0 });
+    assert.deepEqual(requests.slice(0, 2).sort((a, b) => a.key.localeCompare(b.key)), requests.slice(2).sort((a, b) => a.key.localeCompare(b.key)));
+    for (const request of requests) assert.equal(JSON.parse(request.body)[provider === "resend" ? "reply_to" : "replyTo"], "Replies <Reply@Example.test>");
+    const final = await emails(row.id);
+    assert.ok(final.every(mail => mail.state === "accepted" && mail.attempts === 3));
+    assert.deepEqual(final.map(mail => [mail.delivery_key, mail.recipient_cipher, mail.content_cipher, mail.provider_config_cipher]), frozen.map(mail => [mail.delivery_key, mail.recipient_cipher, mail.content_cipher, mail.provider_config_cipher]));
+  });
+}
 
 test("activation repair reuses intent identities and successful mail never replays", async () => {
   const { row, activation } = await activate(), initial = await emails(row.id);

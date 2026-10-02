@@ -4,6 +4,7 @@ import { getDatabase, newId, nowIso, withTransaction, type DbExecutor } from "..
 import { decryptSensitive, encryptSensitive, hmacScopedToken } from "../crypto";
 import { AppError } from "../errors";
 import { evaluateCompanyAccess, getCompanyAccess } from "../company-access";
+import { parseEmailAddress } from "../intake/usesend";
 import type { OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
 import { onboardingEmailEnabled } from "./config";
 import { onboardingEmailEncryptionScope } from "./email-intents";
@@ -22,7 +23,7 @@ interface EmailRow {
 }
 const payloadSchema = z.object({ version: z.literal(1), enrollmentId: z.string(), generation: z.number().int().positive(), purpose: z.enum(["business_information_requested", "getting_started"]), email: z.email(), trialEndsAt: z.iso.datetime({ offset: true }) }).strict();
 const contentSchema = z.object({ subject: z.string().min(1).max(200), text: z.string().min(1), html: z.string().min(1) }).strict();
-const configurationFields = { replyTo: z.email().nullable(), endpoint: z.url().refine(value => new URL(value).protocol === "https:"), keyIdentity: z.string().min(1).max(128) };
+const configurationFields = { replyTo: z.string().refine(value => Boolean(parseEmailAddress(value))).nullable(), endpoint: z.url().refine(value => new URL(value).protocol === "https:"), keyIdentity: z.string().min(1).max(128) };
 const configurationSchema = z.union([
   z.object({ provider: z.enum(["usesend", "resend"]), from: z.string().min(1), ...configurationFields }).strict(),
   z.object({ provider: z.literal("webhook"), from: z.string().nullable(), ...configurationFields }).strict(),
