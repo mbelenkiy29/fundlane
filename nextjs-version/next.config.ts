@@ -36,12 +36,6 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       {
-        source: '/',
-        has: [{ type: 'host', value: 'app.fundlane.io' }],
-        destination: '/dashboard',
-        permanent: false,
-      },
-      {
         source: '/landing',
         destination: '/',
         permanent: true,
