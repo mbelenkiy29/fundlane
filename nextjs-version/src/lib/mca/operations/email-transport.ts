@@ -165,8 +165,11 @@ export async function requestSystemEmail(
     provider: SystemProvider
     apiKey: string
     from: string
-    to: string
+    to: string | string[]
+    cc?: string[]
     replyTo?: string
+    attachments?: Array<{ filename: string; content: string }>
+    headers?: Record<string, string>
     idempotencyKey: string
     fetchImpl?: typeof fetch
     /** Optional self-hosted useSend HTTPS origin (MCA_USESEND_BASE_URL); ignored for Resend. */
@@ -174,6 +177,12 @@ export async function requestSystemEmail(
   }
 ): Promise<{ status: number; emailId?: string; errorCode?: string }> {
   const resend = input.provider === "resend"
+  // Same optional fields for both providers; only the recipient and Reply-To spelling differ.
+  const extras = {
+    ...(input.cc?.length ? { cc: input.cc } : {}),
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(input.headers ? { headers: input.headers } : {}),
+  }
   const response = await (input.fetchImpl ?? fetch)(
     resend
       ? "https://api.resend.com/emails"
@@ -197,11 +206,12 @@ export async function requestSystemEmail(
         resend
           ? {
               from: input.from,
-              to: [input.to],
+              to: [input.to].flat(),
               subject: input.subject,
               text: input.text,
               html: input.html,
               ...(input.replyTo !== undefined ? { reply_to: input.replyTo } : {}),
+              ...extras,
             }
           : {
               to: input.to,
@@ -210,6 +220,7 @@ export async function requestSystemEmail(
               text: input.text,
               html: input.html,
               ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
+              ...extras,
             }
       ),
       redirect: "error",

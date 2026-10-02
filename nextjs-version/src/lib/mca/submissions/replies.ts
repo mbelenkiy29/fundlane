@@ -1126,3 +1126,24 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
     replayedCount: ingested.filter((item) => item.replayed).length,
   }
 }
+
+/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Oldest checkpoint first; one workspace failing never blocks the rest. */
+export async function runScheduledReplyIngest(nowIsoValue = nowIso(), limit = 25): Promise<{ workspaces: number; created: number; failed: number } | undefined> {
+  if (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED !== "true" || process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED !== "true") return undefined
+  const rows = await db().prepare<{ workspace_id: string }>(
+    `SELECT workspace_id FROM mca_funder_replies WHERE provider_message_id = ?
+     GROUP BY workspace_id ORDER BY MIN(updated_at), workspace_id LIMIT ?`,
+  ).all(CHECKPOINT_PROVIDER_MESSAGE_ID, limit)
+  const result = { workspaces: 0, created: 0, failed: 0 }
+  for (const { workspace_id: workspaceId } of rows) {
+    result.workspaces += 1
+    try {
+      const ingest = await runReplyIngest({
+        workspaceId, userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [],
+        source: "system", correlationId: `cron-funder-replies:${workspaceId}:${nowIsoValue}`,
+      })
+      result.created += ingest.createdCount
+    } catch { result.failed += 1 }
+  }
+  return result
+}

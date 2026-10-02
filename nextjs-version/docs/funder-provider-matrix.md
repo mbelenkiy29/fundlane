@@ -34,7 +34,7 @@ The registry blocks these named adapters in production. The sandbox adapter is a
 
 ## Destination types
 
-These are all `FUNDER_ROUTE_KINDS`. Transport configuration or a `sent` delivery attempt does not establish application-to-reply verification. Submission email uses the verified sender identity and `MCA_EMAIL_WEBHOOK_URL` transport in `email-templates.ts`; it fails in production without that webhook. Development preview receipts are not sends. Sender verification alone does not prove submission transport or lender reply ingestion. A manual portal package awaits a human upload. The special `fundlane-sandbox` API destination bypasses the adapter registry in `sandbox/deliver.ts`: it produces workspace-only synthetic offers/declines and never contacts a lender. It is distinct from the registered `sandbox` adapter and does not establish provider readiness. API polling and incoming adapter webhooks normalize replies; they are not additional outbound destination types.
+These are all `FUNDER_ROUTE_KINDS`. Transport configuration or a `sent` delivery attempt does not establish application-to-reply verification. Submission email uses the verified sender identity and `MCA_EMAIL_WEBHOOK_URL` transport in `email-templates.ts`; it fails in production without that webhook unless the system-provider path below is enabled. Development preview receipts are not sends. Sender verification alone does not prove submission transport or lender reply ingestion. A manual portal package awaits a human upload. The special `fundlane-sandbox` API destination bypasses the adapter registry in `sandbox/deliver.ts`: it produces workspace-only synthetic offers/declines and never contacts a lender. It is distinct from the registered `sandbox` adapter and does not establish provider readiness. API polling and incoming adapter webhooks normalize replies; they are not additional outbound destination types.
 
 | Destination kind | Provider / contract evidence | Callback / reply evidence | Commercial access | Readiness | Last verification / environment | Receipt / reply / timeline evidence | Negative-case evidence | Owner / next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -66,3 +66,18 @@ Issue #40 remains blocked on a real provider. Start with an **email-first pilot 
 3. Exercise timeout/unknown outcome, duplicate reply/callback, stale approval and expired credential on the approved target. Reconcile provider receipts before retry; record evidence of at most one send and explicit outcomes for each negative case. Local mocks are not hosted acceptance.
 4. For a real API/webhook provider, first obtain written commercial access and current application/status/callback/document/idempotency contracts, including callback authentication and receipt deduplication. The generic `/api/mca/submissions/webhooks/{slug}` route alone is not evidence of a working provider callback. Do not enable a named adapter based on credentials, route configuration, or a Linear Done status.
 5. Attach authorization, contract, receipt, reply, timeline and negative-case evidence, including environment, timestamps, owner and revision, before changing readiness. Keep the controlled email row **untested (pilot pending)** and all named APIs/webhooks untested or access blocked until that evidence exists. Enable the optional inventory only through reviewed hosted setup; no schedule, migration or provider setting is required by these display changes.
+
+## Submission email via the system provider, and scheduled reply ingest
+
+Both flags default off; only `"true"` enables them.
+
+- `MCA_EMAIL_WEBHOOK_URL` is always used first and is unchanged. With no webhook, `MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED=true` sends through the system email provider (`sendSystemEmail`).
+- **Resend:** `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY`, and `MCA_RESEND_FROM` (falls back to `MCA_USESEND_FROM`). The send goes to `https://api.resend.com/emails`.
+- **useSend** (default selector): `MCA_USESEND_API_KEY`, `MCA_USESEND_FROM`, optional `MCA_USESEND_BASE_URL`.
+- **Message contents:** From is the system sender. Reply-To is the submission sender mailbox, so funder replies reach the mailbox that reply ingest reads. The generated `Message-ID` goes out as a custom header, and the Idempotency-Key is the attempt correlation id. Attachments are the packaged bytes, base64 encoded.
+- **Provider limits, failing closed without dropping files:**
+  - useSend allows 10 attachments (`email_attachment_limit_exceeded`).
+  - Resend allows 40MB of base64 per email (`email_attachment_size_exceeded`).
+- **Error mapping:** a definitive 4xx gives `email_delivery_failed`. A 5xx, 408 or network error gives `delivery_uncertain` under the existing unknown-send-guard conditions (approved package, or `MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED=true`).
+- The useSend `emailId` is not stored, because `EmailAttemptRef` has no field for it.
+- **Scheduled reply ingest:** `runScheduledReplyIngest` runs from the existing `GET /api/cron/comms` tick when both `MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED=true` and `MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED=true`. It covers up to 25 workspaces with an opted-in mailbox per tick, oldest checkpoint first. It uses a system actor, and a failure in one workspace does not stop the others.

@@ -10,6 +10,7 @@ import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
 import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
+import { resendSystemEmailEnabled, sendSystemEmail, systemEmailCredentials } from "../system-email"
 import type { FunderRecord, FunderRoute } from "../funders/contracts"
 import { getFunder, listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
@@ -682,11 +683,54 @@ function uncertain(correlationId: string, messageId: string, rendered: RenderedS
     externalRef: encodeExternalRef({ messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(rendered) }) }
 }
 
-async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
+const USESEND_MAX_ATTACHMENTS = 10
+const RESEND_MAX_BYTES = 40 * 1024 * 1024 // base64 size, per Resend's per-email limit
+
+async function deliverViaSystemProvider(rendered: RenderedSubmissionEmail, correlationId: string, messageId: string, credentials: { apiKey: string; from: string }, job?: SubmissionJob): Promise<DeliverResult> {
+  if (rendered.attachments.some((item) => !item.bytesBase64)) return failed(correlationId, "email_attachment_unavailable", "An attachment has no packaged bytes to send.")
+  if (resendSystemEmailEnabled()) {
+    if (rendered.attachments.reduce((sum, item) => sum + item.bytesBase64!.length, 0) > RESEND_MAX_BYTES) {
+      return failed(correlationId, "email_attachment_size_exceeded", "Attachments exceed the email provider's 40MB limit.")
+    }
+  } else if (rendered.attachments.length > USESEND_MAX_ATTACHMENTS) {
+    return failed(correlationId, "email_attachment_limit_exceeded", `The email provider accepts at most ${USESEND_MAX_ATTACHMENTS} attachments.`)
+  }
+  const guard = Boolean(job?.approvedPackage) || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+  try {
+    await sendSystemEmail({
+      apiKey: credentials.apiKey,
+      from: credentials.from,
+      to: rendered.to,
+      cc: rendered.cc,
+      replyTo: rendered.replyTo || rendered.fromAddress,
+      subject: rendered.subject,
+      text: rendered.body,
+      html: `<div style="white-space:pre-wrap">${rendered.body.replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`)}</div>`,
+      attachments: rendered.attachments.map((item) => ({ filename: item.filename, content: item.bytesBase64! })),
+      headers: { "Message-ID": messageId },
+      idempotencyKey: correlationId,
+      fetchImpl: http(),
+    })
+  } catch (error) {
+    const status = error instanceof AppError && typeof error.extra?.providerStatus === "number" ? error.extra.providerStatus : undefined
+    if (error instanceof AppError && status === undefined && ["usesend_base_url_invalid", "system_email_reply_to_invalid", "system_email_unconfigured"].includes(error.code)) {
+      return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.")
+    }
+    // A 200 without an email id, 408 or 5xx (or no response at all) may still have been accepted.
+    if (guard && (status === undefined || status === 200 || status === 408 || status >= 500)) return uncertain(correlationId, messageId, rendered)
+    return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
+  }
+  const ref: EmailAttemptRef = { messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "sent", snapshot: snapshotOf(rendered) }
+  return { ok: true, state: "sent", correlationId, externalRef: encodeExternalRef(ref) }
+}
+
+export async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
   if (job) await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
   if (job) await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   const messageId = messageIdFor(correlationId)
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL?.trim()
+  const systemCredentials = process.env.MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED === "true" ? systemEmailCredentials() : undefined
+  if (!webhook && systemCredentials) return deliverViaSystemProvider(rendered, correlationId, messageId, systemCredentials, job)
   if (!webhook) {
     if (isSubmissionEmailProduction()) {
       return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.")
