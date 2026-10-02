@@ -9,8 +9,13 @@ import { listDocumentRecords } from "../documents/repository"
 import { documentScanActor } from "../documents/scan-job"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, type BackgroundJob } from "../jobs/queue"
+import { getSubmissionSelection, type SubmissionSelection } from "../submissions/queue"
+import { readAnalysisSettings } from "../underwriting/analysis-repository"
 import { checkCompleteness } from "../underwriting/completeness"
 import type { CompletenessResult } from "../underwriting/contracts"
+import { getLenderFit } from "../underwriting/lender-fit"
+import type { LenderFitResponse } from "../underwriting/lender-fit-contracts"
+import { scoreDeal } from "../underwriting/scoring"
 import { statementExtractionStatus } from "../underwriting/statement-extraction"
 import { analyzeDealStatements } from "../underwriting/statements"
 import { getWorkspaceSettings } from "../workspaces"
@@ -18,6 +23,8 @@ import { getWorkspaceSettings } from "../workspaces"
 const DEBOUNCE_MS = 120_000
 const STALE_RUN_MS = 10 * 60_000
 const ACTIVE_STATUSES: ReadonlySet<DealStatus> = new Set(["lead", "new_application", "missing_documents", "ready_to_submit", "submitted", "resubmitting"])
+// A prior job in any other state means this funder already has (or had) the package.
+const RETRYABLE_JOB_STATES = new Set(["failed", "preflight_failed", "skipped"])
 const STIPULATIONS: Record<string, { category: string; label: string }> = {
   missing_application: { category: "application", label: "Signed merchant application" },
   missing_driver_license: { category: "driver_license", label: "Driver license (front)" },
@@ -62,6 +69,30 @@ export function documentProposals(completeness: CompletenessResult, deal: Pick<D
     { kind: "request_documents", targetKey: "request_documents", fingerprint, payload: { items, otherFindings } },
     { kind: "schedule_follow_up", targetKey: "follow_up", fingerprint, payload: { title: `Follow up: missing documents for ${deal.displayId}`, dueInDays: 2 } },
   ]
+}
+
+export function submissionProposals(fit: LenderFitResponse, topN: number, selection: Pick<SubmissionSelection, "funders" | "jobs">): { proposals: Proposal[]; skipped: Array<{ funderId: string; reason: string }> } {
+  const proposals: Proposal[] = []
+  const skipped: Array<{ funderId: string; reason: string }> = []
+  if (!fit.snapshotId) return { proposals, skipped }
+  for (const lender of fit.lenders) {
+    if (lender.status !== "matched" || lender.rank === null || lender.score === null || lender.rank > topN) continue
+    if (selection.jobs.some(job => job.funderId === lender.funderId && !RETRYABLE_JOB_STATES.has(job.state))) {
+      skipped.push({ funderId: lender.funderId, reason: "already_submitted" })
+      continue
+    }
+    const errors = selection.funders.find(funder => funder.id === lender.funderId)?.preflightErrors ?? [{ field: "funderId", message: "Funder is unavailable for submission." }]
+    if (errors.length) {
+      skipped.push({ funderId: lender.funderId, reason: `preflight: ${errors.map(error => error.message).join("; ")}` })
+      continue
+    }
+    proposals.push({ kind: "submit_to_funder", targetKey: `submit:${lender.funderId}`, fingerprint: `s${fit.snapshotId}`, payload: {
+      funderId: lender.funderId, name: lender.name, rank: lender.rank, score: lender.score,
+      reasons: lender.reasons.filter(reason => reason.result === "pass").map(reason => reason.detail),
+      missingData: lender.missingData, disclaimer: fit.disclaimer,
+    } })
+  }
+  return { proposals, skipped }
 }
 
 /** Serialized per deal. Never touches dismissed/approved rows, so a decision sticks until inputs change. */
@@ -127,11 +158,29 @@ export async function processDealAgentJob(job: BackgroundJob, actor: DealActor):
     const completeness = await checkCompleteness(actor, deal.id)
     await record({ step: "completeness", outcome: "ok", summary: completeness.ready ? `Complete (version ${completeness.version}).` : `${completeness.findings.length} open finding(s) (version ${completeness.version}).` })
 
+    let submissions: ReturnType<typeof submissionProposals> = { proposals: [], skipped: [] }
+    let snapshotId: string | null = null
+    const { topN } = await readAnalysisSettings(actor.workspaceId)
     // ponytail: fit only matters once the file is complete; submissions are never proposed before that.
-    await record({ step: "lender_fit", outcome: "skipped", code: "deal_incomplete", summary: "Lender fit waits for a complete file." })
+    if (!completeness.ready) await record({ step: "lender_fit", outcome: "skipped", code: "deal_incomplete", summary: "Lender fit waits for a complete file." })
+    else {
+      try {
+        await scoreDeal(actor, deal.id, { mode: "analyze_only", topN })
+        const fit = await getLenderFit(actor, deal.id)
+        snapshotId = fit.snapshotId
+        if (!snapshotId) throw new AppError(409, "lender_fit_unscored", "No current lender-fit snapshot.")
+        submissions = submissionProposals(fit, topN, await getSubmissionSelection(actor, deal.id))
+        const matched = fit.lenders.filter(lender => lender.status === "matched").length
+        await record({ step: "lender_fit", outcome: "ok", summary: `${matched} matched lender(s); considering the top ${topN}.` })
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error
+        await record({ step: "lender_fit", outcome: "skipped", code: error.code, summary: error.message })
+      }
+    }
 
-    const proposals = documentProposals(completeness, deal)
-    await record({ step: "proposals", outcome: "ok", summary: proposals.length ? `Proposed ${proposals.map(proposal => proposal.targetKey).join(", ")}.` : "Nothing to propose." })
+    const proposals = [...documentProposals(completeness, deal), ...submissions.proposals]
+    const skippedSummary = submissions.skipped.map(item => ` Skipped ${item.funderId}: ${item.reason}.`).join("")
+    await record({ step: "proposals", outcome: "ok", summary: (proposals.length ? `Proposed ${proposals.map(proposal => proposal.targetKey).join(", ")}.` : "Nothing to propose.") + skippedSummary })
 
     const written = await upsertProposals(actor, deal.id, run.id, proposals)
     await record("skipped" in written
@@ -140,7 +189,7 @@ export async function processDealAgentJob(job: BackgroundJob, actor: DealActor):
 
     const done = nowIso()
     await getDatabase().prepare("UPDATE mca_deal_agent_runs SET state='completed',inputs_json=?,completed_at=?,updated_at=? WHERE workspace_id=? AND id=?")
-      .run(JSON.stringify({ documentCount: documents.length, completenessVersion: completeness.version }), done, done, actor.workspaceId, run.id)
+      .run(JSON.stringify({ documentCount: documents.length, completenessVersion: completeness.version, snapshotId, topN }), done, done, actor.workspaceId, run.id)
     await recordAuditEvent({ context: actor, action: "deal_agent.run_completed", resourceType: "deal_agent_run", resourceId: run.id, metadata: { dealId: deal.id, proposals: proposals.length }, correlationId: actor.correlationId })
     return { runId: run.id }
   } catch (error) {

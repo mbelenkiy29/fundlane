@@ -7,6 +7,9 @@ import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { documentProposals } from "../src/lib/mca/deal-agent/run"
 import { runNextBackgroundJob } from "../src/lib/mca/jobs/worker"
+import { createFunder } from "../src/lib/mca/funders/directory"
+import { publishFunderCriteria } from "../src/lib/mca/funders/criteria"
+import { closedLookbackMonths } from "../src/lib/mca/underwriting/lookback"
 import { getWorkspaceSettings } from "../src/lib/mca/workspaces"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
@@ -183,4 +186,97 @@ test("documentProposals maps findings to stipulation categories", () => {
   assert.deepEqual(proposals[0].payload, { items: [{ category: "statement", label: "Business bank statement for 2026-08", code: "missing_statement_2026-08", period: "2026-08" }], otherFindings: ["Mismatch."] })
   assert.deepEqual(documentProposals({ dealId: "d", ready: false, version: 4, ruleSnapshot: "{}", checkedAt: "", findings: [{ code: "period_mismatch", message: "Mismatch.", documentId: "doc" }] }, { displayId: "D-1" }), [])
   assert.deepEqual(documentProposals({ dealId: "d", ready: true, version: 5, ruleSnapshot: "{}", checkedAt: "", findings: [] }, { displayId: "D-1" }), [])
+})
+
+const metric = (value: number) => JSON.stringify({ value, unknown: false, confidence: 1 })
+
+/** A deal that passes completeness with matched lenders; statement months and aggregate are seeded directly. */
+async function completeDeal(options: { funders?: number; topN?: number; aggregate?: boolean } = {}) {
+  const { workspaceId, dealId } = await enabledDeal()
+  const admin = adminActor(workspaceId)
+  const funderIds: string[] = []
+  for (let index = 0; index < (options.funders ?? 3); index += 1) {
+    const funder = (await createFunder(admin, { idempotencyKey: `funder-${++seq}`, legalName: `Agent Capital ${index}`, routes: [{ kind: "manual_portal", label: "Portal", destination: `https://portal${index}.example.test/submit`, documentExceptions: [], active: true }] })).funder
+    await publishFunderCriteria(admin, funder.id, [{ field: "requested_amount", operator: "max", unit: "usd", value: 100000 + index * 50000, sourceText: "Synthetic deal agent fixture; not lender policy", sourceAsOf: "2026-01-01", unspecified: false }])
+    funderIds.push(funder.id)
+  }
+  const now = new Date().toISOString()
+  if (options.topN) await getDatabase().prepare(`INSERT INTO mca_analysis_settings (workspace_id,mode,top_n,review_notification_channel,automatic_send_enabled,updated_at)
+    VALUES (?,'review_first',?,'none',0,?)`).run(workspaceId, options.topN, now)
+  for (const category of ["application", "driver_license", "voided_check"]) await upload(workspaceId, dealId, category)
+  for (const period of closedLookbackMonths(3, "America/New_York")) {
+    const document = await upload(workspaceId, dealId, "statement", `statement-${period}-${++seq}`)
+    await getDatabase().prepare(`INSERT INTO mca_statement_months (id,workspace_id,deal_id,document_id,account_kind,period,deposits,deposit_count,average_daily_balance,nsf_count,negative_days,ending_balance,extraction_version,created_at,updated_at)
+      VALUES (?,?,?,?,'checking',?,'20000','12','8000','0','0','8000',1,?,?)`).run(`month-${document.id}`, workspaceId, dealId, document.id, period, now, now)
+  }
+  if (options.aggregate !== false) await getDatabase().prepare(`INSERT INTO mca_underwriting_aggregates (workspace_id,deal_id,version,monthly_revenue,average_daily_balance,nsf_count,negative_days,deposit_count,worst_month_nsf,position_count,stale,source_fingerprint,computed_at)
+    VALUES (?,?,1,?,?,?,?,?,?,0,0,'synthetic-deal-agent',?)`).run(workspaceId, dealId, metric(20000), metric(8000), metric(0), metric(0), metric(12), metric(0), now)
+  return { workspaceId, dealId, funderIds }
+}
+
+async function enqueueFor(workspaceId: string, dealId: string, documentId = `manual-${++seq}`) {
+  await withAgentEnv("true", async () => (await import("../src/lib/mca/deal-agent/run")).enqueueDealAgentRun({ id: documentId, workspaceId, dealId }))
+}
+
+const stepsOf = (run: RunRow) => JSON.parse(run.steps_json) as Array<{ step: string; outcome: string; code?: string; summary: string }>
+
+test("complete deal: queues submit_to_funder for top N matched funders with rank, score and reasons", async () => {
+  const { workspaceId, dealId } = await completeDeal({ funders: 3, topN: 2 })
+  await enqueueFor(workspaceId, dealId)
+  await runAgent(dealId)
+  const [run] = await runsFor(dealId)
+  assert.equal(run.state, "completed", run.steps_json)
+  const actions = await actionsFor(dealId)
+  assert.ok(!actions.some(action => action.kind === "request_documents"))
+  const submits = actions.filter(action => action.kind === "submit_to_funder").map(action => JSON.parse(action.payload_json) as { funderId: string; rank: number; score: number; reasons: string[]; disclaimer: string })
+  assert.equal(submits.length, 2, run.steps_json)
+  for (const payload of submits) {
+    assert.equal(typeof payload.score, "number")
+    assert.equal(typeof payload.rank, "number")
+    assert.ok(payload.reasons.length > 0)
+    assert.ok(payload.disclaimer)
+  }
+  assert.deepEqual(submits.map(payload => payload.rank).sort(), [1, 2])
+  assert.ok(actions.filter(action => action.kind === "submit_to_funder").every(action => action.target_key.startsWith("submit:") && action.fingerprint.startsWith("s")))
+})
+
+test("skips funder with an existing sent submission and records why", async () => {
+  const { workspaceId, dealId, funderIds } = await completeDeal({ funders: 2 })
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_submission_jobs (id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_at,updated_at)
+    VALUES (?,?,?,?,'Agent Capital 0','manual_portal','{}','sent',?,?,1,'[]','{}','[]',?,?)`).run(`job-${++seq}`, workspaceId, dealId, funderIds[0], `confirm-${seq}`, `attempt-${seq}`, now, now)
+  await enqueueFor(workspaceId, dealId)
+  await runAgent(dealId)
+  const [run] = await runsFor(dealId)
+  const actions = await actionsFor(dealId)
+  assert.ok(!actions.some(action => action.target_key === `submit:${funderIds[0]}`))
+  assert.ok(actions.some(action => action.target_key === `submit:${funderIds[1]}`))
+  assert.match(stepsOf(run).find(step => step.step === "proposals")!.summary, /already_submitted/)
+})
+
+test("never sends even when automatic_send and auto_submit are configured", async () => {
+  const { workspaceId, dealId } = await completeDeal({ funders: 2 })
+  const now = new Date().toISOString()
+  await getDatabase().prepare(`INSERT INTO mca_analysis_settings (workspace_id,mode,top_n,review_notification_channel,automatic_send_enabled,updated_at)
+    VALUES (?,'automatic_send',3,'none',1,?)`).run(workspaceId, now)
+  await getDatabase().prepare(`INSERT INTO mca_auto_submit_settings (workspace_id,mode,min_match_score,max_funders_per_deal,eligible_funder_ids,updated_at)
+    VALUES (?,'auto_submit',0,3,'[]',?)`).run(workspaceId, now)
+  await enqueueFor(workspaceId, dealId)
+  process.env.MCA_AUTO_SUBMIT_ENABLED = "true"
+  try { await runAgent(dealId) } finally { delete process.env.MCA_AUTO_SUBMIT_ENABLED }
+  assert.equal((await runsFor(dealId))[0].state, "completed")
+  assert.ok((await actionsFor(dealId)).some(action => action.kind === "submit_to_funder"))
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_submission_jobs WHERE deal_id=?").get(dealId))?.n, 0)
+})
+
+test("lender fit without underwriting data is recorded and does not fail the run", async () => {
+  // scoreDeal tolerates a missing aggregate: lenders are not matched rather than an error.
+  const { workspaceId, dealId } = await completeDeal({ funders: 1, aggregate: false })
+  await enqueueFor(workspaceId, dealId)
+  await runAgent(dealId)
+  const [run] = await runsFor(dealId)
+  assert.equal(run.state, "completed")
+  const fit = stepsOf(run).find(step => step.step === "lender_fit")!
+  assert.match(fit.summary, /^0 matched lender/, JSON.stringify(fit))
+  assert.equal((await actionsFor(dealId)).filter(action => action.kind === "submit_to_funder").length, 0)
 })
