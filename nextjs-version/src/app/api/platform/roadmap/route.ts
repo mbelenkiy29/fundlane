@@ -13,7 +13,7 @@ export async function GET(request?: Request) {
   try {
     await requireSuperAdmin(request)
     enabled()
-    return NextResponse.json(await listRoadmapItems(), { headers: { "Cache-Control": "private, no-store" } })
+    return NextResponse.json(await listRoadmapItems(), { headers: { "Cache-Control": "private, no-store", "X-MCA-Snapshot-At": new Date().toISOString() } })
   } catch (error) { return apiError(error) }
 }
 export async function POST(request: Request) {

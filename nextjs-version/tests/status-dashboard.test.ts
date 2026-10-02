@@ -58,7 +58,7 @@ test("missing health or queue metrics is explicitly unavailable, never healthy",
 test("failed refresh discards a previously successful status and error history", () => {
   const [before, after] = runDashboard(`
     // Drive this component's hooks without a browser; nested UI renders with real React.
-    const original = { useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback };
+    const original = { useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useRef: React.useRef };
     const state = []; let cursor = 0;
     function tree() {
       cursor = 0;
@@ -66,6 +66,7 @@ test("failed refresh discards a previously successful status and error history",
         return [state[i], value => { state[i] = typeof value === 'function' ? value(state[i]) : value; }]; };
       React.useEffect = () => {};
       React.useCallback = fn => fn;
+      React.useRef = initial => { const i=cursor++; if (!(i in state)) state[i]={current:initial}; return state[i]; };
       try { return StatusDashboard({}); } finally { Object.assign(React, original); }
     }
     function refresh(node) {

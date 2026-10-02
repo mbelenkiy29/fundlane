@@ -1,5 +1,6 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { PLATFORM_REFRESH_EVENT } from "@/lib/mca/platform-refresh"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,18 +30,27 @@ export default function SmsReview() {
     [notice, setNotice] = useState(""),
     [operation, setOperation] = useState(""),
     [stepUpCode, setStepUpCode] = useState("")
+  const reading = useRef(false)
+  const [snapshotAt, setSnapshotAt] = useState<string>()
   async function load() {
-    setCompanies(
+    if (reading.current) return
+    reading.current = true
+    try { setCompanies(
       (await requestJson<{ companies: Company[] }>("/api/mca/sms/operator"))
         .companies
-    )
+    ); setSnapshotAt(new Date().toISOString()); setError("") } finally { reading.current = false }
   }
   useEffect(() => {
     void load().catch((e) => setError(e.message)).finally(() => setLoading(false))
   }, [])
+  useEffect(() => {
+    const refresh = () => { if (!busy) void load().catch(() => setError("SMS review snapshot is stale; refresh failed.")) }
+    window.addEventListener(PLATFORM_REFRESH_EVENT, refresh)
+    return () => window.removeEventListener(PLATFORM_REFRESH_EVENT, refresh)
+  }, [busy])
   return (
     <section className="space-y-5">
-      <PlatformHeading title="Company SMS review" description="Platform operators review the actual business, application-update use case, and consent evidence. Company roles do not grant access here." />
+      <PlatformHeading snapshotAt={snapshotAt} title="Company SMS review" description="Platform operators review the actual business, application-update use case, and consent evidence. Company roles do not grant access here." />
       {error && (
         <p role="alert" className="text-destructive">
           {error}

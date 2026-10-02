@@ -22,11 +22,13 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 960 }, colorScheme: theme })
     const page = await context.newPage()
     let queueFailure = false
+    const reads = new Map()
     let roadmap = structuredClone(fixtures.roadmap)
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/api/**', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname
       assert.equal(url.origin, origin, 'Synthetic browser must stay local')
+      if (request.method() === 'GET') reads.set(path, (reads.get(path) ?? 0) + 1)
       if (request.method() !== 'GET') actions.push({ path, body: request.postDataJSON() })
       if (path === '/api/platform/queues') {
         if (queueFailure) return route.fulfill({ status: 500, json: { error: { message: 'Synthetic queue failure' } } })
@@ -57,7 +59,7 @@ try {
       await visit(path)
       await page.locator('main h1').waitFor()
       if (path.includes('/monitoring')) await page.getByText('Healthy', { exact: true }).waitFor()
-      if (['/platform', '/platform/companies/company-a', '/platform/sms'].includes(path)) await page.getByText(/Snapshot loaded/).first().waitFor()
+      if (['/platform', '/platform/companies/company-a', '/platform/sms'].includes(path)) await page.getByText(/Database snapshot/).first().waitFor()
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Overflow: ${width} ${theme} ${path}`)
       assert.equal(await page.locator('main h1').count(), 1, path)
       if (width === 1440 && path === '/platform/companies/company-a') assert.equal(await page.locator('nav[aria-label="Platform"] a[href="/platform/companies"]').getAttribute('data-active'), 'true')
@@ -108,7 +110,7 @@ try {
     await page.getByRole('button', { name: 'Search', exact: true }).click()
     await page.getByText('No matching companies.', { exact: true }).waitFor()
     await visit('/platform')
-    await page.getByText(/Snapshot loaded/).waitFor()
+    await page.getByText(/Database snapshot/).first().waitFor()
     await page.getByRole('button', { name: 'Next 50' }).click()
     await page.getByRole('link', { name: 'Synthetic Brokerage B', exact: true }).waitFor()
     queueFailure = true
@@ -138,6 +140,31 @@ try {
     await page.getByRole('alert').filter({ hasText: 'Synthetic SMS reviews unavailable' }).waitFor()
     assert.equal(await page.getByText('No companies available for review.', { exact: true }).count(), 0)
     await visit('/platform/roadmap')
+    if (width === 1440 && theme === 'light') {
+      await page.clock.install()
+      const title = page.getByLabel('Title', { exact: true }).nth(1)
+      await title.fill('Unfinished operator edit')
+      const before = reads.get('/api/platform/roadmap') ?? 0
+      const timed = page.waitForResponse(response => response.url().endsWith('/api/platform/roadmap'))
+      await page.clock.runFor(30_001)
+      await timed
+      await page.waitForFunction(() => globalThis.platformServerReads > 0)
+      assert.ok((reads.get('/api/platform/roadmap') ?? 0) > before, '30s timer refreshes client queues')
+      assert.equal(await title.inputValue(), 'Unfinished operator edit', 'Refresh preserves drafts')
+      await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')) })
+      const hidden = reads.get('/api/platform/roadmap')
+      await page.clock.runFor(60_001)
+      assert.equal(reads.get('/api/platform/roadmap'), hidden, 'Hidden tabs do not poll')
+      const returning = page.waitForResponse(response => response.url().endsWith('/api/platform/roadmap'))
+      await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')) })
+      await returning
+      assert.equal(await title.inputValue(), 'Unfinished operator edit')
+      const manual = page.waitForResponse(response => response.url().endsWith('/api/platform/roadmap'))
+      await page.getByRole('button', { name: 'Refresh data', exact: true }).click()
+      await manual
+      assert.equal(await title.inputValue(), 'Unfinished operator edit')
+      await page.clock.resume()
+    }
     await page.getByRole('button', { name: 'Publish', exact: true }).click()
     await page.getByRole('button', { name: 'Unpublish', exact: true }).waitFor()
     for (const fixture of ['loading', 'error']) {

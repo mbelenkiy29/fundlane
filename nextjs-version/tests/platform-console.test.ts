@@ -4,7 +4,7 @@ import {randomUUID} from "node:crypto"
 import {createPostgresTestDatabase} from "./helpers/postgres-test-db.mjs"
 import {createWorkspaceWithAdmin} from "../src/lib/mca/workspaces"
 import {getDatabase,nowIso,closeDatabaseForTests,recordAuditEvent} from "../src/lib/mca/db"
-import {platformCompanies,platformCompany,platformPayments,platformAudit,platformMutation,platformQuerySchema} from "../src/lib/mca/platform-console"
+import {platformCompanies,platformCompany,platformPayments,platformAudit,platformMutation,platformQuerySchema,platformBillingObservations} from "../src/lib/mca/platform-console"
 import {initializeCompanyTrial} from "../src/lib/mca/company-access"
 async function initializeSyntheticTrial(workspaceId:string,seats:number) {
   await getDatabase().prepare("DELETE FROM company_subscription_state WHERE workspace_id=? AND state_kind='internal_demo'").run(workspaceId)
@@ -38,6 +38,22 @@ test("payments aggregate currencies separately and invoice links are allowlisted
   assert.equal(data.invoices.find(row=>row.currency==="usd")?.invoice_url,"https://invoice.stripe.com/i/test")
   const detail=await platformCompany(workspaceId)
   assert.equal(detail.invoices.length,2);assert.equal(detail.payments.length,2)
+})
+test("financial search, invoice status and totals share the unpaginated selection",async()=>{
+  const query={q:"invoice-usd",status:"paid",offset:0}
+  const filtered=await platformPayments(query)
+  assert.deepEqual(filtered.invoices.map(row=>row.stripe_invoice_id),["invoice-usd"])
+  assert.deepEqual(filtered.payments.map(row=>row.stripe_payment_id),["payment-usd"])
+  assert.deepEqual(filtered.totals,[{currency:"usd",due:"39900",paid:"39900",remaining:"0",refunded:"0",disputed:"0"}])
+  assert.deepEqual((await platformPayments({...query,q:"payment-usd"})).totals,filtered.totals)
+  const next=await platformPayments({...query,offset:50})
+  assert.equal(next.invoices.length,0);assert.equal(next.payments.length,0)
+  assert.deepEqual(next.totals,filtered.totals)
+  const open=await platformPayments({...query,status:"open"})
+  assert.equal(open.payments.length,0);assert.deepEqual(open.totals,[])
+  const empty=await platformPayments({...query,q:"not-a-company"})
+  assert.deepEqual(empty.totals,[])
+  assert.ok(Number.isFinite(Date.parse(empty.snapshotAt)))
 })
 test("audit search returns persisted billing reasons without raw metadata",async()=>{
   const rows=await platformAudit({q:"billing.platform_access_changed",status:"",offset:0})
@@ -134,4 +150,20 @@ test("refund/dispute reporting keeps gross, successful refunds and open balances
   const all=await platformPayments({...query,currency:""});assert.equal(all.totals.length,2);assert.equal(all.totals.find(row=>row.currency==="eur")?.refunded,"700")
   const scoped=await platformPayments({...query,q:""},workspaceId);assert.equal(scoped.adjustments.length,0);assert.deepEqual(scoped.totals,[])
   assert.equal(platformQuerySchema.safeParse({from:"2025-03-31",to:"2025-03-01"}).success,false)
+})
+
+
+test("Stripe observations show new verification failures and clear historical failures after a successful read", async () => {
+  const company=await fixture("Observation fixture"),db=getDatabase(),old=new Date(Date.now()-3600000).toISOString(),verified=new Date(Date.now()-60000).toISOString(),stamp=nowIso(),job=randomUUID()
+  await db.prepare("INSERT INTO workspace_stripe_customers(workspace_id,stripe_customer_id,livemode,created_at) VALUES (?,?,1,?)").run(company.workspaceId,`cus_${job}`,old)
+  await db.prepare("INSERT INTO workspace_billing_entitlements(workspace_id,plan_slug,plan_name,status,seat_limit,source,synced_at) VALUES (?,'fundlane','Fundlane','active',1,'stripe_api',?)").run(company.workspaceId,verified)
+  await db.prepare("INSERT INTO mca_background_jobs(id,workspace_id,kind,resource_id,idempotency_key,actor_json,payload_json,payload_hash,state,error_code,available_at,created_at,updated_at) VALUES (?,?,'billing_reconcile',?,?,'{}','{}','synthetic','failed','provider_unavailable',?,?,?)").run(job,company.workspaceId,job,job,old,old,old)
+  assert.equal((await platformBillingObservations([company.workspaceId]))[0].failed,false)
+  await db.prepare("UPDATE mca_background_jobs SET updated_at=? WHERE id=?").run(stamp,job)
+  assert.equal((await platformBillingObservations([company.workspaceId]))[0].failed,true)
+  await db.prepare("DELETE FROM mca_background_jobs WHERE id=?").run(job)
+  await recordAuditEvent({context:{workspaceId:company.workspaceId,userId:null},action:"billing.recovery_verification_failed",resourceType:"workspace",resourceId:company.workspaceId})
+  assert.equal((await platformBillingObservations([company.workspaceId]))[0].failed,true)
+  await db.prepare("UPDATE workspace_billing_entitlements SET synced_at=? WHERE workspace_id=?").run(new Date(Date.now()+1000).toISOString(),company.workspaceId)
+  assert.equal((await platformBillingObservations([company.workspaceId]))[0].failed,false)
 })

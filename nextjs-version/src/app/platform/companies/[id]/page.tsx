@@ -7,7 +7,7 @@ import { notFound } from "next/navigation"
 import { platformCompany, platformPayments, platformQuerySchema } from "@/lib/mca/platform-console"
 import { requirePlatformPage } from "@/lib/mca/platform-page-access"
 import { AppError } from "@/lib/mca/errors"
-import { InvoiceTable, PaymentTable, AdjustmentTable, CurrencyTotals, PlatformSearch, PlatformPagination } from "@/components/mca/platform/tables"
+import { BillingObservations, InvoiceTable, PaymentTable, AdjustmentTable, CurrencyTotals, PlatformSearch, PlatformPagination } from "@/components/mca/platform/tables"
 import { CompanyControls } from "@/components/mca/platform/company-controls"
 import { formatBillingMoney } from "@/lib/mca/billing-display"
 
@@ -17,7 +17,7 @@ export default async function CompanyPage({ params, searchParams }: { params: Pr
   const data = await platformCompany(id).catch(error => { if (error instanceof AppError && error.status === 404) notFound(); throw error })
   const query = platformQuerySchema.parse(await searchParams), financial = await platformPayments(query, id)
   return <div className="min-w-0 space-y-6">
-    <PlatformHeading title={data.company.name}><Button asChild variant="outline" size="sm"><Link href="/platform/companies">Back to companies</Link></Button></PlatformHeading>
+    <PlatformHeading snapshotAt={financial.snapshotAt} title={data.company.name}><Button asChild variant="outline" size="sm"><Link href="/platform/companies">Back to companies</Link></Button></PlatformHeading>
     <p className="break-all font-mono text-xs text-muted-foreground">{id}</p>
     <PlatformSection title="Company summary">
       <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">{[
@@ -44,6 +44,7 @@ export default async function CompanyPage({ params, searchParams }: { params: Pr
     <OperationsQueues kind="sms" workspaceId={id} />
     <CompanyControls id={id} paused={data.access.manualPaused} billingState={data.billingState} owner={data.owner} ownerCandidates={data.ownerCandidates} notifications={data.notifications} />
     <PlatformSection title="Financial record filters"><PlatformSearch financial query={query} statuses={["draft", "open", "paid", "void", "uncollectible"]} /></PlatformSection>
+    <BillingObservations rows={financial.billingObservations} snapshotAt={financial.snapshotAt} truncated={financial.observationsTruncated} />
     <CurrencyTotals totals={financial.totals} query={query} companyScoped />
     <InvoiceTable rows={financial.invoices} />
     <PaymentTable rows={financial.payments} />
