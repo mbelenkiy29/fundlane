@@ -20,8 +20,8 @@ type Security = {
   verified: boolean
 }
 
-export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?: "manage" | "challenge" | "enroll"; continueTo?: "/onboarding" | "/platform" }) {
-  const continuationLabel = continueTo === "/platform" ? "Continue to platform administration" : "Continue to your workspace"
+export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?: "manage" | "challenge" | "enroll"; continueTo?: "/onboarding" | "/platform" | "/activate" }) {
+  const continuationLabel = continueTo === "/platform" ? "Continue to platform administration" : continueTo === "/activate" ? "Continue to account activation" : "Continue to your workspace"
   const [state, setState] = useState<Security | null>(null)
   const [enrollment, setEnrollment] = useState<{ secret: string; qrCode: string } | null>(null)
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null)

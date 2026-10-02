@@ -140,3 +140,7 @@ test("Google tenant exemption does not report the owner session as MFA verified"
   await getDatabase().prepare("UPDATE auth_session_totp SET method='totp' WHERE session_id=?").run(sessionId)
   assert.equal((await (await GET()).json()).platformVerified, true)
 })
+test("account security preserves only the exact activation continuation",async()=>{
+  assert.equal(mfaProps(await security.default({searchParams:Promise.resolve({next:"/activate"})}))?.continueTo,"/activate")
+  for(const next of ["https://attacker.test/activate","//attacker.test/activate","/activate?other=1"])assert.equal(mfaProps(await security.default({searchParams:Promise.resolve({next})}))?.continueTo,"/platform")
+})

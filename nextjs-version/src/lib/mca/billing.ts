@@ -450,6 +450,8 @@ export async function createBillingCheckout(workspaceId: string, selectedSeats: 
   return withImmediateTransaction(async db => {
     const workspace = await db.prepare<{ name: string }>("SELECT name FROM workspaces WHERE id = ? FOR UPDATE").get(workspaceId)
     if (!workspace) throw new AppError(404, "workspace_not_found", "Company not found.")
+    const signup = await db.prepare<{state:string}>("SELECT state FROM company_signup_intents WHERE workspace_id=?").get(workspaceId)
+    if (signup && ["ready","activating"].includes(signup.state)) throw new AppError(409,"signup_activation_pending","Finish account activation before opening another billing checkout.")
     await assertOccupiedSeats(workspaceId, selectedSeats, db)
     if (missingBillingStateFailsClosed()) await requireBillingState(workspaceId, db)
     else await ensureBillingState(workspaceId, db)

@@ -6,10 +6,10 @@ import { superAdminContinuation } from "@/lib/mca/platform-auth"
 
 export const dynamic = "force-dynamic"
 
-export default async function AccountSecurityPage({ searchParams }: { searchParams: Promise<{ required?: string; challenge?: string }> }) {
-  if (!await supabaseIdentity()) redirect("/sign-in?next=%2Faccount-security")
+export default async function AccountSecurityPage({ searchParams }: { searchParams: Promise<{ required?: string; challenge?: string; next?:string }> }) {
   const params = await searchParams
-  const continuation = await superAdminContinuation()
+  if (!await supabaseIdentity()) redirect(params.next==="/activate"?"/sign-in?next=%2Factivate":"/sign-in?next=%2Faccount-security")
+  const continuation = params.next==="/activate" ? "/activate" : await superAdminContinuation()
   const mode = continuation || params.challenge === "1" ? "challenge" : params.required === "1" ? "enroll" : "manage"
   return <AuthShell title="Account security" description="Use an authenticator app to protect email and password sign-in. Workspace administrators can require this for every member. Google sign-in does not ask for a second factor after Google authentication.">
     <MfaForm mode={mode} continueTo={continuation ?? "/onboarding"} />
