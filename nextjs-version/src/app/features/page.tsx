@@ -37,6 +37,6 @@ export default function FeaturesPage() {
         </section>
       })}
     </div>
-    <section className="fl-closing"><div className="fl-container"><div><p className="fl-section-label">See it come together</p><h2>Your deals. Your team.<br />One clear workflow.</h2><p>Walk through Fundlane with your brokerage’s needs in mind.</p></div><GetStartedLink /></div></section>
+    <section className="fl-closing"><div className="fl-container"><div><p className="fl-section-label">See it come together</p><h2>Your deals. Your team.<br />One clear workflow.</h2><p>Get started with a trial, or log in if you already have a workspace.</p></div><GetStartedLink /></div></section>
   </main></MarketingShell>
 }

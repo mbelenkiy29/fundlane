@@ -72,6 +72,9 @@ test("every home purchase CTA uses Get Started without a demo or registration st
   `, launchEnv) as string
   const main = markup.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ""
   assert.equal((main.match(/<button[^>]*>Get Started<\/button>/g) ?? []).length, 9)
+  assert.match(main, /After the trial, the subscription continues unless you cancel/)
+  assert.match(main, /Ready to get started/)
+  assert.doesNotMatch(main, /\$399|Have a question specific to your brokerage\?|Let’s walk through it|Walk through Fundlane/)
   assert.doesNotMatch(main, /href="\/(?:demo|sign-up)"|Book a demo|your demo|<input[^>]+name="(?:email|password|companyName|seats)"/)
 })
 
@@ -87,7 +90,8 @@ test("features and changelog replace repeated demo acquisition links", () => {
   for (const markup of result) {
     assert.match(markup, /<button[^>]*>Get Started<\/button>/)
     assert.match(markup, /href="\/sign-in"[^>]*>Login<\/a>/)
-    assert.doesNotMatch(markup, /href="\/demo"|Book a demo|your demo/)
+    assert.match(markup, /Get started with a trial, or log in if you already have a workspace\./)
+    assert.doesNotMatch(markup, /href="\/demo"|Book a demo|your demo|Walk through Fundlane/)
   }
 })
 

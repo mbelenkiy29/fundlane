@@ -85,7 +85,7 @@ const faqs: readonly (readonly [string, string])[] = [
   ],
   [
     "What happens when I get started?",
-    "Get Started opens secure Stripe Checkout for a 14-day free trial with a card required. The plan includes the first user at $399 per month after the trial unless you cancel; applicable discounts and tax follow your Checkout terms. Verify your identity to enter your CRM, then complete optional business details and setup at your own pace.",
+    "Get Started opens secure Stripe Checkout for a 14-day free trial with a card required. After the trial, the subscription continues unless you cancel; applicable discounts and tax follow your Checkout terms. Verify your identity to enter your CRM, then complete optional business details and setup at your own pace.",
   ],
 ]
 
@@ -264,10 +264,6 @@ export function MarketingHome() {
           <div className="fl-section-heading">
             <p className="fl-section-label">A few things to know</p>
             <h2>Before you get started.</h2>
-            <p>
-              Have a question specific to your brokerage?
-              <br />
-            </p>
             <GetStartedLink className="fl-inline-link" />
           </div>
           <div className="fl-faq-items">
@@ -285,7 +281,7 @@ export function MarketingHome() {
         <section className="fl-closing">
           <div className="fl-container">
             <div>
-              <p className="fl-section-label">Let’s walk through it</p>
+              <p className="fl-section-label">Ready to get started</p>
               <h2>
                 A clearer way to run
                 <br />
