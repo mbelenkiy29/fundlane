@@ -1,12 +1,30 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import pg from "pg"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { COMPANY_MANIFEST, PROTECTED_USERS, TEST_USERS, PRODUCTION_REF, inventorySql, deletionSql, freshStart, reviewStripeCustomer } from "../scripts/ops/platform-fresh-start"
+import { COMPANY_MANIFEST, PROTECTED_USERS, TEST_USERS, PRODUCTION_REF, inventorySql, deletionSql, freshStart, reviewStripeCustomer, verifyPrivateBackup } from "../scripts/ops/platform-fresh-start"
+
+test("recovery copies must be private, regular files with verified contents before deletion", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fresh-start-backup-"))
+  const path = join(directory, "copy.bin")
+  const checksum = createHash("sha256").update("recovery").digest("hex")
+  try {
+    await writeFile(path, "recovery", { mode: 0o600 })
+    await verifyPrivateBackup(path, checksum)
+    await writeFile(path, "corrupt")
+    await assert.rejects(verifyPrivateBackup(path, checksum), /checksum failed/)
+    await writeFile(path, "recovery")
+    await chmod(path, 0o644)
+    await assert.rejects(verifyPrivateBackup(path, checksum), /not private/)
+    await chmod(path, 0o600)
+    await symlink(path, join(directory, "link.bin"))
+    await assert.rejects(verifyPrivateBackup(join(directory, "link.bin"), checksum), /not private/)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
 
 test("fresh start inventories dependencies, fails closed, rolls back and resumes without touching new companies", async () => {
   const db = await createPostgresTestDatabase("fresh_start")

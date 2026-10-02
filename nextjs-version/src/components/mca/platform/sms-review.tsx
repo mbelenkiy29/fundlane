@@ -30,15 +30,15 @@ export default function SmsReview() {
     [notice, setNotice] = useState(""),
     [operation, setOperation] = useState(""),
     [stepUpCode, setStepUpCode] = useState("")
-  const reading = useRef(false)
+  const reading = useRef<Promise<void> | null>(null)
   const [snapshotAt, setSnapshotAt] = useState<string>()
   async function load() {
-    if (reading.current) return
-    reading.current = true
-    try { setCompanies(
+    if (reading.current) return reading.current
+    reading.current = (async () => { try { setCompanies(
       (await requestJson<{ companies: Company[] }>("/api/mca/sms/operator"))
         .companies
-    ); setSnapshotAt(new Date().toISOString()); setError("") } finally { reading.current = false }
+    ); setSnapshotAt(new Date().toISOString()); setError("") } finally { reading.current = null } })()
+    return reading.current
   }
   useEffect(() => {
     void load().catch((e) => setError(e.message)).finally(() => setLoading(false))
@@ -103,6 +103,7 @@ export default function SmsReview() {
             setBusy(true)
             setError("")
             try {
+              await reading.current
               await requestJson("/api/mca/sms/operator", {
                 method: "POST",
                 body: JSON.stringify({

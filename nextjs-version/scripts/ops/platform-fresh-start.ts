@@ -151,6 +151,11 @@ async function savePrivate(path: string, data: unknown) {
   await writeFile(temp, JSON.stringify(data), { mode: 0o600, flag: "wx" })
   await rename(temp, path)
 }
+export async function verifyPrivateBackup(path: string, sha256: string) {
+  const backup = await lstat(path)
+  if (!backup.isFile() || backup.isSymbolicLink() || (backup.mode & 0o077)) throw new Error("Storage recovery copy missing or not private")
+  if (createHash("sha256").update(await readFile(path)).digest("hex") !== sha256) throw new Error("Storage recovery checksum failed")
+}
 
 type StripeHistory = { data: Record<string, unknown>[]; has_more: boolean }
 export function reviewStripeCustomer(customer: Record<string, unknown>, history: Record<string, StripeHistory>) {
@@ -299,6 +304,7 @@ export async function freshStart(args: string[]) {
           object.sha256 = createHash("sha256").update(bytes).digest("hex")
           const path = join(directory!, `storage-${createHash("sha256").update(`${object.bucket_id}/${object.name}`).digest("hex")}-${object.sha256}.bin`)
           await writeFile(path, bytes, { mode: 0o600, flag: "wx" }).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error })
+          await verifyPrivateBackup(path, object.sha256)
         }
       }
       const stripe = !client && inventory.rows.some(row => row.table === "workspace_stripe_customers") ? await stripeCustomerInventory() : undefined
@@ -342,9 +348,7 @@ export async function freshStart(args: string[]) {
         if (state.removedObjects?.includes(identity)) continue
         if (!object.sha256 || !/^[a-f0-9]{64}$/.test(object.sha256)) throw new Error("Storage recovery checksum missing")
         const backupPath = join(directory!, `storage-${createHash("sha256").update(identity).digest("hex")}-${object.sha256}.bin`)
-        const backup = await lstat(backupPath)
-        if (!backup.isFile() || backup.isSymbolicLink() || (backup.mode & 0o077)) throw new Error("Storage recovery copy missing or not private")
-        if (createHash("sha256").update(await readFile(backupPath)).digest("hex") !== object.sha256) throw new Error("Storage recovery checksum failed")
+        await verifyPrivateBackup(backupPath, object.sha256)
         const { error } = await supabase.storage.from(object.bucket_id).remove([object.name])
         if (error) throw new Error("Storage deletion failed; resume with the same directory")
         state.removedObjects!.push(identity); await savePrivate(statePath, state)

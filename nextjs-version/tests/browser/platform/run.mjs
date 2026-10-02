@@ -24,6 +24,7 @@ try {
     let queueFailure = false
     const reads = new Map()
     let roadmap = structuredClone(fixtures.roadmap)
+    let smsCompany = structuredClone(fixtures.smsCompany), smsReadGate = null
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/api/**', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname
@@ -38,10 +39,13 @@ try {
       if (path === '/api/admin/status') return route.fulfill({ json: fixtures.status })
       if (path === '/api/admin/status/errors') return route.fulfill({ json: { errors: [], next: null } })
       if (path === '/api/mca/sms/operator' && request.method() === 'GET') {
+        const company = structuredClone(smsCompany)
+        if (smsReadGate) await smsReadGate
         const fixture = new URL(page.url()).searchParams.get('fixture')
         if (fixture === 'sms-error') return route.fulfill({ status: 500, json: { error: { message: 'Synthetic SMS reviews unavailable' } } })
-        return route.fulfill({ json: { companies: fixture === 'sms-empty' ? [] : [fixtures.smsCompany] } })
+        return route.fulfill({ json: { companies: fixture === 'sms-empty' ? [] : [company] } })
       }
+      if (path === '/api/mca/sms/operator' && request.method() === 'POST') smsCompany.reviewState = 'approved'
       if (path.startsWith('/api/platform/roadmap')) {
         if (request.method() === 'GET') return route.fulfill({ json: roadmap })
         if (url.searchParams.get('action') === 'publish') roadmap = roadmap.map(item => ({ ...item, published: true }))
@@ -132,8 +136,25 @@ try {
     await page.getByRole('button', { name: 'Verify code' }).click()
     await page.getByText('Authenticator verified for this session.').waitFor()
     await page.getByLabel('Reason / evidence reference').fill('Synthetic consent evidence reviewed')
+    let releaseSmsRead
+    if (width === 1440 && theme === 'light') {
+      smsReadGate = new Promise(resolve => { releaseSmsRead = resolve })
+      const pendingRead = page.waitForRequest(request => request.url().endsWith('/api/mca/sms/operator') && request.method() === 'GET')
+      await page.evaluate(() => window.dispatchEvent(new Event('mca:platform-refresh')))
+      await pendingRead
+    }
+    const smsReadsBeforeSave = reads.get('/api/mca/sms/operator')
+    const smsWritesBeforeSave = actions.filter(action => action.path === '/api/mca/sms/operator').length
     await page.getByRole('button', { name: 'Save decision and limits' }).click()
+    if (releaseSmsRead) {
+      await page.waitForTimeout(100)
+      assert.equal(actions.filter(action => action.path === '/api/mca/sms/operator').length, smsWritesBeforeSave, 'SMS decision waits for an in-flight refresh')
+      smsReadGate = null
+      releaseSmsRead()
+    }
     await page.getByText('Review saved.', { exact: true }).waitFor()
+    await page.waitForFunction(() => document.querySelector('form .font-normal')?.textContent === 'approved')
+    assert.ok(reads.get('/api/mca/sms/operator') > smsReadsBeforeSave, 'SMS decision reloads after its write')
     await visit('/platform/sms?view=review&fixture=sms-empty')
     await page.getByText('No companies available for review.', { exact: true }).waitFor()
     await visit('/platform/sms?view=review&fixture=sms-error')
