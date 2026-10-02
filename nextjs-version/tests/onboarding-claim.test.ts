@@ -6,10 +6,12 @@ import {
   provider,
   resetAuthProvider,
   liveIdentity,
+  browserCookies,
 } from "./helpers/onboarding-auth"
 import { getDatabase, newId, nowIso } from "../src/lib/mca/db"
 import { findEnrollment } from "../src/lib/mca/onboarding/store"
-import { linkSupabaseUser } from "../src/lib/mca/supabase-auth"
+import { linkSupabaseUser, setActiveWorkspace, WORKSPACE_COOKIE } from "../src/lib/mca/supabase-auth"
+import { encryptSensitive } from "../src/lib/mca/crypto"
 
 let close: () => Promise<void>
 before(async () => {
@@ -63,6 +65,48 @@ test("claim atomically creates one owner, company, billing and SMS grant and sam
     ),
     { trial_started_at: null, trial_ends_at: null }
   )
+})
+test("claimed status leaves B active and explicit authorized replay selects A without changing B basics or billing", async () => {
+  const f = await activatedEnrollment(), a = await claim(f), db = getDatabase()
+  const enrollment = (await findEnrollment(f.id))!, userId = enrollment.userId!, b = newId(), stamp = nowIso()
+  await db.execute("INSERT INTO workspaces(id,name,timezone,feature_flags,page_visibility,created_at,updated_at) VALUES (?,'Existing company B','UTC','{}','{}',?,?)", [b, stamp, stamp])
+  await db.execute("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)", [newId(), b, userId, stamp, stamp])
+  await db.execute("INSERT INTO company_basic_profiles(workspace_id,profile_cipher,revision,supplied_at,updated_by_user_id,updated_at) VALUES (?,?,1,?,?,?)", [b, encryptSensitive(JSON.stringify({legalName:"Company B",ein:"123456789"}),b), stamp,userId,stamp])
+  await db.execute("INSERT INTO workspace_stripe_customers(workspace_id,stripe_customer_id,created_at) VALUES (?,'cus_company_B',?)", [b,stamp])
+  await db.execute("INSERT INTO workspace_billing_entitlements(workspace_id,stripe_subscription_id,plan_slug,plan_name,status,seat_limit,source,synced_at) VALUES (?,'sub_company_B','fundlane:3','Fundlane','active',3,'stripe_api',?)",[b,stamp])
+  await db.execute("INSERT INTO company_subscription_state(workspace_id,legacy_exempt,state_kind,selected_seats,updated_at) VALUES (?,1,'internal_demo',3,?)", [b,stamp])
+  const snapshotB = async () => ({
+    basics: await db.queryOne("SELECT * FROM company_basic_profiles WHERE workspace_id=?",[b]),
+    billing: await db.queryOne("SELECT * FROM workspace_stripe_customers WHERE workspace_id=?",[b]),
+    subscription: await db.queryOne("SELECT * FROM workspace_billing_entitlements WHERE workspace_id=?",[b]),
+    state: await db.queryOne("SELECT * FROM company_subscription_state WHERE workspace_id=?",[b]),
+  })
+  const originalB = await snapshotB()
+  const { claimEnrollment, readEnrollmentStatus } = await import("../src/lib/mca/onboarding/claim")
+  for (const [destination, expected, paused] of [["business","/settings/business",false],["crm","/dashboard",false],["billing","/settings/billing",false],["business","/settings/billing",true]] as const) {
+    await db.execute("UPDATE company_subscription_state SET manual_paused=? WHERE workspace_id=?",[paused?1:0,a.workspaceId])
+    await setActiveWorkspace(f.identity,b)
+    const input = {enrollmentId:f.id,identity:f.identity,generation:enrollment.emailGeneration,destination}
+    const status = await readEnrollmentStatus(input,f.client)
+    assert.equal(status.nextAction,"continue")
+    assert.equal(status.destination,expected)
+    assert.equal(browserCookies.get(WORKSPACE_COOKIE),b,"observational status must leave ordinary workspace selection alone")
+    const replay = await claimEnrollment(input,f.client)
+    assert.deepEqual(replay,{workspaceId:a.workspaceId,destination:expected})
+    assert.equal(browserCookies.get(WORKSPACE_COOKIE),a.workspaceId)
+    assert.deepEqual(await snapshotB(),originalB)
+  }
+  // A status observation cannot guarantee that membership/MFA will remain valid at the later click.
+  await setActiveWorkspace(f.identity,b)
+  await db.execute("UPDATE memberships SET status='deactivated' WHERE workspace_id=? AND user_id=?",[a.workspaceId,userId])
+  await assert.rejects(claimEnrollment({enrollmentId:f.id,identity:f.identity,destination:"business",generation:enrollment.emailGeneration},f.client),{code:"membership_inactive"})
+  assert.equal(browserCookies.get(WORKSPACE_COOKIE),b)
+  assert.equal((await readEnrollmentStatus({enrollmentId:f.id,identity:f.identity},f.client)).nextAction,"recover")
+  await db.execute("UPDATE memberships SET status='active' WHERE workspace_id=? AND user_id=?",[a.workspaceId,userId])
+  await db.execute("INSERT INTO user_totp_factors(user_id,status,secret_cipher,created_at,updated_at) VALUES (?,'enabled','synthetic',?,?)",[userId,stamp,stamp])
+  await assert.rejects(claimEnrollment({enrollmentId:f.id,identity:f.identity,destination:"business",generation:enrollment.emailGeneration},f.client),{code:"totp_required"})
+  assert.equal(browserCookies.get(WORKSPACE_COOKIE),b)
+  assert.deepEqual(await snapshotB(),originalB)
 })
 test("claim rechecks session revocation after provider refresh and rolls back all grants", async () => {
   const f = await activatedEnrollment()

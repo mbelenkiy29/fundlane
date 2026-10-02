@@ -18,6 +18,9 @@ import { persistEntitlement } from "../src/lib/mca/billing";
 import { renderOnboardingEmail } from "../src/lib/mca/onboarding/email-content";
 import { runOnboardingEmails, recordOnboardingEmailDispatchOutcome } from "../src/lib/mca/onboarding/email-worker";
 import { runScheduledCommsJobs } from "../src/lib/mca/comms/scheduler";
+import { enqueueNotification, getNotification } from "../src/lib/mca/notifications/service";
+import { recordNotificationOutcome, setNotificationReceiptLookupForTests } from "../src/lib/mca/notifications/worker";
+import type { DealActor } from "../src/lib/mca/deals/schema";
 
 const instant = "2030-01-01T12:00:00.000Z", end = "2030-01-15T12:00:00.000Z";
 const offer: EnrollmentOffer = { version: 1, accountId: "acct_synthetic", basePriceId: "price_base", seatPriceId: "price_seats", currency: "usd", baseAmount: 39900, quantity: 1, trialDays: 14, livemode: false, promotionCodes: true, automaticTax: false };
@@ -320,6 +323,89 @@ test("comms owns one gated service-email phase with its existing absolute deadli
   assert.equal((await runScheduledCommsJobs(instant)).onboardingEmails?.accepted, 2);
   delete process.env.MCA_ONBOARDING_EMAIL_ENABLED;
   assert.equal((await runScheduledCommsJobs(instant)).onboardingEmails, undefined);
+});
+
+test("slow onboarding backlog leaves useful discovery, receipt repair and old notification work within the common deadline", async t => {
+  // Fifteen activations create thirty independently leased intents; no real provider wait.
+  for (let index = 0; index < 15; index++) await activate();
+  const db = getDatabase(), workspaceId = randomUUID(), userId = randomUUID(), membershipId = randomUUID();
+  await db.execute("INSERT INTO workspaces(id,name,timezone,feature_flags,page_visibility,created_at,updated_at) VALUES (?,'Existing notification company','UTC','{\"integrations\":true}','{\"deals\":true,\"integrations\":true}',?,?)", [workspaceId, instant, instant]);
+  await db.execute("INSERT INTO users(id,email,name,application_identifier,created_at,updated_at) VALUES (?,'broker@example.test','Synthetic broker',?,?,?)", [userId, userId, instant, instant]);
+  await db.execute("INSERT INTO memberships(id,workspace_id,user_id,role,status,created_at,updated_at) VALUES (?,?,?,'admin','active',?,?)", [membershipId, workspaceId, userId, instant, instant]);
+  const actor: DealActor = { workspaceId, userId, membershipId, role: "admin", source: "user", managedMembershipIds: [], activeMembershipIds: [membershipId], correlationId: "comms-fairness" };
+  const input = { kind: "document" as const, audience: "broker" as const, channel: "email" as const, recipientUserId: userId, scheduledFor: instant, approvedAt: instant, payload: { title: "Existing business notification", message: "Review the existing requested documents." } };
+  const queued = await enqueueNotification(actor, { ...input, eventKey: "old-due-notification" });
+  const accepted = await enqueueNotification(actor, { ...input, eventKey: "old-due-receipt" });
+  await db.execute("UPDATE mca_notifications SET state='sending',attempts=1,claim_token='prior-synthetic-attempt',lease_until=? WHERE id=?", [end, accepted.id]);
+  assert.equal(await recordNotificationOutcome(workspaceId, accepted.id, "prior-synthetic-attempt", { state: "accepted", providerMessageId: "prior-provider-id" }, instant), true);
+  const startedAt = Date.now(), overallDeadline = startedAt + 230_000;
+  const advance = (ms: number) => t.mock.timers.setTime(Date.now() + ms);
+  const onboardingKeys: string[] = [], oldNotificationKeys: string[] = [];
+  const budgets: { discovery?: number; receipt?: number; send: number[]; receiptDeadline?: number } = { send: [] };
+  const originalQuery = pg.Client.prototype.query;
+  t.mock.method(pg.Client.prototype, "query", (async function(this: pg.Client, ...args: unknown[]) {
+    const query = args[0], text = typeof query === "string" ? query : query && typeof query === "object" && "text" in query ? String(query.text) : "";
+    const result = await Reflect.apply(originalQuery, this, args);
+    if (text.includes("SELECT * FROM mca_document_notification_discovery")) {
+      budgets.discovery = overallDeadline - Date.now();
+      advance(15_000); // Charge the actual discovery entry its worst-case budget.
+    }
+    if (text.includes("SELECT * FROM mca_notifications WHERE state IN ('queued','retry')")) budgets.send.push(overallDeadline - Date.now());
+    return result;
+  }) as typeof originalQuery);
+  setNotificationReceiptLookupForTests(async (row, context) => {
+    assert.equal(row.id, accepted.id);
+    assert.equal(row.provider_message_id, "prior-provider-id");
+    budgets.receipt = context.deadlineMs - Date.now(); budgets.receiptDeadline = context.deadlineMs;
+    advance(15_000);
+    return { state: "delivered", providerMessageId: "prior-provider-id" };
+  });
+  t.after(() => { setNotificationReceiptLookupForTests(); delete process.env.MCA_NOTIFICATION_RUNTIME; });
+  globalThis.fetch = async (_url, init) => {
+    const key = new Headers(init?.headers).get("idempotency-key")!, body = JSON.parse(String(init?.body));
+    advance(15_000);
+    if (body.subject === "Existing business notification") {
+      oldNotificationKeys.push(key);
+      return Response.json({ emailId: "old-notification-accepted" });
+    }
+    onboardingKeys.push(key);
+    throw new Error("Synthetic slow unknown provider acceptance");
+  };
+  process.env.MCA_NOTIFICATION_RUNTIME = "enabled";
+  const result = await runScheduledCommsJobs(instant);
+  const held = await emails();
+  t.diagnostic(JSON.stringify({ result, budgets, elapsedMs: Date.now() - startedAt, onboardingQueued: held.filter(mail => mail.state === "queued").length, onboardingHeld: held.filter(mail => mail.state === "uncertain").length }));
+  assert.equal(result.notifications?.accepted, 1, "existing business mail must progress despite onboarding backlog");
+  assert.deepEqual(result.onboardingEmails, { attempted: 9, accepted: 0, uncertain: 9, suppressed: 0 });
+  assert.equal(budgets.discovery, 95_000);
+  assert.equal(budgets.receipt, 80_000, "receipt repair retains its actual 60-second entry threshold after discovery");
+  assert.equal(budgets.receiptDeadline, overallDeadline, "the shared 230-second deadline is unchanged");
+  // The last empty claim also observes the remaining budget after the useful send.
+  assert.deepEqual(budgets.send, [65_000, 50_000]);
+  assert.equal(Date.now() - startedAt, 180_000);
+  assert.equal((await getNotification(actor, queued.id)).state, "accepted");
+  assert.equal((await getNotification(actor, queued.id)).attempts, 1);
+  assert.equal((await getNotification(actor, accepted.id)).state, "delivered");
+  assert.equal((await getNotification(actor, accepted.id)).attempts, 1);
+  assert.deepEqual(oldNotificationKeys, [`notification:${queued.id}`]);
+  assert.equal(held.filter(mail => mail.state === "uncertain" && mail.attempts === 1 && !mail.claim_token && !mail.lease_until).length, 9);
+  assert.equal(held.filter(mail => mail.state === "queued" && mail.attempts === 0 && !mail.claim_token && !mail.lease_until).length, 21);
+  assert.equal(new Set(onboardingKeys).size, 9);
+  assert.equal((await db.queryOne<{ count: number }>("SELECT count(*)::int count FROM mca_notification_receipts WHERE notification_id=? AND state='delivered' AND evidence='verified_provider_lookup'", [accepted.id]))?.count, 1);
+  // With mail dispatch disabled the same owner still runs old notifications and never replays held mail.
+  delete process.env.MCA_ONBOARDING_EMAIL_ENABLED;
+  const followup = await enqueueNotification(actor, { ...input, eventKey: "old-mail-with-onboarding-disabled" });
+  const next = await runScheduledCommsJobs(new Date().toISOString());
+  assert.equal(next.onboardingEmails, undefined);
+  assert.equal(next.notifications?.accepted, 1);
+  assert.equal((await getNotification(actor, followup.id)).state, "accepted");
+  assert.equal(onboardingKeys.length, 9);
+  await db.execute("DELETE FROM mca_notification_receipts WHERE workspace_id=?", [workspaceId]);
+  await db.execute("DELETE FROM mca_notifications WHERE workspace_id=?", [workspaceId]);
+  await db.execute("DELETE FROM memberships WHERE workspace_id=?", [workspaceId]);
+  await db.execute("DELETE FROM workspaces WHERE id=?", [workspaceId]);
+  await db.execute("DELETE FROM users WHERE id=?", [userId]);
+  delete process.env.MCA_NOTIFICATION_RUNTIME;
 });
 
 test("a response arriving after lease expiry becomes uncertain without acceptance evidence", async t => {

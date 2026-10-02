@@ -34,7 +34,7 @@ export default function PricingPage() {
       <p>You choose how many seats to buy. Removing a user frees their seat for someone else but doesn&apos;t lower your bill. Adding seats beyond what you&apos;ve bought is prorated and charged right away; the new seat is ready after payment. Reducing your seat count takes effect at your next renewal, with no mid-cycle credit. Seat changes during the free trial are free.</p>
       <p>AI credits: coming soon.</p>
       <p>Onboarding: set up on your own with our guides{supportEmail && <>, or <a className="fl-inline-link" href={`mailto:${supportEmail}`}>email us</a> for help getting your company set up</>}.</p>
-      <p>Start with a {TRIAL_DAYS}-day free trial. A card is required to start. Your subscription automatically converts to {dollars(BILLING_CATALOG.base.unitAmountCents)} per month unless you cancel before the trial ends.</p>
+      <p>Start with a {TRIAL_DAYS}-day free trial. A card is required to start. Your subscription automatically converts at the base monthly first-user price of {dollars(BILLING_CATALOG.base.unitAmountCents)} per month unless you cancel before the trial ends; applicable Checkout discounts and tax follow your Checkout terms.</p>
       <p>Stripe will show your first scheduled charge date before you start your trial.</p>
       <TrialCheckoutStart available={marketingTrialEnrollmentEnabled()} />
       {supportEmail && <p>Questions? Email <a className="fl-inline-link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.</p>}

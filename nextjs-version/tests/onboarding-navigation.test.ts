@@ -82,6 +82,8 @@ test("pricing discloses the first-user offer, required card and automatic conver
   `, launchEnv) as string
   assert.match(markup, /\$399 per month per company/)
   assert.match(markup, /including the first user/)
+  assert.match(markup, /base monthly first-user price of \$399 per month/)
+  assert.match(markup, /applicable Checkout discounts and tax/)
   assert.match(markup, /14-day free trial/)
   assert.match(markup, /A card is required/)
   assert.match(markup, /automatically[^<]*\$399[^<]*month[^<]*unless[^<]*cancel/i)
