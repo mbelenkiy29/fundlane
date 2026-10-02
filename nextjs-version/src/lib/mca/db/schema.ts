@@ -2054,4 +2054,4 @@ export const company_signup_intents = pgTable("company_signup_intents", {
  activation_started_at: text(), subscription_id: text().unique(), email_sent_at: text(), email_retry_until: text(),
  expires_at: text().notNull(), created_at: text().notNull(), updated_at: text().notNull(),
 }, table => [check("company_signup_intents_mode_check", sql`${table.livemode} IN (0,1)`),
- check("company_signup_intents_state_check", sql`${table.state} IN ('pending','ready','activating','paid_required','active')`)])
+ check("company_signup_intents_state_check", sql`${table.state} IN ('pending','ready','activating','paid_initializing','paid_required','active')`)])

@@ -6,7 +6,7 @@ CREATE TABLE company_signup_intents (
  checkout_email text,
  payment_method_id text,
  livemode integer NOT NULL CHECK (livemode IN (0,1)),
- state text NOT NULL CHECK (state IN ('pending','ready','activating','paid_required','active')),
+ state text NOT NULL CHECK (state IN ('pending','ready','activating','paid_initializing','paid_required','active')),
  workspace_id text UNIQUE REFERENCES workspaces(id),
  user_id text REFERENCES users(id),
  activation_started_at text,

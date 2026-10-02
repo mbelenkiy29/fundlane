@@ -128,37 +128,51 @@ export async function activateSignup(token:string, context:{workspaceId:string;u
     const current=await db.prepare<Intent>("SELECT * FROM company_signup_intents WHERE id=? FOR UPDATE").get(row.id)
     assertIntent(current)
     if (current.workspace_id && (current.workspace_id!==context.workspaceId || current.user_id!==context.userId)) throw new AppError(409,"signup_already_claimed","This signup was already claimed by another company.")
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(context.workspaceId)
     const owner=await db.prepare<{email:string}>(`SELECT u.email FROM workspace_owners o JOIN memberships m ON m.id=o.membership_id AND m.workspace_id=o.workspace_id JOIN users u ON u.id=m.user_id WHERE o.workspace_id=? AND m.user_id=? AND m.status='active'`).get(context.workspaceId,context.userId)
     if (!owner || owner.email.trim().toLowerCase()!==context.email.trim().toLowerCase()) throw new AppError(403,"signup_owner_required","Only the verified company owner can activate signup.")
-    if (current.state==="active" || current.state==="paid_required" || current.state==="activating") return current.state
+    if (current.state==="active" || current.state==="paid_required" || current.state==="paid_initializing" || current.state==="activating") return current.state
     const existing=await db.prepare("SELECT workspace_id FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId)
     if (existing) throw new AppError(409,"billing_subscription_exists","Use your company's existing Plans & Billing.")
     const trial=await trialAllowedForOwner(context.workspaceId,db)
-    await db.prepare("UPDATE company_signup_intents SET workspace_id=?,user_id=?,state=?,activation_started_at=?,updated_at=? WHERE id=?").run(context.workspaceId,context.userId,trial?"activating":"paid_required",nowIso(),nowIso(),current.id)
+    await db.prepare("UPDATE company_signup_intents SET workspace_id=?,user_id=?,state=?,activation_started_at=?,updated_at=? WHERE id=?").run(context.workspaceId,context.userId,trial?"activating":"paid_initializing",nowIso(),nowIso(),current.id)
     if (trial) await reserveTrialForCheckout(context.workspaceId,current.checkout_session_id!,Math.floor(Date.now()/1000)+86400,db)
-    return trial?"activating":"paid_required"
+    return trial?"activating":"paid_initializing"
   })
   if (decision==="active") return {status:"active" as const}
   // Existing catalog/customer machinery needs a workspace before creating the real Stripe customer.
   const current=await readSignupIntent(token)
-  let mapping=await getDatabase().prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId)
-  if (!mapping) {
-    if (Date.parse(current.activation_started_at!) < Date.now()-23*3600000) throw new AppError(503,"signup_activation_review_required","Activation needs support review. No new charge has been created.")
-    const method=await client.paymentMethods.retrieve(row.payment_method_id)
-    if (method.livemode!==stripeLiveMode() || method.customer) throw new AppError(409,"signup_card_mismatch","The saved card cannot be attached to this company.")
-    const address=method.billing_details.address
-    const customer=await client.customers.create({email:context.email,...(address?{address:{city:address.city??undefined,country:address.country??undefined,line1:address.line1??undefined,line2:address.line2??undefined,postal_code:address.postal_code??undefined,state:address.state??undefined}}:{}),metadata:{workspace_id:context.workspaceId,fundlane_signup_intent:row.id}}, {idempotencyKey:`fundlane-signup-customer-${row.id}`})
-    if (customer.livemode!==stripeLiveMode()) throw new AppError(409,"signup_mode_mismatch","Customer mode mismatch.")
-    await getDatabase().prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,livemode,created_at) VALUES (?,?,?,?) ON CONFLICT(workspace_id) DO NOTHING").run(context.workspaceId,customer.id,stripeLiveMode()?1:0,nowIso())
-    mapping={stripe_customer_id:customer.id,livemode:stripeLiveMode()?1:0}
-  }
+  const mapping=await withImmediateTransaction(async db=>{
+    await db.prepare("SELECT id FROM workspaces WHERE id=? FOR UPDATE").get(context.workspaceId)
+    let mapping=await db.prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId)
+    if (!mapping) {
+      if (Date.parse(current.activation_started_at!) < Date.now()-23*3600000) throw new AppError(503,"signup_activation_review_required","Activation needs support review. No new charge has been created.")
+      const method=await client.paymentMethods.retrieve(row.payment_method_id)
+      if (method.livemode!==stripeLiveMode() || method.customer) throw new AppError(409,"signup_card_mismatch","The saved card cannot be attached to this company.")
+      const address=method.billing_details.address
+      const customer=await client.customers.create({email:context.email,...(address?{address:{city:address.city??undefined,country:address.country??undefined,line1:address.line1??undefined,line2:address.line2??undefined,postal_code:address.postal_code??undefined,state:address.state??undefined}}:{}),metadata:{workspace_id:context.workspaceId,fundlane_signup_intent:row.id}}, {idempotencyKey:`fundlane-signup-customer-${row.id}`})
+      if (customer.livemode!==stripeLiveMode()) throw new AppError(409,"signup_mode_mismatch","Customer mode mismatch.")
+      await db.prepare("INSERT INTO workspace_stripe_customers (workspace_id,stripe_customer_id,livemode,created_at) VALUES (?,?,?,?) ON CONFLICT(workspace_id) DO NOTHING").run(context.workspaceId,customer.id,stripeLiveMode()?1:0,nowIso())
+      mapping=await db.prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId)
+      if (!mapping) throw new AppError(503,"signup_activation_pending","Customer setup is being verified. Retry shortly.")
+    }
+    return mapping
+  })
   if (Boolean(mapping.livemode)!==stripeLiveMode()) throw new AppError(409,"signup_mode_mismatch","Customer mode mismatch.")
   const method=await client.paymentMethods.retrieve(row.payment_method_id)
   const methodCustomer=typeof method.customer==="string"?method.customer:method.customer?.id
   if (method.livemode!==stripeLiveMode() || (methodCustomer && methodCustomer!==mapping.stripe_customer_id)) throw new AppError(409,"signup_card_mismatch","The saved card belongs to another customer.")
   if (!methodCustomer) await client.paymentMethods.attach(method.id,{customer:mapping.stripe_customer_id},{idempotencyKey:`fundlane-signup-attach-${row.id}`})
   await client.customers.update(mapping.stripe_customer_id,{invoice_settings:{default_payment_method:method.id}},{idempotencyKey:`fundlane-signup-default-${row.id}`})
-  if (decision==="paid_required") return {status:"paid_required" as const}
+  if (["paid_initializing","paid_required"].includes(decision)) {
+    const billing=await syncWorkspaceBilling(context.workspaceId,client)
+    if (billing.subscriptionId && billing.status==="active") {
+      await getDatabase().prepare("UPDATE company_signup_intents SET state='active',subscription_id=?,updated_at=? WHERE id=?").run(billing.subscriptionId,nowIso(),row.id)
+      return {status:"active" as const}
+    }
+    await getDatabase().prepare("UPDATE company_signup_intents SET state='paid_required',updated_at=? WHERE id=? AND state='paid_initializing'").run(nowIso(),row.id)
+    return {status:"paid_required" as const}
+  }
   const subscriptions=await client.subscriptions.list({customer:mapping.stripe_customer_id,status:"all",limit:100})
   if (subscriptions.has_more) throw new AppError(503,"signup_activation_review_required","Subscription history needs support review.")
   let subscription=subscriptions.data.find(sub=>sub.metadata?.fundlane_signup_intent===row.id)
