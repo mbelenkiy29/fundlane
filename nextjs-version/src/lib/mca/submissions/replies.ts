@@ -2,7 +2,8 @@ import "server-only"
 
 import { assertTrustedMutation, requireWorkspaceAccess } from "../auth"
 import { decryptSensitive, encryptSensitive } from "../crypto"
-import { getDatabase, newId, nowIso, parseJson, recordAuditEvent } from "../db"
+import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withTransaction } from "../db"
+import { assertExecutionActive, executionSignal, outsideExecutionScope, withExecutionDeadline } from "../jobs/execution"
 import { canActorAccessDeal } from "../deals/access-policy"
 import { findDealById } from "../deals/repository"
 import type { DealActor, DealRecord } from "../deals/schema"
@@ -83,11 +84,14 @@ export interface MailboxListInput {
   senderId: string
   fromAddress: string
   cursor?: string
+  deadlineMs?: number
+  messageLimit?: number
 }
 
 export interface MailboxListResult {
   messages: MailboxMessage[]
   nextCursor: string
+  complete?: boolean
 }
 
 export interface ReplyMailbox {
@@ -177,6 +181,8 @@ type AttemptAnchorRow = {
   confirmation_key: string
   job_state: string
   external_ref: string | null
+  deal_display_id: string
+  deal_legal_name: string | null
 }
 
 type SubmissionAnchor = {
@@ -199,6 +205,10 @@ type CheckpointRecord = {
   optedIn: boolean
   lastRunAt?: string
   lastError?: string | null
+  pendingReplyIds?: string[]
+  claimMode?: "manual" | "scheduled"
+  scheduledClaimToken?: string
+  scheduledLeaseUntil?: string
 }
 
 type MailboxFetch = ReplyMailbox | undefined
@@ -232,17 +242,21 @@ export function replyMailboxMode(): "fixture" | "unconfigured" | "live" {
   return mailboxOverride ? "fixture" : process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED === "true" ? "live" : "unconfigured"
 }
 
-function activeMailbox(sender: StoredEmailSender): ReplyMailbox | undefined {
+function activeMailbox(sender: StoredEmailSender, claimToken?: string): ReplyMailbox | undefined {
   if (mailboxOverride) return mailboxOverride
   if (replyMailboxMode() !== "live") return undefined
   if (!senderConversationReady(sender)) throw new AppError(409, "email_reconnect_required", "Reconnect this submission sender with mailbox read access.")
   return {
     async listMessages(input) {
-      const mailbox = new Mailbox(sender)
+      const mailbox = new Mailbox(sender, async () => {
+        assertExecutionActive()
+        if (claimToken) await assertReplyClaim(sender, claimToken)
+      })
       await mailbox.connect()
-      const listed = await mailbox.listInboxSince(input.cursor)
+      const listed = await mailbox.listInboxSince(input.cursor, input.deadlineMs === undefined ? undefined : { deadlineMs: input.deadlineMs, messageLimit: input.messageLimit ?? 2 })
       return {
         nextCursor: listed.nextCursor,
+        complete: listed.complete,
         messages: listed.messages.map(message => ({
           providerMessageId: message.id,
           threadId: message.threadId,
@@ -371,6 +385,10 @@ function parseCheckpoint(value: string | null): CheckpointRecord {
     cursor: typeof parsed.cursor === "string" ? parsed.cursor : undefined,
     lastRunAt: typeof parsed.lastRunAt === "string" ? parsed.lastRunAt : undefined,
     lastError: parsed.lastError == null ? null : typeof parsed.lastError === "string" ? parsed.lastError : String(parsed.lastError),
+    pendingReplyIds: Array.isArray(parsed.pendingReplyIds) ? parsed.pendingReplyIds.filter((id): id is string => typeof id === "string") : undefined,
+    claimMode: parsed.claimMode === "manual" ? "manual" : "scheduled",
+    scheduledClaimToken: typeof parsed.scheduledClaimToken === "string" ? parsed.scheduledClaimToken : undefined,
+    scheduledLeaseUntil: typeof parsed.scheduledLeaseUntil === "string" ? parsed.scheduledLeaseUntil : undefined,
   }
 }
 
@@ -381,6 +399,10 @@ function encodeCheckpoint(record: CheckpointRecord): string {
     cursor: record.cursor,
     lastRunAt: record.lastRunAt,
     lastError: record.lastError ?? null,
+    pendingReplyIds: record.pendingReplyIds,
+    claimMode: record.claimMode,
+    scheduledClaimToken: record.scheduledClaimToken,
+    scheduledLeaseUntil: record.scheduledLeaseUntil,
     intervalMs: REPLY_INGEST_INTERVAL_MS,
     flagsUnchanged: true,
   })
@@ -450,23 +472,109 @@ async function loadCheckpoint(workspaceId: string, senderId: string): Promise<Ch
   return row ? parseCheckpoint(row.match_evidence) : { optedIn: false }
 }
 
-async function saveCheckpoint(sender: StoredEmailSender, record: CheckpointRecord): Promise<void> {
+/** Opt-in is an atomic control mutation: never replace a concurrent cursor, lease or pending preview. */
+async function saveCheckpointOptIn(sender: StoredEmailSender, optedIn: boolean): Promise<void> {
   const now = nowIso()
-  const existing = await findReplyByProvider(sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID)
-  const evidence = encodeCheckpoint(record)
-  if (existing) {
-    await db().prepare(
-      "UPDATE mca_funder_replies SET match_evidence = ?, from_address = ?, updated_at = ? WHERE id = ? AND workspace_id = ?",
-    ).run(evidence, sender.fromAddress, now, existing.id, sender.workspaceId)
-    return
-  }
   await db().prepare(`INSERT INTO mca_funder_replies
-    (id, workspace_id, sender_id, provider_message_id, thread_id, from_address, subject, body_cipher,
-     matched_deal_id, matched_job_id, match_evidence, state, created_at, updated_at)
-    VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, ?, 'processed', ?, ?)
-    ON CONFLICT (workspace_id, sender_id, provider_message_id) DO UPDATE SET
-      match_evidence = EXCLUDED.match_evidence, from_address = EXCLUDED.from_address, updated_at = EXCLUDED.updated_at`,
-  ).run(newId(), sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID, sender.fromAddress, evidence, now, now)
+    (id,workspace_id,sender_id,provider_message_id,thread_id,from_address,subject,body_cipher,
+     matched_deal_id,matched_job_id,match_evidence,state,created_at,updated_at)
+    VALUES (?,?,?,?,NULL,?,NULL,NULL,NULL,NULL,?,'processed',?,?)
+    ON CONFLICT (workspace_id,sender_id,provider_message_id) DO UPDATE SET
+      match_evidence=((CASE WHEN excluded.match_evidence::jsonb->>'optedIn'='false'
+        THEN mca_funder_replies.match_evidence::jsonb-'scheduledClaimToken'-'scheduledLeaseUntil'-'claimMode'
+        ELSE mca_funder_replies.match_evidence::jsonb END) || jsonb_build_object('optedIn',excluded.match_evidence::jsonb->'optedIn'))::text,
+      from_address=excluded.from_address,updated_at=excluded.updated_at`).run(newId(), sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID,
+        sender.fromAddress, encodeCheckpoint({ optedIn }), now, now)
+}
+
+async function assertReplyClaim(sender: StoredEmailSender, token: string, lock = false): Promise<void> {
+  const claim = await db().prepare<{ claim_mode: string }>(`SELECT match_evidence::jsonb->>'claimMode' AS claim_mode FROM mca_funder_replies WHERE workspace_id=? AND sender_id=? AND provider_message_id=?
+      AND match_evidence::jsonb->>'scheduledClaimToken'=? AND match_evidence::jsonb->>'optedIn'='true'
+      AND (match_evidence::jsonb->>'scheduledLeaseUntil')::timestamptz>clock_timestamp() ${lock ? 'FOR UPDATE' : ''}`).get(sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID, token)
+  if (!claim || (claim.claim_mode !== "manual" && (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED !== "true" || process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED !== "true"))) {
+    throw new AppError(409, "reply_ingest_claim_lost", "Mailbox polling was stopped or reclaimed.")
+  }
+}
+
+async function releaseReplyClaim(sender: StoredEmailSender, token: string, error?: unknown): Promise<void> {
+  const code = error instanceof AppError && /^[a-z0-9_]{1,80}$/.test(error.code) ? error.code : "mailbox_ingest_failed"
+  const diagnostics = error === undefined ? {} : { lastError: code, lastRunAt: nowIso() }
+  try {
+    await outsideExecutionScope(() => withExecutionDeadline(async () => {
+      await db().prepare(`UPDATE mca_funder_replies SET match_evidence=((match_evidence::jsonb || ?::jsonb)-'scheduledClaimToken'-'scheduledLeaseUntil'-'claimMode')::text
+        WHERE workspace_id=? AND sender_id=? AND provider_message_id=? AND match_evidence::jsonb->>'scheduledClaimToken'=?`).run(JSON.stringify(diagnostics), sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID, token)
+    }, undefined, 1000))
+  } catch { /* The short lease expires if bounded cleanup cannot acquire the row. */ }
+}
+
+async function saveClaimedCheckpoint(sender: StoredEmailSender, record: CheckpointRecord): Promise<void> {
+  await assertReplyClaim(sender, record.scheduledClaimToken!)
+  const updated = await db().prepare(`UPDATE mca_funder_replies SET match_evidence=?,updated_at=? WHERE workspace_id=? AND sender_id=? AND provider_message_id=?
+    AND match_evidence::jsonb->>'scheduledClaimToken'=? AND match_evidence::jsonb->>'optedIn'='true'
+    AND (match_evidence::jsonb->>'scheduledLeaseUntil')::timestamptz>clock_timestamp()`).run(encodeCheckpoint(record), nowIso(), sender.workspaceId, sender.id, CHECKPOINT_PROVIDER_MESSAGE_ID, record.scheduledClaimToken)
+  if (!updated.changes) throw new AppError(409, "reply_ingest_claim_lost", "Mailbox polling was stopped or reclaimed.")
+}
+
+/** Pending intent lives on the reply, so inaccessible previews cannot grow a checkpoint or stop inbox polling. */
+async function updateReplyExtractionMarker(sender: StoredEmailSender, token: string, replyId: string, patch: Record<string, unknown>): Promise<void> {
+  await withTransaction(async database => {
+    // Use checkpoint-before-reply lock ordering, including extraction persistence.
+    await assertReplyClaim(sender, token, true)
+    await database.prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || ?::jsonb)::text
+      WHERE workspace_id=? AND sender_id=? AND id=? ${patch.automaticExtractionPending === true ? "AND NOT (match_evidence::jsonb ? 'extraction')" : ''}`)
+      .run(JSON.stringify(patch), sender.workspaceId, sender.id, replyId)
+  })
+}
+
+async function drainReplyExtractions(actor: DealActor, sender: StoredEmailSender, checkpoint: CheckpointRecord, deadlineMs = Infinity): Promise<CheckpointRecord> {
+  let current = checkpoint
+  const duration = Math.min(5000, deadlineMs - Date.now() - 1000)
+  if (duration < 1000) return current
+  try {
+    return await withExecutionDeadline(async () => {
+      const { getReplyExtraction, previewReplyExtraction } = await import("./extract-outcomes")
+      const pending = await db().prepare<{ id: string }>(`SELECT id FROM mca_funder_replies
+        WHERE workspace_id=? AND sender_id=? AND state='matched'
+          AND match_evidence::jsonb->>'automaticExtractionPending'='true'
+          AND NOT (match_evidence::jsonb ? 'extraction')
+        ORDER BY COALESCE(match_evidence::jsonb->>'automaticExtractionAttemptAt',''),created_at,id LIMIT 2`).all(sender.workspaceId, sender.id)
+      for (const { id: replyId } of pending) {
+        await assertReplyClaim(sender, checkpoint.scheduledClaimToken!)
+        // Rotate before work: cancellation or a killed classifier must not pin the first reply forever.
+        await updateReplyExtractionMarker(sender, checkpoint.scheduledClaimToken!, replyId, { automaticExtractionAttemptAt: nowIso() })
+        try {
+          const existing = await getReplyExtraction(actor, replyId)
+          if (!existing.extraction) await previewReplyExtraction(actor, { replyId }, async () => {
+            await assertReplyClaim(sender, checkpoint.scheduledClaimToken!)
+            await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+          }, async () => {
+            await assertReplyClaim(sender, checkpoint.scheduledClaimToken!, true)
+            await (await import("../company-access")).assertCompanyOperational(actor.workspaceId)
+          })
+          await updateReplyExtractionMarker(sender, checkpoint.scheduledClaimToken!, replyId, { automaticExtractionPending: false })
+        } catch (error) {
+          if (error instanceof AppError && ["execution_expired", "reply_ingest_deadline", "reply_ingest_claim_lost"].includes(error.code)) throw error
+          const code = error instanceof AppError && /^[a-z0-9_]{1,80}$/.test(error.code) ? error.code : "unexpected_error"
+          await audit(actor, "funder_reply.extraction_failed", replyId, { code })
+          // Keep this reply queued for an eligible actor, behind other pending work.
+          await updateReplyExtractionMarker(sender, checkpoint.scheduledClaimToken!, replyId, { automaticExtractionPending: true, automaticExtractionError: code })
+        }
+      }
+      // IDs are an active-page diagnostic; durable reply markers are the queue.
+      const remaining = await db().prepare<{ id: string }>(`SELECT id FROM mca_funder_replies
+        WHERE workspace_id=? AND sender_id=? AND state='matched' AND match_evidence::jsonb->>'automaticExtractionPending'='true'
+          AND NOT (match_evidence::jsonb ? 'extraction')
+        ORDER BY COALESCE(match_evidence::jsonb->>'automaticExtractionAttemptAt',''),created_at,id LIMIT 2`).all(sender.workspaceId, sender.id)
+      current = { ...current, pendingReplyIds: remaining.map(row => row.id) }
+      await saveClaimedCheckpoint(sender, current)
+      return current
+    }, executionSignal(), duration)
+  } catch (error) {
+    if (!(error instanceof AppError) || !["execution_expired", "reply_ingest_deadline"].includes(error.code)) throw error
+    // A preview sub-budget may expire while the outer sender still has inbox time.
+    assertExecutionActive()
+    return current
+  }
 }
 
 function healthFor(sender: StoredEmailSender, checkpoint: CheckpointRecord): ReplySenderHealth {
@@ -546,26 +654,24 @@ async function audit(actor: DealActor, action: string, resourceId: string, metad
 async function loadAnchors(actor: DealActor): Promise<SubmissionAnchor[]> {
   const [rows, funders] = await Promise.all([
     db().prepare<AttemptAnchorRow>(
-      `SELECT a.job_id, j.deal_id, j.funder_id, j.display_funder_name, j.confirmation_key, j.state AS job_state, a.external_ref
+      `SELECT a.job_id, j.deal_id, j.funder_id, j.display_funder_name, j.confirmation_key, j.state AS job_state, a.external_ref,
+         d.display_id AS deal_display_id,d.legal_name AS deal_legal_name
        FROM mca_submission_attempts a
        INNER JOIN mca_submission_jobs j ON j.id = a.job_id
+       INNER JOIN deals d ON d.workspace_id=j.workspace_id AND d.id=j.deal_id
        WHERE j.workspace_id = ? AND a.transport = 'email' AND a.external_ref IS NOT NULL
        ORDER BY a.created_at DESC, a.id DESC`,
     ).all(actor.workspaceId),
     listFunders(actor, { includeInactive: true }),
   ])
   const funderById = new Map(funders.map((funder) => [funder.id, funder]))
-  const deals = new Map<string, DealRecord>()
   const anchors: SubmissionAnchor[] = []
   for (const row of rows) {
+    assertExecutionActive()
     const ref = parseEmailAttemptRef(row.external_ref)
-    if (!ref?.messageId || ref.delivery === "uncertain") continue
-    let deal = deals.get(row.deal_id)
-    if (!deal) {
-      deal = await findDealById(actor.workspaceId, row.deal_id)
-      if (deal) deals.set(row.deal_id, deal)
-    }
-    if (!deal) continue
+    // Operator-reconciled system sends can be accepted without an API receipt ID.
+    // They remain domain/subject anchors; no attempted RFC ID becomes thread evidence.
+    if (!ref || (!ref.messageId && !ref.providerEmailId && !(ref.provider && ref.delivery === "sent")) || ref.delivery === "uncertain") continue
     const funder = funderById.get(row.funder_id)
     anchors.push({
       jobId: row.job_id,
@@ -577,8 +683,8 @@ async function loadAnchors(actor: DealActor): Promise<SubmissionAnchor[]> {
       threadId: ref.threadId,
       references: ref.references,
       subject: ref.snapshot.subject,
-      displayId: deal.displayId,
-      legalName: deal.legalName?.trim() || "",
+      displayId: row.deal_display_id,
+      legalName: row.deal_legal_name?.trim() || "",
       domains: funder?.domains ?? [],
     })
   }
@@ -857,7 +963,7 @@ async function persistReply(input: {
     bodyCipher,
     input.matchedDealId ?? null,
     input.matchedJobId ?? null,
-    JSON.stringify(input.evidence),
+    JSON.stringify({ ...input.evidence, ...(input.state === "matched" ? { automaticExtractionPending: true } : {}) }),
     input.state,
     now,
     now,
@@ -865,6 +971,8 @@ async function persistReply(input: {
   if (!inserted) {
     const existing = await findReplyByProvider(input.sender.workspaceId, input.sender.id, input.message.providerMessageId)
     if (!existing) throw new Error("Funder reply insert conflicted but no row was found.")
+    if (existing.state === "matched") await db().prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || '{"automaticExtractionPending":true}'::jsonb)::text
+      WHERE workspace_id=? AND id=? AND NOT (match_evidence::jsonb ? 'extraction')`).run(input.sender.workspaceId, existing.id)
     return { reply: mapReply(existing, { includeBody: false, created: false }), created: false }
   }
   const saved = await findReplyByProvider(input.sender.workspaceId, input.sender.id, input.message.providerMessageId)
@@ -872,18 +980,19 @@ async function persistReply(input: {
   return { reply: mapReply(saved, { includeBody: false, created: true }), created: true }
 }
 
-async function ingestSender(actor: DealActor, sender: StoredEmailSender, checkpoint: CheckpointRecord): Promise<{
+async function ingestSender(actor: DealActor, sender: StoredEmailSender, checkpoint: CheckpointRecord, options: { deadlineMs: number; messageLimit: number }): Promise<{
   ingested: RunReplyIngestResult["ingested"]
   checkpoint: CheckpointRecord
   flagsUnchanged: true
 }> {
-  const mailbox = activeMailbox(sender)
+  const mailbox = activeMailbox(sender, checkpoint.scheduledClaimToken)
   if (!mailbox) mailboxUnavailable()
   const listed = await mailbox.listMessages({
     workspaceId: sender.workspaceId,
     senderId: sender.id,
     fromAddress: sender.fromAddress,
     cursor: checkpoint.cursor,
+    ...options,
   })
   const [anchors, funders] = await Promise.all([loadAnchors(actor), listFunders(actor, { includeInactive: true })])
   const ingested: RunReplyIngestResult["ingested"] = []
@@ -920,8 +1029,9 @@ async function ingestSender(actor: DealActor, sender: StoredEmailSender, checkpo
     cursor: listed.nextCursor,
     lastRunAt: nowIso(),
     lastError: null,
+    pendingReplyIds: ingested.filter(item => item.state === "matched").map(item => item.id),
   }
-  await saveCheckpoint(sender, next)
+  await saveClaimedCheckpoint(sender, next)
   return { ingested, checkpoint: next, flagsUnchanged: true }
 }
 
@@ -1059,9 +1169,7 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
   if (enabled !== undefined) {
     if (!isAdmin(actor)) denied("Only workspace administrators can opt in mailbox ingestion.")
     if (!selected) invalid("senderId", "Choose a submission sender to opt in.")
-    const current = await loadCheckpoint(actor.workspaceId, selected.id)
-    const next: CheckpointRecord = { ...current, optedIn: enabled, lastError: enabled ? current.lastError ?? null : current.lastError ?? null }
-    await saveCheckpoint(selected, next)
+    await saveCheckpointOptIn(selected, enabled)
     await audit(actor, enabled ? "funder_reply.mailbox_opted_in" : "funder_reply.mailbox_opted_out", selected.id, {
       senderId: selected.id,
       optedIn: enabled,
@@ -1094,26 +1202,27 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
   if (replyMailboxMode() === "unconfigured") mailboxUnavailable()
 
   const ingested: RunReplyIngestResult["ingested"] = []
+  const deadlineMs = Date.now() + 230000
   for (const sender of targets) {
-    const checkpoint = await loadCheckpoint(actor.workspaceId, sender.id)
+    if (deadlineMs - Date.now() < 3000) break
+    const duration = Math.min(SCHEDULED_INGEST_SLICE_MS, deadlineMs - Date.now() - 1000)
+    const sliceDeadline = Date.now() + duration
+    let claim: Awaited<ReturnType<typeof claimReplySender>>
+    let failure: unknown
     try {
-      const result = await ingestSender(actor, sender, checkpoint)
-      ingested.push(...result.ingested)
-      for (const item of result.ingested) {
-        if (!item.created || item.state !== "matched") continue
-        try {
-          const { previewReplyExtraction } = await import("./extract-outcomes")
-          await previewReplyExtraction(actor, { replyId: item.id })
-        } catch (error) {
-          await audit(actor, "funder_reply.extraction_failed", item.id, {
-            code: error instanceof AppError ? error.code : "unexpected_error",
-          })
-        }
-      }
+      await withExecutionDeadline(async () => {
+        claim = await claimReplySender(actor.workspaceId, duration + 5000, sender.id, "manual")
+        if (!claim) throw new AppError(409, "reply_ingest_busy", "Mailbox polling is already running. Try again shortly.")
+        const checkpoint = await drainReplyExtractions(actor, sender, claim.checkpoint, sliceDeadline)
+        if (sliceDeadline - Date.now() < 2000) return
+        const result = await ingestSender(actor, sender, checkpoint, { deadlineMs: sliceDeadline - 1000, messageLimit: 100 })
+        ingested.push(...result.ingested)
+        await drainReplyExtractions(actor, sender, result.checkpoint, sliceDeadline)
+      }, undefined, duration)
     } catch (error) {
-      const message = error instanceof AppError ? error.message : "Mailbox ingest failed."
-      await saveCheckpoint(sender, { ...checkpoint, lastRunAt: nowIso(), lastError: message })
-      throw error
+      if (!(error instanceof AppError) || !["execution_expired", "reply_ingest_deadline"].includes(error.code)) { failure = error; throw error }
+    } finally {
+      if (claim) await releaseReplyClaim(claim.sender, claim.checkpoint.scheduledClaimToken!, failure)
     }
   }
 
@@ -1127,31 +1236,66 @@ export async function runReplyIngest(actor: DealActor, input: RunReplyIngestInpu
   }
 }
 
-const SCHEDULED_INGEST_MIN_BUDGET_MS = 60_000
+const SCHEDULED_INGEST_MIN_BUDGET_MS = 3000
+const SCHEDULED_INGEST_SLICE_MS = 25000
 
-/** Scheduled tick: needs both the live-ingest flag and the scheduling flag. Opted-in workspaces only, ordered by their most recently touched checkpoint (so a skipped expired sender cannot pin a workspace to the front); stops starting workspaces within 60s of the deadline (a started mailbox scan is not interrupted). */
+/** Claim and rotate before provider work. A killed process leaves a short, expiring lease. */
+async function claimReplySender(workspaceId: string, leaseMs: number, senderId?: string, claimMode: "manual" | "scheduled" = "scheduled"): Promise<{ sender: StoredEmailSender; checkpoint: CheckpointRecord } | undefined> {
+  return withTransaction(async database => {
+    const row = await database.prepare<ReplyRow>(`SELECT r.* FROM mca_funder_replies r
+      JOIN mca_email_senders s ON s.workspace_id=r.workspace_id AND s.id=r.sender_id
+      WHERE r.workspace_id=? AND r.provider_message_id=? AND r.match_evidence::jsonb->>'optedIn'='true'
+        AND s.purpose='submission' AND s.state='verified'
+        ${senderId ? 'AND r.sender_id=?' : ''}
+        AND COALESCE((r.match_evidence::jsonb->>'scheduledLeaseUntil')::timestamptz,'-infinity'::timestamptz)<=clock_timestamp()
+      ORDER BY r.updated_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).get(workspaceId, CHECKPOINT_PROVIDER_MESSAGE_ID, ...(senderId ? [senderId] : []))
+    if (!row) return
+    const sender = await findSenderById(workspaceId, row.sender_id)
+    if (!sender) return
+    const previous = parseCheckpoint(row.match_evidence)
+    if (previous.pendingReplyIds?.length) await database.prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || '{"automaticExtractionPending":true}'::jsonb)::text
+      WHERE workspace_id=? AND sender_id=? AND id=ANY(?::text[]) AND state='matched' AND NOT (match_evidence::jsonb ? 'extraction')`).run(workspaceId, sender.id, previous.pendingReplyIds)
+    const checkpoint = { ...previous, pendingReplyIds: previous.pendingReplyIds?.slice(0, 100), claimMode, scheduledClaimToken: newId(), scheduledLeaseUntil: new Date(Date.now() + leaseMs).toISOString() }
+    await database.prepare("UPDATE mca_funder_replies SET match_evidence=?,updated_at=? WHERE id=? AND workspace_id=?").run(encodeCheckpoint(checkpoint), nowIso(), row.id, workspaceId)
+    return { sender, checkpoint }
+  })
+}
+
+/** One sender/page per workspace, with a shared absolute deadline and durable rotation/resumption. */
 export async function runScheduledReplyIngest(nowIsoValue: string, deadlineMs: number): Promise<{ workspaces: number; created: number; failed: number } | undefined> {
   if (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED !== "true" || process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED !== "true") return undefined
-  // The checkpoint encoder writes compact JSON, so this matches exactly the opted-in checkpoints.
-  const rows = await db().prepare<{ workspace_id: string }>(
-    `SELECT workspace_id FROM mca_funder_replies WHERE provider_message_id = ? AND match_evidence LIKE '%"optedIn":true%'
-     GROUP BY workspace_id ORDER BY MAX(updated_at), workspace_id LIMIT 25`,
-  ).all(CHECKPOINT_PROVIDER_MESSAGE_ID)
+  if (!Number.isFinite(Date.parse(nowIsoValue)) || !Number.isFinite(deadlineMs)) throw new AppError(422, "reply_ingest_options_invalid", "Use a valid polling clock and absolute deadline.")
   const result = { workspaces: 0, created: 0, failed: 0 }
+  if (deadlineMs - Date.now() < SCHEDULED_INGEST_MIN_BUDGET_MS) return result
+  const rows = await withExecutionDeadline(() => db().prepare<{ workspace_id: string }>(
+    `SELECT r.workspace_id FROM mca_funder_replies r JOIN mca_email_senders s ON s.workspace_id=r.workspace_id AND s.id=r.sender_id
+     WHERE r.provider_message_id=? AND r.match_evidence::jsonb->>'optedIn'='true' AND s.purpose='submission' AND s.state='verified'
+     GROUP BY r.workspace_id ORDER BY MAX(r.updated_at),r.workspace_id LIMIT 25`,
+  ).all(CHECKPOINT_PROVIDER_MESSAGE_ID), undefined, Math.min(5000, deadlineMs - Date.now() - 1000))
   for (const { workspace_id: workspaceId } of rows) {
-    // A mailbox scan is not interruptible, so only start one with real budget left.
     if (deadlineMs - Date.now() < SCHEDULED_INGEST_MIN_BUDGET_MS) break
-    result.workspaces += 1
+    const duration = Math.min(SCHEDULED_INGEST_SLICE_MS, deadlineMs - Date.now() - 1000)
+    const sliceDeadline = Date.now() + duration
+    let claim: Awaited<ReturnType<typeof claimReplySender>>
+    let failure: unknown
     try {
-      const ingest = await runReplyIngest({
-        workspaceId, userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [],
-        source: "system", correlationId: `cron-funder-replies:${workspaceId}:${nowIsoValue}`,
-      })
-      result.created += ingest.createdCount
-    } catch {
-      result.failed += 1
-      // A failing workspace may not have saved a checkpoint; touch it so it rotates behind the others.
-      await db().prepare("UPDATE mca_funder_replies SET updated_at = ? WHERE workspace_id = ? AND provider_message_id = ?").run(nowIso(), workspaceId, CHECKPOINT_PROVIDER_MESSAGE_ID)
+      await withExecutionDeadline(async () => {
+        claim = await claimReplySender(workspaceId, duration + 5000)
+        if (!claim) return
+        result.workspaces++
+        const actor: DealActor = { workspaceId, userId: null, membershipId: null, role: "admin", managedMembershipIds: [], activeMembershipIds: [], source: "system", correlationId: `cron-funder-replies:${workspaceId}:${nowIsoValue}` }
+        await (await import("../company-access")).assertCompanyOperational(workspaceId)
+        const checkpoint = await drainReplyExtractions(actor, claim.sender, claim.checkpoint, sliceDeadline)
+        if (sliceDeadline - Date.now() < 2000) return
+        const ingested = await ingestSender(actor, claim.sender, checkpoint, { deadlineMs: sliceDeadline - 1000, messageLimit: 2 })
+        result.created += ingested.ingested.filter(item => item.created).length
+        await drainReplyExtractions(actor, claim.sender, ingested.checkpoint, sliceDeadline)
+      }, undefined, duration)
+    } catch (error) {
+      // Exhausted slices retain cursor/pending extraction intent for the next pass.
+      if (!(error instanceof AppError) || !["execution_expired", "reply_ingest_deadline"].includes(error.code)) { failure = error; result.failed++ }
+    } finally {
+      if (claim) await releaseReplyClaim(claim.sender, claim.checkpoint.scheduledClaimToken!, failure)
     }
   }
   return result

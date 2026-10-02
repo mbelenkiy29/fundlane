@@ -1,6 +1,7 @@
 import "server-only"
 
 import { AppError } from "../errors"
+import { assertExecutionActive, executionSignal } from "../jobs/execution"
 import type { SenderProvider } from "./contracts"
 import type { OAuthCredential } from "./repository"
 
@@ -109,13 +110,14 @@ export function senderAuthorizationUrl(provider: "google" | "microsoft", state: 
 }
 
 async function oauthPost(url: string, body: URLSearchParams): Promise<Record<string, unknown>> {
+  assertExecutionActive()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15_000)
   try {
     const response = await http()(url, {
       method: "POST",
       redirect: "error",
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, ...(executionSignal() ? [executionSignal()!] : [])]),
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body,
     })
@@ -127,6 +129,7 @@ async function oauthPost(url: string, body: URLSearchParams): Promise<Record<str
     }
     return payload
   } catch (error) {
+    assertExecutionActive()
     if (error instanceof AppError) throw error
     throw new AppError(503, "sender_oauth_timeout", "Email sender authorization timed out. Start the connection again.")
   } finally {

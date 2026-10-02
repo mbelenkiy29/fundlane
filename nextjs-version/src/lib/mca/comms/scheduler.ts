@@ -6,6 +6,7 @@ import type { RunCommsJobsResult } from "./contracts"
 import { runCommsJobs } from "./jobs"
 import { WORKFLOW_WEBHOOK_MAX_ATTEMPTS } from "./webhooks"
 import { onboardingEmailEnabled } from "../onboarding/config"
+import { runCommsFollowons } from "./followon-budget"
 
 const emptyFollowups = { attempted: 0, sent: 0, skipped: 0 }
 const emptyDigests = { attempted: 0, sent: 0, skipped: 0 }
@@ -87,6 +88,10 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
     const {runScheduledNotifications}=await import("../notifications/worker")
     result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
   }
-  result.funderReplies = await (await import("../submissions/replies")).runScheduledReplyIngest(nowIsoValue, notificationDeadline)
+  // After dispatch so mailbox I/O cannot consume the delivery budget.
+  if (process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED === "true" && process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED === "true") {
+    Object.assign(result, await runCommsFollowons({ clock: nowIsoValue, deadlineMs: notificationDeadline,
+      replies: (await import("../submissions/replies")).runScheduledReplyIngest }))
+  }
   return result
 }

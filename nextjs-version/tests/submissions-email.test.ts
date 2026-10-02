@@ -19,6 +19,7 @@ import { createSender, updateSender } from "../src/lib/mca/senders/service"
 import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
 import {
   deliverRendered,
+  sendSubmissionEmail,
   parseEmailAttemptRef,
   setEmailDeliveryFetchForTests,
   setSubmissionEmailProductionForTests,
@@ -27,6 +28,7 @@ import {
 import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
 import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
+import { prepareDealSubmission, readDealSubmissionPreview } from "../src/lib/mca/submissions/broker-preview"
 import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
@@ -744,7 +746,15 @@ for (const [provider, url, key, from, replyToKey] of [
       assert.equal(body.from, from)
       assert.equal(body[replyToKey], "broker@example.test")
       assert.deepEqual(body.to, ["alpha@funders.example.test"])
-      assert.equal(parseEmailAttemptRef(attempt?.external_ref)?.messageId, (body.headers as Record<string, string>)["Message-ID"])
+      const ref = parseEmailAttemptRef(attempt?.external_ref)
+      assert.equal(ref?.attemptedMessageId, (body.headers as Record<string, string>)["Message-ID"])
+      assert.equal(ref?.messageId, "")
+      assert.equal(ref?.threadId, "")
+      assert.deepEqual(ref?.references, [])
+      assert.equal(ref?.threadStatus, "unknown")
+      assert.equal(ref?.providerEmailId, "em-1")
+      assert.equal(ref?.provider, provider)
+      assert.equal(ref?.snapshot.fromAddress, provider === "resend" ? "system@resend.example.test" : "system@mail.example.test")
       const files = body.attachments as Array<{ filename: string; content: string }>
       assert.equal(files.length, 1)
       assert.equal(files[0]!.filename, "statement.pdf")
@@ -758,6 +768,49 @@ test("useSend submission send fails closed above ten attachments without calling
     const { job, attempt } = await queueOne(10)
     assert.equal(job.state, "failed")
     assert.equal(attempt?.error_code, "email_attachment_limit_exceeded")
+    assert.equal(calls.length, 0)
+  })
+})
+
+test("broker approval shows the delivered system sender and becomes stale after provider configuration changes", async () => {
+  await withProvider("resend", async (calls) => {
+    const { deal } = await seedDeal()
+    const preview = await prepareDealSubmission(actor(), deal.id, [alphaFunderId])
+    assert.equal(preview.destinations[0]?.email?.from, "system@resend.example.test")
+    assert.equal(preview.destinations[0]?.email?.replyTo, "broker@example.test")
+    for (const [key, value] of [["MCA_RESEND_FROM", "Changed <changed@example.test>"], ["MCA_RESEND_API_KEY", "changed-provider-account"], ["MCA_SYSTEM_EMAIL_PROVIDER", "usesend"]] as const) {
+      const before = process.env[key]
+      process.env[key] = value
+      await assert.rejects(readDealSubmissionPreview(actor(), deal.id, preview.id), { code: "submission_preview_stale" })
+      if (before === undefined) delete process.env[key]; else process.env[key] = before
+    }
+    assert.equal(calls.length, 0)
+  })
+})
+
+test("every malformed successful provider response remains uncertain under the send guard", async () => {
+  for (const status of [200, 201, 202]) {
+    await withProvider("resend", async () => {
+      process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+      assert.equal((await queueOne()).attempt?.error_code, "delivery_uncertain")
+    }, () => Response.json({}, { status }))
+  }
+})
+
+test("approved queued system emails refuse provider, sender, account or transport drift before dispatch", async () => {
+  await withProvider("resend", async (calls) => {
+    const { deal } = await seedDeal()
+    await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [alphaFunderId], confirmationKey: `frozen-system-${dealCounter}`, deferDelivery: true })
+    const [job] = await listJobsForDeal(ids.workspace, deal.id)
+    assert.ok(job?.approvedPackage?.email)
+    assert.equal(job.approvedPackage.email.fromAddress, "system@resend.example.test")
+    assert.equal(job.approvedPackage.email.submissionSenderAddress, "broker@example.test")
+    for (const [key, value] of [["MCA_RESEND_FROM", "Changed <changed@example.test>"], ["MCA_RESEND_API_KEY", "changed-provider-account"], ["MCA_SYSTEM_EMAIL_PROVIDER", "usesend"], ["MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED", "false"], ["MCA_EMAIL_WEBHOOK_URL", "https://new-webhook.example.test/send"]] as const) {
+      const before = process.env[key]
+      process.env[key] = value
+      assert.equal((await sendSubmissionEmail(job, job.approvedPackage.documents)).errorCode, "approved_email_transport_changed")
+      if (before === undefined) delete process.env[key]; else process.env[key] = before
+    }
     assert.equal(calls.length, 0)
   })
 })
