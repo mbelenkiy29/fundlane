@@ -122,6 +122,7 @@ export async function sendSignupRecovery(sessionId:string) {
 export async function activateSignup(token:string, context:{workspaceId:string;userId:string;email:string}, client:StripeBillingClient=getStripeClient()) {
   const row=await readSignupIntent(token)
   if (!row.payment_method_id || row.state==="pending") throw new AppError(409,"signup_card_incomplete","Finish saving your card before activating.")
+  const paymentMethodId=row.payment_method_id
   if (!row.checkout_email || row.checkout_email!==context.email.trim().toLowerCase()) throw new AppError(403,"signup_email_mismatch","Verify and sign in with the same email used at Stripe.")
   const ids=await verifyBillingPrices(client)
   const decision=await withImmediateTransaction(async db=>{
@@ -147,7 +148,7 @@ export async function activateSignup(token:string, context:{workspaceId:string;u
     let mapping=await db.prepare<{stripe_customer_id:string;livemode:number}>("SELECT stripe_customer_id,livemode FROM workspace_stripe_customers WHERE workspace_id=?").get(context.workspaceId)
     if (!mapping) {
       if (Date.parse(current.activation_started_at!) < Date.now()-23*3600000) throw new AppError(503,"signup_activation_review_required","Activation needs support review. No new charge has been created.")
-      const method=await client.paymentMethods.retrieve(row.payment_method_id)
+      const method=await client.paymentMethods.retrieve(paymentMethodId)
       if (method.livemode!==stripeLiveMode() || method.customer) throw new AppError(409,"signup_card_mismatch","The saved card cannot be attached to this company.")
       const address=method.billing_details.address
       const customer=await client.customers.create({email:context.email,...(address?{address:{city:address.city??undefined,country:address.country??undefined,line1:address.line1??undefined,line2:address.line2??undefined,postal_code:address.postal_code??undefined,state:address.state??undefined}}:{}),metadata:{workspace_id:context.workspaceId,fundlane_signup_intent:row.id}}, {idempotencyKey:`fundlane-signup-customer-${row.id}`})
@@ -159,7 +160,7 @@ export async function activateSignup(token:string, context:{workspaceId:string;u
     return mapping
   })
   if (Boolean(mapping.livemode)!==stripeLiveMode()) throw new AppError(409,"signup_mode_mismatch","Customer mode mismatch.")
-  const method=await client.paymentMethods.retrieve(row.payment_method_id)
+  const method=await client.paymentMethods.retrieve(paymentMethodId)
   const methodCustomer=typeof method.customer==="string"?method.customer:method.customer?.id
   if (method.livemode!==stripeLiveMode() || (methodCustomer && methodCustomer!==mapping.stripe_customer_id)) throw new AppError(409,"signup_card_mismatch","The saved card belongs to another customer.")
   if (!methodCustomer) await client.paymentMethods.attach(method.id,{customer:mapping.stripe_customer_id},{idempotencyKey:`fundlane-signup-attach-${row.id}`})
