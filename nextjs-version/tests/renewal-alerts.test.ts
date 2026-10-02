@@ -5,6 +5,8 @@ import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { saveRenewalPolicy } from "../src/lib/mca/renewals/service"
 import { runScheduledCommsJobs } from "../src/lib/mca/comms/scheduler"
+import { notificationInput } from "../src/lib/mca/notifications/service"
+import type { NotificationRow } from "../src/lib/mca/notifications/contracts"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>
@@ -52,11 +54,37 @@ test("flag on: below threshold nothing, crossing threshold yields one broker ale
   process.env.MCA_RENEWAL_ALERTS_ENABLED = "true"
   await runScheduledCommsJobs(early)
   assert.equal((await alerts()).length, 0)
-  await runScheduledCommsJobs(late)
+  const tick = await runScheduledCommsJobs(late)
+  assert.deepEqual(tick.renewalAlerts, { companies: 1, enqueued: 1, failed: 0 }) // ws-nopolicy is never selected
   const first = await alerts()
   assert.equal(first.length, 1)
   assert.deepEqual([first[0].audience, first[0].channel, first[0].recipient_user_id], ["broker", "email", "u-renew"])
   assert.equal(first[0].event_key, "renewal:v1:adv-renew")
   await runScheduledCommsJobs("2026-06-03T00:00:00.000Z")
   assert.equal((await alerts()).length, 1)
+})
+
+test("editing the action after the first alert causes no failure and no duplicate", async () => {
+  await getDatabase().prepare("UPDATE mca_renewal_actions SET message_subject='Edited subject', message_body='Edited body' WHERE source_advance_id='adv-renew'").run()
+  const tick = await runScheduledCommsJobs("2026-06-04T00:00:00.000Z")
+  assert.deepEqual(tick.renewalAlerts, { companies: 1, enqueued: 0, failed: 0 })
+  assert.equal((await alerts()).length, 1)
+})
+
+test("an over-long multiline action text is normalized to the notification limits", async () => {
+  const db = getDatabase(), name = `Long\nName ${"x".repeat(3000)}`
+  await db.prepare(`INSERT INTO deals (id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at)
+    VALUES ('d-long','ws-renew','MCA-L',?,'funded',1,'submission_ready','[]','{}',1,?,?)`).run(name, now, now)
+  await db.prepare(`INSERT INTO deal_assignments (id,workspace_id,deal_id,membership_id,kind,is_primary,assigned_at,assigned_by_user_id) VALUES ('a-long','ws-renew','d-long','m-renew','originator',1,?,'u-renew')`).run(now)
+  await db.prepare(`INSERT INTO mca_offers (id,workspace_id,deal_id,funder_name,source,current_revision_id,created_at,updated_at) VALUES ('o-long','ws-renew','d-long','Northstar Capital','manual','r-long',?,?)`).run(now, now)
+  await db.prepare(`INSERT INTO mca_offer_revisions (id,workspace_id,offer_id,revision_number,state,amount_cents,factor_rate_millionths,term_months,payment_amount_cents,payment_frequency,commission_cents,fee_cents,effective_at,expires_at,created_at)
+    VALUES ('r-long','ws-renew','o-long',1,'funded',4000000,1250000,10,500000,'monthly',0,0,?,?,?)`).run(now, "2026-01-15T00:00:00.000Z", now)
+  await db.prepare(`INSERT INTO mca_advances (id,workspace_id,funding_event_id,deal_id,offer_id,offer_revision_id,funded_at,principal_cents,payback_cents,periodic_payment_cents,payment_count,payment_frequency,calendar_convention,commission_cents,fee_cents,source,calculation_snapshot_json,status,status_version,created_at,updated_at)
+    VALUES ('adv-long','ws-renew','ev-long','d-long','o-long','r-long',?,4000000,5000000,500000,10,'monthly','calendar_days',0,0,'live','{}','active',1,?,?)`).run(now, now, now)
+  const tick = await runScheduledCommsJobs("2026-06-05T00:00:00.000Z")
+  assert.deepEqual(tick.renewalAlerts, { companies: 1, enqueued: 1, failed: 0 })
+  const row = (await db.prepare<NotificationRow>("SELECT * FROM mca_notifications WHERE event_key='renewal:v1:adv-long'").get())!
+  const { payload } = notificationInput(row)
+  assert.ok(payload!.title.length <= 200 && !/[\r\n]/.test(payload!.title)); assert.ok(payload!.message.length <= 2000)
+  assert.equal((await alerts()).length, 2)
 })

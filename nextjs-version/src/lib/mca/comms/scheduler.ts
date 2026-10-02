@@ -83,11 +83,11 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
       ...(result.onboardingEmails ? { onboardingEmails: result.onboardingEmails } : {}),
     }
   }
-  const { renewalAlertsEnabled, runRenewalAlerts } = await import("../renewals/alerts")
-  if (renewalAlertsEnabled()) result.renewalAlerts = await runRenewalAlerts(nowIsoValue)
   if(process.env.MCA_NOTIFICATION_RUNTIME === "enabled") {
     const {runScheduledNotifications}=await import("../notifications/worker")
     result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
   }
+  // After dispatch so it cannot eat the delivery budget; new alerts go out on the next tick.
+  if (process.env.MCA_RENEWAL_ALERTS_ENABLED === "true") result.renewalAlerts = await (await import("../renewals/alerts")).runRenewalAlerts(nowIsoValue, notificationDeadline)
   return result
 }
