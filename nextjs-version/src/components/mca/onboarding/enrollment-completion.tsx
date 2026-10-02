@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react"
 import { enrollmentContinuation, type EnrollmentContinuation } from "@/lib/mca/auth-navigation"
+import { BILLING_CATALOG } from "@/lib/mca/billing-catalog"
+import { formatBillingMoney } from "@/lib/mca/billing-display"
 import { requestJson } from "@/lib/mca/client"
 import type { EnrollmentPublicStatus } from "@/lib/mca/onboarding/claim"
 import { EnrollmentAuth } from "./enrollment-auth"
@@ -9,6 +11,7 @@ import { EnrollmentAuth } from "./enrollment-auth"
 const allowedDestinations = new Set(["/dashboard", "/settings/business", "/settings/billing"])
 const pollLimit = 12, pollDelay = 5000
 const trialDate = (value: string) => new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value))
+const firstUserMonthlyPrice = formatBillingMoney(BILLING_CATALOG.base.unitAmountCents, BILLING_CATALOG.currency).replace(/\.00$/, "")
 function errorCode(error: unknown): string {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : ""
 }
@@ -99,7 +102,7 @@ export function EnrollmentCompletion({ continuation, initialStatus, supportEmail
     {status?.state === "claimed" && <p>Your workspace is ready. Continue to your CRM or manage billing.</p>}
     {status?.state === "recovery_required" && <p role="status">This purchase needs billing or account review. Manage or cancel billing if available, or contact support. Do not start another purchase.</p>}
     {status?.state === "unavailable" && <p>Use the correct account to recover this purchase. The link alone does not grant access.</p>}
-    {validTrialDate && <p>Your original trial ends <time dateTime={validTrialDate}>{trialDate(validTrialDate)} UTC</time>. The subscription automatically converts to $399/month unless canceled before then; applicable tax follows your Checkout terms.</p>}
+    {validTrialDate && <p>Your original trial ends <time dateTime={validTrialDate}>{trialDate(validTrialDate)} UTC</time>. The subscription automatically converts to {firstUserMonthlyPrice}/month {BILLING_CATALOG.currency.toUpperCase()}, including the first user, unless canceled before then; applicable tax follows your Checkout terms.</p>}
     {needsAuth && <EnrollmentAuth continuation={continuation} />}
     {(wrongAccount || needsAuth) && <button className="inline-flex items-center justify-center rounded-md border px-4 py-3 text-sm font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => void run("sign-out")}>Sign out and use another account</button>}
     {status?.nextAction === "claim" && !needsAuth && !wrongAccount && <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => run("claim")}>{busy ? "Finishing secure access…" : "Enter your CRM"}</button>}
