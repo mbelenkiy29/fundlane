@@ -10,6 +10,8 @@ import { onboardingEmailEnabled } from "../onboarding/config"
 const emptyFollowups = { attempted: 0, sent: 0, skipped: 0 }
 const emptyDigests = { attempted: 0, sent: 0, skipped: 0 }
 const emptyWebhooks = { attempted: 0, delivered: 0, failed: 0 }
+// Allow 15s discovery, the 60s receipt-entry threshold, and 15s overhead after onboarding.
+const notificationReservationMs = 90_000
 
 function systemActor(workspaceId: string, clock: string): DealActor {
   return {
@@ -45,7 +47,7 @@ export interface ScheduledCommsJobsResult {
 export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<ScheduledCommsJobsResult> {
   const notificationDeadline=Date.now()+230_000
   const onboardingEmails = onboardingEmailEnabled()
-    ? await (await import("../onboarding/email-worker")).runOnboardingEmails({ clock: nowIsoValue, limit: 25, deadlineMs: notificationDeadline })
+    ? await (await import("../onboarding/email-worker")).runOnboardingEmails({ clock: nowIsoValue, limit: 25, deadlineMs: notificationDeadline - notificationReservationMs })
     : undefined
   await import("./digest")
   await import("./webhooks")

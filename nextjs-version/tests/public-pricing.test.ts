@@ -109,7 +109,7 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   }
   assert.match(result.pricing, new RegExp(`${TRIAL_DAYS}-day free trial`))
   assert.match(result.pricing, /A card is required to start/)
-  assert.match(result.pricing, /automatically converts to \$399 per month unless you cancel before the trial ends/)
+  assert.match(result.pricing, /automatically converts at the base monthly first-user price of \$399 per month unless you cancel before the trial ends; applicable Checkout discounts and tax follow your Checkout terms/)
   assert.match(result.pricing, /Sales tax is added where applicable/)
   assert.match(result.pricing, /You choose how many seats to buy/)
   assert.match(result.pricing, /Removing a user frees their seat/)

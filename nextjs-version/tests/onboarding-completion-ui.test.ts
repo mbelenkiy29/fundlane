@@ -14,9 +14,73 @@ test("completion renders authoritative trial date and explicit claim without SSR
   assert.match(result.html, /Enter your CRM/)
   assert.match(result.html, /Oct 15, 2026/)
   assert.match(result.html, /UTC/)
+  assert.match(result.html, /base monthly first-user price of \$399\/month USD/)
+  assert.match(result.html, /applicable Checkout discounts and tax/)
   assert.match(result.html, /Manage or cancel billing/)
   assert.doesNotMatch(result.html, /company name|name="seats"|Invite your employees/i)
   assert.deepEqual(result.requests, [])
+})
+
+for (const [destination, returnedDestination] of [["business", "/settings/business"], ["crm", "/dashboard"], ["billing", "/settings/billing"], ["business", "/settings/billing"]]) {
+  test(`claimed Continue replays once before selecting A and navigating ${destination} to ${returnedDestination}`, () => {
+    const continuation = { ...locator, destination }
+    const result = runClient(`${interactionSetup}
+      let activeWorkspace='B',resolveClaim;const pending=new Promise(resolve=>{resolveClaim=resolve});
+      const originalB={basics:'Company B',customer:'cus_B',subscription:'sub_B'};
+      const companies={A:{basics:'Company A',customer:'cus_A',subscription:'sub_A'},B:{...originalB}};
+      response=async(path)=>{if(path.endsWith('/claim')){await pending;activeWorkspace='A';return {workspaceId:'A',destination:${JSON.stringify(returnedDestination)}}}return {state:'claimed',nextAction:'continue',destination:'/settings/business'};};
+      ${load}
+      (async()=>{const props={continuation:${JSON.stringify(continuation)},initialStatus:{state:'claimed',nextAction:'continue',destination:'/settings/business'}};
+        const view=render(EnrollmentCompletion,props);await Promise.resolve();
+        const before={activeWorkspace,calls:[...calls],navigations:[...navigations]};
+        const onClick=button(view.tree,'Continue to your workspace').props.onClick;
+        const first=onClick(),second=onClick();await Promise.resolve();
+        const held={activeWorkspace,calls:[...calls],navigations:[...navigations],html:render(EnrollmentCompletion,props).markup};
+        resolveClaim();await Promise.all([first,second]);
+        console.log(JSON.stringify({before,held,activeWorkspace,calls,navigations,companies,originalB}));
+      })().catch(error=>{console.error(error);process.exitCode=1});
+    `)
+    assert.equal(result.before.activeWorkspace, "B")
+    assert.equal(result.before.calls.length, 1)
+    assert.match(result.before.calls[0].path, /^\/api\/enrollment\/status\?/)
+    assert.deepEqual(result.before.navigations, [])
+    assert.equal(result.held.activeWorkspace, "B")
+    assert.deepEqual(result.held.navigations, [], "navigation waits for explicit authorized replay")
+    assert.match(result.held.html, /<button[^>]*disabled/)
+    assert.deepEqual(result.calls.filter((call: {path:string}) => call.path === "/api/enrollment/claim"), [{path:"/api/enrollment/claim",input:continuation}])
+    assert.equal(result.activeWorkspace, "A")
+    assert.deepEqual(result.navigations, [returnedDestination], "only the replay destination is trusted")
+    assert.deepEqual(result.companies.B, result.originalB)
+  })
+}
+
+for (const code of ["membership_inactive", "totp_required", "totp_enrollment_required", "authentication_required", "enrollment_identity_mismatch"]) {
+  test(`claimed Continue handles ${code} without selecting or opening the workspace`, () => {
+    const result = runClient(`${interactionSetup}
+      response=async(path)=>{if(path.endsWith('/claim')){const error=new Error('RAW provider data');error.code=${JSON.stringify(code)};throw error}return {state:'claimed',nextAction:'continue',destination:'/settings/business'};};
+      ${load}
+      (async()=>{const props={continuation:${JSON.stringify(locator)},initialStatus:{state:'claimed',nextAction:'continue',destination:'/settings/business'}};const view=render(EnrollmentCompletion,props);await button(view.tree,'Continue to your workspace').props.onClick();console.log(JSON.stringify({calls,navigations,html:render(EnrollmentCompletion,props).markup}));})().catch(error=>{console.error(error);process.exitCode=1});
+    `)
+    assert.equal(result.calls.filter((call: {path:string}) => call.path === "/api/enrollment/claim").length, 1)
+    if (code.startsWith("totp_")) {
+      assert.match(result.navigations[0], /^\/account-security\?/)
+      assert.equal(new URL(result.navigations[0], "https://fundlane.test").searchParams.get("next"), "/enrollment?enrollment=11111111-1111-4111-8111-111111111111&destination=business&generation=3")
+    } else {
+      assert.deepEqual(result.navigations, [])
+      assert.match(result.html, /role="alert"/)
+    }
+    assert.doesNotMatch(result.html, /RAW provider/)
+  })
+}
+
+test("claimed Continue rejects a noncanonical replay destination", () => {
+  const result = runClient(`${interactionSetup}
+    response=async(path)=>path.endsWith('/claim')?{workspaceId:'A',destination:'https://foreign.example.test'}:{state:'claimed',nextAction:'continue',destination:'/settings/business'};
+    ${load}
+    (async()=>{const props={continuation:${JSON.stringify(locator)},initialStatus:{state:'claimed',nextAction:'continue',destination:'/settings/business'}};await button(render(EnrollmentCompletion,props).tree,'Continue to your workspace').props.onClick();console.log(JSON.stringify({navigations,html:render(EnrollmentCompletion,props).markup}));})().catch(error=>{console.error(error);process.exitCode=1});
+  `)
+  assert.deepEqual(result.navigations, [])
+  assert.match(result.html, /role="alert"/)
 })
 
 test("completion pending and recovery never offer another Checkout start", () => {

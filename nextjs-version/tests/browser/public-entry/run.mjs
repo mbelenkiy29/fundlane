@@ -4,7 +4,7 @@ import http from "node:http"
 import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 const { chromium } = require("/Users/mbele/.npm-global/lib/node_modules/openclaw/node_modules/playwright-core")
-const directory = "/tmp/task6-public-entry-browser"
+const directory = process.env.MCA_PUBLIC_BROWSER_DIRECTORY ?? "/tmp/task6-public-entry-browser"
 const server = http.createServer(async (request, response) => {
   const pathname = new URL(request.url, "http://localhost").pathname
   const file = pathname === "/app.js" ? "app.js" : pathname === "/app.css" ? "app.css" : "index.html"
@@ -19,15 +19,16 @@ const id = "11111111-1111-4111-8111-111111111111"
 const canonical = `/enrollment?enrollment=${id}&destination=business&generation=3`
 const readiness = { dismissed: false, dismissedAt: null, completedCount: 0, totalCount: 0, allComplete: false, nextStep: null, steps: [], readiness: [{ id:"business_details",title:"Business details",phase:"needs_setup",detail:"Optional legal name and EIN. Keep using the CRM.",action:"Open business details",href:"/settings/business",helpHref:"/help/set-up-your-company" }] }
 
-async function fixture(screen, scenario = "ready", viewport = { width: 1440, height: 900 }) {
+async function fixture(screen, scenario = "ready", viewport = { width: 1440, height: 900 }, destination = "business") {
   const context = await browser.newContext({ viewport })
+  if (scenario.startsWith("claimed-")) await context.addCookies([{ name:"mca_workspace",value:"B",url:origin,httpOnly:true,sameSite:"Lax" }])
   if (scenario === "unsupported") await context.addInitScript(() => { Object.defineProperty(navigator, "locks", { configurable: true, value: undefined }) })
   const calls = [], navigations = []
-  const state = { scenario, statusCalls: 0, claimCalls: 0, sessionCalls: 0, startCalls: 0, holdStart: null, releaseStart: null, holdClaim: null, releaseClaim: null }
+  const state = { scenario, statusCalls: 0, claimCalls: 0, sessionCalls: 0, startCalls: 0, holdStart: null, releaseStart: null, holdClaim: null, releaseClaim: null, activeWorkspace:"B", companyB:{basics:"Company B",customer:"cus_B",subscription:"sub_B"} }
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url())
     if (url.origin !== origin) { navigations.push(url.toString()); return route.fulfill({ status: 200, contentType: "text/html", body: "Synthetic external destination. No provider request." }) }
-    if (["/dashboard", "/settings/business", "/account-security"].includes(url.pathname)) { navigations.push(url.pathname + url.search); return route.fulfill({status:200,contentType:"text/html",body:"Synthetic protected destination"}) }
+    if (["/dashboard", "/settings/business", "/settings/billing", "/account-security"].includes(url.pathname)) { navigations.push(url.pathname + url.search); const selected=request.headers().cookie?.match(/mca_workspace=([^;]+)/)?.[1]??"none";return route.fulfill({status:200,contentType:"text/html",body:`Synthetic protected destination; selected company ${selected}`}) }
     if (!url.pathname.startsWith("/api/")) return route.continue()
     const body = request.postData() ? JSON.parse(request.postData()) : null
     calls.push({ path:url.pathname, search:url.search, method:request.method(), body, cookie:request.headers().cookie??"" })
@@ -39,10 +40,20 @@ async function fixture(screen, scenario = "ready", viewport = { width: 1440, hei
       state.statusCalls++
       if(state.scenario==="stale")return error("enrollment_link_superseded",409)
       if(state.scenario==="outage")return error("enrollment_disabled",503)
-      const stateName = ["auth","unknown","expired"].includes(state.scenario) ? "unavailable" : state.scenario === "pending" ? "pending" : state.scenario === "recover" ? "recovery_required" : state.scenario === "claimed" ? "claimed" : "ready"
+      const stateName = ["auth","unknown","expired"].includes(state.scenario) ? "unavailable" : state.scenario === "pending" ? "pending" : state.scenario === "recover" ? "recovery_required" : state.scenario.startsWith("claimed") ? "claimed" : "ready"
       return respond({state:stateName,nextAction:stateName==="unavailable"?"authenticate":stateName==="pending"?"wait":stateName==="recovery_required"?"recover":stateName==="claimed"?"continue":"claim",...(stateName==="unavailable"?{}:{trialEndsAt:"2026-10-15T18:30:00Z",destination:"/settings/business"})})
     }
-    if(url.pathname==="/api/enrollment/claim") { state.claimCalls++; if(state.holdClaim)await state.holdClaim; if(state.scenario==="mfa")return error("totp_required");if(state.scenario==="mfa-enroll")return error("totp_enrollment_required");if(state.scenario==="wrong")return error("enrollment_identity_mismatch");if(state.scenario==="unauth")return error("authentication_required",401);state.scenario="claimed";return respond({workspaceId:id,destination:"/settings/business"}) }
+    if(url.pathname==="/api/enrollment/claim") {
+      state.claimCalls++; if(state.holdClaim)await state.holdClaim
+      if(state.scenario==="mfa"||state.scenario==="claimed-mfa")return error("totp_required")
+      if(state.scenario==="mfa-enroll"||state.scenario==="claimed-mfa-enroll")return error("totp_enrollment_required")
+      if(state.scenario==="claimed-revoked")return error("membership_inactive")
+      if(state.scenario==="wrong")return error("enrollment_identity_mismatch")
+      if(state.scenario==="unauth")return error("authentication_required",401)
+      const selectedDestination=state.scenario==="claimed-paused"||body.destination==="billing"?"/settings/billing":body.destination==="crm"?"/dashboard":"/settings/business"
+      state.activeWorkspace="A";state.scenario="claimed"
+      return respond({workspaceId:"A",destination:selectedDestination},200,{"set-cookie":"mca_workspace=A; HttpOnly; SameSite=Lax; Path=/"})
+    }
     if(url.pathname==="/api/enrollment/billing")return respond({url:"https://billing.stripe.test/synthetic"})
     if(url.pathname==="/api/enrollment/auth")return respond({success:true,challengeId:"22222222-2222-4222-8222-222222222222"})
     if(url.pathname==="/api/enrollment/verify") {if(state.scenario==="expired")return error("enrollment_challenge_invalid",400);state.scenario="ready";return respond({success:true,destination:canonical})}
@@ -58,7 +69,7 @@ async function fixture(screen, scenario = "ready", viewport = { width: 1440, hei
   page.setDefaultTimeout(5000)
   page.on("pageerror", error => { browserErrors.push(error.message); console.error(`BROWSER ERROR ${error.message}`) })
   if (scenario === "pending") await page.clock.install()
-  await page.goto(`${origin}/?screen=${screen}&scenario=${scenario}&next=${encodeURIComponent(canonical)}`, {waitUntil:"networkidle"})
+  await page.goto(`${origin}/?screen=${screen}&scenario=${scenario}&destination=${destination}&next=${encodeURIComponent(canonical)}`, {waitUntil:"networkidle"})
   return {page,context,calls,navigations,state}
 }
 async function check(name, action) {
@@ -67,6 +78,31 @@ async function check(name, action) {
   catch(error) { results.push({name,status:"FAIL",error:error.message}); console.error(`FAIL ${name}: ${error.message}`) }
 }
 try {
+  for (const [scenario,destination,path] of [["claimed-business","business","/settings/business"],["claimed-crm","crm","/dashboard"],["claimed-billing","billing","/settings/billing"],["claimed-paused","business","/settings/billing"]]) await check(`${scenario} Continue explicitly selects A before navigation while B stays unchanged`,async()=>{
+    const f=await fixture("enrollment",scenario,{width:390,height:844},destination),originalB={...f.state.companyB}
+    assert.equal((await f.context.cookies(origin)).find(c=>c.name==="mca_workspace")?.value,"B")
+    assert.equal(f.state.claimCalls,0);assert.equal(f.navigations.length,0)
+    f.state.holdClaim=new Promise(resolve=>{f.state.releaseClaim=resolve})
+    await f.page.getByRole("button",{name:"Continue to your workspace"}).evaluate(button=>{button.click();button.click()})
+    await f.page.waitForTimeout(50)
+    assert.equal(f.state.claimCalls,1,"claimed Continue must explicitly replay before opening the active company")
+    assert.equal(await f.page.getByRole("button",{name:"Continue to your workspace"}).isDisabled(),true)
+    assert.equal(f.navigations.length,0);assert.equal(f.state.activeWorkspace,"B")
+    f.state.releaseClaim();await f.page.waitForURL(`${origin}${path}`)
+    assert.equal(f.state.claimCalls,1);assert.deepEqual(f.calls.find(c=>c.path.endsWith('/claim')).body,{enrollmentId:id,destination,generation:3})
+    assert.match(await f.page.locator('body').innerText(),/selected company A/)
+    assert.equal((await f.context.cookies(origin)).find(c=>c.name==="mca_workspace")?.value,"A")
+    assert.deepEqual(f.state.companyB,originalB);await f.context.close()
+  })
+  for (const scenario of ["claimed-revoked","claimed-mfa","claimed-mfa-enroll"]) await check(`${scenario} Continue preserves B and cannot open protected company destinations`,async()=>{
+    const f=await fixture("enrollment",scenario),originalB={...f.state.companyB}
+    await f.page.getByRole("button",{name:"Continue to your workspace"}).click()
+    if(scenario==="claimed-revoked"){await f.page.getByRole("alert").waitFor();assert.equal(f.navigations.length,0);assert.equal(await f.page.locator(':focus').getAttribute('role'),"alert")}
+    else {await f.page.waitForURL(/account-security/);const url=new URL(f.page.url());assert.equal(url.searchParams.get('next'),canonical);assert.equal(url.searchParams.get(scenario==="claimed-mfa"?'challenge':'required'),"1")}
+    assert.equal(f.state.claimCalls,1);assert.equal(f.state.activeWorkspace,"B")
+    assert.equal((await f.context.cookies(origin)).find(c=>c.name==="mca_workspace")?.value,"B")
+    assert.deepEqual(f.state.companyB,originalB);assert.doesNotMatch(await f.page.locator('body').innerText(),/RAW synthetic/);await f.context.close()
+  })
   await check("Login stages locally, focuses password, and clears stale error on Change email",async()=>{
     const f=await fixture("login");await f.page.getByLabel("Work email").fill("unknown@example.test");await f.page.getByRole("button",{name:"Next",exact:true}).click();assert.equal(await f.page.locator(":focus").getAttribute("name"),"password");assert.equal(f.calls.length,0);await f.page.getByLabel("Password",{exact:true}).fill("Synthetic unused password");await f.page.getByRole("button",{name:"Login",exact:true}).click();await f.page.getByRole("alert").waitFor();assert.equal(await f.page.locator(":focus").getAttribute("role"),"alert");await f.page.getByRole("button",{name:"Change email"}).click();assert.equal(await f.page.getByRole("alert").count(),0);assert.equal(await f.page.locator(":focus").getAttribute("name"),"email");await f.context.close()
   })
