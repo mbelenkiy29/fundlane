@@ -8,7 +8,6 @@ import Payments from "../../../src/app/platform/payments/page"
 import Audit from "../../../src/app/platform/audit/page"
 import Monitoring from "../../../src/app/platform/monitoring/page"
 import Sms from "../../../src/app/platform/sms/page"
-import Demo from "../../../src/app/platform/demo-requests/page"
 import Roadmap from "../../../src/app/platform/roadmap/page"
 import Loading from "../../../src/app/platform/loading"
 import ErrorPage from "../../../src/app/platform/error"
@@ -24,7 +23,6 @@ async function render() {
     "/platform/audit": () => Audit({ searchParams }),
     "/platform/monitoring": () => Monitoring(),
     "/platform/sms": () => Sms({ searchParams }),
-    "/platform/demo-requests": () => Demo(),
     "/platform/roadmap": () => Roadmap(),
   }
   const fixture = url.searchParams.get("fixture")

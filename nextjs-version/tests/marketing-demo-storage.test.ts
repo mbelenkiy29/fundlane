@@ -7,7 +7,6 @@ import { readFile } from "node:fs/promises"
 import { decryptSensitive } from "../src/lib/mca/crypto"
 import { closeDatabaseForTests } from "../src/lib/mca/db"
 import { deliverStoredDemoSubmission, hasUnnotifiedDemoSubmissions, isDemoSubmissionTracked, isDemoStorageAvailable, listDemoSubmissions, notifyDemoSubmission, retryUnsentDemoSubmissions, storeDemoSubmission } from "../src/lib/marketing/demo-storage"
-import { createDemoHandler } from "../src/lib/marketing/demo"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 test("demo submissions persist once and reject conflicting request IDs", async () => {
@@ -67,14 +66,9 @@ test("pre-migration submissions keep best-effort email and remain visible", asyn
   try {
     await db.query("ALTER TABLE marketing_demo_submissions DROP COLUMN notified_at, DROP COLUMN notification_error, DROP COLUMN notification_attempts, DROP COLUMN notification_lease_until, DROP COLUMN notification_tracking_enabled")
     const id = randomUUID()
-    const contact = { requestId: id, name: "Alex", email: "alex@example.test", brokerage: "Synthetic", teamSize: "1", message: "Call", website: "" }
-    const handler = createDemoHandler({
-      configuration: () => ({ enabled: true, databaseEnabled: true, privacyUrl: "https://fundlane.io/privacy", webhookUrl: null, token: null }),
-      rateLimit: async () => {},
-      metric: () => {},
-    })
-    const request = new Request("https://fundlane.io/api/marketing/demo", { method: "POST", headers: { "content-type": "application/json", origin: "https://fundlane.io" }, body: JSON.stringify(contact) })
-    assert.equal((await handler(request)).status, 202)
+    const contact = { name: "Alex", email: "alex@example.test", brokerage: "Synthetic", teamSize: "1" as const, message: "Call" }
+    assert.equal(await storeDemoSubmission(id, contact), true)
+    assert.equal(await notifyDemoSubmission(id, contact), true)
     assert.equal(await isDemoSubmissionTracked(id), false)
     assert.equal(sends, 1)
     assert.equal((await listDemoSubmissions())[0].notification_status, "unknown")

@@ -16,7 +16,6 @@ export const detail = { company, access: company.access, owner: { email: 'owner@
 export const audit = { id: 'audit-a', created_at: stamp, workspace_id: companyId, company_name: company.name, actor_user_id: 'operator-a', action: 'billing.access_updated', resource_type: 'workspace', resource_id: companyId, reason: 'Synthetic access review' }
 export const adminAudit = { id: 'audit-admin-a', created_at: stamp, actor_email: actor.email, actor_user_id: 'operator-a', action: 'super_admin.first_access', target_workspace_id: companyId, target_type: 'workspace', target_id: companyId, reason: 'Synthetic review' }
 export const roadmap = [{ id: 'roadmap-a', title: 'Better reporting', summary: 'Synthetic product update for browser verification.', status: 'in_progress', sort_order: 1, published: false, updated_at: stamp }]
-export const demo = { request_id: 'demo-a', created_at: stamp, contact: { brokerage: 'Synthetic Brokerage', name: 'Demo Contact', email: 'demo@example.test', teamSize: '6–10', message: 'Please show our team the platform.' }, notification_status: 'unsent', notification_attempts: 1 }
 export const queueCompany = { workspaceId: companyId, name: company.name, ownerEmail: 'owner@example.test', occupiedSeats: 6, purchasedSeats: 8, subscriptionStatus: 'active', accessState: 'active', smsReviewState: 'pending', providerState: 'unknown', observedAt: null, blockedReasons: ['provider_observation_unverified'] }
 export const queueSms = { workspaceId: companyId, companyName: company.name, reviewState: 'pending', submittedAt: stamp, registrationSummary: [], latestOperation: null, blockedReasons: ['provider_observation_unverified'] }
 export const smsCompany = { optOutReady: false, workspaceId: companyId, name: company.name, reviewState: 'pending', registrationState: 'unknown', emailVerified: true, suspended: false, numberLimit: 2, monthlyLimitCents: 10000, registrationLimitCents: 2000, profile: { legalName: 'Synthetic Capital Partners LLC', purpose: 'Requested application status updates only.', consentEvidence: 'Synthetic consent evidence' } }
@@ -35,8 +34,6 @@ export const platformCompany = async () => detail
 export const platformPayments = async query => ({ snapshotAt:stamp,billingObservations:[billingObservation],observationsTruncated:false,totals, invoices: query.q === 'no-match' ? [] : [invoice], payments: [payment], adjustments: [adjustment] })
 export const platformAudit = async () => [audit]
 export const listSuperAdminActions = async () => [adminAudit]
-export const listDemoSubmissions = async () => [demo]
-export const hasUnnotifiedDemoSubmissions = async () => true
 export const listRoadmapItems = async () => roadmap
 
 export class AppError extends Error {}
