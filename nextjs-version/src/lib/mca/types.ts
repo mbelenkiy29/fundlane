@@ -28,6 +28,7 @@ export interface FeatureFlags {
   reports: boolean;
   payments: boolean;
   integrations: boolean;
+  dealAgent: boolean;
 }
 
 export interface PageVisibility {

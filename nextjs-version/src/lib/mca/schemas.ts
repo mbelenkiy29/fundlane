@@ -39,7 +39,7 @@ export const membershipPatchSchema = z.object({
   senderAssociation: z.string().trim().max(160).nullable().optional(),
 }).refine((value) => Object.keys(value).length > 0, "Provide at least one change.");
 
-const featureFlags = z.object({ reports: z.boolean(), payments: z.boolean(), integrations: z.boolean() }).partial();
+const featureFlags = z.object({ reports: z.boolean(), payments: z.boolean(), integrations: z.boolean(), dealAgent: z.boolean() }).partial();
 const pageVisibility = z.object({
   dashboard: z.boolean(), deals: z.boolean(), users: z.boolean(), reports: z.boolean(),
   payments: z.boolean(), workspace: z.boolean(), integrations: z.boolean(),
