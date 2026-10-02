@@ -1,6 +1,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
+import { withExecutionDeadline } from "../src/lib/mca/jobs/execution";
 
 let fixture: Awaited<ReturnType<typeof createPostgresTestDatabase>>;
 let originalDatabaseUrl: string | undefined;
@@ -121,4 +122,61 @@ test("transactions keep nested operations on one client, see their writes, and r
   });
   assert.equal((await getDatabase().queryOne<{ value: string }>("SELECT value FROM transaction_probe WHERE id = ?", ["committed"]))?.value, "kept");
   assert.equal((await getDatabase().queryOne<{ count: number }>("SELECT count(*)::int count FROM transaction_probe WHERE id LIKE 'concurrent-%'"))?.count, 8);
+});
+
+test("deadline queries cancel the server backend; pg_sleep is gone from pg_stat_activity", { timeout: 20000 }, async () => {
+  const { AppError } = await import("../src/lib/mca/errors");
+  const { getDatabase, withTransaction } = await import("../src/lib/mca/db");
+  await withExecutionDeadline(async () => {
+    const recursive = await getDatabase().queryOne<{ n: number }>("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<3) SELECT max(n)::int n FROM t");
+    assert.equal(recursive?.n, 3);
+  }, undefined, 10_000);
+  const started = Date.now();
+  await assert.rejects(
+    withExecutionDeadline(() => getDatabase().query("SELECT pg_sleep(4)"), undefined, 300),
+    (error: unknown) => error instanceof AppError && error.code === "execution_expired",
+  );
+  assert.ok(Date.now() - started < 1_500, "the client must return near the 300ms deadline, not after pg_sleep(4)");
+  const leftoverSql = `SELECT count(*)::int AS n FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND pid <> pg_backend_pid()
+      AND query ILIKE '%pg_sleep(4)%'
+      AND state <> 'idle'`;
+  let leftover = await getDatabase().queryOne<{ n: number }>(leftoverSql);
+  const until = Date.now() + 1_000;
+  while ((leftover?.n ?? 0) > 0 && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    leftover = await getDatabase().queryOne<{ n: number }>(leftoverSql);
+  }
+  assert.equal(leftover?.n, 0, "SET LOCAL statement_timeout must cancel the server query, not only the JS waiter");
+  const leaked = await getDatabase().queryOne<{ statement_timeout: string }>("SHOW statement_timeout");
+  assert.ok(["0", "0ms", "0s"].includes(leaked?.statement_timeout ?? ""));
+  await withTransaction(async (tx) => {
+    const first = await tx.queryOne<{ pid: number }>("SELECT pg_backend_pid() pid");
+    const second = await getDatabase().queryOne<{ pid: number }>("SELECT pg_backend_pid() pid");
+    assert.equal(first?.pid, second?.pid);
+  });
+});
+
+test("blocked deadline UPDATE is aborted server-side and does not apply after the lock is released", { timeout: 20000 }, async () => {
+  const { AppError } = await import("../src/lib/mca/errors");
+  const { Client } = await import("pg");
+  const { getDatabase } = await import("../src/lib/mca/db");
+  await getDatabase().execute("CREATE TABLE IF NOT EXISTS deadline_lock_probe (id text PRIMARY KEY, value text NOT NULL)");
+  await getDatabase().execute("INSERT INTO deadline_lock_probe (id, value) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET value = excluded.value", ["row", "original"]);
+  const blocker = new Client({ connectionString: fixture.databaseUrl });
+  await blocker.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM deadline_lock_probe WHERE id=$1 FOR UPDATE", ["row"]);
+    await assert.rejects(
+      withExecutionDeadline(() => getDatabase().execute("UPDATE deadline_lock_probe SET value = ? WHERE id = ?", ["mutated", "row"]), undefined, 400),
+      (error: unknown) => error instanceof AppError && error.code === "execution_expired",
+    );
+  } finally {
+    await blocker.query("ROLLBACK");
+    await blocker.end();
+  }
+  const row = await getDatabase().queryOne<{ value: string }>("SELECT value FROM deadline_lock_probe WHERE id = ?", ["row"]);
+  assert.equal(row?.value, "original");
 });
