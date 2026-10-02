@@ -35,3 +35,48 @@ export type EnrollmentOperationsPage = Page<EnrollmentOperationsRow> & {
   snapshotAt: string
   runtime: { enabled: boolean; creationEnabled: boolean; emailEnabled: boolean }
 }
+
+/** Exact sanitized projection of the protected enrollment detail route. */
+export type EnrollmentOperatorAction = "verify_target" | "approve_identity" | "record_email_evidence" | "reissue_emails"
+export interface EnrollmentOperatorEmail {
+  id: string
+  purpose: OnboardingEmailPurpose
+  generation: number
+  state: OnboardingEmailState
+  attempts: number
+  createdAt: string
+  updatedAt: string
+  ageSeconds: number
+  nextAttemptAt: string
+  errorCode: string | null
+  provider: "usesend" | "resend" | "webhook" | null
+  providerConfigurationId: string | null
+  providerIdentityVerified: false
+  providerMessageId: string | null
+  supersededByGeneration: number | null
+  canRecordEvidence: boolean
+  receipts: Array<{ id: string; state: string; providerMessageId: string | null; evidenceType: string; occurredAt: string; observedAt: string }>
+}
+export interface EnrollmentOperatorTarget {
+  id: string
+  state: string
+  provider_user_id: string | null
+  verified_at: string | null
+}
+export interface EnrollmentOperatorDetail {
+  enrollmentId: string
+  revision: number
+  claimState: string
+  recoveryState: string
+  emailGeneration: number
+  billingState: string
+  trialEndsAt: string | null
+  providerAccountId: string
+  checkoutSessionId: string | null
+  subscriptionId: string | null
+  livemode: boolean
+  runtime: { runtimeEnabled: boolean; creationEnabled: boolean; emailDispatchEnabled: boolean }
+  availableActions: EnrollmentOperatorAction[]
+  targetVerification: EnrollmentOperatorTarget[]
+  emails: EnrollmentOperatorEmail[]
+}

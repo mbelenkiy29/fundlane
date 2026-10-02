@@ -1,6 +1,6 @@
-# auth-refractor acceptance evidence — Task 7 core draft
+# auth-refractor acceptance evidence — local Task 7 checks
 
-This maps the approved A01–A20 criteria to concrete local regression anchors. It is not final-head, browser, hosted, release or delivery acceptance. Task 7 recovery/evidence action UI, Task 6 final public/signup integration, independent whole-branch review and aggregate checks remain separate gates. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
+This maps the approved A01–A20 criteria to concrete local regression anchors. It is not final-head, hosted, release or delivery acceptance. Task 7's operator consumers have focused synthetic browser evidence; controller integration, independent whole-branch review and aggregate checks remain separate gates. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
 
 | Criterion | Concrete regression anchor | Core evidence / remaining acceptance |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ This maps the approved A01–A20 criteria to concrete local regression anchors. 
 | A09 | `onboarding-checkout.test.ts`: known ineligibility; `onboarding-reconciliation.test.ts`: exact compensation, ambiguous acceptance and conversion race | Existing reviewed no-silent-paid and compensation rules; controlled cancellation proof pending. |
 | A10 | `onboarding-claim.test.ts`: “faults at tenant boundaries roll back the entire claim”; final association/audit/revocation failures and competing claimants | Existing fault tests reused rather than mirrored. |
 | A11 | `onboarding-store.test.ts`: transaction-only two-intent convergence and rollback; `onboarding-email.test.ts`: activation repair reuses intent identities | New closed-browser case observes two distinct pre-company intents and still exactly two after claim. |
-| A12 | `onboarding-email.test.ts`: lost acceptance, interrupted lease, frozen retry/configuration fence and receipt deduplication | Core queue exposes independent current-generation states. Task 4 reviewed operator actions and their UI/browser checks remain pending. |
+| A12 | `onboarding-email.test.ts`: lost acceptance, interrupted lease, frozen retry/configuration fence and receipt deduplication; `onboarding-email-recovery.test.ts`: strict operator evidence/receipt ownership | Queue/detail expose generation-specific states and accepted/delivered receipts. Focused operator browser verifies explicit evidence/reissue bodies and preserves receipt-owned M1 despite a missing projection. Hosted transport/delivery proof remains pending. |
 | A13 | `onboarding-acceptance.test.ts`: closed-browser/mail rejection/no-profile case; `onboarding-claim.test.ts`: live identity requirement | Both service messages fail in the mocked transport while claimed company access is operational and continuation is `/dashboard`. |
 | A14 | `onboarding-acceptance.test.ts`: Checkout name → company → basic-form prefill; `onboarding-business-profile.test.ts`: encrypted EIN/sanitized validation/stale revisions | New integration proves prefill with no basic profile; reviewed profile tests cover writes and privacy. |
 | A15 | `onboarding-business-profile.test.ts`: active admin/MFA/visibility/operational/CSRF checks; `onboarding-auth.test.ts`: public status and generation checks | Existing tenant protections; forwarded service locators carry no membership authority. |
@@ -23,7 +23,7 @@ This maps the approved A01–A20 criteria to concrete local regression anchors. 
 | A17 | `onboarding-readiness.test.ts`: observational readiness and preview/accepted/received sender evidence; `onboarding-ui.test.ts`: resumable checklist | Existing explicit-action behavior; controlled receipt/submission proof pending. |
 | A18 | `onboarding-acceptance.test.ts`: “new enrollment recovery leaves an existing registered tenant and platform owner authority unchanged”; reviewed billing/owner/invitation regressions | New case snapshots historical trial, seat selection, registered SMS, membership, owner and platform grant through exact redundant-trial cancellation. Final legacy/new tenant UX proof pending Task 6. |
 | A19 | `onboarding-acceptance.test.ts`: exact expiry boundary/cancellation/setup retention; `onboarding-reconciliation.test.ts`: late paid evidence/outage/conversion race | New company loses trial access exactly at the original deadline and routes to billing without erasing encrypted basics or restarting Checkout. Existing paid/grace/pause rules remain in force. |
-| A20 | `onboarding-operator.test.ts`: runtime-off sanitized queue, due/stalled/lease facts, cursor/filter bounds and denied/stale UI; `onboarding-acceptance.test.ts`: direct maintenance selection/disabled/zero-limit/deadline | New diagnostic/read-only core covered locally. Current scheduler/provider configuration and actual useful claims/receipts remain unproven hosted gates. |
+| A20 | `onboarding-operator.test.ts`: runtime-off sanitized queue, due/stalled/lease facts, cursor/filter bounds and denied/stale UI; `onboarding-acceptance.test.ts`: direct maintenance selection/disabled/zero-limit/deadline; `tests/browser/onboarding-operator/run.mjs` | Local detail/action consumers verify runtime-off reads with disabled mutations, immutable drafts, shared clock and private requests. Current scheduler/provider configuration and actual useful claims/receipts remain unproven hosted gates. |
 
 ## Core checks
 
@@ -31,7 +31,9 @@ Fixed reviewed base: `02801de9836d29dfc417d0001f2f83daf75ea923`; Node `24.18.0`;
 
 New core GREEN: `onboarding-migrations.test.ts`, `onboarding-operator.test.ts`, `onboarding-acceptance.test.ts`: **11 tests, 11 pass, 0 fail, 0 skip**, 8491.646416 ms. RED before implementation: 11 tests, 2 pass, 9 fail, 5677.811084 ms; six failures were absent queue/migration behavior and three were corrected synthetic fixture assumptions. No reviewed service defect was found or rewritten.
 
-The exact focused regression command, static check results, SQL/journal byte comparison, scoped commit SHA and remaining work belong in `task-7-core-report.md` for controller review. Root will add final aggregate counts/build/browser/Graphify/provider evidence to this draft on the reviewed combined head; those checks have not been claimed here.
+The exact core command, static results and SQL/journal byte comparison are retained in `task-7-core-report.md`. The follow-up starts from reviewed combined base `94397e74ac9bd5e85196764e41f147d59d5635f5` and consumes the existing protected detail/recovery/evidence services without changing server authority. Its installed-Chrome runner passed **22 named checks, 10 explicit synthetic POSTs and zero page errors**, including four light/dark width combinations. The affected `onboarding-operator`, `onboarding-acceptance`, `platform-console`, `platform-queues`, `platform-refresh` and `platform-shell` set passed **31/31**, zero failures/skips, 5299.025 ms. Exact final commands, static results and scoped SHA belong in `task-7-followup-report.md`.
+
+Root will add final aggregate counts/build/combined browser/Graphify/provider evidence to this draft on the reviewed combined head; those checks have not been claimed here. The retained Task 4/3 service suites prove authority, lease, audit and receipt behavior and were not repeated merely to test these UI consumers.
 
 ## Hosted evidence still required
 
@@ -41,4 +43,4 @@ The exact focused regression command, static check results, SQL/journal byte com
 - Controlled Stripe business name/card/terms, exact 14-day completion clock, delayed events, renewal/invoice evidence, cancellation and interruption recovery.
 - One authenticated billing/enrollment repair owner and one comms/service-email owner, with enabled flags, code SHA, useful queue claims and no competing legacy worker.
 - Both distinct service mails to explicitly controlled recipients with actual receipt evidence; provider acceptance or an empty cron response cannot satisfy receipt.
-- Reviewed Task 4 action contracts consumed by the operator UI, fresh action step-up/revision fencing and final browser checks; pending Checkout must wait/retry/support without a duplicate purchase.
+- Final integrated operator/public browser checks on the reviewed release head; pending Checkout must wait/retry/support without a duplicate purchase. Local synthetic operator controls do not prove live platform MFA or provider evidence.
