@@ -1,6 +1,6 @@
 # auth-refractor local acceptance evidence
 
-This maps the approved A01–A20 criteria to concrete local regression anchors and combined-branch checks. It proves local code behavior, not hosted release or delivery acceptance. Independent whole-branch review is required before draft publication. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
+This maps the approved A01–A20 criteria to concrete local regression anchors and combined-branch checks. It proves local code behavior, not hosted release or delivery acceptance. Independent whole-branch review and its one complete fix wave are approved; exact published SHA/CI and available preview are verified separately. The [rollout guide](../stripe-first-onboarding.md) defines migration allocation, competing-flow sequencing and runtime evidence requirements.
 
 | Criterion | Concrete regression anchor | Core evidence / remaining acceptance |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ The final operator fix adds five actual-component StrictMode checks with zero PO
 
 ## Combined-branch verification
 
-Code candidate `99e0ea36a5f6dd2b6b523ce6f34ba1556540c312`; reviewed candidate `f8e5b5546219a75bb100effe3cb5f706fdf025a0` differs only in plan/evidence documentation and generated Graphify artifacts. Current main `d8cd10252a43db3d8a5b78ba37d481d1d13c4a70` is included. Node24.18.0/pnpm11.1.2; task-owned PostgreSQL14.23 on loopback55436, unique synthetic test databases and mocked external providers. CI uses PostgreSQL17. No application envfiles or production credentials/data were used.
+Full-suite code candidate `99e0ea36a5f6dd2b6b523ce6f34ba1556540c312`; whole-branch review at `f8e5b5546219a75bb100effe3cb5f706fdf025a0` plus evidence-only `4b7132d`. Its final scoped fix `c87a4a60b488e1e3c1440e0a46d62aa98060bbc8` is approved and composed in publication candidate `34853aee22d046ff7733c294e82d68e5bdb7590a`. The full suite below predates that final delta; its final affected checks are listed separately. Current main `d8cd10252a43db3d8a5b78ba37d481d1d13c4a70` is included. Node24.18.0/pnpm11.1.2; task-owned PostgreSQL14.23 on loopback55436, unique synthetic test databases and mocked external providers. CI uses PostgreSQL17. No application envfiles or production credentials/data were used.
 
 From `nextjs-version/`, a clean environment with only the disposable `MCA_TEST_DATABASE_ADMIN_URL` ran:
 
@@ -46,14 +46,14 @@ From `nextjs-version/`, a clean environment with only the disposable `MCA_TEST_D
 | `pnpm test` | **2186 tests: 2185 pass, 0 fail, 1 skip**, 317922.360042ms. Skip is the unchanged opt-in live synthetic assistant-provider acceptance case. |
 | `pnpm typecheck` | Exit0. |
 | `pnpm lint` | Exit0; zero errors,16 inherited warnings. |
-| `pnpm build` | Normal Next16.1.1/Turbopack exit0; compiled11.5s,274staticpages. Telemetry disabled; only existing public font build access. |
+| `pnpm build` | Normal Next16.1.1/Turbopack exit0; compiled10.6s,274staticpages on the publication candidate. Telemetry disabled; only existing public font build access. |
 | `node scripts/operations/build-monitor.mjs` plus tracked generated-file parity | Exit0; no generated monitor diff. |
 | Deno2.9.7 `check --node-modules-dir=none --unstable-sloppy-imports scripts/operations/edge-entry.ts` | Exit0 with task-owned cached dependencies/copied lock; no product lock changes. |
-| Graphify update and `cluster-only . --no-label` | Exit0;16173nodes,51686edges,790communities. HTML regenerated with30000-node limit. Main had13564nodes/41904edges; no shrink warning.31 files yielded zero AST nodes, including data-only JSON. |
+| Graphify update and `cluster-only . --no-label` | Exit0;16175nodes,51700edges,782communities. HTML regenerated with30000-node limit. Main had13564nodes/41904edges; no shrink warning.31 files yielded zero AST nodes, including data-only JSON. |
 
 The first combined candidate had one failure: completion copy repeated a price literal. The unchanged catalog guard caught it; a reviewed one-component change now derives the displayed USD first-user price from the canonical catalog. The corrected combined guard passes3/3 and the complete rerun above passes. No assertion or guard was weakened. Experimental/deprecated module-mock warnings and expected sanitized synthetic failure diagnostics remain disclosed.
 
-Actual controlled Chrome evidence: public entry19cases, then3focused unsupported/supported coordination cases; operator22checks/10explicit syntheticPOSTs, then5focused StrictMode checks; zero pageerrors in all. APIs/providers are intercepted synthetic fixtures. These are real component/browser checks, not live Auth/Stripe/mail acceptance. Each implementation slice and concrete fix passed independent spec/quality review. Whole-branch review and exact published SHA/CI/available preview verification are publication gates.
+Actual controlled Chrome evidence: public entry19cases, then3focused unsupported/supported coordination cases; operator22checks/10explicit syntheticPOSTs, then5focused StrictMode checks; zero pageerrors in all. APIs/providers are intercepted synthetic fixtures. These are real component/browser checks, not live Auth/Stripe/mail acceptance. Each implementation slice and concrete fix passed independent spec/quality review. Whole-branch review identified two integration issues and one copy issue. One complete fix wave and one independent scoped re-review addressed all three; no open code findings remain. Exact published SHA/CI/available preview verification follows publication.
 
 ## Hosted evidence still required
 
@@ -64,3 +64,14 @@ Actual controlled Chrome evidence: public entry19cases, then3focused unsupported
 - One authenticated billing/enrollment repair owner and one comms/service-email owner, with enabled flags, code SHA, useful queue claims and no competing legacy worker.
 - Both distinct service mails to explicitly controlled recipients with actual receipt evidence; provider acceptance or an empty cron response cannot satisfy receipt.
 - Final integrated operator/public browser checks on the reviewed release head; pending Checkout must wait/retry/support without a duplicate purchase. Local synthetic operator controls do not prove live platform MFA or provider evidence.
+
+
+## Final review fixes and covering evidence
+
+Claimed continuation now performs the existing explicit claim replay before navigation. Actual PostgreSQL tests keep company B selected during status GET, then select enrollment company A through its membership-validated replay for business/CRM/billing/paused intents. B’s encrypted basics and billing state remain unchanged; revoked A membership and required MFA reject replay without changing B. Actual Chrome tests prove one POST, no premature navigation and preserved error/MFA behavior.
+
+Onboarding mail receives at most140seconds of the unchanged230-second comms deadline, reserving90seconds for existing discovery, receipt repair and sends. In the deterministic real-PG slow-provider regression, nine intents become held and21 remain queued; discovery/receipt/send entry retain95/80/65seconds. An old notification is accepted and an old receipt becomes delivered within180syntheticseconds, with no held-message replay. Mail-disabled runtime still serves old notifications. This addresses new-mail starvation; arbitrary preexisting digest/webhook load remains a hosted workload check.
+
+The two conversion surfaces identify the catalog amount as the base first-user price and preserve applicable Checkout discounts/tax. No offer, coupon, tax or billing policy changed.
+
+Final unique affected coverage: **157 passing cases** across scoped runs (31UI/navigation,114services/catalog,8pricing,4legacy discovery), plus **11/11 actual Chrome checks**, zero pageerrors; the two required PG cases are included, not double-counted. One122-case covering run had121passes/one obsolete exact copy expectation; its strengthened pricing assertions subsequently passed8/8. There is no claimed single157-case run. Final typecheck/scopedlint/diff pass; root publication build, Deno check and monitor parity pass. No source changes follow the approved fix, only evidence/plan/generated Graphify bookkeeping.
