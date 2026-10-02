@@ -38,6 +38,7 @@ function PlatformSidebar({ email, roadmapEnabled }: { email: string; roadmapEnab
     ] },
     { label: "Operations", items: [
       { title: "Monitoring", url: "/platform/monitoring", icon: Activity },
+      { title: "Trial enrollments", url: "/platform/onboarding", icon: ClipboardList },
       { title: "SMS", url: "/platform/sms", icon: MessageSquare },
     ] },
     { label: "Administration", items: [
@@ -61,7 +62,7 @@ function PlatformSidebar({ email, roadmapEnabled }: { email: string; roadmapEnab
 
 function PlatformHeader() {
   const pathname = usePathname()
-  const titles: Record<string, string> = { companies: "Companies", payments: "Payments", monitoring: "Monitoring", sms: "SMS", audit: "Audit", "demo-requests": "Demo requests", roadmap: "Roadmap" }
+  const titles: Record<string, string> = { companies: "Companies", payments: "Payments", monitoring: "Monitoring", onboarding: "Trial enrollments", sms: "SMS", audit: "Audit", "demo-requests": "Demo requests", roadmap: "Roadmap" }
   const section = pathname.split("/")[2]
   return <header className="sticky top-0 z-30 flex h-(--header-height) shrink-0 items-center border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
     <div className="flex w-full min-w-0 items-center gap-3 px-4 lg:px-6">

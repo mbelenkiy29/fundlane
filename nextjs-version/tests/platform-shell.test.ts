@@ -24,7 +24,7 @@ test("platform shell scopes navigation, highlights company details and gates Roa
   `], { encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
   const [overview, detail, totals, smsLoading] = JSON.parse(result.stdout) as string[]
-  for (const url of ["/platform/companies", "/platform/payments", "/platform/monitoring", "/platform/sms", "/platform/audit", "/platform/demo-requests", "/account-security", "/dashboard"]) assert.ok(overview.includes(`href="${url}"`), url)
+  for (const url of ["/platform/companies", "/platform/payments", "/platform/monitoring", "/platform/onboarding", "/platform/sms", "/platform/audit", "/platform/demo-requests", "/account-security", "/dashboard"]) assert.ok(overview.includes(`href="${url}"`), url)
   assert.doesNotMatch(overview, /href="\/platform\/roadmap"/)
   assert.match(detail, /href="\/platform\/roadmap"/)
   assert.match(detail, /data-active="true"[^>]*href="\/platform\/companies"/)

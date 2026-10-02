@@ -22,7 +22,7 @@ The document and assistant worker entrypoints remain in source for local proof a
 
 ## Billing and integrations
 
-[Stripe billing](docs/supabase-billing.md) offers a no-card 14-day trial (five users) and one $399/month plan including the first user, with graduated additional seats. Migration 0047 explicitly exempts existing companies until paid conversion. Stripe test/live mode is configured explicitly; verified provider reads, local time-based gates, renewal grace and retryable notifications manage access. Historical Clerk billing rows remain available.
+[Stripe billing](docs/supabase-billing.md) retains existing company cohorts, including historical no-card trials and migration 0047 exemptions, and one $399/month plan including the first user with graduated additional seats. The selected [Stripe-first self-service onboarding](docs/stripe-first-onboarding.md) collects a card for one user and starts exactly 14 provider days at completed Checkout; rollout flags default off. Its unapplied migrations are `0080_stripe_first_onboarding` and `0081_enrollment_billing_evidence`, with release sequencing and competing-flow timestamp checks in the guide. Stripe test/live mode is explicit; verified provider reads, local time-based gates, renewal grace and retryable notifications manage access. Historical Clerk billing rows remain available.
 
 Application invitations and business messages use the existing transactional delivery adapter. Supabase Auth uses separately configured SMTP. Company SMS, signature providers, sender OAuth, and assistant credit packs retain their individual activation requirements:
 
