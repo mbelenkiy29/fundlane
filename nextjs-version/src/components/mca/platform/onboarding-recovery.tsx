@@ -48,17 +48,17 @@ export function OnboardingRecovery({ enrollmentId, onUpdated, onBusyChange, queu
     controller.current = abort
     setLoading(true)
     const operation = requestJson<EnrollmentOperatorDetail>(url, { credentials: "same-origin", signal: abort.signal }).then(data => {
-      if (!mounted.current || abort.signal.aborted) return
+      if (!mounted.current || abort.signal.aborted || controller.current !== abort) return
       current.current = { data }
       setObservation(current.current)
     }).catch((error: unknown) => {
-      if (!mounted.current || abort.signal.aborted) return
+      if (!mounted.current || abort.signal.aborted || controller.current !== abort) return
       const denied = error instanceof RequestError && [401, 403].includes(error.status)
       current.current = { ...(denied ? {} : { data: current.current.data }), error: denied ? "Access denied. Sign in with an authorized owner session." : "Could not refresh detail. Stale diagnostics are shown; actions are disabled." }
       setObservation(current.current)
       if (denied) { setDraft(null); setCode(""); setSteppedUp(false); setNotice(""); setActionError("") }
     }).finally(() => {
-      if (!abort.signal.aborted) { reading.current = null; if (mounted.current) setLoading(false) }
+      if (controller.current === abort) { controller.current = null; reading.current = null; if (mounted.current) setLoading(false) }
     })
     reading.current = operation
     return operation
@@ -68,7 +68,14 @@ export function OnboardingRecovery({ enrollmentId, onUpdated, onBusyChange, queu
     void read()
     const refresh = () => { if (!mutating.current) void read() }
     window.addEventListener(PLATFORM_REFRESH_EVENT, refresh)
-    return () => { mounted.current = false; controller.current?.abort(); window.removeEventListener(PLATFORM_REFRESH_EVENT, refresh) }
+    return () => {
+      mounted.current = false
+      const abandoned = controller.current
+      controller.current = null
+      reading.current = null
+      abandoned?.abort()
+      window.removeEventListener(PLATFORM_REFRESH_EVENT, refresh)
+    }
   }, [read])
   const data = observation.data
   const safe = queueSafe && !loading && !observation.error && Boolean(data?.runtime.runtimeEnabled)
