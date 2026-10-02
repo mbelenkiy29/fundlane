@@ -8,6 +8,10 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { documentProposals, processDealAgentJob, upsertProposals } from "../src/lib/mca/deal-agent/run"
 import { decideDealAgentAction, listDealAgent } from "../src/lib/mca/deal-agent/actions"
 import type { DealActor } from "../src/lib/mca/deals/schema"
+import { setClosingTransportForTests } from "../src/lib/mca/closing/delivery"
+import { encryptSensitive } from "../src/lib/mca/crypto"
+import { setSenderDeliveryFetchForTests } from "../src/lib/mca/senders/delivery"
+import { setEmailDeliveryFetchForTests } from "../src/lib/mca/submissions/email-templates"
 import { documentScanActor } from "../src/lib/mca/documents/scan-job"
 import { AppError } from "../src/lib/mca/errors"
 import type { BackgroundJob } from "../src/lib/mca/jobs/queue"
@@ -79,7 +83,7 @@ function adminActor(workspaceId: string) {
 
 async function seedBareDeal(workspaceId: string): Promise<string> {
   const key = `da-deal-${++seq}`
-  return (await createDeal(adminActor(workspaceId), { idempotencyKey: key, legalName: "Agent Merchant LLC", entityType: "llc", address: { line1: "1 Main St", city: "New York", state: "NY", postalCode: "10001" }, startDate: "2020-01-01", industry: "restaurants", naicsCode: "722511", monthlyRevenue: 20_000, ficoScore: 680, requestedAmount: 50_000, requestedTermMonths: 12, fundingPurpose: "working capital", contactPhone: "2125550100", owners: [{ firstName: "Ada", lastName: "Cole", ownershipPercent: 100, isPrimary: true }] })).deal.id
+  return (await createDeal(adminActor(workspaceId), { idempotencyKey: key, legalName: "Agent Merchant LLC", entityType: "llc", address: { line1: "1 Main St", city: "New York", state: "NY", postalCode: "10001" }, startDate: "2020-01-01", industry: "restaurants", naicsCode: "722511", monthlyRevenue: 20_000, ficoScore: 680, requestedAmount: 50_000, requestedTermMonths: 12, fundingPurpose: "working capital", contactPhone: "2125550100", contactName: "Mira", contactEmail: "merchant@example.test", owners: [{ firstName: "Ada", lastName: "Cole", ownershipPercent: 100, isPrimary: true }] })).deal.id
 }
 
 test("migration creates deal agent tables with open-action uniqueness", async () => {
@@ -417,7 +421,7 @@ test("dismiss records decider, time and note", async () => {
   const view = await listDealAgent(broker, dealId)
   assert.equal(view.runs.length, 1)
   const listed = view.actions.find(action => action.id === request.id)!
-  assert.equal(listed.decidedBy, `Broker ${broker.userId.replace("da-user-", "")}`)
+  assert.equal(listed.decidedBy, (await getDatabase().prepare<{ name: string }>("SELECT name FROM users WHERE id=?").get(broker.userId))?.name)
   assert.equal(listed.decisionNote, "Merchant is sending by courier")
   assert.equal(view.actions[0].status, "pending")
 })
@@ -453,4 +457,112 @@ test("deciding a non-pending action returns 409 action_not_pending", async () =>
   const [action] = await actionsFor(dealId)
   await decide(broker, dealId, action.id, "dismiss")
   await assert.rejects(decide(broker, dealId, action.id, "dismiss"), { status: 409, code: "action_not_pending" })
+})
+
+async function completeDealWithSubmitAction() {
+  const fixture = await completeDeal({ funders: 1 })
+  await enqueueFor(fixture.workspaceId, fixture.dealId)
+  await runAgent(fixture.dealId)
+  const action = (await actionsFor(fixture.dealId)).find(row => row.kind === "submit_to_funder")!
+  assert.ok(action, "submit_to_funder proposed")
+  return { ...fixture, action, broker: await seedMember(fixture.workspaceId, "admin") }
+}
+
+async function withQueuedDelivery<T>(callback: () => Promise<T>): Promise<T> {
+  process.env.MCA_BACKGROUND_JOBS = "enabled"
+  try { return await callback() } finally { delete process.env.MCA_BACKGROUND_JOBS }
+}
+
+const outboundFetches: string[] = []
+before(() => {
+  setEmailDeliveryFetchForTests(async (url) => { outboundFetches.push(String(url)); return new Response("ok") })
+  setSenderDeliveryFetchForTests(async (url) => { outboundFetches.push(String(url)); return new Response("ok") })
+})
+after(() => { setEmailDeliveryFetchForTests(); setSenderDeliveryFetchForTests(); setClosingTransportForTests() })
+
+const submissionJobs = (dealId: string) => getDatabase().prepare<{ state: string; confirmation_key: string }>("SELECT state,confirmation_key FROM mca_submission_jobs WHERE deal_id=?").all(dealId)
+
+test("approve before review is rejected", async () => {
+  const { dealId, action, broker } = await completeDealWithSubmitAction()
+  await assert.rejects(decide(broker, dealId, action.id, "approve"), { status: 409, code: "review_required" })
+  assert.equal((await submissionJobs(dealId)).length, 0)
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "pending")
+})
+
+test("review then approve hands off to confirmSubmissions", async () => {
+  const { dealId, action, broker, funderIds } = await completeDealWithSubmitAction()
+  const fetchesBefore = outboundFetches.length
+  const reviewed = await decide(broker, dealId, action.id, "review")
+  const preview = reviewed.preview as { id: string; destinations: Array<{ funderId: string }> }
+  assert.equal(preview.destinations[0].funderId, funderIds[0])
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.preview_id, preview.id)
+  assert.equal(reviewed.action.status, "pending")
+  assert.equal(reviewed.action.hasPreview, true)
+  const approved = await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve"))
+  assert.equal(approved.action.status, "approved")
+  const jobs = await submissionJobs(dealId)
+  assert.equal(jobs.length, 1)
+  assert.equal(jobs[0].confirmation_key, preview.id)
+  assert.equal(jobs[0].state, "queued")
+  assert.equal(outboundFetches.length, fetchesBefore)
+  await assert.rejects(decide(broker, dealId, action.id, "approve"), { status: 409, code: "action_not_pending" })
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE action='deal_agent.action_approved' AND resource_id=?").get(action.id))?.n, 1)
+})
+
+test("stale submission preview returns action to pending", async () => {
+  const { dealId, action, broker } = await completeDealWithSubmitAction()
+  await decide(broker, dealId, action.id, "review")
+  await getDatabase().prepare("UPDATE deals SET version=version+1 WHERE id=?").run(dealId)
+  await assert.rejects(withQueuedDelivery(() => decide(broker, dealId, action.id, "approve")), { status: 409, code: "submission_preview_stale" })
+  const row = (await actionsFor(dealId)).find(item => item.id === action.id)!
+  assert.equal(row.status, "pending")
+  assert.equal(row.error_code, "submission_preview_stale")
+  assert.equal((await submissionJobs(dealId)).length, 0)
+})
+
+test("api-key actor cannot review a submission", async () => {
+  const { workspaceId, dealId, action } = await completeDealWithSubmitAction()
+  const apiKey: DealActor = { workspaceId, userId: null, membershipId: null, role: null, managedMembershipIds: [], activeMembershipIds: [], source: "api_key", apiKeyId: "key", scopes: ["deals:write"], correlationId: "api" }
+  await assert.rejects(decide(apiKey, dealId, action.id, "review"), { status: 403, code: "broker_review_required" })
+})
+
+test("request_documents review creates stipulations and a closing preview; approve sends once via sendRequestPreview", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const now = new Date().toISOString()
+  const senderId = `merchant-sender-${++seq}`
+  await getDatabase().prepare("INSERT INTO mca_email_senders (id,workspace_id,provider,purpose,from_name,from_address,signature,credential_cipher,state,is_default,verified_at,last_error,created_by_user_id,created_at,updated_at) VALUES (?,?,'smtp','merchant','Closer','closer@example.test',NULL,?,'verified',1,?,NULL,?,?,?)")
+    .run(senderId, workspaceId, encryptSensitive(JSON.stringify({ kind: "smtp", host: "smtp.example.test", port: 587, username: "u", password: "secret", secure: false }), workspaceId), now, broker.userId, now, now)
+  const action = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  const items = (JSON.parse(action.payload_json) as { items: unknown[] }).items
+  await assert.rejects(decide(broker, dealId, action.id, "review"), { status: 422, code: "sender_required" })
+  const reviewed = await decide(broker, dealId, action.id, "review", { senderId })
+  const preview = reviewed.preview as { id: string; body: string; recipient: string }
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_stipulations WHERE deal_id=? AND status='open'").get(dealId))?.n, items.length)
+  const again = await decide(broker, dealId, action.id, "review", { senderId })
+  assert.equal((again.preview as { id: string }).id, preview.id)
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_stipulations WHERE deal_id=?").get(dealId))?.n, items.length)
+  const delivered: string[] = []
+  setClosingTransportForTests({ async deliver(request) { delivered.push(request.body ?? ""); return { state: "sent", correlationId: request.correlationId, externalId: "agent-mail-1" } } })
+  try {
+    const approved = await decide(broker, dealId, action.id, "approve")
+    assert.equal(approved.action.status, "approved")
+  } finally { setClosingTransportForTests() }
+  assert.equal(delivered.length, 1)
+  assert.match(delivered[0], /\/merchant-upload\//)
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_deliveries WHERE workspace_id=?").get(workspaceId))?.n, 1)
+})
+
+test("approve schedule_follow_up creates one calendar followup assigned to approver", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const action = (await actionsFor(dealId)).find(row => row.kind === "schedule_follow_up")!
+  const approved = await decide(broker, dealId, action.id, "approve")
+  assert.equal(approved.action.status, "approved")
+  const rows = await getDatabase().prepare<{ kind: string; assignee_id: string; all_day: number; starts_at: string }>("SELECT kind,assignee_id,all_day,starts_at FROM mca_calendar_activities WHERE deal_id=?").all(dealId)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].kind, "followup")
+  assert.equal(rows[0].assignee_id, broker.membershipId)
+  assert.equal(Number(rows[0].all_day), 1)
+  assert.match(rows[0].starts_at, /^\d{4}-\d{2}-\d{2}$/)
 })
