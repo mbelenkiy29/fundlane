@@ -19,4 +19,4 @@ The `fundlane.io` hosting cutover remains separate and requires the Framer hosti
 
 ## Current hosted prerequisites
 
-Vercel Preview's variable inventory does not contain `STRIPE_BASE_PRICE_ID` or `STRIPE_ADDITIONAL_SEAT_PRICE_ID`. Its Supabase environment has not been established as an approved nonproduction target in this task. No hosted migration, app deployment, Framer CTA edit or publication has been performed for this flow.
+Vercel Preview's variable inventory does not contain `STRIPE_BASE_PRICE_ID` or `STRIPE_ADDITIONAL_SEAT_PRICE_ID`. A `fundlane-staging` Supabase project exists, but Preview's sensitive Supabase URL cannot be retrieved through Vercel's API and has not been confirmed to target it. Preview billing mode is `test`. The local Stripe profiles do not expose the Fundlane test catalog lookup keys; the intended test account/catalog still needs connection. No hosted migration, app deployment, Framer CTA edit or publication has been performed for this flow.
