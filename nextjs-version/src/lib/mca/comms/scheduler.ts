@@ -40,6 +40,7 @@ export interface ScheduledCommsJobsResult {
   digests: RunCommsJobsResult["digests"]
   webhooks: RunCommsJobsResult["webhooks"]
   notifications?: Awaited<ReturnType<typeof import("../notifications/worker").runScheduledNotifications>>
+  renewalAlerts?: Awaited<ReturnType<typeof import("../renewals/alerts").runRenewalAlerts>>
   onboardingEmails?: Awaited<ReturnType<typeof import("../onboarding/email-worker").runOnboardingEmails>>
 }
 
@@ -82,6 +83,8 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
       ...(result.onboardingEmails ? { onboardingEmails: result.onboardingEmails } : {}),
     }
   }
+  const { renewalAlertsEnabled, runRenewalAlerts } = await import("../renewals/alerts")
+  if (renewalAlertsEnabled()) result.renewalAlerts = await runRenewalAlerts(nowIsoValue)
   if(process.env.MCA_NOTIFICATION_RUNTIME === "enabled") {
     const {runScheduledNotifications}=await import("../notifications/worker")
     result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
