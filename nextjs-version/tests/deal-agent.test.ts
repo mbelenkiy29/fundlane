@@ -6,6 +6,8 @@ import { retryDocumentScan, storeDocument } from "../src/lib/mca/documents/servi
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { documentProposals, processDealAgentJob, upsertProposals } from "../src/lib/mca/deal-agent/run"
+import { decideDealAgentAction, listDealAgent } from "../src/lib/mca/deal-agent/actions"
+import type { DealActor } from "../src/lib/mca/deals/schema"
 import { documentScanActor } from "../src/lib/mca/documents/scan-job"
 import { AppError } from "../src/lib/mca/errors"
 import type { BackgroundJob } from "../src/lib/mca/jobs/queue"
@@ -384,4 +386,71 @@ test("failed run is reclaimed on retry", async () => {
     assert.equal(runs[0].state, "completed")
     assert.equal(stepsOf(runs[0])[0].code, "statement_unreadable")
   } finally { setStatementExtractionProviderForTests() }
+})
+
+async function seedMember(workspaceId: string, role: "admin" | "manager" | "rep"): Promise<DealActor> {
+  const now = new Date().toISOString()
+  const userId = `da-user-${++seq}`
+  const membershipId = `da-mem-${seq}`
+  await getDatabase().prepare(`INSERT INTO users (id,email,password_hash,name,phone,application_identifier,created_at,updated_at) VALUES (?,?,NULL,?,NULL,?,?,?)`)
+    .run(userId, `${userId}@example.test`, `Broker ${seq}`, `APP-DA-${seq}`, now, now)
+  await getDatabase().prepare(`INSERT INTO memberships (id,workspace_id,user_id,role,manager_membership_id,status,sender_association,created_at,updated_at) VALUES (?,?,?,?,NULL,'active',NULL,?,?)`)
+    .run(membershipId, workspaceId, userId, role, now, now)
+  return { workspaceId, userId, membershipId, role, managedMembershipIds: [], activeMembershipIds: [membershipId], source: "user", sessionId: `session-${seq}`, scopes: [], correlationId: `corr-${seq}` }
+}
+
+const decide = (actor: DealActor, dealId: string, actionId: string, decision: "review" | "approve" | "dismiss", extra: { senderId?: string; note?: string } = {}) =>
+  withAgentEnv("true", () => decideDealAgentAction(actor, { dealId, actionId, decision, origin: "https://app.example.test", ...extra }))
+
+test("dismiss records decider, time and note", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const request = (await actionsFor(dealId)).find(action => action.kind === "request_documents")!
+  const result = await decide(broker, dealId, request.id, "dismiss", { note: "Merchant is sending by courier" })
+  assert.equal(result.action.status, "dismissed")
+  const row = await getDatabase().prepare<{ status: string; decided_by_user_id: string; decided_at: string; decision_note: string }>("SELECT status,decided_by_user_id,decided_at,decision_note FROM mca_deal_agent_actions WHERE id=?").get(request.id)
+  assert.equal(row?.status, "dismissed")
+  assert.equal(row?.decided_by_user_id, broker.userId)
+  assert.ok(row?.decided_at)
+  assert.equal(row?.decision_note, "Merchant is sending by courier")
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE workspace_id=? AND action='deal_agent.action_dismissed' AND resource_id=?").get(workspaceId, request.id))?.n, 1)
+  const view = await listDealAgent(broker, dealId)
+  assert.equal(view.runs.length, 1)
+  const listed = view.actions.find(action => action.id === request.id)!
+  assert.equal(listed.decidedBy, `Broker ${broker.userId.replace("da-user-", "")}`)
+  assert.equal(listed.decisionNote, "Merchant is sending by courier")
+  assert.equal(view.actions[0].status, "pending")
+})
+
+test("tenant isolation: other workspace cannot list or decide", async () => {
+  const { dealId } = await incompleteDealWithRun()
+  const outsider = await seedMember(await seedWorkspace({ dealAgent: true }), "admin")
+  const [action] = await actionsFor(dealId)
+  await assert.rejects(listDealAgent(outsider, dealId), { status: 404 })
+  await assert.rejects(decide(outsider, dealId, action.id, "dismiss"), { status: 404 })
+  assert.equal((await actionsFor(dealId)).find(row => row.id === action.id)?.status, "pending")
+})
+
+test("rep without deal visibility gets 404", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const rep = await seedMember(workspaceId, "rep")
+  const [action] = await actionsFor(dealId)
+  await assert.rejects(listDealAgent(rep, dealId), { status: 404, code: "deal_not_found" })
+  await assert.rejects(decide(rep, dealId, action.id, "dismiss"), { status: 404, code: "deal_not_found" })
+})
+
+test("actionId from another deal of the same workspace returns 404", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const otherDealId = await seedBareDeal(workspaceId)
+  const broker = await seedMember(workspaceId, "admin")
+  const [action] = await actionsFor(dealId)
+  await assert.rejects(decide(broker, otherDealId, action.id, "dismiss"), { status: 404, code: "action_not_found" })
+})
+
+test("deciding a non-pending action returns 409 action_not_pending", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const [action] = await actionsFor(dealId)
+  await decide(broker, dealId, action.id, "dismiss")
+  await assert.rejects(decide(broker, dealId, action.id, "dismiss"), { status: 409, code: "action_not_pending" })
 })
