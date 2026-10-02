@@ -6,6 +6,7 @@ import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { findSenderById, type StoredEmailSender } from "./repository"
 import type { SenderTestSendResult } from "./contracts"
+import { postmarkTransportIdentity } from "../closing/delivery"
 
 export const senderTestInput = z.object({ to: z.email().max(254), recipientControlConfirmed: z.literal(true), requestKey: z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/) }).strict()
 export type SenderTestState = "sending" | "preview" | "accepted" | "received" | "uncertain" | "failed"
@@ -14,8 +15,10 @@ interface TestRow { id: string; state: SenderTestState; sender_fingerprint: stri
 
 /** Configuration identity, independent of bookkeeping timestamps and test-result state changes. */
 export function senderTestFingerprint(sender: StoredEmailSender): string {
-  return hashOpaqueToken(JSON.stringify({ provider: sender.provider, purpose: sender.purpose, fromName: sender.fromName, fromAddress: sender.fromAddress, signature: sender.signature, credential: sender.credentialCipher, default: sender.isDefault,
-    transport: process.env.MCA_CLOSING_EMAIL_PROVIDER, webhook: process.env.MCA_EMAIL_WEBHOOK_URL, webhookToken: hashOpaqueToken(process.env.MCA_EMAIL_WEBHOOK_TOKEN ?? ""), postmarkAccount: process.env.MCA_POSTMARK_ACCOUNT_ID, postmarkToken: hashOpaqueToken(process.env.MCA_POSTMARK_SERVER_TOKEN ?? process.env.POSTMARK_SERVER_TOKEN ?? "") }))
+  const transport = process.env.MCA_CLOSING_EMAIL_PROVIDER === "postmark"
+    ? { provider: "postmark", ...postmarkTransportIdentity({ workspaceId: sender.workspaceId, senderId: sender.id, sender: { fromName: sender.fromName, fromAddress: sender.fromAddress } }) }
+    : { provider: "webhook", webhook: process.env.MCA_EMAIL_WEBHOOK_URL?.trim(), webhookToken: hashOpaqueToken(process.env.MCA_EMAIL_WEBHOOK_TOKEN ?? "") }
+  return hashOpaqueToken(JSON.stringify({ provider: sender.provider, purpose: sender.purpose, fromName: sender.fromName, fromAddress: sender.fromAddress, signature: sender.signature, credential: sender.credentialCipher, transport }))
 }
 function result(row: TestRow): SenderTestSendResult {
   return { testId: row.id, correlationId: row.id, delivery: row.state === "accepted" || row.state === "received" ? "sent" : row.state === "preview" ? "preview" : row.state === "failed" ? "failed" : "uncertain", evidence: row.state, evidenceSource: row.evidence_source ?? undefined, providerMessageId: row.provider_message_id ?? undefined,

@@ -9,6 +9,12 @@ import type { DealActor } from '../src/lib/mca/deals/schema'
 import { createSender, testSend, getSender, setSenderDeliveryFetchForTests, updateSender } from '../src/lib/mca/senders/service'
 import * as senderService from '../src/lib/mca/senders/service'
 import { saveBusinessBasics } from '../src/lib/mca/onboarding/business-profile'
+import { createDeal } from '../src/lib/mca/deals/service'
+import { setSandboxFunderEnabled } from '../src/lib/mca/sandbox/service'
+import { checkCompleteness } from '../src/lib/mca/underwriting/completeness'
+import { closedLookbackMonths, setUnderwritingNowForTests } from '../src/lib/mca/underwriting/lookback'
+import { queueSubmissions } from '../src/lib/mca/submissions/queue'
+import { setAutoSubmitSettings } from '../src/lib/mca/underwriting/auto-submit'
 import { onboardingStatus, profileSchema } from '../src/lib/mca/sms/onboarding'
 import * as sms from '../src/lib/mca/sms/onboarding'
 let readiness: typeof import('../src/lib/mca/onboarding/readiness') | undefined
@@ -17,8 +23,30 @@ const prior = { ...process.env }; let serial = 0
 async function owner() { const c = await createWorkspaceWithAdmin({ workspaceName: 'Readiness Company', adminName: 'Owner', adminEmail: `ready-${++serial}@example.test`, password: 'SyntheticPassword123', role: 'admin' }); return { ...c, source: 'user', role: 'admin', sessionId: 'verified-session', managedMembershipIds: [], activeMembershipIds: [c.membershipId], correlationId: 'readiness-test' } as DealActor }
 async function sender(actor: DealActor) { return createSender(actor, { provider: 'smtp', purpose: 'submission', fromName: 'Test Sender', fromAddress: 'owner@example.test', smtp: { host: 'smtp.example.test', port: 587, username: 'synthetic', password: 'synthetic-secret' } }) }
 const input = (requestKey: string) => ({ to: 'owner@example.test', recipientControlConfirmed: true as const, requestKey })
+async function safeFixture() {
+  const actor = await owner()
+  const { deal } = await createDeal(actor, { idempotencyKey: `readiness-synthetic-${serial}`, legalName: '[SYNTHETIC] Readiness Merchant', entityType: 'llc', address: { line1: '100 Test Road', city: 'New York', state: 'NY', postalCode: '10001' }, contactPhone: '+12125551234', owners: [{ firstName: 'Test', lastName: 'Owner', ownershipPercent: 100 }], startDate: '2020-01-01', industry: 'restaurants', monthlyRevenue: 20000, requestedAmount: 50000, fundingPurpose: 'working capital' })
+  assert.equal(deal.draftState, 'submission_ready')
+  const { funder } = await setSandboxFunderEnabled(actor, true)
+  assert.ok(funder)
+  return { actor, dealId: deal.id, funderId: funder.id }
+}
+async function readyDocument(actor: DealActor, dealId: string, category: string, filename = `${category}.pdf`) {
+  const id = `readiness-doc-${++serial}`, now = nowIso()
+  await getDatabase().prepare("INSERT INTO mca_documents(id,workspace_id,deal_id,idempotency_key,original_filename,display_filename,mime_type,byte_length,checksum,category,version,storage_key,source,processing_state,created_at,updated_at) VALUES (?,?,?,?,?,?,'application/pdf',1,?,?,1,?,'upload','ready',?,?)").run(id, actor.workspaceId, dealId, id, filename, filename, `checksum-${id}`, category, id, now, now)
+  return id
+}
+async function completeDocuments(actor: DealActor, dealId: string) {
+  const application = await readyDocument(actor, dealId, 'application')
+  await readyDocument(actor, dealId, 'driver_license'); await readyDocument(actor, dealId, 'voided_check')
+  for (const period of closedLookbackMonths(3, 'America/New_York')) {
+    const id = await readyDocument(actor, dealId, 'statement', `statement-${period}.pdf`), now = nowIso()
+    await getDatabase().prepare("INSERT INTO mca_statement_months(id,workspace_id,deal_id,document_id,account_kind,period,deposits,deposit_count,average_daily_balance,nsf_count,negative_days,ending_balance,extraction_version,created_at,updated_at) VALUES (?,?,?,?,'checking',?,'0','0','0','0','0','0',1,?,?)").run(`month-${id}`, actor.workspaceId, dealId, id, period, now, now)
+  }
+  return { application }
+}
 before(async () => { readiness = await import('../src/lib/mca/onboarding/readiness').catch(() => undefined); fixture = await createPostgresTestDatabase('onboarding_readiness'); Object.assign(process.env, fixture.env({ MCA_DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64url') })) })
-after(async () => { setSenderDeliveryFetchForTests(); await closeDatabaseForTests(); await fixture?.close(); for (const k of Object.keys(process.env)) if (!(k in prior)) delete process.env[k]; Object.assign(process.env, prior) })
+after(async () => { setSenderDeliveryFetchForTests(); setUnderwritingNowForTests(); await closeDatabaseForTests(); await fixture?.close(); for (const k of Object.keys(process.env)) if (!(k in prior)) delete process.env[k]; Object.assign(process.env, prior) })
 
 test('readiness is observational and business basics are supplied without granting SMS registration', async () => {
   assert.ok(readiness?.getOnboardingReadiness)
@@ -129,20 +157,139 @@ test('acceptance for the old transport cannot verify a changed deployment mail t
   } finally { delete process.env.MCA_EMAIL_WEBHOOK_URL }
 })
 
-test('safe submission readiness needs ready synthetic documents and an actual sandbox route, and only sandbox transport counts as accepted', async () => {
+test('choosing a tested sender as default preserves its controlled-inbox evidence', async () => {
+  const actor = await owner(), s = await sender(actor)
+  process.env.MCA_EMAIL_WEBHOOK_URL = 'https://synthetic.example.test/mail'
+  setSenderDeliveryFetchForTests(async () => new Response('ok', { status: 202 }))
+  try {
+    const result = await testSend(actor, s.id, input('test-before-default'))
+    await senderService.confirmSenderTestReceipt(actor, s.id, result.testId!, { received: true })
+    await updateSender(actor, s.id, { isDefault: true })
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence?.state, 'received')
+  } finally { delete process.env.MCA_EMAIL_WEBHOOK_URL }
+})
+
+test('Postmark evidence follows selected token and effective stream rotations only', async () => {
+  const actor = await owner(), s = await sender(actor)
+  const connection = { workspaceId: actor.workspaceId, senderId: s.id, fromAddress: s.fromAddress, serverToken: 'synthetic-token-a', messageStream: 'transactional-a' }
+  let unrelated = { workspaceId: 'unrelated-workspace', senderId: 'unrelated-sender', fromAddress: 'unrelated@example.test', serverToken: 'unrelated-token' }
+  const configure = (selected: object) => { process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON = JSON.stringify([selected, unrelated]) }
+  process.env.MCA_CLOSING_EMAIL_PROVIDER = 'postmark'
+  setSenderDeliveryFetchForTests(async () => Response.json({ ErrorCode: 0, MessageID: 'synthetic-postmark-message' }))
+  try {
+    configure(connection)
+    const sent = await testSend(actor, s.id, input('postmark-original'))
+    await senderService.confirmSenderTestReceipt(actor, s.id, sent.testId!, { received: true })
+    unrelated = { ...unrelated, serverToken: 'unrelated-rotation' }; configure(connection)
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence?.state, 'received')
+    process.env.MCA_CLOSING_POSTMARK_MESSAGE_STREAM = 'ignored-fallback'
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence?.state, 'received')
+    configure({ ...connection, serverToken: 'synthetic-token-b' })
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence, undefined)
+    await assert.rejects(() => senderService.confirmSenderTestReceipt(actor, s.id, sent.testId!, { received: true }), { code: 'sender_connection_changed' })
+    configure({ ...connection, messageStream: 'transactional-b' })
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence, undefined)
+    const { messageStream: explicitStream, ...fallbackConnection } = connection
+    assert.ok(explicitStream)
+    configure(fallbackConnection)
+    const fallback = await testSend(actor, s.id, input('postmark-fallback'))
+    assert.equal(fallback.evidence, 'accepted')
+    process.env.MCA_CLOSING_POSTMARK_MESSAGE_STREAM = 'rotated-fallback'
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence, undefined)
+  } finally {
+    delete process.env.MCA_CLOSING_EMAIL_PROVIDER; delete process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON; delete process.env.MCA_CLOSING_POSTMARK_MESSAGE_STREAM
+  }
+})
+
+test('in-flight Postmark acceptance cannot verify a replacement selected transport', async () => {
+  const actor = await owner(), s = await sender(actor)
+  const connection = { workspaceId: actor.workspaceId, senderId: s.id, fromAddress: s.fromAddress, serverToken: 'synthetic-before', messageStream: 'before' }
+  process.env.MCA_CLOSING_EMAIL_PROVIDER = 'postmark'; process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON = JSON.stringify([connection])
+  setSenderDeliveryFetchForTests(async (_url, init) => {
+    assert.equal(new Headers(init?.headers).get('x-postmark-server-token'), 'synthetic-before')
+    assert.equal(JSON.parse(String(init?.body)).MessageStream, 'before')
+    process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON = JSON.stringify([{ ...connection, serverToken: 'synthetic-after', messageStream: 'after' }])
+    return Response.json({ ErrorCode: 0, MessageID: 'synthetic-before-message' })
+  })
+  try {
+    const result = await testSend(actor, s.id, input('postmark-inflight'))
+    assert.equal(result.evidence, 'accepted')
+    assert.equal((await getSender(actor, s.id)).state, 'pending')
+    assert.equal((await senderService.listSenders(actor)).senders[0].testEvidence, undefined)
+  } finally { delete process.env.MCA_CLOSING_EMAIL_PROVIDER; delete process.env.MCA_CLOSING_POSTMARK_CONNECTIONS_JSON }
+})
+
+test('safe submission readiness rejects one bank statement and only frozen sandbox transport counts as accepted', async () => {
   assert.ok(readiness?.getOnboardingReadiness)
   const actor = await owner(), db = getDatabase(), now = nowIso(), dealId = `safe-deal-${serial}`, funderId = `safe-funder-${serial}`
   await db.prepare("INSERT INTO deals(id,workspace_id,display_id,legal_name,status,pipeline_version,draft_state,missing_required_json,field_sources_json,version,created_at,updated_at) VALUES (?,?,?,'[SYNTHETIC] Readiness Merchant','lead',1,'submission_ready','[]','{}',1,?,?)").run(dealId, actor.workspaceId, `SAFE-${serial}`, now, now)
   await db.prepare("INSERT INTO mca_funders(id,workspace_id,idempotency_key,legal_name,active,routes,created_at,updated_at) VALUES (?,?,'fundlane-sandbox-funder','Sandbox',1,?, ?,?)").run(funderId, actor.workspaceId, JSON.stringify([{ id: 'safe-route', kind: 'api', destination: 'fundlane-sandbox', active: true, documentExceptions: [] }]), now, now)
   assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'unavailable')
   await db.prepare("INSERT INTO mca_documents(id,workspace_id,deal_id,idempotency_key,original_filename,display_filename,mime_type,byte_length,checksum,category,version,storage_key,source,processing_state,created_at,updated_at) VALUES (?,?,?,'safe-doc','statement.pdf','statement.pdf','application/pdf',1,'synthetic-checksum','bank_statement',1,?,'upload','ready',?,?)").run(`safe-doc-${serial}`, actor.workspaceId, dealId, `safe-doc-${serial}`, now, now)
-  assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'ready')
+  assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'unavailable')
   await db.prepare("UPDATE mca_funders SET routes='[]' WHERE id=?").run(funderId)
   assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'unavailable')
   await db.prepare("INSERT INTO mca_submission_jobs(id,workspace_id,deal_id,funder_id,display_funder_name,route_kind,route_json,state,confirmation_key,attempt_key,deal_version,document_versions_json,package_json,preflight_errors_json,created_at,updated_at) VALUES (?,?,?,?,'Sandbox','api','{}','sent','safe-confirm','safe-attempt',1,'{}','{}','[]',?,?)").run(`safe-job-${serial}`, actor.workspaceId, dealId, funderId, now, now)
   assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'unavailable')
   await db.prepare('UPDATE mca_submission_jobs SET route_json=? WHERE id=?').run(JSON.stringify({ kind: 'api', destination: 'fundlane-sandbox' }), `safe-job-${serial}`)
   assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'accepted')
+})
+
+test('safe submission positive prerequisites pass ordinary explicit sandbox queue checks without a test bypass', async () => {
+  assert.ok(readiness?.getOnboardingReadiness)
+  const { actor, dealId, funderId } = await safeFixture()
+  await completeDocuments(actor, dealId)
+  assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'ready')
+  assert.equal((await getDatabase().prepare<{ count: number }>('SELECT count(*)::int count FROM mca_completeness_results WHERE workspace_id=?').get(actor.workspaceId))?.count, 0)
+  const result = await queueSubmissions({ actor, dealId, funderIds: [funderId], confirmationKey: `safe-explicit-${serial}`, deferDelivery: true })
+  assert.equal(result.jobs.length, 1); assert.equal(result.jobs[0].state, 'queued')
+})
+
+test('read-only readiness never enqueues auto-submit while the explicit completeness writer retains events and automatic enqueue', async () => {
+  assert.ok(readiness?.getOnboardingReadiness)
+  const { actor, dealId, funderId } = await safeFixture(), db = getDatabase()
+  await completeDocuments(actor, dealId)
+  process.env.MCA_AUTO_SUBMIT_ENABLED = 'true'
+  try {
+    await setAutoSubmitSettings(actor, { mode: 'score_only', minMatchScore: 80, maxFundersPerDeal: 3, eligibleFunderIds: [funderId] })
+    assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'ready')
+    for (const table of ['mca_completeness_results', 'mca_readiness_events', 'mca_background_jobs', 'mca_submission_jobs']) assert.equal((await db.prepare<{ count: number }>(`SELECT count(*)::int count FROM ${table} WHERE workspace_id=?`).get(actor.workspaceId))?.count, 0)
+    const checked = await checkCompleteness(actor, dealId)
+    assert.equal(checked.ready, true)
+    const queued = await db.prepare<{ kind: string; state: string; payload_json: string }>('SELECT kind,state,payload_json FROM mca_background_jobs WHERE workspace_id=?').all(actor.workspaceId)
+    assert.equal(queued.length, 1); assert.equal(queued[0].kind, 'auto_submit'); assert.equal(queued[0].state, 'queued')
+    assert.equal(JSON.parse(queued[0].payload_json).completenessVersion, checked.version)
+    assert.equal((await db.prepare<{ count: number }>('SELECT count(*)::int count FROM mca_readiness_events WHERE workspace_id=?').get(actor.workspaceId))?.count, 1)
+    assert.equal((await checkCompleteness(actor, dealId)).version, checked.version)
+    assert.equal((await db.prepare<{ count: number }>('SELECT count(*)::int count FROM mca_background_jobs WHERE workspace_id=?').get(actor.workspaceId))?.count, 1)
+    await db.prepare("UPDATE mca_documents SET processing_state='quarantined' WHERE workspace_id=? AND deal_id=? AND category='application'").run(actor.workspaceId, dealId)
+    const invalidated = await checkCompleteness(actor, dealId)
+    assert.equal(invalidated.ready, false); assert.equal(invalidated.version, checked.version + 1)
+    assert.equal((await db.prepare<{ count: number }>('SELECT count(*)::int count FROM mca_background_jobs WHERE workspace_id=?').get(actor.workspaceId))?.count, 1)
+  } finally { delete process.env.MCA_AUTO_SUBMIT_ENABLED }
+})
+
+for (const invalidation of ['quarantined application', 'deleted month extraction', 'changed month window', 'proposed position'] as const) test(`safe submission readiness rejects stale completeness after ${invalidation} without GET writes`, async () => {
+  assert.ok(readiness?.getOnboardingReadiness)
+  const { actor, dealId } = await safeFixture()
+  setUnderwritingNowForTests(new Date('2026-10-02T12:00:00.000Z'))
+  try {
+    const { application } = await completeDocuments(actor, dealId)
+    assert.equal((await checkCompleteness(actor, dealId)).ready, true)
+    const db = getDatabase()
+    if (invalidation === 'quarantined application') await db.prepare("UPDATE mca_documents SET processing_state='quarantined' WHERE id=?").run(application)
+    if (invalidation === 'deleted month extraction') await db.prepare('DELETE FROM mca_statement_months WHERE workspace_id=? AND deal_id=?').run(actor.workspaceId, dealId)
+    if (invalidation === 'changed month window') setUnderwritingNowForTests(new Date('2026-11-02T12:00:00.000Z'))
+    if (invalidation === 'proposed position') {
+      const now = nowIso()
+      await db.prepare("INSERT INTO mca_existing_positions(id,workspace_id,deal_id,label,evidence,status,created_at,updated_at) VALUES (?,?,?,'Synthetic proposed position','fixture','proposed',?,?)").run(`readiness-position-${serial}`, actor.workspaceId, dealId, now, now)
+    }
+    const tables = ['mca_completeness_results', 'mca_readiness_events', 'audit_events', 'mca_submission_jobs']
+    const counts = async () => Promise.all(tables.map(table => db.prepare<{ count: number }>(`SELECT count(*)::int count FROM ${table} WHERE workspace_id=?`).get(actor.workspaceId)))
+    const before = await counts()
+    assert.equal((await readiness.getOnboardingReadiness(actor)).safeSubmission, 'unavailable')
+    assert.deepEqual(await counts(), before)
+  } finally { setUnderwritingNowForTests() }
 })
 
 test('membership revoked while a test waits for the sender lock cannot acquire a send claim', async () => {

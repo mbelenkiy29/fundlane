@@ -110,3 +110,14 @@ test('HTTP validation never reflects sensitive input, including unexpected JSON 
   const response = await route.POST(new Request('http://localhost/api/mca/onboarding/business', { method: 'POST', body: JSON.stringify({ legalName: 'Safe Company', ein: '123456789', expectedRevision: 0, '123456789': true }), headers: { cookie: `mca_session=${token}`, origin: 'http://localhost' } }))
   assert.ok(response.status >= 400 && response.status < 500); assert.doesNotMatch(await response.text(), /123456789/)
 })
+
+for (const level of ['envelope', 'profile'] as const) test(`full SMS HTTP validation rejects sensitive unexpected ${level} keys without reflection`, async () => {
+  const route = await import('../src/app/api/mca/sms/onboarding/route'), actor = await owner(), now = nowIso(), token = `sms-safe-errors-${serial}`
+  await getDatabase().prepare("INSERT INTO sessions(id,user_id,membership_id,token_hash,expires_at,created_at,last_seen_at) VALUES (?,?,?,?,'2099-01-01',?,?)").run(`sms-safe-error-session-${serial}`, actor.userId, actor.membershipId, hashOpaqueToken(token), now, now)
+  const sensitive = '12-3456789'
+  const input = { action: 'submit', profile: level === 'profile' ? { [sensitive]: true } : {}, useStoredEin: true, basicRevision: 1, ...(level === 'envelope' ? { [sensitive]: true } : {}) }
+  const response = await route.POST(new Request('http://localhost/api/mca/sms/onboarding', { method: 'POST', body: JSON.stringify(input), headers: { cookie: `mca_session=${token}`, origin: 'http://localhost' } }))
+  assert.equal(response.status, 400)
+  assert.doesNotMatch(await response.text(), /12-3456789/)
+  assert.equal((await getDatabase().prepare<{ count: number }>('SELECT count(*)::int count FROM sms_companies WHERE workspace_id=?').get(actor.workspaceId))?.count, 0)
+})

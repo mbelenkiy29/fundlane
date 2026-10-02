@@ -5,6 +5,12 @@ import { listSenders } from "../senders/service"
 import { getCompanyAccess } from "../company-access"
 import { getDatabase } from "../db"
 import { SANDBOX_FUNDER_IDEMPOTENCY_KEY } from "../sandbox/labels"
+import { findFunderByIdempotencyKey } from "../funders/directory-repository"
+import { activeRoute } from "../submissions/jobs"
+import { preflightDestination } from "../submissions/preflight"
+import { listDocumentRecords } from "../documents/repository"
+import { readCurrentCompleteness } from "../underwriting/completeness"
+import { listPositionRecords } from "../underwriting/statement-repository"
 
 export interface OnboardingReadiness {
   businessDetails: "missing" | "supplied" | "registered"
@@ -31,17 +37,23 @@ export async function getOnboardingReadiness(actor: DealActor): Promise<Onboardi
 
 /** Server-internal prerequisite facts. Actual submission still uses all normal preflight, document and approval checks. */
 export async function getSafeSubmissionReadiness(workspaceId: string): Promise<OnboardingReadiness["safeSubmission"]> {
-  const row = await getDatabase().prepare<{ ready: boolean; accepted: boolean }>(`SELECT
-    EXISTS(SELECT 1 FROM deals d JOIN mca_funders f ON f.workspace_id=d.workspace_id
-      CROSS JOIN LATERAL jsonb_array_elements(f.routes::jsonb) r
-      WHERE d.workspace_id=? AND d.draft_state='submission_ready' AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')
-      AND f.idempotency_key=? AND f.active=1 AND r->>'active'='true' AND r->>'kind'='api' AND r->>'destination'='fundlane-sandbox'
-      AND EXISTS(SELECT 1 FROM mca_documents doc WHERE doc.workspace_id=d.workspace_id AND doc.deal_id=d.id AND doc.processing_state IN ('ready','clean')
-        AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(COALESCE(r->'documentExceptions','[]'::jsonb)) excluded WHERE excluded=doc.category))) ready,
+  const row = await getDatabase().prepare<{ accepted: boolean }>(`SELECT
     EXISTS(SELECT 1 FROM mca_submission_jobs j JOIN deals d ON d.workspace_id=j.workspace_id AND d.id=j.deal_id
       JOIN mca_funders f ON f.workspace_id=j.workspace_id AND f.id=j.funder_id
       WHERE j.workspace_id=? AND j.state='sent' AND j.route_kind='api' AND j.route_json::jsonb->>'destination'='fundlane-sandbox'
       AND f.idempotency_key=? AND (d.legal_name ILIKE '[SANDBOX]%' OR d.legal_name ILIKE '[SYNTHETIC]%')) accepted`)
-    .get(workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY, workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY)
-  return row?.accepted ? "accepted" : row?.ready ? "ready" : "unavailable"
+    .get(workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY)
+  if (row?.accepted) return "accepted"
+  const funder = await findFunderByIdempotencyKey(workspaceId, SANDBOX_FUNDER_IDEMPOTENCY_KEY)
+  const route = funder && activeRoute(funder.routes)
+  if (!funder?.active || route?.kind !== "api" || route.destination !== "fundlane-sandbox") return "unavailable"
+  const deals = await getDatabase().prepare<{ id: string }>("SELECT id FROM deals WHERE workspace_id=? AND draft_state='submission_ready' AND (legal_name ILIKE '[SANDBOX]%' OR legal_name ILIKE '[SYNTHETIC]%')").all(workspaceId)
+  for (const deal of deals) {
+    const [completeness, positions, documents] = await Promise.all([
+      readCurrentCompleteness(workspaceId, deal.id), listPositionRecords(workspaceId, deal.id), listDocumentRecords(workspaceId, deal.id, true),
+    ])
+    if (completeness.findings.length || positions.some(position => position.status === "proposed")) continue
+    if (!preflightDestination({ funder, documents, sender: {} }).errors.length) return "ready"
+  }
+  return "unavailable"
 }
