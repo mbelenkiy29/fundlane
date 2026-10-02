@@ -15,7 +15,7 @@ The existing signed Stripe endpoint handles setup completion before its unmapped
 5. Deploy the reviewed app only after hosted acceptance and controlled production migration. Follow the [domain cutover checklist](marketing-app-domain-split.md) to configure and verify `https://app.fundlane.io`, its authentication callbacks and signed webhook.
 6. Publish the prepared Framer components and page CTAs: **Get started → https://app.fundlane.io/get-started** and **Log in → https://app.fundlane.io/sign-in**. The unpublished changes remove demo copy and state that the trial starts after activation. Review and publish only after the destinations work.
 
-The user selected Framer marketing at `fundlane.io` and the existing Vercel app at `app.fundlane.io`, then chose to keep Basic hosting and defer the domain cutover. Root DNS and Framer publication remain deferred. Hosted signup acceptance and Framer redirect entitlement are required before a later cutover. Preserve the app's existing paths, legal, support and authentication destinations.
+The user selected Framer marketing at `fundlane.io` and the existing Vercel app at `app.fundlane.io`. The root DNS cutover remains pending signup acceptance and Framer redirect entitlement. Preserve the app's existing paths, legal, support and authentication destinations.
 
 ## Current hosted prerequisites
 

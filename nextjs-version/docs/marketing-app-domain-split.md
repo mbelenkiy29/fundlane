@@ -1,13 +1,13 @@
 # Marketing and app domain cutover
 
-The selected target is Framer at `https://fundlane.io`, with `www.fundlane.io` redirecting to the apex, and the existing Vercel project at `https://app.fundlane.io`. The user subsequently chose **Keep Basic; defer the domain cutover**. The root still serves the existing Vercel site; no upgrade or cutover is authorized now. Existing Supabase identities, application data and Stripe subscriptions stay in place. Browser auth and signup-intent cookies remain host-only; do not add a shared `.fundlane.io` cookie domain.
+Framer owns `https://fundlane.io`; `www.fundlane.io` redirects to the apex. The existing Vercel project owns `https://app.fundlane.io`. Existing Supabase identities, application data and Stripe subscriptions stay in place. Browser auth and signup-intent cookies remain host-only; do not add a shared `.fundlane.io` cookie domain.
 
 ## Prepared and verified
 
 - Vercel project `fundlane` has verified `app.fundlane.io`. `/sign-in` returns HTTP 200 over verified HTTPS. An explicit `app` CNAME points to `6c62fd56bd6e213e.vercel-dns-017.com.` so root DNS changes will not rely on wildcard routing.
 - Next.js redirects only the app hostname's `/` to `/dashboard` with a temporary 307, preserving query parameters. The existing dashboard gateway handles login, onboarding and MFA. Marketing, previews, signup and API paths retain their behavior. The routing test first failed with 200, then passed after the configuration change.
 - The connected Fundlane Framer project has `fundlane.io` registered, pending DNS. Basic hosting is active. Its unpublished home, navigation, banner and footer changes contain 29 Get started destinations and eight Log in destinations across breakpoints/variants. Readback found no Book a demo, Sign in, or old demo/login URLs. Legal links point to the app's existing `/privacy` and `/terms`. Trial copy states activation starts the trial.
-- The root and `www` still serve Vercel. No root/`www` DNS or email records were changed. No subscription was purchased. Framer rejected native redirect creation because Basic does not include redirects. The Pro review showed $30 due immediately after Basic credit and $45/month renewing November 1, with no add-ons selected. The user declined the upgrade and deferred cutover; the checkout was canceled.
+- The root and `www` still serve Vercel. No root/`www` DNS or email records were changed. No subscription was purchased. Framer rejected native redirect creation because Basic does not include redirects; the advertised Pro upgrade is $45/month, before applicable tax and any prorated adjustment. Upgrade approval remains separate.
 
 ## Release prerequisites
 
