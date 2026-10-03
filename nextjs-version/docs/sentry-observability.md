@@ -47,7 +47,7 @@ Supabase Edge functions and the historical Render workers are out of scope. Shar
 2. In Sentry organization and project settings, turn on server-side data scrubbing, **Prevent storing of IP addresses** and spike protection.
 3. Set `NEXT_PUBLIC_SENTRY_DSN` (and the build variables if not set by the integration) for **Preview** first and redeploy.
 4. On the preview, using synthetic accounts and records: trigger a browser error and an API 500 and confirm both carry the user and workspace; confirm a replay is masked and stops on `/review/...` and `/account-security`; confirm public `/apply` and `/merchant-upload` pages send no replay; use the floating Feedback button to send an issue report, a feature request and an improvement (one with a screenshot) and check each `feedback_type` tag; sign in as a second user on the same tab and confirm a new replay ID; confirm stack traces are de-minified.
-5. Set the same variables for **Production** after the draft privacy policy update has been approved, then redeploy.
+5. Set the same variables for **Production**, then redeploy. The privacy policy wording for Sentry was approved by the owner on October 3, 2026 (see `docs/legal-drafts.md`).
 
 Roll back by unsetting `NEXT_PUBLIC_SENTRY_DSN` and `SENTRY_DSN` and redeploying.
 
