@@ -19,7 +19,7 @@ The route uses the same `requireScoreActor(request, "read")` as lender fit (sess
 | Average monthly deposits (M) | Mean of the latest up-to-3 statement months with known deposits. Months are restricted to included checking months in the closed lookback window (`includedMonths` + `resolveUnderwritingWindow`). Multiple accounts in the same month are summed. A period with any unknown deposit total is dropped. |
 | Existing daily payments | Sum of `estimatedPayment` on non-dismissed existing positions, with negative values counted as 0. |
 | Lender min/max funding | Criteria `requested_amount` `min`/`max` (numeric, not unspecified). |
-| Lender term | Criteria `term`, converted from the rule's unit (`days` × 12/365, `months`, `years` × 12); rules with any other unit, or a zero or negative value, are ignored with a warning. Uses the `eq` value, otherwise the midpoint of `min` and `max`, otherwise the single bound, then rounds and clamps to 2–18 months with a warning. Lender-fit scoring uses the same unit conversion for hard `term` rules (`lenderTermRuleWholeMonths`), but rounds toward the lender's side and does not clamp, so a deal never falls outside the lender's real term: a maximum rounds **down** (a 200-day max = 6 months, a 180-day max = 5), a minimum rounds **up** (a 200-day min = 7 months), an exact term rounds to the nearest month, and a 24-month max stays 24. |
+| Lender term | Criteria `term`, converted from the rule's unit (`days` × 12/365, `months`, `years` × 12); rules with any other unit, or a zero or negative value, are ignored with a warning. Uses the `eq` value, otherwise the midpoint of `min` and `max`, otherwise the single bound, then rounds and clamps to 2–18 months with a warning. Lender-fit scoring converts hard `term` rules differently; see [Hard term rules in lender-fit scoring](#hard-term-rules-in-lender-fit-scoring). |
 | Broker assumptions | Query params `factor`, `termMonths`, `frequency` (`daily`/`weekly`), `holdbackPct`. Non-numeric values or an unknown frequency return 422. Out-of-range values are clamped, with a warning. |
 
 Precedence for each assumption: broker, then lender (term only), then default. `assumptionsSource` records which one was used.
@@ -58,3 +58,16 @@ Worked example: M = $60,000, no positions, defaults. D = $2,857.14, available = 
 - **Transfers and funding credits aren't separated.** Statement extraction keeps the printed deposit total. If a used month has a `transfer:` or `mca_credit:` warning, the estimate says "Deposits may include transfers or funding credits".
 - **Position cadence isn't stored.** Each `estimatedPayment` is treated as a **daily** debit, which is the most conservative reading ("Existing position payments assumed daily"). Lender scoring treats the same value as monthly. Positions without an amount are excluded, with a count. No positions at all gives "Existing positions not detected; estimate assumes none".
 - **No lender factor criteria exist.** Factor always comes from the broker or the default.
+
+## Hard term rules in lender-fit scoring
+
+Lender-fit scoring (`lenderTermRuleWholeMonths` in `estimates.ts`, used by `scoring.ts`) does **not** use the estimate conversion above. It compares the deal's requested term against the lender's real term, never clamps it, and rounds toward the lender's side so a deal can't fall outside what the lender allows. Days use integer math only; the estimates' 12/365 float factor is never used.
+
+| Rule | Conversion | Examples |
+| --- | --- | --- |
+| `max` in days | 30-day month, rounded down: `floor(days / 30)` | 180 days = 6, 200 = 6, 365 = 12 |
+| `min` in days | 365/12 month, rounded up: `ceil(days × 12 / 365)` | 90 days = 3, 200 = 7, 365 = 12 |
+| `eq` in days | Whole months only: `days / 30` or `days × 12 / 365`, whichever is whole | 180 days = 6, 365 = 12; 200 days matches no whole-month request |
+| `months` / `years` | As given / × 12, with the same rounding (max down, min up) | a 24-month max stays 24 and passes a 20-month request |
+
+A max under 30 days, a zero or negative value, or a unit that isn't `days`, `months` or `years` gives `unknown` (needs review), never pass or fail. Unknown-term reasons name the rule's own limit (minimum or maximum). In the criteria panel, changing a rule's field to Term resets its unit to months.

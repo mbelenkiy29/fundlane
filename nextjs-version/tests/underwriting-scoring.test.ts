@@ -343,42 +343,62 @@ test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pas
   assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
 })
 
-test("hard term rules in days or years are converted to the lender's real term in whole months, rounded toward the lender's side and not clamped", async () => {
+test("hard term rules: max = floor(days/30), min = ceil(days*12/365), eq whole months only, no clamp", async () => {
   const workspaceId = "workspace-score-term-units"
-  const termResult = async (term: Partial<EligibilityRule>, termMonths: number) => {
-    const rules = fitRules().map((rule) => rule.field === "term" ? { ...rule, ...term } as EligibilityRule : rule)
+  const term = async (rule: Partial<EligibilityRule>, termMonths: number) => {
+    const rules = fitRules().map((item) => item.field === "term" ? { ...item, ...rule } as EligibilityRule : item)
     const score = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths }, funderRecord("term-units", workspaceId, "Term Units"), rules)
-    return score.reasons.find((reason) => reason.ruleId === "hard.term")?.result
+    return score.reasons.find((reason) => reason.ruleId === "hard.term")
   }
-  // Days are months, not raw numbers: a 180-day max no longer passes a 12-month request.
-  assert.equal(await termResult({ unit: "days", value: 180 }, 12), "fail")
-  assert.equal(await termResult({ operator: "min", unit: "days", value: 180 }, 3), "fail")
-  // A maximum rounds DOWN so a deal is never longer than the lender allows: a 200-day max reads as 6 months.
-  assert.equal(await termResult({ unit: "days", value: 200 }, 6), "pass")
-  assert.equal(await termResult({ unit: "days", value: 200 }, 7), "fail")
-  // A minimum rounds UP so a deal is never shorter than the lender requires: a 200-day min reads as 7 months.
-  assert.equal(await termResult({ operator: "min", unit: "days", value: 200 }, 6), "fail")
-  assert.equal(await termResult({ operator: "min", unit: "days", value: 200 }, 7), "pass")
-  // An exact term rounds to the nearest month: 180 days = 6.
-  assert.equal(await termResult({ operator: "eq", unit: "days", value: 180 }, 6), "pass")
-  // 180 days is 5.9 months, so as a maximum it reads as 5: a 6-month (about 182-day) request exceeds it.
-  assert.equal(await termResult({ unit: "days", value: 180 }, 5), "pass")
-  assert.equal(await termResult({ unit: "days", value: 180 }, 6), "fail")
-  assert.equal(await termResult({ unit: "days", value: 365 }, 12), "pass")
-  assert.equal(await termResult({ unit: "years", value: 1 }, 13), "fail")
-  // No 2-18 clamp on hard rules: a 24-month max passes a 20-month request; 3 years is 36 months.
-  assert.equal(await termResult({ unit: "months", value: 24 }, 20), "pass")
-  assert.equal(await termResult({ unit: "months", value: 24 }, 25), "fail")
-  assert.equal(await termResult({ unit: "years", value: 3 }, 20), "pass")
-  assert.equal(await termResult({ unit: "years", value: 3 }, 37), "fail")
-  assert.equal(await termResult({ operator: "min", unit: "months", value: 1 }, 1), "pass")
-  // A months-unit term is unchanged.
-  assert.equal(await termResult({ unit: "months", value: 12 }, 12), "pass")
-  assert.equal(await termResult({ unit: "months", value: 12 }, 13), "fail")
+  const result = async (rule: Partial<EligibilityRule>, termMonths: number) => (await term(rule, termMonths))?.result
+  const max = (value: number): Partial<EligibilityRule> => ({ operator: "max", unit: "days", value })
+  const min = (value: number): Partial<EligibilityRule> => ({ operator: "min", unit: "days", value })
+  const eq = (value: number): Partial<EligibilityRule> => ({ operator: "eq", unit: "days", value })
+  // Maximums: a 30-day month, rounded down.
+  assert.equal(await result(max(180), 6), "pass")
+  assert.equal(await result(max(180), 7), "fail")
+  assert.equal(await result(max(180), 12), "fail")
+  assert.equal(await result(max(365), 12), "pass")
+  assert.equal(await result(max(365), 13), "fail")
+  assert.equal(await result(max(200), 6), "pass")
+  assert.equal(await result(max(200), 7), "fail")
+  // Minimums: a 365/12 month, rounded up.
+  assert.equal(await result(min(365), 12), "pass")
+  assert.equal(await result(min(365), 11), "fail")
+  assert.equal(await result(min(90), 3), "pass")
+  assert.equal(await result(min(90), 2), "fail")
+  assert.equal(await result(min(200), 7), "pass")
+  assert.equal(await result(min(200), 6), "fail")
+  // Exact terms match only a whole number of months.
+  assert.equal(await result(eq(365), 12), "pass")
+  assert.equal(await result(eq(180), 6), "pass")
+  assert.equal(await result(eq(180), 7), "fail")
+  for (const months of [6, 7]) assert.equal(await result(eq(200), months), "fail", `200 days equals no whole month (${months})`)
+  // A max under one month is unknown (needs review), not 0.
+  assert.equal(await result(max(20), 1), "unknown")
+  // No 2-18 clamp on hard rules; years are x12; months unchanged.
+  assert.equal(await result({ operator: "max", unit: "months", value: 24 }, 20), "pass")
+  assert.equal(await result({ operator: "max", unit: "months", value: 24 }, 25), "fail")
+  assert.equal(await result({ operator: "max", unit: "years", value: 3 }, 36), "pass")
+  assert.equal(await result({ operator: "max", unit: "years", value: 3 }, 37), "fail")
+  assert.equal(await result({ operator: "min", unit: "years", value: 1 }, 11), "fail")
+  assert.equal(await result({ operator: "max", unit: "months", value: 12 }, 12), "pass")
+  assert.equal(await result({ operator: "max", unit: "months", value: 12 }, 13), "fail")
   // A non-time unit or a zero/negative value cannot pass or fail; it needs review.
-  assert.equal(await termResult({ unit: "count", value: 180 }, 6), "unknown")
-  assert.equal(await termResult({ unit: "days", value: 0 }, 6), "unknown")
-  assert.equal(await termResult({ unit: "months", value: -6 }, 6), "unknown")
+  assert.equal(await result({ unit: "count", value: 180 }, 6), "unknown")
+  assert.equal(await result(max(0), 6), "unknown")
+  assert.equal(await result({ operator: "max", unit: "months", value: -6 }, 6), "unknown")
+})
+
+test("unknown-term reasons name the rule's own limit (minimum vs maximum)", async () => {
+  const workspaceId = "workspace-score-term-wording"
+  const detail = async (operator: EligibilityRule["operator"]) => {
+    const rules = fitRules().map((item) => item.field === "term" ? { ...item, operator } as EligibilityRule : item)
+    const score = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths: undefined }, funderRecord("term-wording", workspaceId, "Term Wording"), rules)
+    return score.reasons.find((reason) => reason.ruleId === "hard.term")?.detail
+  }
+  assert.equal(await detail("min"), "Term is unknown, so the funder's minimum cannot pass.")
+  assert.equal(await detail("max"), "Term is unknown, so the funder's maximum cannot pass.")
 })
 
 test("industry not_in 7132 fails NAICS prefix 713210", async () => {
