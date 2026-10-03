@@ -19,7 +19,7 @@ The route uses the same `requireScoreActor(request, "read")` as lender fit (sess
 | Average monthly deposits (M) | Mean of the latest up-to-3 statement months with known deposits. Months are restricted to included checking months in the closed lookback window (`includedMonths` + `resolveUnderwritingWindow`). Multiple accounts in the same month are summed. A period with any unknown deposit total is dropped. |
 | Existing daily payments | Sum of `estimatedPayment` on non-dismissed existing positions, with negative values counted as 0. |
 | Lender min/max funding | Criteria `requested_amount` `min`/`max` (numeric, not unspecified). |
-| Lender term | Criteria `term`, converted from the rule's unit (`days` × 12/365, `months`, `years` × 12); rules with any other unit are ignored with a warning. Uses the `eq` value, otherwise the midpoint of `min` and `max`, otherwise the single bound, then rounds and clamps to 2–18 months with a warning. |
+| Lender term | Criteria `term`, converted from the rule's unit (`days` × 12/365, `months`, `years` × 12); rules with any other unit, or a zero or negative value, are ignored with a warning. Uses the `eq` value, otherwise the midpoint of `min` and `max`, otherwise the single bound, then rounds and clamps to 2–18 months with a warning. Lender-fit scoring uses the same conversion and clamp (`lenderTermRuleMonths`, `clampLenderTermMonths`) for hard `term` rules. |
 | Broker assumptions | Query params `factor`, `termMonths`, `frequency` (`daily`/`weekly`), `holdbackPct`. Non-numeric values or an unknown frequency return 422. Out-of-range values are clamped, with a warning. |
 
 Precedence for each assumption: broker, then lender (term only), then default. `assumptionsSource` records which one was used.
@@ -29,7 +29,7 @@ Precedence for each assumption: broker, then lender (term only), then default. `
 1. D = M / 21; availableDaily = holdbackPct × D − existingDailyPayments. If availableDaily ≤ 0, the status is `no_capacity`.
 2. payments = round(termMonths × 21) for daily, or round(termMonths × 4.33) for weekly.
 3. capacityMaxAdvance = availableDaily × termMonths × 21 / factor.
-4. high = min(1.0 × M, capacityMaxAdvance, lender max), rounded down to $500. If that comes out as $0, the status is `no_capacity`.
+4. high = min(1.0 × M, capacityMaxAdvance, lender max), rounded down to $500. If that comes out as $0, the status is `no_capacity`; the reason names the lender maximum when that maximum is itself under $500.
 5. If a lender min exists and high < min, the status is `below_lender_minimum`.
 6. low = max(min(0.5 × M, high) rounded down to $500, lender min).
 7. payback = advance × factor; payment per period = payback / payments, rounded to cents. Both are computed for low and high. If the payment count isn't positive or any amount isn't finite, the status is `insufficient_data` (never $0 or Infinity).

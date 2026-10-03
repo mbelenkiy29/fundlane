@@ -343,6 +343,33 @@ test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pas
   assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
 })
 
+test("hard term rules in days or years are converted to months (180 days = 6) and clamped to 2-18", async () => {
+  const workspaceId = "workspace-score-term-units"
+  const termResult = async (term: Partial<EligibilityRule>, termMonths: number) => {
+    const rules = fitRules().map((rule) => rule.field === "term" ? { ...rule, ...term } as EligibilityRule : rule)
+    const score = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths }, funderRecord("term-units", workspaceId, "Term Units"), rules)
+    return score.reasons.find((reason) => reason.ruleId === "hard.term")?.result
+  }
+  // 180 days is 6 months, not 180 months.
+  assert.equal(await termResult({ unit: "days", value: 180 }, 6), "pass")
+  assert.equal(await termResult({ unit: "days", value: 180 }, 12), "fail")
+  assert.equal(await termResult({ operator: "min", unit: "days", value: 180 }, 3), "fail")
+  assert.equal(await termResult({ operator: "eq", unit: "days", value: 180 }, 6), "pass")
+  assert.equal(await termResult({ unit: "years", value: 1 }, 13), "fail")
+  // Clamped at both ends, like estimates: 30 days -> 2 months, 3 years -> 18 months.
+  assert.equal(await termResult({ unit: "days", value: 30 }, 2), "pass")
+  assert.equal(await termResult({ unit: "days", value: 30 }, 3), "fail")
+  assert.equal(await termResult({ unit: "years", value: 3 }, 18), "pass")
+  assert.equal(await termResult({ unit: "years", value: 3 }, 20), "fail")
+  // A months-unit term is unchanged.
+  assert.equal(await termResult({ unit: "months", value: 12 }, 12), "pass")
+  assert.equal(await termResult({ unit: "months", value: 12 }, 13), "fail")
+  // A non-time unit or a zero/negative value cannot pass or fail; it needs review.
+  assert.equal(await termResult({ unit: "count", value: 180 }, 6), "unknown")
+  assert.equal(await termResult({ unit: "days", value: 0 }, 6), "unknown")
+  assert.equal(await termResult({ unit: "months", value: -6 }, 6), "unknown")
+})
+
 test("industry not_in 7132 fails NAICS prefix 713210", async () => {
   assert.equal(naicsPrefixMatch("7132", "713210"), true)
   assert.equal(naicsPrefixMatch("713210", "7132"), true)
