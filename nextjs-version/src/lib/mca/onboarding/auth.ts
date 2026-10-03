@@ -1,7 +1,10 @@
 import "server-only"
 import { cookies } from "next/headers"
 import { z } from "zod"
-import { createSupabaseServerClient } from "../../supabase/server"
+import {
+  createSupabaseServerClient,
+  getSupabaseAdminClient,
+} from "../../supabase/server"
 import {
   getDatabase,
   newId,
@@ -24,6 +27,7 @@ import {
 } from "../auth-navigation"
 import { startPasswordTotpChallenge } from "../totp-service"
 import { supabaseIdentity, type SupabaseIdentity } from "../supabase-auth"
+import { authError } from "../supabase-auth-http"
 import { onboardingOrigin } from "./checkout"
 import {
   assertEnrollmentGeneration,
@@ -31,13 +35,20 @@ import {
   assertEnrollmentSession,
   requireEnrollmentRuntime,
 } from "./claim"
-import { enrollmentEmailHash, findEnrollment } from "./store"
+import {
+  enrollmentChallengeScope,
+  enrollmentEmailDomainHash,
+  enrollmentEmailHash,
+  enrollmentEncryptionScope,
+  findEnrollment,
+  readEnrollmentContact,
+} from "./store"
+import { enqueueOnboardingEmailIntents } from "./email-intents"
 import type { EnrollmentRecord } from "./contracts"
 
+export { enrollmentChallengeScope }
 export const enrollmentAuthCookie = "mca_enrollment_auth"
 export const enrollmentBindingCookie = "mca_enrollment_binding"
-export const enrollmentChallengeScope = (id: string) =>
-  `onboarding:challenge:${id}`
 const challengePayloadSchema = z
   .object({
     version: z.literal(1),
@@ -47,6 +58,8 @@ const challengePayloadSchema = z
     generation: z.number().int().positive().optional(),
     issuedAt: z.iso.datetime().nullable(),
     sessionId: z.uuid().nullable(),
+    // Only a challenge minted into the frozen getting_started email proves mailbox control.
+    invite: z.literal(true).optional(),
   })
   .strict()
 export type EnrollmentChallengePayload = z.infer<typeof challengePayloadSchema>
@@ -424,6 +437,177 @@ export async function reserveEnrollmentCallbackAttempt(
     15
   )
   await reserveEnrollmentAuthenticationAttempt(challengeId, { continuation })
+}
+
+/** Opening an emailed invite only binds it to this browser; nothing is consumed until the POST. */
+export async function openEnrollmentInvite(
+  challengeId: string,
+  token: string
+): Promise<string> {
+  requireEnrollmentRuntime()
+  ;(await cookies()).set(enrollmentAuthCookie, `${challengeId}.${token}`, {
+    secure: true,
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 3600,
+  })
+  const challenge = await getDatabase().queryOne<EnrollmentChallenge>(
+    "SELECT * FROM mca_enrollment_challenges WHERE id=?",
+    [challengeId]
+  )
+  if (!challenge || hashOpaqueToken(token) !== challenge.token_hash)
+    return "/enrollment"
+  const payload = readEnrollmentChallengePayload(challenge)
+  // Expired or used invites still land on their enrollment, which then offers the email-code fallback.
+  return payload.invite
+    ? enrollmentContinuation({
+        enrollmentId: challenge.enrollment_id,
+        ...(payload.destination ? { destination: payload.destination } : {}),
+        ...(payload.generation ? { generation: payload.generation } : {}),
+      })
+    : "/enrollment"
+}
+
+/** A mailbox-proving invite either sets the new owner's password or moves the unclaimed enrollment to a corrected email. */
+export async function completeEnrollmentInvite(input: {
+  challengeId: string
+  email: string
+  password?: string
+}): Promise<{ destination: string } | { emailChanged: true }> {
+  const { challenge, payload, row } =
+    await reserveEnrollmentAuthenticationAttempt(input.challengeId)
+  if (
+    !payload.invite ||
+    row.workspaceId ||
+    row.claimedProviderUserId ||
+    row.initiatingProviderUserId
+  )
+    throw invalidChallenge()
+  const email = input.email.trim().toLowerCase()
+  if (enrollmentEmailHash(email) !== challenge.email_hash) {
+    if (input.password !== undefined)
+      throw new AppError(
+        400,
+        "validation_failed",
+        "Confirm the new email before setting a password."
+      )
+    return changeEnrollmentEmailFromInvite(input.challengeId, email)
+  }
+  if (input.password === undefined)
+    throw new AppError(400, "validation_failed", "Choose a password.")
+  // The consumed invite proves the mailbox, so the new account is created confirmed.
+  const { error } = await getSupabaseAdminClient().auth.admin.createUser({
+    email: payload.email,
+    password: input.password,
+    email_confirm: true,
+  })
+  if (error && (error.code === "email_exists" || error.status === 422))
+    throw new AppError(
+      409,
+      "enrollment_account_exists",
+      "An account already uses this email. Login with your password to continue."
+    )
+  authError(error)
+  const client = await createSupabaseServerClient()
+  if (
+    (
+      await client.auth.signInWithPassword({
+        email: payload.email,
+        password: input.password,
+      })
+    ).error
+  )
+    throw invalidChallenge()
+  const identity = await supabaseIdentity()
+  if (!identity) throw invalidChallenge()
+  const result = await completeEnrollmentAuthentication(
+    input.challengeId,
+    identity
+  )
+  await startPasswordTotpChallenge(identity)
+  return result
+}
+
+async function changeEnrollmentEmailFromInvite(
+  challengeId: string,
+  email: string
+): Promise<{ emailChanged: true }> {
+  await withImmediateTransaction(async (db) => {
+    const candidate = await db.queryOne<EnrollmentChallenge>(
+      "SELECT * FROM mca_enrollment_challenges WHERE id=?",
+      [challengeId]
+    )
+    if (!candidate) throw invalidChallenge()
+    await db.queryOne("SELECT id FROM mca_enrollments WHERE id=? FOR UPDATE", [
+      candidate.enrollment_id,
+    ])
+    await db.queryOne(
+      "SELECT id FROM mca_enrollment_challenges WHERE id=? FOR UPDATE",
+      [challengeId]
+    )
+    const { payload, row } = await requireIssuedEnrollmentChallenge(
+      challengeId,
+      undefined,
+      db,
+      true
+    )
+    if (
+      !payload.invite ||
+      row.workspaceId ||
+      row.claimedProviderUserId ||
+      row.initiatingProviderUserId ||
+      row.claimState !== "unclaimed"
+    )
+      throw invalidChallenge()
+    if (
+      await db.queryOne("SELECT id FROM users WHERE lower(email)=?", [email])
+    )
+      throw new AppError(
+        409,
+        "enrollment_email_unavailable",
+        "This email already has an account. Login with it instead, or use another email."
+      )
+    const now = nowIso(),
+      generation = row.emailGeneration + 1
+    await db.execute(
+      "UPDATE mca_enrollment_challenges SET state='consumed',consumed_at=?,updated_at=? WHERE id=? AND state='pending'",
+      [now, now, challengeId]
+    )
+    const changed = await db.execute(
+      "UPDATE mca_enrollments SET contact_cipher=?,email_hash=?,email_domain_hash=?,email_generation=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",
+      [
+        encryptSensitive(
+          JSON.stringify({ ...readEnrollmentContact(row), email }),
+          enrollmentEncryptionScope(row.id)
+        ),
+        enrollmentEmailHash(email),
+        enrollmentEmailDomainHash(email),
+        generation,
+        now,
+        row.id,
+        row.revision,
+      ]
+    )
+    if (changed !== 1)
+      throw new AppError(
+        409,
+        "enrollment_revision_conflict",
+        "Reload the purchase page and retry."
+      )
+    await db.execute(
+      "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE enrollment_id=? AND state IN ('pending','verified')",
+      [now, row.id]
+    )
+    await db.execute(
+      "UPDATE mca_onboarding_service_emails SET state='suppressed',superseded_by_generation=?,updated_at=? WHERE enrollment_id=? AND generation<? AND state IN ('queued','retry','failed') AND claim_token IS NULL AND provider_message_id IS NULL AND frozen_at IS NULL",
+      [generation, now, row.id, generation]
+    )
+    // The fresh invite must prove the corrected mailbox before any password is set.
+    await enqueueOnboardingEmailIntents(row.id, generation, db)
+  })
+  ;(await cookies()).delete(enrollmentAuthCookie)
+  return { emailChanged: true }
 }
 
 export async function verifyEnrollmentAuthentication(input: {

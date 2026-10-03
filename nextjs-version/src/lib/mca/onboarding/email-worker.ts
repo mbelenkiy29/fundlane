@@ -1,14 +1,15 @@
 import "server-only";
 import { z } from "zod";
 import { getDatabase, newId, nowIso, withTransaction, type DbExecutor } from "../db";
-import { decryptSensitive, encryptSensitive, hmacScopedToken } from "../crypto";
+import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken, hmacScopedToken } from "../crypto";
 import { AppError } from "../errors";
 import { evaluateCompanyAccess, getCompanyAccess } from "../company-access";
 import { parseEmailAddress } from "../intake/usesend";
-import type { OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
+import type { EnrollmentRecord, OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
+import type { EnrollmentChallengePayload } from "./auth";
 import { onboardingEmailEnabled } from "./config";
 import { onboardingEmailEncryptionScope } from "./email-intents";
-import { enrollmentEmailHash, findEnrollment } from "./store";
+import { enrollmentChallengeScope, enrollmentEmailHash, findEnrollment } from "./store";
 import { renderOnboardingEmail } from "./email-content";
 import { readVerifiedEnrollmentBilling } from "./evidence";
 import { dispatchOnboardingEmail, onboardingEmailConfiguration, onboardingEmailProviderIdentity, type FrozenOnboardingEmailConfiguration, type OnboardingEmailDispatchOutcome } from "./email-transport";
@@ -90,12 +91,24 @@ async function freeze(row: EmailRow): Promise<EmailRow | undefined> {
     const payload = payloadSchema.parse(JSON.parse(decryptSensitive(live.payload_cipher, scope(live))));
     if (payload.enrollmentId !== live.enrollment_id || payload.generation !== live.generation || payload.purpose !== live.purpose || payload.trialEndsAt !== enrollment.trialEndsAt || enrollmentEmailHash(payload.email) !== live.recipient_hash || hmacScopedToken("onboarding-email-payload", live.enrollment_id, JSON.stringify(payload)) !== live.payload_hash) throw new AppError(409, "onboarding_email_payload_changed", "Review the service email intent.");
     const configuration = onboardingEmailConfiguration();
+    // Only a brand-new owner gets a password invite; existing accounts already have a sign-in path.
+    const invite = payload.purpose === "getting_started" && !enrollment.workspaceId && !enrollment.claimedProviderUserId && !enrollment.initiatingProviderUserId && enrollment.claimState === "unclaimed"
+      ? { challengeId: newId(), token: createOpaqueToken() } : undefined;
     let content: ReturnType<typeof renderOnboardingEmail>;
-    try { content = renderOnboardingEmail({ purpose: payload.purpose, enrollmentId: payload.enrollmentId, generation: payload.generation, trialEndsAt: payload.trialEndsAt, origin: process.env.MCA_APP_ORIGIN?.trim() ?? "" }); }
+    try { content = renderOnboardingEmail({ purpose: payload.purpose, enrollmentId: payload.enrollmentId, generation: payload.generation, trialEndsAt: payload.trialEndsAt, origin: process.env.MCA_APP_ORIGIN?.trim() ?? "", ...(invite ? { invite } : {}) }); }
     catch { throw new AppError(503, "onboarding_email_origin_invalid", "Configure a secure onboarding application origin."); }
     const writeClock = nowIso();
-    return db.queryOne<EmailRow>("UPDATE mca_onboarding_service_emails SET recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=?,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND frozen_at IS NULL RETURNING *", [encryptSensitive(payload.email, scope(live)), encryptSensitive(JSON.stringify(content), scope(live)), encryptSensitive(JSON.stringify(configuration), scope(live)), configuration.provider, onboardingEmailProviderIdentity(configuration), writeClock, writeClock, live.id, live.claim_token, writeClock]);
+    const frozen = await db.queryOne<EmailRow>("UPDATE mca_onboarding_service_emails SET recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=?,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND frozen_at IS NULL RETURNING *", [encryptSensitive(payload.email, scope(live)), encryptSensitive(JSON.stringify(content), scope(live)), encryptSensitive(JSON.stringify(configuration), scope(live)), configuration.provider, onboardingEmailProviderIdentity(configuration), writeClock, writeClock, live.id, live.claim_token, writeClock]);
+    // Minted once, only with the snapshot that carries it; frozen retries return above and never mint again.
+    if (frozen && invite) await insertInvite(db, enrollment, payload, invite, writeClock);
+    return frozen;
   });
+}
+
+/** The DB keeps only the token hash; the CHECK caps expiry at created_at + 1 day, so both derive from one clock. */
+async function insertInvite(db: DbExecutor, enrollment: EnrollmentRecord, payload: z.infer<typeof payloadSchema>, invite: { challengeId: string; token: string }, now: string) {
+  const challenge: EnrollmentChallengePayload = { version: 1, email: payload.email.trim().toLowerCase(), emailGeneration: enrollment.emailGeneration, destination: "crm", generation: payload.generation, issuedAt: now, sessionId: null, invite: true };
+  await db.execute("INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,resume_generation,expires_at,created_at,updated_at) VALUES (?,?,'authentication',?,?,?,?,?,?,?)", [invite.challengeId, enrollment.id, hashOpaqueToken(invite.token), encryptSensitive(JSON.stringify(challenge), enrollmentChallengeScope(invite.challengeId)), enrollmentEmailHash(payload.email), enrollment.resumeGeneration, new Date(Date.parse(now) + 86_400_000).toISOString(), now, now]);
 }
 
 /** Configuration failures before a frozen send keep durable work without consuming a provider attempt. */

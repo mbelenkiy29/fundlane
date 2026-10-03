@@ -11,8 +11,11 @@ import { createOpaqueToken } from "../crypto"
 import { apiError, AppError } from "../errors"
 import { readJson } from "../http"
 import { supabaseIdentity } from "../supabase-auth"
+import { newPassword } from "../supabase-auth-http"
 import {
+  completeEnrollmentInvite,
   enrollmentBindingCookie,
+  openEnrollmentInvite,
   readEnrollmentAuthCookie,
   requestEnrollmentAuthentication,
   verifyEnrollmentAuthentication,
@@ -49,6 +52,14 @@ type EnrollmentHttpAction =
   | "verify"
   | "claim"
   | "billing"
+  | "invite-open"
+  | "password"
+const inviteQuerySchema = z
+  .object({
+    challenge: z.uuid(),
+    token: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/),
+  })
+  .strict()
 export async function handleEnrollmentHttp(
   request: Request,
   action: EnrollmentHttpAction
@@ -92,6 +103,28 @@ export async function handleEnrollmentHttp(
         }),
         { headers: enrollmentHttpHeaders }
       )
+    }
+    if (action === "invite-open") {
+      // Emailed links are GETs; like Auth callbacks, the bound token replaces an Origin check.
+      await consumeRequestRateLimit(
+        clientRateKey(request, "enrollment:invite"),
+        15
+      )
+      const query = new URL(request.url).searchParams
+      const parsed = inviteQuerySchema.safeParse(
+        Object.fromEntries(query.entries())
+      )
+      const location =
+        parsed.success && [...query.keys()].length === 2
+          ? await openEnrollmentInvite(
+              parsed.data.challenge,
+              parsed.data.token
+            )
+          : "/enrollment"
+      return NextResponse.redirect(new URL(location, onboardingOrigin()), {
+        status: 303,
+        headers: { ...enrollmentHttpHeaders, "Referrer-Policy": "no-referrer" },
+      })
     }
     assertEnrollmentMutation(request)
     await consumeRequestRateLimit(
@@ -164,6 +197,22 @@ export async function handleEnrollmentHttp(
       )
       return NextResponse.json(
         { success: true, ...(await verifyEnrollmentAuthentication(input)) },
+        { headers: enrollmentHttpHeaders }
+      )
+    }
+    if (action === "password") {
+      const input = await readJson(
+        request,
+        z
+          .object({
+            challengeId: z.uuid(),
+            email: z.email().max(320),
+            password: newPassword.optional(),
+          })
+          .strict()
+      )
+      return NextResponse.json(
+        { success: true, ...(await completeEnrollmentInvite(input)) },
         { headers: enrollmentHttpHeaders }
       )
     }
