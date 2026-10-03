@@ -35,6 +35,7 @@ All paths below are relative to `nextjs-version/`.
 | Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
 | Intake, application review, documents and imports | `src/lib/mca/intake/` (`review.ts`, `notifications.ts`, `submission-review.ts`), `src/components/mca/intake/application-review.tsx`, `documents/`, `imports/`, `docs/application-intake.md` |
 | Underwriting and funder matching | `src/lib/mca/underwriting/`, `funders/`, `datamerch/` |
+| Deal Agent proposals and broker approval queue | `src/lib/mca/deal-agent/`, `src/components/mca/deal-agent/`, `/api/mca/deal-agent/[dealId]`, `drizzle/0082_deal_agent.sql`, `docs/deal-agent.md` |
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | In-app email conversations and worker | `src/lib/mca/email-conversations/`, `src/components/mca/email/`, `src/app/api/mca/email/`, `scripts/messaging/`, `docs/email-conversations.md` |
 | Outbound workflow webhooks and daily report email | `src/lib/mca/comms/webhooks.ts`, `workflow-events.ts`, `digest.ts`, `scheduler.ts`, `src/components/mca/comms/webhook-console.tsx`, `digest-settings.tsx`, `/api/mca/comms/`, `/api/cron/comms`, `docs/outbound-webhooks-and-daily-reports.md` |
