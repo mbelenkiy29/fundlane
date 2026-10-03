@@ -75,6 +75,8 @@ async function failUploadCompletion(actor: DealActor, record: DocumentRecord, er
 /** Scan after integrity checks (enqueue on Vercel); promote storage only when clean. Never release quarantine. */
 async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, bytes: Uint8Array): Promise<DocumentRecord> {
   if (isDocumentReady(record.processingState) || record.processingState === "quarantined") return record
+  // scan_failed means a scanner ran and could not verify the file; the bypass must not release it.
+  if (record.processingState === "scan_failed" && scanBypassEnabled()) return record
   try {
     if (bytes.byteLength !== record.byteLength || createHash("sha256").update(bytes).digest("hex") !== record.checksum) {
       throw new AppError(409, "document_integrity_failed", "Stored file verification failed. Upload a new version of this document.")
