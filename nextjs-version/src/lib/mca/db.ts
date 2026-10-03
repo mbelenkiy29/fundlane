@@ -5,7 +5,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AppError } from "./errors";
-import { assertExecutionActive, executionFence, executionRemainingMs } from "./jobs/execution";
+import { assertExecutionActive, executionFence, executionRemainingMs, executionSignal } from "./jobs/execution";
+import { acquireDeadlineClient, DatabaseConnectionDeadlineError } from "./db/deadline-client";
 import { postgresConnection } from "./db-connection";
 import { assertHostedSupabaseConfig } from "./hosted-config";
 import type { AuditEvent, AuthContext, JobResourceReference, WorkspaceResource } from "./types";
@@ -50,6 +51,19 @@ async function wireQuery<Row extends QueryResultRow>(
   return queryable.query<Row>({ text: config.text, values: config.values ?? [], query_timeout: config.query_timeout });
 }
 
+function rollbackQueryTimeout(): number | undefined {
+  const remaining = executionRemainingMs();
+  return remaining === undefined ? undefined : executionSignal()?.aborted ? 1 : Math.min(1_000, remaining);
+}
+
+function executionQueryError(error: unknown): unknown {
+  if (executionRemainingMs() !== undefined && error instanceof Error &&
+      (error.message === "Query read timeout" || (error as Error & { code?: string }).code === "57014")) {
+    return new AppError(503, "execution_expired", "The worker execution expired; remaining work will be retried.");
+  }
+  return error;
+}
+
 function databaseUrl(): string {
   assertHostedSupabaseConfig();
   const value = process.env.DATABASE_URL?.trim();
@@ -88,6 +102,15 @@ function getPool(): Pool {
     globalDatabase.__mcaDatabaseUrl = url;
   }
   return globalDatabase.__mcaDatabasePool;
+}
+
+async function acquireClient(): Promise<PoolClient> {
+  assertExecutionActive();
+  try { return await acquireDeadlineClient(() => getPool().connect(), executionRemainingMs(), executionSignal()); }
+  catch (error) {
+    if (error instanceof DatabaseConnectionDeadlineError) throw new AppError(503, "execution_expired", "The worker execution expired; remaining work will be retried.");
+    throw error;
+  }
 }
 
 /** Convert only real SQLite-style bind markers; quoted SQL and comments are preserved. */
@@ -235,22 +258,29 @@ export function assertTransactionExecutor(db: DbExecutor): void {
 
 /** Hold a cross-instance lock on a separate transaction, including through a transaction pooler. */
 export async function withTransactionAdvisoryLock<T>(key: string, operation: () => Promise<T>): Promise<{ busy: true } | { busy: false; result: T }> {
-  const client = await getPool().connect();
+  const client = await acquireClient();
   let discard = false;
+  let commitSent = false;
   try {
-    await wireQuery(client, { text: "BEGIN" });
+    assertExecutionActive();
     try {
-      const lock = await wireQuery<{ locked: boolean }>(client, { text: "SELECT pg_try_advisory_xact_lock(hashtext($1)) locked", values: [key] });
+      await wireQuery(client, { text: "BEGIN", query_timeout: executionRemainingMs() });
+      const lock = await wireQuery<{ locked: boolean }>(client, { text: "SELECT pg_try_advisory_xact_lock(hashtext($1)) locked", values: [key], query_timeout: executionRemainingMs() });
       if (!lock.rows[0]?.locked) {
-        await wireQuery(client, { text: "COMMIT" });
+        assertExecutionActive();
+        commitSent = true;
+        await wireQuery(client, { text: "COMMIT", query_timeout: executionRemainingMs() });
         return { busy: true };
       }
       const result = await operation();
-      await wireQuery(client, { text: "COMMIT" });
+      assertExecutionActive();
+      commitSent = true;
+      await wireQuery(client, { text: "COMMIT", query_timeout: executionRemainingMs() });
       return { busy: false, result };
     } catch (error) {
-      try { await wireQuery(client, { text: "ROLLBACK" }); } catch { discard = true; }
-      throw error;
+      if (commitSent && executionRemainingMs() !== undefined) discard = true;
+      else { try { await wireQuery(client, { text: "ROLLBACK", query_timeout: rollbackQueryTimeout() }); } catch { discard = true; } }
+      throw executionQueryError(error);
     }
   } finally {
     client.release(discard);
@@ -283,17 +313,21 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
   // Also report failures to acquire a connection: no transaction was started.
   let connected = false;
   try {
-    const client: PoolClient = await getPool().connect();
+    const client: PoolClient = await acquireClient();
     connected = true;
     // A checked-out pg client cannot execute concurrent wire queries safely. Repository
     // callbacks may use Promise.all, so serialize only this transaction's command stream.
     const executor = createExecutor(client, true);
+    let beginSent = false;
+    let commitSent = false;
     try {
-      await wireQuery(client, { text: "BEGIN" });
+      assertExecutionActive();
+      beginSent = true;
+      await wireQuery(client, { text: "BEGIN", query_timeout: executionRemainingMs() });
       const remaining = executionRemainingMs();
       if (remaining !== undefined) {
         assertExecutionActive();
-        await wireQuery(client, { text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`] });
+        await wireQuery(client, { text: "SELECT set_config('statement_timeout', $1, true)", values: [`${remaining}ms`], query_timeout: remaining });
       }
       const context = { executor, rollbackCallbacks, active: true };
       const result = await transactionContext.run(context, async () => {
@@ -301,12 +335,19 @@ export async function withTransaction<T>(operation: (database: DbExecutor) => Pr
         finally { context.active = false; }
       });
       assertExecutionActive();
-      await wireQuery(client, { text: "COMMIT" });
+      commitSent = true;
+      await wireQuery(client, { text: "COMMIT", query_timeout: executionRemainingMs() });
       return result;
     } catch (error) {
-      try { await wireQuery(client, { text: "ROLLBACK" }); rolledBack = true; }
-      catch { discardClient = true; }
-      throw error;
+      // A timed-out COMMIT may already have succeeded on the server. Do not run
+      // rollback cleanup callbacks against potentially committed resources.
+      if (commitSent && executionRemainingMs() !== undefined) discardClient = true;
+      else if (!beginSent) rolledBack = true;
+      else {
+        try { await wireQuery(client, { text: "ROLLBACK", query_timeout: rollbackQueryTimeout() }); rolledBack = true; }
+        catch { discardClient = true; }
+      }
+      throw executionQueryError(error);
     } finally { client.release(discardClient); }
   } catch (error) {
     // Do not borrow another pool connection while the failed transaction still

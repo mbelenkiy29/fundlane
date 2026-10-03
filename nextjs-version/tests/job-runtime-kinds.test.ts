@@ -17,3 +17,10 @@ test("explicit kinds are validated, deduplicated and auto-submit stays gated", (
   assert.throws(() => runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "document_scan" }), { code: "job_runtime_kinds_invalid" })
   assert.throws(() => runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "export,unknown" }), { code: "job_runtime_kinds_invalid" })
 })
+
+test("runtimeKinds includes deal_agent only when MCA_DEAL_AGENT_ENABLED is true", () => {
+  assert.deepEqual(runtimeKinds({ MCA_DEAL_AGENT_ENABLED: "true" }), ["export_create", "export", "deal_agent"])
+  assert.deepEqual(runtimeKinds({ MCA_DEAL_AGENT_ENABLED: "TRUE" }), ["export_create", "export"])
+  assert.deepEqual(runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "export,deal_agent" }), ["export"])
+  assert.deepEqual(runtimeKinds({ MCA_JOB_RUNTIME_KINDS: "export,deal_agent", MCA_DEAL_AGENT_ENABLED: "true" }), ["export", "deal_agent"])
+})

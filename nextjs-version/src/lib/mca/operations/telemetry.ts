@@ -90,9 +90,14 @@ export function logApiFailure(correlationId?: string, diagnostics?: ErrorDiagnos
     await persistEvent(event)
   })
 }
-export async function recordOperationalError(component: string, code: string) {
+export async function recordOperationalError(
+  component: string,
+  code: string,
+  details?: Record<string, unknown>
+) {
   const event = operationalEvent(component, code)
-  console.error(JSON.stringify({ event: "operational_error", ...event }))
+  // Details go to native logs only; the persisted row stays minimal.
+  console.error(JSON.stringify({ ...details, event: "operational_error", ...event }))
   await persistEvent(event)
 }
 export function recordActivity(request: Request, userId: string) {

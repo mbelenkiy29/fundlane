@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { closeDatabaseForTests, getDatabase } from "../src/lib/mca/db"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
-import { hashOpaqueToken } from "../src/lib/mca/crypto"
+import { encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { Role } from "../src/lib/mca/types"
@@ -25,10 +25,11 @@ import {
 } from "../src/lib/mca/comms/reminders"
 import { parseEmailAttemptRef } from "../src/lib/mca/submissions/email-templates"
 import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
-import { insertJob } from "../src/lib/mca/submissions/repository"
+import { findJobById, insertJob } from "../src/lib/mca/submissions/repository"
 import { setWebhookFetchForTests, setWebhookLookupForTests } from "../src/lib/mca/submissions/webhook"
 import { GET as remindersGet, POST as remindersPost } from "../src/app/api/mca/comms/reminders/route"
 import { POST as previewPost } from "../src/app/api/mca/comms/reminders/preview/route"
+import { systemEmailConfiguration } from "../src/lib/mca/system-email"
 
 let testDatabase: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 
@@ -110,6 +111,7 @@ type PreviewBody = {
   sender: { fromName: string; fromAddress: string }
   to: string[]
   cc: string[]
+  replyTo: string
   subject: string
   body: string
   thread: { mode: string; messageId?: string; threadId?: string; inReplyTo?: string; references: string[]; disclosure?: string }
@@ -220,6 +222,44 @@ before(async () => {
       active: true,
     }],
   })).funder.id
+})
+
+test("system-provider receipts disclose unknown threads and hide unsupported reminders without a webhook", async () => {
+  const deal = await seedDeal()
+  const queued = await queueEmail(deal.id)
+  const job = await findJobById(ids.workspace, queued.jobId)
+  assert.ok(job?.approvedPackage?.email)
+  const prior = [process.env.MCA_SYSTEM_EMAIL_PROVIDER, process.env.MCA_RESEND_API_KEY, process.env.MCA_RESEND_FROM]
+  Object.assign(process.env, { MCA_SYSTEM_EMAIL_PROVIDER: "resend", MCA_RESEND_API_KEY: "synthetic-system-key", MCA_RESEND_FROM: "Fundlane <system@example.test>" })
+  try {
+    const approved = { ...job.approvedPackage, email: { ...job.approvedPackage.email, submissionSenderAddress: "broker@example.test", fromAddress: "system@example.test", fromName: "Fundlane", systemProvider: systemEmailConfiguration() } }
+    await getDatabase().prepare("UPDATE mca_submission_jobs SET approved_package_cipher=? WHERE workspace_id=? AND id=?").run(encryptSensitive(JSON.stringify(approved), ids.workspace), ids.workspace, job.id)
+    const ref = await attemptRef(job.id)
+    assert.ok(ref)
+    await getDatabase().prepare("UPDATE mca_submission_attempts SET external_ref=? WHERE workspace_id=? AND job_id=?").run(JSON.stringify({ ...ref, provider: "resend", providerEmailId: "synthetic-receipt", attemptedMessageId: ref.messageId, threadStatus: "unknown", snapshot: { ...ref.snapshot, fromAddress: "system@example.test", fromName: "Fundlane", replyTo: "broker@example.test" } }), ids.workspace, job.id)
+    const unavailable = await remindersGet(cookieRequest(`/api/mca/comms/reminders?dealId=${deal.id}`, "admin-session-token"))
+    const list = await unavailable.json() as ListBody
+    assert.equal(list.jobs.find(item => item.jobId === job.id)?.ineligibleReason, "delivery_unconfigured")
+    assert.equal(list.jobs.find(item => item.jobId === job.id)?.remindControl, "hidden")
+    const blocked = await previewPost(cookieRequest("/api/mca/comms/reminders/preview", "admin-session-token", { method: "POST", body: JSON.stringify({ jobId: job.id }) }))
+    assert.equal(blocked.status, 409)
+    assert.equal((await blocked.json() as ErrorBody).error.code, "reminder_delivery_unconfigured")
+    process.env.MCA_EMAIL_WEBHOOK_URL = "https://synthetic.example.test/send"
+    const preview = await previewPost(cookieRequest("/api/mca/comms/reminders/preview", "admin-session-token", { method: "POST", body: JSON.stringify({ jobId: job.id }) }))
+    const body = await preview.json() as PreviewBody
+    assert.equal(preview.status, 200)
+    assert.equal(body.thread.mode, "fallback")
+    assert.equal(body.thread.disclosure, THREAD_FALLBACK_DISCLOSURE)
+    assert.equal(body.thread.inReplyTo, undefined)
+    assert.deepEqual(body.thread.references, [])
+    assert.equal(body.sender.fromAddress, "system@example.test")
+    assert.equal(body.replyTo, "broker@example.test")
+  } finally {
+    for (const [index, name] of ["MCA_SYSTEM_EMAIL_PROVIDER", "MCA_RESEND_API_KEY", "MCA_RESEND_FROM"].entries()) {
+      if (prior[index] === undefined) delete process.env[name]; else process.env[name] = prior[index]
+    }
+    delete process.env.MCA_EMAIL_WEBHOOK_URL
+  }
 })
 
 beforeEach(() => {

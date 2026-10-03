@@ -12,6 +12,7 @@ import { getDatabase, closeDatabaseForTests, nowIso, withTransaction } from "../
 import { createWorkspaceWithAdmin } from "../src/lib/mca/workspaces"
 import { BILLING_CATALOG, monthlyPriceCents } from "../src/lib/mca/billing-catalog"
 import { initializeCompanyTrial, getCompanyAccess, evaluateCompanyAccess, assertCompanyOperational, assertCompanyOutboundAllowed, STRIPE_ACCESS } from "../src/lib/mca/company-access"
+import { systemEmailConfiguration } from "../src/lib/mca/system-email"
 import { deliverBillingEmail } from "../src/lib/mca/email"
 import { subscriptionEntitlement, syncWorkspaceBilling, getWorkspaceBilling, assertBillingCapacity, getStripeClient, processStripeBillingEvent, runImmediateBillingReconcile, verifyStripeBillingEvent, verifyBillingPrices, createBillingCheckout, checkoutIdempotencyKey, changeBillingSeats, cancelBillingSubscription, billingTrialDays, stripeCheckoutTrialConfiguration, isStripeCheckoutTrialConfigured, billingSeatSyncEnabled, billingManualSeatPreviewEnabled, seatsCountPendingInvites, licensedSeatCount, ensureSyncedSeatCapacity, reconcileLicensedSeats, previewBillingSeatIncrease, type BillingSubscription, type StripeBillingClient } from "../src/lib/mca/billing"
 import { setPlatformCompanyAccess, deliverBillingNotifications, getPlatformCompanyBillingDetail, runBillingMaintenance, localTrialNoticeEligible } from "../src/lib/mca/billing-operations"
@@ -23,6 +24,7 @@ import { acceptSupabaseInvitation, deliverSupabaseInvitation } from "../src/lib/
 
 let database: Awaited<ReturnType<typeof createPostgresTestDatabase>>
 const envKeys = ["MCA_STRIPE_BILLING_ENABLED", "MCA_BILLING_SEAT_SYNC_ENABLED", "MCA_BILLING_MANUAL_SEAT_PREVIEW_ENABLED", "MCA_BILLING_SEATS_COUNT_PENDING_INVITES", "MCA_BILLING_MAX_PENDING_INVITATIONS", "MCA_STRIPE_TAX_ENABLED", "MCA_STRIPE_PROMOTION_CODES_ENABLED", "MCA_STRIPE_TAX_BEHAVIOR", "MCA_STRIPE_MODE", "MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED", "STRIPE_SECRET_KEY", "STRIPE_BASE_PRICE_ID", "STRIPE_ADDITIONAL_SEAT_PRICE_ID", "STRIPE_BILLING_WEBHOOK_SECRET", "MCA_APP_ORIGIN", "MCA_EMAIL_WEBHOOK_URL", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_TRIAL_ABUSE_LIMITS_ENABLED", "MCA_TRIAL_LIMIT_PER_USER", "MCA_TRIAL_LIMIT_PER_EMAIL", "MCA_TRIAL_LIMIT_PER_DOMAIN", "MCA_TRIAL_FINGERPRINT_ACTION", "MCA_BILLING_MISSING_STATE_FAIL_CLOSED"]
+envKeys.push("MCA_SYSTEM_EMAIL_PROVIDER", "MCA_RESEND_API_KEY", "MCA_RESEND_FROM", "MCA_SYSTEM_EMAIL_REPLY_TO", "MCA_USESEND_BASE_URL", "MCA_EMAIL_WEBHOOK_TOKEN")
 const initialEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 before(async () => {
   database = await createPostgresTestDatabase("billing")
@@ -30,6 +32,8 @@ before(async () => {
   Object.assign(process.env, { MCA_STRIPE_BILLING_ENABLED: "true", MCA_STRIPE_MODE: "test", STRIPE_SECRET_KEY: "rk_test_fixture", STRIPE_BASE_PRICE_ID: "price_base", STRIPE_ADDITIONAL_SEAT_PRICE_ID: "price_seats", STRIPE_BILLING_WEBHOOK_SECRET: "whsec_fixture", MCA_APP_ORIGIN: "http://localhost:3000" })
   delete process.env.MCA_STRIPE_TAX_ENABLED;delete process.env.MCA_STRIPE_PROMOTION_CODES_ENABLED;delete process.env.MCA_STRIPE_TAX_BEHAVIOR
   delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM
+  delete process.env.MCA_SYSTEM_EMAIL_PROVIDER;delete process.env.MCA_RESEND_API_KEY;delete process.env.MCA_RESEND_FROM
+  delete process.env.MCA_SYSTEM_EMAIL_REPLY_TO;delete process.env.MCA_USESEND_BASE_URL;delete process.env.MCA_EMAIL_WEBHOOK_TOKEN
   delete process.env.MCA_BILLING_MISSING_STATE_FAIL_CLOSED
   delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED
 })
@@ -2796,12 +2800,39 @@ test("canceling a Stripe trial suppresses late and already queued charge reminde
   } finally {delete process.env.MCA_STRIPE_TRIAL_LIFECYCLE_ENABLED}
 })
 
+test("legacy ambiguous billing payloads enter a durable audited hold without provider I/O",async()=>{
+  const f=await fixture(false),id=`billing:${f.workspaceId}:legacy-ambiguous`
+  const payload=JSON.stringify({recipient:"owner@example.test",actionUrl:"https://fundlane.example/settings/billing",expiresAt:"2030-01-01T00:00:00Z",data:{kind:"billing_paused"},transport:"usesend",from:"old@example.test",retryUntil:new Date(Date.now()+3600000).toISOString()})
+  await getDatabase().prepare("INSERT INTO company_billing_notifications (id,workspace_id,kind,data,available_at,created_at,delivery_payload,attempts) VALUES (?,?,?,'{}','0001-01-01',?,?,1)").run(id,f.workspaceId,"billing_paused",nowIso(),payload)
+  const original=globalThis.fetch
+  let calls=0
+  globalThis.fetch=async()=>{calls++;throw new Error("Legacy payload must never reach a provider")}
+  try {
+    assert.deepEqual(await deliverBillingNotifications(1),{claimed:1,delivered:0})
+    const held=await getDatabase().prepare<{available_at:string;lease_until:string|null;last_error:string;delivered_at:string|null;delivery_payload:string;attempts:number}>("SELECT available_at,lease_until,last_error,delivered_at,delivery_payload,attempts FROM company_billing_notifications WHERE id=?").get(id)
+    assert.ok(held)
+    assert.equal(held.delivered_at,null)
+    assert.equal(held.lease_until,null)
+    assert.match(held.available_at,/^9999-/)
+    assert.match(held.last_error,/^billing_delivery_review_required:/)
+    assert.equal(held.delivery_payload,payload)
+    assert.equal(held.attempts,2)
+    assert.equal(calls,0)
+    const audit=await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.notification_review_required' AND resource_id=?").get(f.workspaceId,id)
+    assert.equal(audit?.count,1)
+    await deliverBillingNotifications(1)
+    assert.equal((await getDatabase().prepare<{attempts:number}>("SELECT attempts FROM company_billing_notifications WHERE id=?").get(id))?.attempts,held.attempts)
+    assert.equal((await getDatabase().prepare<{count:number}>("SELECT count(*)::int count FROM audit_events WHERE workspace_id=? AND action='billing.notification_review_required' AND resource_id=?").get(f.workspaceId,id))?.count,1)
+  } finally {globalThis.fetch=original}
+})
+
 test("billing UseSend fallback sends the documented API payload with a stable idempotency key",async()=>{
   const original=globalThis.fetch
   const requests:Array<{url:string;headers:Headers;body:string}>=[]
   process.env.MCA_USESEND_API_KEY="test-usesend-key"
+  process.env.MCA_USESEND_FROM="Fundlane <billing@example.test>"
   globalThis.fetch=async(input,init)=>{requests.push({url:String(input),headers:new Headers(init?.headers),body:String(init?.body)});return new Response(JSON.stringify({emailId:"mail_test"}),{status:200})}
-  const message={recipient:"owner@example.test",actionUrl:"https://fundlane.example/settings/billing",expiresAt:"2030-01-01T00:00:00Z",data:{kind:"billing_paused"},transport:"usesend" as const,from:"Fundlane <billing@example.test>",retryUntil:new Date(Date.now()+3600000).toISOString()}
+  const message={recipient:"owner@example.test",actionUrl:"https://fundlane.example/settings/billing",expiresAt:"2030-01-01T00:00:00Z",data:{kind:"billing_paused"},transport:"usesend" as const,configuration:systemEmailConfiguration(),from:"Fundlane <billing@example.test>",retryUntil:new Date(Date.now()+3600000).toISOString()}
   try {
     await deliverBillingEmail(message,"billing-stable-key");await deliverBillingEmail(message,"billing-stable-key")
     assert.equal(requests[0].url,"https://app.usesend.com/api/v1/emails")
@@ -2809,7 +2840,7 @@ test("billing UseSend fallback sends the documented API payload with a stable id
     assert.equal(requests[0].body,requests[1].body)
     assert.match(JSON.parse(requests[0].body).text,/Outstanding invoices, including missed months, remain due even after cancellation/)
     await assert.rejects(deliverBillingEmail({...message,retryUntil:"2000-01-01T00:00:00Z"},"billing-stable-key"),{code:"billing_delivery_review_required"})
-  } finally {globalThis.fetch=original;delete process.env.MCA_USESEND_API_KEY}
+  } finally {globalThis.fetch=original;delete process.env.MCA_USESEND_API_KEY;delete process.env.MCA_USESEND_FROM}
 })
 test("refund and dispute projections are provider-backed, reconcile resolutions, and audit only changed state",async()=>{
   const f=await fixture()

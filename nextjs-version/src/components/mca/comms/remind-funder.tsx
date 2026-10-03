@@ -11,7 +11,7 @@ import { RequestError, requestJson } from "@/lib/mca/client"
 import { reminderSendGate } from "@/lib/mca/integrations/connection-status"
 import { MissingPrerequisites } from "@/components/mca/integrations/connection-status"
 
-type ReminderIneligibleReason = "unsupported_transport" | "not_sent" | "has_response"
+type ReminderIneligibleReason = "unsupported_transport" | "not_sent" | "has_response" | "delivery_unconfigured"
 type ReminderThreadMode = "reply" | "fallback"
 type RouteKind = "email" | "api" | "manual_portal" | "custom_webhook"
 
@@ -89,6 +89,16 @@ function formatTimestamp(value?: string): string {
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed)) return value
   return new Date(parsed).toLocaleString()
+}
+
+export function ReminderDeliveryUnavailable({ jobs }: { jobs: ReminderJobView[] }) {
+  const unavailable = jobs.filter((job) => job.ineligibleReason === "delivery_unconfigured")
+  if (!unavailable.length) return null
+  return (
+    <p role="status" className="text-sm text-muted-foreground">
+      Reminder delivery is unavailable for {unavailable.map((job) => job.displayFunderName).join(", ")}. Contact your administrator to configure reminder delivery.
+    </p>
+  )
 }
 
 export function RemindFunder({ dealId }: { dealId: string }) {
@@ -183,8 +193,9 @@ export function RemindFunder({ dealId }: { dealId: string }) {
         {loading && <p role="status" className="text-sm text-muted-foreground">Loading funder reminders…</p>}
         {error && <p role="alert" className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" />{error}</p>}
         {message && <p role="status" className="flex items-start gap-2 text-sm text-emerald-700"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{message}</p>}
+        {!loading && !error && !preview && <ReminderDeliveryUnavailable jobs={payload?.jobs ?? []} />}
 
-        {!loading && !error && eligible.length === 0 && !preview && (
+        {!loading && !error && eligible.length === 0 && !preview && !payload?.jobs.some((job) => job.ineligibleReason === "delivery_unconfigured") && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
             No unanswered email submissions are ready to remind.
           </div>

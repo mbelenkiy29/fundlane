@@ -93,7 +93,8 @@ export async function readCurrentCompleteness(workspaceId: string, dealId: strin
   return { findings, requiredStatementMonths, timeZone, lookback }
 }
 
-export async function checkCompleteness(actor: DealActor, dealId: string): Promise<CompletenessResult> {
+/** `skipAutoSubmit` keeps proposal-only callers (Deal Agent) from handing a newly ready deal to auto-submit. */
+export async function checkCompleteness(actor: DealActor, dealId: string, options: { skipAutoSubmit?: boolean } = {}): Promise<CompletenessResult> {
   const deal = await getDealForDocument(actor, dealId)
   const { findings, requiredStatementMonths, timeZone, lookback } = await readCurrentCompleteness(deal.workspaceId, deal.id)
   const findingsFingerprint = fingerprint(findings)
@@ -129,7 +130,7 @@ export async function checkCompleteness(actor: DealActor, dealId: string): Promi
     metadata: { version: result.version, ready: result.ready, findingCount: findings.length },
     correlationId: actor.correlationId,
   })
-  if (result.ready && process.env.MCA_AUTO_SUBMIT_ENABLED === "true") await (await import("./auto-submit")).enqueueAutoSubmitIfEnabled(actor, deal.id, result.version, deal.version)
+  if (result.ready && !options.skipAutoSubmit && process.env.MCA_AUTO_SUBMIT_ENABLED === "true") await (await import("./auto-submit")).enqueueAutoSubmitIfEnabled(actor, deal.id, result.version, deal.version)
   return result
 }
 

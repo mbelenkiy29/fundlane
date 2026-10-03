@@ -44,6 +44,7 @@ async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): 
   const payload = JSON.parse(job.payload_json)
   switch (job.kind) {
     case "auto_submit": return (await import("../underwriting/auto-submit")).processAutoSubmit(actor, job.resource_id, payload.completenessVersion, payload.mode, payload.dealVersion)
+    case "deal_agent": return (await import("../deal-agent/run")).processDealAgentJob(job, actor)
     case "application_invitation_email": return (await import("../applications/service")).processInvitationEmail(actor, job)
     case "drive_preview":
     case "drive_apply": {
