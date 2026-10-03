@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs/config";
 import { retiredPublicRedirects } from "./src/lib/mca/retired-public-redirects";
 import { sampleRouteRedirects } from "./src/lib/mca/sample-route-redirects";
 import { nextConfigHeaders } from "./src/lib/mca/security-headers";
+import { SENTRY_TUNNEL_ROUTE } from "./src/lib/observability/sentry-options";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -67,4 +69,19 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry is inert without NEXT_PUBLIC_SENTRY_DSN; source maps are generated and
+// uploaded only when SENTRY_AUTH_TOKEN is set, then deleted from the deployment.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  telemetry: false,
+  // Same-origin tunnel (CSP connect-src 'self'); excluded from the proxy matcher in src/proxy.ts.
+  tunnelRoute: SENTRY_TUNNEL_ROUTE,
+  widenClientFileUpload: true,
+  sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN, deleteSourcemapsAfterUpload: true },
+  errorHandler: (error) => {
+    console.warn(`[sentry] Source map upload failed; continuing the build: ${error.message}`);
+  },
+});

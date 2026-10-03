@@ -14,7 +14,7 @@ test("platform shell scopes navigation, highlights company details and gates Roa
     const {CurrencyTotals} = require('./src/components/mca/platform/tables.tsx');
     const render = (path, enabled) => renderToStaticMarkup(React.createElement(ThemeProvider, null,
       React.createElement(AppRouterContext.Provider, {value:{refresh(){}}}, React.createElement(PathnameContext.Provider, {value:path}, React.createElement(PlatformChrome,
-        {email:'operator@example.test',roadmapEnabled:enabled}, React.createElement('h1',null,'Synthetic page'))))));
+        {userId:'00000000-0000-4000-8000-000000000001',email:'operator@example.test',roadmapEnabled:enabled}, React.createElement('h1',null,'Synthetic page'))))));
     const {default:SmsReview} = require('./src/components/mca/platform/sms-review.tsx');
     const smsLoading = renderToStaticMarkup(React.createElement(SmsReview));
     const totals = renderToStaticMarkup(React.createElement(CurrencyTotals, {cards:true,totals:[

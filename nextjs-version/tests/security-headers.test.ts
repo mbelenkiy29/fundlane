@@ -46,6 +46,8 @@ test("document headers include CSP, HSTS, Permissions-Policy, and no wildcard CO
   for (const feature of ["camera=()", "microphone=()", "geolocation=()", "payment=()"]) {
     assert.match(PERMISSIONS_POLICY, new RegExp(feature.replace("()", "\\(\\)")))
   }
+  // Feedback screenshots capture this page only; other origins stay blocked.
+  assert.match(PERMISSIONS_POLICY, /display-capture=\(self\)/)
   assert.equal(headerValue(DOCUMENT_SECURITY_HEADERS, "X-Frame-Options"), "DENY")
   assert.equal(headerValue(DOCUMENT_SECURITY_HEADERS, "Access-Control-Allow-Origin"), undefined)
 })

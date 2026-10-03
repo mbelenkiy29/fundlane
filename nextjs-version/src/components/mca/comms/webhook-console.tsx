@@ -239,7 +239,7 @@ export function WebhookConsole() {
         ) : null}
         {shownSecret ? (
           <p className="rounded-md border px-3 py-2 text-sm">
-            Signing secret is shown once. Store <code className="text-xs">{shownSecret}</code> for HMAC verification.
+            Signing secret is shown once. Store <code className="text-xs" data-sentry-block>{shownSecret}</code> for HMAC verification.
           </p>
         ) : null}
 

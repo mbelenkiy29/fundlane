@@ -46,6 +46,7 @@ All paths below are relative to `nextjs-version/`.
 | Background jobs | `src/lib/mca/jobs/`, `/api/cron/jobs`, `docs/background-job-runtime.md`; `../render.yaml`, `Dockerfile.worker`, and `docs/render-deployment.md` are historical deployment references |
 | Previous Railway / Render web hosting | `Dockerfile`, `railway.json`, `scripts/railway/`, `../DEPLOYMENT.md`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
+| Observability (Sentry errors, logs, replay, feedback) | `src/instrumentation.ts`, `src/instrumentation-client.ts`, `src/lib/observability/` (`bridge.ts` for shared server code, `scrub.ts`, `sentry-options.ts`, `sentry-server.ts`), `src/components/observability/` (`sentry-session.tsx`, `feedback-menu.tsx`), `docs/sentry-observability.md`; inert without `NEXT_PUBLIC_SENTRY_DSN` |
 | Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts`, `tests/supabase-auth.test.ts` |
 | Migration tooling | `scripts/database/`, `scripts/supabase/`, `drizzle.config.ts` |
 | Plans, contracts and verification evidence | `docs/milestone-*/`, `docs/acceptance/`, `docs/supabase-*.md`; `docs/neon-*.md` and `docs/clerk-*.md` are historical |

@@ -26,7 +26,7 @@ async function render() {
     "/platform/roadmap": () => Roadmap(),
   }
   const fixture = url.searchParams.get("fixture")
-  const content = fixture === "loading" ? <Loading /> : fixture === "error" ? <ErrorPage reset={() => location.reload()} /> : await (pages[url.pathname] ?? pages["/platform"])()
-  createRoot(document.getElementById("root")!).render(<ThemeProvider defaultTheme={url.searchParams.get("theme") === "dark" ? "dark" : "light"} storageKey="platform-preview-theme"><PlatformChrome email="operator@example.test" roadmapEnabled={url.searchParams.get("roadmap") !== "off"}>{content}</PlatformChrome></ThemeProvider>)
+  const content = fixture === "loading" ? <Loading /> : fixture === "error" ? <ErrorPage error={new Error("Synthetic platform error")} reset={() => location.reload()} /> : await (pages[url.pathname] ?? pages["/platform"])()
+  createRoot(document.getElementById("root")!).render(<ThemeProvider defaultTheme={url.searchParams.get("theme") === "dark" ? "dark" : "light"} storageKey="platform-preview-theme"><PlatformChrome userId="00000000-0000-4000-8000-000000000001" email="operator@example.test" roadmapEnabled={url.searchParams.get("roadmap") !== "off"}>{content}</PlatformChrome></ThemeProvider>)
 }
 void render()

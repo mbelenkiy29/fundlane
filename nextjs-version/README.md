@@ -10,7 +10,7 @@ Set `DATABASE_URL` to the transaction pooler URL with the restricted `mca_app` r
 
 Configure the Supabase URL, publishable browser key and server-only secret key, private buckets, Auth email templates and SMTP as described in [Supabase Auth](docs/supabase-auth.md). Run `pnpm dev`. New users verify email and create a company; migrated users recover their account and set a new password. Local company membership, permissions and API keys remain authoritative.
 
-The runtime pool defaults to two connections on Vercel. Never expose database URLs, service secrets, Stripe credentials, or the encryption key through `NEXT_PUBLIC_*` settings. Only Supabase's URL and publishable key belong in the browser.
+The runtime pool defaults to two connections on Vercel. Never expose database URLs, service secrets, Stripe credentials, the Sentry auth token, or the encryption key through `NEXT_PUBLIC_*` settings. Only Supabase's URL and publishable key and the public Sentry DSN belong in the browser.
 
 ## Data and processing
 
@@ -53,3 +53,5 @@ Pipeline calendar setup: [Calendar and Google sync](docs/pipeline-calendar.md). 
 Client invitation workflow and production activation: [Application outreach](docs/application-outreach.md).
 
 Owner operations and alert activation: [Platform status](docs/platform-status.md).
+
+Error monitoring, logs, masked session replay and in-app bug reports and feature requests: [Sentry observability](docs/sentry-observability.md). Sentry is inert until `NEXT_PUBLIC_SENTRY_DSN` is set.
