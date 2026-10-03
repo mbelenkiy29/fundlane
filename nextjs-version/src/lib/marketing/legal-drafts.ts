@@ -11,8 +11,10 @@ export const legalPlaceholders = {
   contact: "mike@sentineltechsolutions.io",
   effectiveDate: "September 28, 2026",
   /** Last wording change (privacy: Sentry monitoring, Resend email), approved by the owner on October 3, 2026. */
-  lastUpdated: "October 3, 2026",
 } as const
+
+/** Each document keeps its own revision date; Terms were last revised at publication. */
+export const legalLastUpdated = { terms: "September 28, 2026", privacy: "October 3, 2026" } as const
 
 export const legalDraftBanner = "These terms were prepared without attorney review and will be updated after legal review."
 
@@ -114,7 +116,7 @@ export const privacySections: readonly LegalSection[] = [
     "Customer-connected or customer-selected recipients can include Google and Microsoft mailboxes, Google Calendar or Drive where used, funders, custom webhooks, DataMerch, DocuSeal and configured form or intake providers. Such recipients are not all Fundlane subprocessors. SMTP, SendGrid and Postmark adapter support alone does not establish production use. Supabase Auth's SMTP provider, external webhook operators, provider legal entities, processing regions and contractual roles remain unconfirmed.",
   ] },
   { heading: "Cookies, browser storage and analytics", paragraphs: [
-    "Supabase session cookies support sign-in; a cookie remembers active workspace selection and sidebar_state remembers the sidebar preference. Local storage remembers theme preferences. The application has no advertising SDK. When configured, Sentry error monitoring runs in the browser and session storage keeps a session recording consistent across page loads. Error reports can include the signed-in user’s ID, name and email, the workspace and role, the page address with tokens and query values removed, and browser and device details. For signed-in users in the app, a sample of sessions, and the moments before an error or a feedback report, may be recorded as page interactions with all text, form inputs and images masked. Public pages, application forms, merchant upload and review links, and account security pages are not recorded. We configure Sentry not to collect cookies, request bodies, IP addresses or AI inputs and outputs. A feedback screenshot is captured only when a user chooses to attach one, and the user can review it before sending. Hosting-side analytics and the complete cookie inventory require confirmation.",
+    "Supabase session cookies support sign-in; a cookie remembers active workspace selection and sidebar_state remembers the sidebar preference. Local storage remembers theme preferences. The application has no advertising SDK. When configured, Sentry error monitoring runs in the browser and session storage keeps a session recording consistent across page loads. Error reports can include the signed-in user’s ID, name and email, the workspace and role, the page address with tokens and query values removed, and browser and device details. For signed-in users in the app, a sample of sessions, and the moments before an error or a feedback report, may be recorded as page interactions with text, form inputs and images masked (only navigation menus and button labels remain visible). Public pages, application forms, merchant upload and review links, and account security pages are not recorded. We configure Sentry not to collect cookies, request bodies, IP addresses or AI inputs and outputs. A feedback screenshot is captured only when a user chooses to attach one, and the user can review it before sending. Hosting-side analytics and the complete cookie inventory require confirmation.",
   ] },
   { heading: "Security and operational records", paragraphs: [
     "Workspace roles and assignments, selected-field encryption, private document storage and limited-access links help control access. Audit events and operational monitoring record activity and errors. These measures do not guarantee absolute security, comprehensive log redaction, universal scanning or certification.",
