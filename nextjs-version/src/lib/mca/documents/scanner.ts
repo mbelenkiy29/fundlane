@@ -4,7 +4,8 @@ import { spawn } from "node:child_process"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { CloudmersiveScanner } from "./cloudmersive"
+import { AppError } from "../errors"
+import { CloudmersiveScanner, SCAN_TOO_LARGE_MESSAGE, SCAN_TOO_LARGE_REASON } from "./cloudmersive"
 
 export type ScanResult =
   | { status: "clean"; provider: string; evidence: Record<string, unknown> }
@@ -67,6 +68,17 @@ class UnavailableScanner implements DocumentScanner {
   async scan(): Promise<ScanResult> {
     return { status: "unavailable", provider: this.name, evidence: { reason: "Configure MCA_DOCUMENT_SCANNER=cloudmersive, clamdscan, or clamscan." } }
   }
+}
+
+export function scanTooLarge(evidence: unknown): boolean {
+  return !!evidence && typeof evidence === "object" && (evidence as { reason?: unknown }).reason === SCAN_TOO_LARGE_REASON
+}
+
+/** A file over the provider's size limit fails permanently (4xx); other scanner failures stay retryable (503). */
+export function scannerFailure(evidence: unknown, message: string): AppError {
+  return scanTooLarge(evidence)
+    ? new AppError(413, "scan_file_too_large", SCAN_TOO_LARGE_MESSAGE)
+    : new AppError(503, "scanner_unavailable", message)
 }
 
 let scannerOverride: DocumentScanner | undefined

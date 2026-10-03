@@ -11,3 +11,7 @@ A custom streaming multipart implementation incorrectly returned a clean verdict
 Activation: after upgrading, rerun the authenticated synthetic hosted scanner scenarios (clean, eicar, maximum), verify expected clean/infected/clean outcomes and resource headroom, then select the provider only in the approved Supabase execution path. Do not activate a consumer based on scanner tests alone; follow the current background runtime acceptance gates. Existing document limits remain unchanged.
 
 Tests: `node --conditions=react-server --import tsx --test tests/cloudmersive.test.ts`; `pnpm typecheck`; targeted ESLint; `node scripts/supabase/build.mjs`.
+
+## Free-plan limits
+
+The free plan rejects files over 3.5 MB and allows one call per second. The adapter checks size before calling the provider. A file over 3,500,000 bytes gets scan status `error` with reason `file_too_large` and the message "File too large for virus scan (max 3.5 MB)", so the document is marked `scan_failed`. The worker then fails the job permanently with `scan_file_too_large` (HTTP 413) instead of retrying. Provider calls in one process are spaced at least one second apart.

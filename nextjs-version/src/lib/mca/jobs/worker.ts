@@ -6,7 +6,7 @@ import type { DealActor } from "../deals/schema"
 import { AppError } from "../errors"
 import { getDealForDocument } from "../deals/service"
 import { processDirectUpload } from "../documents/direct-uploads"
-import { findDocumentById } from "../documents/repository"
+import { findApplicationDraft, findDocumentById } from "../documents/repository"
 import { documentScanActor } from "../documents/scan-job"
 import { retryDocumentScan } from "../documents/service"
 import { extractApplicationDraft, retryApplicationDraftScan } from "../documents/application-drafts"
@@ -18,7 +18,7 @@ import { commitCsvUpdate, commitSpreadsheetImport } from "../imports/service"
 import { claimBackgroundJob, completeBackgroundJob, currentJobActor, deferBackgroundJob, failBackgroundJob, heartbeatBackgroundJob, runAsBackgroundWorker, type BackgroundJob, type BackgroundJobKind } from "./queue"
 import { processMultipartTask } from "./multipart"
 import { quarantineBucket, storageClient, validateStorageKey } from "../documents/storage"
-import { documentScanner } from "../documents/scanner"
+import { documentScanner, scannerFailure } from "../documents/scanner"
 import { processQueuedEmail, replayEmailIntake } from "../intake/email"
 import { replayIntake } from "../intake/service"
 import { previewDrivePackage, applyDriveDocuments } from "../imports/drive-service"
@@ -29,6 +29,13 @@ import { executionSignal, outsideExecutionScope, withExecutionDeadline } from ".
 import { documentRuntimeEnabled } from "./document-runtime"
 import { reportException } from "../../observability/bridge"
 
+/** Scan results returned to jobs omit evidence; re-read it so a permanent scan failure is not retried. */
+async function storedScanEvidence(workspaceId: string, result: object): Promise<unknown> {
+  const id = "id" in result && typeof result.id === "string" ? result.id : undefined
+  if (!id) return undefined
+  return (await findDocumentById(workspaceId, id))?.scanEvidence ?? (await findApplicationDraft(workspaceId, id))?.scanEvidence
+}
+
 async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
   if (!observeGuardedAttemptOnly && ["auto_submit", "submission_delivery", "application_invitation_email", "application_invitation_reminder"].includes(job.kind)) assertOutboundFresh(job.created_at)
@@ -38,7 +45,7 @@ async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): 
     const record = await findDocumentById(job.workspace_id, job.resource_id)
     if (!record) throw new AppError(404, "document_not_found", "The requested document was not found.")
     const result = await retryDocumentScan(documentScanActor(record), job.resource_id)
-    if (documentRuntimeEnabled() && (result.processingState === "pending_scan" || result.processingState === "scan_failed")) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this document. Retry after restoring the scanner.")
+    if (documentRuntimeEnabled() && (result.processingState === "pending_scan" || result.processingState === "scan_failed")) throw scannerFailure(await storedScanEvidence(job.workspace_id, result), "The scanner could not verify this document. Retry after restoring the scanner.")
     return result
   }
   const actor = await currentJobActor(JSON.parse(job.actor_json) as DealActor)
@@ -60,18 +67,18 @@ async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): 
       if (error || !data) throw new AppError(503, "scanner_unavailable", "The staged file could not be read.")
       if (data.size > 25 * 1024 * 1024) throw new AppError(413, "file_limit", "The staged file exceeds the size limit.")
       const result = await documentScanner().scan(new Uint8Array(await data.arrayBuffer()), payload.filename)
-      if (documentRuntimeEnabled() && (result.status === "unavailable" || result.status === "error")) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this file. Retry after restoring the scanner.")
+      if (documentRuntimeEnabled() && (result.status === "unavailable" || result.status === "error")) throw scannerFailure(result.evidence, "The scanner could not verify this file. Retry after restoring the scanner.")
       return result
     }
     case "multipart_task": return processMultipartTask(actor, payload)
     case "document_upload": {
       const result = await processDirectUpload(job.workspace_id, job.resource_id)
-      if (documentRuntimeEnabled() && result && typeof result === "object" && "processingState" in result && ["pending_scan", "scan_failed"].includes(String(result.processingState))) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this upload. Retry after restoring the scanner.")
+      if (documentRuntimeEnabled() && result && typeof result === "object" && "processingState" in result && ["pending_scan", "scan_failed"].includes(String(result.processingState))) throw scannerFailure(await storedScanEvidence(job.workspace_id, result), "The scanner could not verify this upload. Retry after restoring the scanner.")
       return result
     }
     case "draft_scan": {
       const result = await retryApplicationDraftScan(actor, job.resource_id)
-      if (documentRuntimeEnabled() && ["pending_scan", "scan_failed"].includes(result.processingState)) throw new AppError(503, "scanner_unavailable", "The scanner could not verify this draft. Retry after restoring the scanner.")
+      if (documentRuntimeEnabled() && ["pending_scan", "scan_failed"].includes(result.processingState)) throw scannerFailure(await storedScanEvidence(job.workspace_id, result), "The scanner could not verify this draft. Retry after restoring the scanner.")
       return result
     }
     case "draft_extract": return extractApplicationDraft(actor, job.resource_id, payload.approvedFields)
