@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS mca_deal_agent_actions (
   target_key text NOT NULL,
   fingerprint text NOT NULL,
   payload_json text NOT NULL,
+  next_fingerprint text,
+  next_payload_json text,
   status text NOT NULL CONSTRAINT mca_deal_agent_actions_status_check CHECK (status IN ('pending','executing','approved','dismissed','superseded','failed')),
   preview_id text,
   result_json text,
@@ -54,8 +56,12 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'mca_app') THEN
     GRANT SELECT, INSERT, UPDATE, DELETE ON mca_deal_agent_runs, mca_deal_agent_actions TO mca_app;
-    CREATE POLICY mca_server_access ON mca_deal_agent_runs TO mca_app USING (true) WITH CHECK (true);
-    CREATE POLICY mca_server_access ON mca_deal_agent_actions TO mca_app USING (true) WITH CHECK (true);
+    IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='mca_deal_agent_runs' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON mca_deal_agent_runs TO mca_app USING (true) WITH CHECK (true);
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='mca_deal_agent_actions' AND policyname='mca_server_access') THEN
+      CREATE POLICY mca_server_access ON mca_deal_agent_actions TO mca_app USING (true) WITH CHECK (true);
+    END IF;
   END IF;
 END
 $grants$;

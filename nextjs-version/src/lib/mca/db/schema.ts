@@ -1518,6 +1518,8 @@ export const mca_deal_agent_actions = pgTable("mca_deal_agent_actions", {
 	target_key: text().notNull(),
 	fingerprint: text().notNull(),
 	payload_json: text().notNull(),
+	next_fingerprint: text(),
+	next_payload_json: text(),
 	status: text().notNull(),
 	preview_id: text(),
 	result_json: text(),
