@@ -66,7 +66,7 @@ Renewal alert emails go to brokers through the system email provider (Resend, or
 4. System email configured: `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM`, or the useSend equivalents.
 5. `/api/cron/comms` scheduled every five minutes with `Authorization: Bearer ${CRON_SECRET}` (see `docs/ops/cron-schedules.json`).
 6. Migrations `0071` (notifications) and `0073` (renewal policy/actions) applied.
-7. Each company that wants alerts saves a renewal policy under **Accounting → Renewals** (paid-in threshold and minimum days since funding). Companies without a policy are skipped.
+7. Each company that wants alerts saves a renewal policy on the **Renewals** page (`/renewals`) (paid-in threshold and minimum days since funding). Companies without a policy are skipped.
 
 Saving a new policy version re-alerts every advance that is still eligible, because the event key includes the policy version. Change the policy deliberately.
 
