@@ -117,7 +117,7 @@ test("marketing font preloads preserve the default and turn off only with polish
   assert.equal(polishedClasses, polished[0].variable)
 })
 
-test("internal demo link in mobile navigation has no external arrow when polished", () => {
+test("mobile navigation preserves Login and unavailable Get Started across visual variants", () => {
   const script = `
     const React = require("react");
     const { renderToStaticMarkup } = require("react-dom/server");
@@ -127,9 +127,11 @@ test("internal demo link in mobile navigation has no external arrow when polishe
   const result = spawnSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", cwd: resolve(import.meta.dirname, "..") })
   assert.equal(result.status, 0, result.stderr)
   const [current, polished] = JSON.parse(result.stdout) as string[]
-  assert.match(current, /Book a demo <span aria-hidden="true">↗<\/span>/)
-  assert.match(polished, /Book a demo/)
-  assert.doesNotMatch(polished, /↗/)
+  for (const markup of [current, polished]) {
+    assert.match(markup, /<button[^>]*disabled[^>]*>Get Started<\/button>/)
+    assert.match(markup, /href="\/sign-in">Login<\/a>/)
+    assert.doesNotMatch(markup, /Book a demo|href="\/demo"|↗/)
+  }
 })
 
 test("sitemap includes lastmod for each public marketing URL", () => {

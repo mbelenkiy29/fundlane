@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import http from "node:http"
 import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
-const { chromium } = require("/Users/mbele/.npm-global/lib/node_modules/openclaw/node_modules/playwright-core")
+const { chromium } = require(process.env.MCA_PLAYWRIGHT_MODULE ?? "playwright-core")
 const directory = process.env.MCA_PUBLIC_BROWSER_DIRECTORY ?? "/tmp/task6-public-entry-browser"
 const server = http.createServer(async (request, response) => {
   const pathname = new URL(request.url, "http://localhost").pathname
@@ -13,7 +13,7 @@ const server = http.createServer(async (request, response) => {
 })
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
-const browser = await chromium.launch({ headless: true, executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args: ["--no-sandbox"] })
+const browser = await chromium.launch({ headless: true, ...(process.env.MCA_BROWSER_EXECUTABLE_PATH ? { executablePath: process.env.MCA_BROWSER_EXECUTABLE_PATH } : {}), args: ["--no-sandbox"] })
 const results = [], browserErrors = []
 const id = "11111111-1111-4111-8111-111111111111"
 const canonical = `/enrollment?enrollment=${id}&destination=business&generation=3`
@@ -108,6 +108,21 @@ try {
   })
   await check("mobile native details traps Tab, restores body and closes on Escape/desktop resize",async()=>{
     const f=await fixture("mobile","ready",{width:390,height:844});const summary=f.page.locator("summary");await summary.click();await f.page.waitForFunction(()=>document.body.style.overflow==="hidden");await summary.focus();await f.page.keyboard.press("Shift+Tab");assert.equal(await f.page.locator(":focus").innerText(),"Get Started");await f.page.keyboard.press("Tab");assert.equal(await f.page.locator(":focus").evaluate(el=>el.tagName),"SUMMARY");await f.page.keyboard.press("Escape");await f.page.waitForFunction(()=>!document.querySelector("details").open&&document.body.style.overflow!=="hidden");await summary.click();await f.page.setViewportSize({width:1440,height:900});await f.page.waitForFunction(()=>!document.querySelector("details").open&&document.body.style.overflow!=="hidden");await f.context.close()
+  })
+  await check("repeated Get Started controls share one guarded direct Checkout",async()=>{
+    const f=await fixture("ctas");const buttons=f.page.getByRole("button",{name:"Get Started",exact:true});await buttons.first().waitFor();
+    assert.equal(await buttons.count(),2);assert.equal(f.state.startCalls,0);assert.equal(f.state.sessionCalls,0);
+    f.state.holdStart=new Promise(resolve=>{f.state.releaseStart=resolve});
+    await buttons.evaluateAll(items=>{items[0].click();items[1].click()});
+    await f.page.getByRole("button",{name:"Opening secure Checkout…"}).first().waitFor();
+    f.state.releaseStart();await f.page.waitForURL("https://checkout.stripe.test/synthetic");
+    assert.equal(f.state.startCalls,1);assert.equal(f.state.sessionCalls,1);assert.ok(f.calls.every(call=>JSON.stringify(call.body)==="{}"));await f.context.close();
+  })
+  await check("mobile Get Started opens Checkout directly while Login stays separate",async()=>{
+    const f=await fixture("mobile","ready",{width:390,height:844});await f.page.locator("summary").click();
+    assert.equal(await f.page.getByRole("link",{name:"Login",exact:true}).getAttribute("href"),"/sign-in");
+    await f.page.getByRole("button",{name:"Get Started",exact:true}).click();await f.page.waitForURL("https://checkout.stripe.test/synthetic");
+    assert.equal(f.state.startCalls,1);assert.equal(f.state.sessionCalls,1);assert.equal(f.navigations.some(url=>url.includes("/pricing")||url.includes("/demo")),false);await f.context.close();
   })
   await check("live start guards repeated click, keeps empty bodies and retries with the same browser binding",async()=>{
     const f=await fixture("start","start-failed");f.state.holdStart=new Promise(resolve=>{f.state.releaseStart=resolve});await f.page.getByRole("button",{name:"Start 14-day free trial"}).evaluate(button=>{button.click();button.click()});await f.page.getByRole("button",{name:"Opening secure Checkout…"}).waitFor();await f.page.waitForFunction(()=>document.querySelector("button").disabled);f.state.releaseStart();await f.page.getByRole("alert").waitFor();assert.equal(f.state.startCalls,1);await f.page.getByRole("button",{name:"Start 14-day free trial"}).click();await f.page.waitForURL("https://checkout.stripe.test/synthetic");assert.equal(f.state.startCalls,2);assert.equal(f.state.sessionCalls,2);assert.ok(f.calls.every(call=>JSON.stringify(call.body)==="{}"));assert.equal((await f.context.cookies(origin)).find(c=>c.name==="mca_enrollment_binding")?.httpOnly,true);await f.context.close()

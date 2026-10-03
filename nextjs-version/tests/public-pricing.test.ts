@@ -93,11 +93,14 @@ function renderLaunch(env: Record<string, string | undefined>) {
   return JSON.parse(result.stdout) as { shell: string; mobile: string; pricing: string; footer: string }
 }
 
-test("disabled launch flags keep unavailable pricing readable and marketing links absent", () => {
+test("disabled launch flags keep pricing readable and Get Started unavailable", () => {
   const result = renderLaunch({ MCA_PUBLIC_PRICING_ENABLED: undefined, MCA_MARKETING_TRIAL_CTA_ENABLED: undefined, MCA_SUPPORT_EMAIL: undefined })
   assert.match(result.pricing, /trial enrollment is currently unavailable/i)
-  assert.doesNotMatch(result.shell, /href="\/pricing"|Get Started/)
-  assert.doesNotMatch(result.mobile, /href="\/pricing"|Get Started/)
+  for (const markup of [result.shell, result.mobile]) {
+    assert.doesNotMatch(markup, /href="\/(?:pricing|demo)"/)
+    assert.match(markup, /<button[^>]*disabled[^>]*>Get Started<\/button>/)
+    assert.match(markup, /trial enrollment is currently unavailable/i)
+  }
   assert.match(result.shell, /href="\/sign-in"[^>]*>Login/)
   assert.doesNotMatch(result.footer, /mailto:/)
 })
@@ -119,15 +122,18 @@ test("enabled pricing uses catalog values and configured support, with gated CTA
   assert.match(result.pricing, /Users 2–10|Users 2<!-- -->–10/)
   assert.match(result.pricing, /help@example.com/)
   assert.match(result.shell, /href="\/pricing"[^>]*>Pricing/)
-  assert.match(result.shell, /href="\/pricing"[^>]*>Get Started/)
+  assert.match(result.shell, /<button[^>]*>Get Started<\/button>/)
   assert.match(result.mobile, /href="\/pricing"[^>]*>Pricing/)
-  assert.match(result.mobile, /href="\/pricing"[^>]*>Get Started/)
+  assert.match(result.mobile, /<button[^>]*>Get Started<\/button>/)
   assert.match(result.footer, /mailto:help@example.com/)
   const invite = renderLaunch({ ...readyEnrollment, MCA_PUBLIC_PRICING_ENABLED: "true", MCA_MARKETING_TRIAL_CTA_ENABLED: "true", MCA_SIGNUP_MODE: "invite_only" })
   assert.match(invite.pricing, /trial enrollment is currently unavailable/i)
   assert.doesNotMatch(invite.pricing, /href="\/sign-up"/)
-  assert.doesNotMatch(invite.shell, /Get Started/)
-  assert.doesNotMatch(invite.mobile, /Get Started/)
+  for (const markup of [invite.shell, invite.mobile]) {
+    assert.match(markup, /<button[^>]*disabled[^>]*>Get Started<\/button>/)
+    assert.match(markup, /trial enrollment is currently unavailable/i)
+    assert.doesNotMatch(markup, /href="\/demo"/)
+  }
 })
 
 test("marketing purchase navigation requires complete enrollment rollout and Stripe configuration", () => {
@@ -144,8 +150,10 @@ test("marketing purchase navigation requires complete enrollment rollout and Str
     withEnv({ ...ready, ...disabled }, () => assert.equal(marketingTrialEnrollmentEnabled(), false))
   }
   const missing = renderLaunch({ ...ready, STRIPE_BASE_PRICE_ID: "" })
-  assert.doesNotMatch(missing.shell, /Get Started/)
-  assert.doesNotMatch(missing.mobile, /Get Started/)
+  for (const markup of [missing.shell, missing.mobile]) {
+    assert.match(markup, /<button[^>]*disabled[^>]*>Get Started<\/button>/)
+    assert.match(markup, /trial enrollment is currently unavailable/i)
+  }
   assert.match(missing.pricing, /trial enrollment is currently unavailable/i)
   assert.doesNotMatch(missing.pricing, /STRIPE_BASE_PRICE_ID|sk_test_synthetic|href="\/sign-up"/)
 })

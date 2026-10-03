@@ -1,6 +1,6 @@
 import { Check } from "lucide-react"
 import Image, { type StaticImageData } from "next/image"
-import { MarketingShell, DemoLink } from "@/components/marketing/shell"
+import { MarketingShell, GetStartedLink } from "@/components/marketing/shell"
 import { Timeline, type TimelineEntry } from "@/components/ui/timeline"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 import pipeline from "../../../public/marketing/pipeline.png"
@@ -140,9 +140,9 @@ export default function ChangelogPage() {
                 <br />
                 One clear workflow.
               </h2>
-              <p>Walk through Fundlane with your brokerage’s needs in mind.</p>
+              <p>Get started with a trial, or log in if you already have a workspace.</p>
             </div>
-            <DemoLink />
+            <GetStartedLink />
           </div>
         </section>
       </main>
