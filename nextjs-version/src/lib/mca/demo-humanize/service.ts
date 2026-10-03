@@ -35,6 +35,13 @@ const detId = (ws: string, key: string) => {
 const dec = (value: unknown, ws: string) => (typeof value === "string" && value ? decryptSensitive(value, ws) : undefined)
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const businesses = () => parseBusinessesCsv(BUSINESSES_CSV)
+const STAGING_REF = "djnhfcxbuigsnqwcpdrz"
+/** Writes run only in the production deployment, or in an explicit staging rehearsal whose database is the staging project. */
+function assertWritesAllowed() {
+  if (process.env.VERCEL_ENV === "production") return
+  const rehearsal = process.env.MCA_DEMO_HUMANIZE_STAGING_REHEARSAL === STAGING_REF && (process.env.DATABASE_URL ?? "").includes(STAGING_REF)
+  assert.ok(rehearsal, "Write modes run only in the production deployment")
+}
 
 /** The seeded deals, in seed order. Fails unless there are exactly EXPECTED_DEALS of them. */
 async function targetDeals(db: Q, ws: string): Promise<Row[]> {
@@ -139,7 +146,9 @@ export async function dryRun(ws: string) {
 }
 
 const BACKUP_TABLES = ["mca_merchants", "deals", "deal_owners", "mca_merchant_owners", "mca_offers", "mca_manual_submissions", "mca_offer_selections", "mca_advance_status_history", "mca_documents", "deal_notes"] as const
-type Backup = { meta: { workspaceId: string; seedBatch: string; exportedAt: string; dealIds: string[] }; tables: Record<(typeof BACKUP_TABLES)[number], Row[]>; files: Record<string, string> }
+type Backup = { meta: { workspaceId: string; seedBatch: string; exportedAt: string; dealIds: string[] }; tables: Record<(typeof BACKUP_TABLES)[number], Row[]> }
+/** Responses and requests must stay under Vercel's 4.5 MB body limit; base64 adds a third. */
+const MAX_FILE_BYTES = 3_000_000
 
 async function backupRows(db: Q, ws: string, dealIds: string[]): Promise<Backup["tables"]> {
   const merchantIds = (await db.query(`SELECT DISTINCT merchant_id FROM deals WHERE workspace_id=$1 AND id=ANY($2::text[]) AND merchant_id IS NOT NULL`, [ws, dealIds])).rows.map(r => r.merchant_id)
@@ -158,20 +167,28 @@ async function backupRows(db: Q, ws: string, dealIds: string[]): Promise<Backup[
   }
 }
 
-/** Read-only: raw rows (ciphertext as stored) of everything the job can change, plus the bytes of every document on those deals. */
+/** Read-only: raw rows (ciphertext as stored) of everything the job can change. Document bytes are fetched one at a time with backupFile. */
 export async function backup(ws: string): Promise<Backup> {
   const db = getDatabase()
   const dealIds = (await targetDeals(db, ws)).map(d => d.id)
-  const tables = await backupRows(db, ws, dealIds)
+  return { meta: { workspaceId: ws, seedBatch: SEED_BATCH, exportedAt: new Date().toISOString(), dealIds }, tables: await backupRows(db, ws, dealIds) }
+}
+
+/** Read-only: the stored bytes of one document on the target deals. */
+export async function backupFile(ws: string, documentId: string) {
+  const db = getDatabase()
+  const dealIds = (await targetDeals(db, ws)).map(d => d.id)
+  const doc = (await db.query(`SELECT id, deal_id, storage_key, checksum FROM mca_documents WHERE workspace_id=$1 AND id=$2 AND deal_id=ANY($3::text[])`, [ws, documentId, dealIds])).rows[0]
+  assert.ok(doc, "Document is not on one of the seeded deals")
   const { documentStorage } = await import("../documents/storage")
-  const storage = documentStorage()
-  const files: Record<string, string> = {}
-  for (const doc of tables.mca_documents) files[doc.storage_key] = Buffer.from(await storage.get(doc.storage_key)).toString("base64")
-  return { meta: { workspaceId: ws, seedBatch: SEED_BATCH, exportedAt: new Date().toISOString(), dealIds }, tables, files }
+  const bytes = await documentStorage().get(doc.storage_key)
+  assert.ok(bytes.byteLength <= MAX_FILE_BYTES, "Document is too large to export through this endpoint")
+  return { documentId: doc.id, storageKey: doc.storage_key, checksumMatches: sha256(bytes) === doc.checksum, base64: Buffer.from(bytes).toString("base64") }
 }
 
 /** Writes deal, owner, merchant and funder-name changes in one transaction. Idempotent. */
 export async function applyData(ws: string) {
+  assertWritesAllowed()
   return withTransaction(async db => {
     await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${VERSION}:${ws}`])
     const plans = await plan(db, ws)
@@ -220,6 +237,7 @@ export async function applyData(ws: string) {
 
 /** Uploads up to `limit` missing or stale sample PDFs through the app's document service. Call repeatedly until `remaining` is 0. */
 export async function applyDocuments(ws: string, limit: number, budgetMs: number) {
+  assertWritesAllowed()
   const started = Date.now()
   const db = getDatabase()
   const plans = await plan(db, ws)
@@ -301,18 +319,41 @@ export async function verify(ws: string, sampleNames: string[]) {
     submissionReady: plans.filter(p => p.deal.draft_state === "submission_ready").length, testText, docStates, samples, storageReadBack }
 }
 
+/** Rejects a backup unless every row belongs to this company's seeded deals (or their merchants/advances). */
+async function assertBackupScope(db: Q, ws: string, data: Backup, deals: Row[]) {
+  assert.equal(data?.meta?.workspaceId, ws, "Backup is for a different company")
+  const dealIds = deals.map(d => d.id), seedKey = new Map(deals.map(d => [d.id, d.idempotency_key]))
+  assert.deepEqual([...data.meta.dealIds].sort(), [...dealIds].sort(), "Backup deals do not match this company's seeded deals")
+  const t = data.tables
+  for (const table of BACKUP_TABLES) {
+    assert.ok(Array.isArray(t?.[table]), `Backup is missing ${table}`)
+    for (const row of t[table]) assert.equal(row.workspace_id, ws, `Backup ${table} row ${row.id} is from another company`)
+  }
+  assert.deepEqual(t.deals.map(r => String(r.id)).sort(), [...dealIds].sort(), "Backup deal rows must be exactly the seeded deals")
+  for (const r of t.deals) assert.equal(r.idempotency_key, seedKey.get(r.id), `Backup deal ${r.id} has the wrong seed key`)
+  const inDeals = new Set(dealIds)
+  for (const table of ["deal_owners", "mca_offers", "mca_manual_submissions", "mca_offer_selections", "mca_documents", "deal_notes"] as const)
+    for (const r of t[table]) assert.ok(inDeals.has(r.deal_id), `Backup ${table} row ${r.id} is not on a seeded deal`)
+  const merchantIds = new Set(t.deals.map(r => r.merchant_id).filter(Boolean))
+  for (const r of t.mca_merchants) assert.ok(merchantIds.has(r.id), `Backup merchant ${r.id} is not linked to a seeded deal in the backup`)
+  for (const r of t.mca_merchant_owners) assert.ok(merchantIds.has(r.merchant_id), `Backup merchant owner ${r.id} is not on a backed-up merchant`)
+  const advances = new Set((await db.query(`SELECT id FROM mca_advances WHERE workspace_id=$1 AND deal_id=ANY($2::text[])`, [ws, dealIds])).rows.map(r => r.id))
+  for (const r of t.mca_advance_status_history) assert.ok(advances.has(r.advance_id), `Backup status history ${r.id} is not on a seeded deal's advance`)
+  for (const r of t.mca_documents) assert.equal(r.storage_key, `${ws}/${r.deal_id}/${r.id}`, `Backup document ${r.id} has an unexpected storage key`)
+}
+
 /**
- * Puts every backed-up row back exactly (raw ciphertext), removes owners/merchants/documents the job added, and
- * re-uploads backed-up document files that are missing. Scoped to the backup's deals, which must be this company's seeded deals.
+ * Puts every backed-up row back exactly (raw ciphertext) and removes owners/merchants/documents the job added.
+ * The whole backup is validated first; any row outside the seeded deals rejects the restore. Files go back with restoreFiles.
  */
 export async function restore(ws: string, data: Backup) {
-  assert.equal(data?.meta?.workspaceId, ws, "Backup is for a different company")
+  assertWritesAllowed()
   const removedKeys: string[] = []
   const counts = await withTransaction(async db => {
-    const dealIds = (await targetDeals(db, ws)).map(d => d.id)
-    assert.deepEqual([...data.meta.dealIds].sort(), [...dealIds].sort(), "Backup deals do not match this company's seeded deals")
-    for (const table of BACKUP_TABLES) for (const row of data.tables[table] ?? []) assert.equal(row.workspace_id, ws, `Backup ${table} row ${row.id} is from another company`)
-    const ids = (t: (typeof BACKUP_TABLES)[number]) => (data.tables[t] ?? []).map(r => String(r.id))
+    const deals = await targetDeals(db, ws)
+    await assertBackupScope(db, ws, data, deals)
+    const dealIds = deals.map(d => d.id)
+    const ids = (t: (typeof BACKUP_TABLES)[number]) => data.tables[t].map(r => String(r.id))
     const merchantsBefore = (await db.query(`SELECT DISTINCT merchant_id FROM deals WHERE workspace_id=$1 AND id=ANY($2::text[]) AND merchant_id IS NOT NULL`, [ws, dealIds])).rows.map(r => r.merchant_id)
     const out: Record<string, number> = {}
     const docs = (await db.query(`DELETE FROM mca_documents WHERE workspace_id=$1 AND deal_id=ANY($2::text[]) AND source='demo_seed' AND source_reference=$3 AND NOT id=ANY($4::text[]) RETURNING storage_key`, [ws, dealIds, VERSION, ids("mca_documents")])).rows
@@ -320,7 +361,7 @@ export async function restore(ws: string, data: Backup) {
     out.dealOwnersRemoved = (await db.query(`DELETE FROM deal_owners WHERE workspace_id=$1 AND deal_id=ANY($2::text[]) AND NOT id=ANY($3::text[])`, [ws, dealIds, ids("deal_owners")])).rowCount
     out.merchantOwnersRemoved = (await db.query(`DELETE FROM mca_merchant_owners WHERE workspace_id=$1 AND merchant_id=ANY($2::text[]) AND NOT id=ANY($3::text[])`, [ws, [...new Set([...merchantsBefore, ...ids("mca_merchants")])], ids("mca_merchant_owners")])).rowCount
     for (const table of BACKUP_TABLES) {
-      const rows = data.tables[table] ?? []
+      const rows = data.tables[table]
       if (!rows.length) continue
       const cols = (await db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND is_generated='NEVER' ORDER BY ordinal_position`, [table])).rows.map(r => `"${r.column_name}"`)
       const set = cols.filter(c => c !== '"id"').map(c => `${c}=EXCLUDED.${c}`).join(", ")
@@ -335,13 +376,25 @@ export async function restore(ws: string, data: Backup) {
   const { storageClient, quarantineBucket } = await import("../documents/storage")
   const bucket = process.env.MCA_SUPABASE_DOCUMENT_BUCKET ?? "fundlane-documents"
   for (const key of removedKeys) for (const b of [bucket, quarantineBucket()]) await storageClient().storage.from(b).remove([key])
-  let filesRestored = 0
-  for (const doc of data.tables.mca_documents ?? []) {
-    const b64 = data.files?.[doc.storage_key]
-    if (!b64) continue
+  return { ...counts, storageObjectsRemoved: removedKeys.length }
+}
+
+/** After restore: puts backed-up document bytes back for document rows on the seeded deals whose object is missing. */
+export async function restoreFiles(ws: string, files: Array<{ storageKey: string; base64: string }>) {
+  assertWritesAllowed()
+  const db = getDatabase()
+  const dealIds = (await targetDeals(db, ws)).map(d => d.id)
+  const { storageClient, quarantineBucket } = await import("../documents/storage")
+  const bucket = process.env.MCA_SUPABASE_DOCUMENT_BUCKET ?? "fundlane-documents"
+  let restored = 0, present = 0
+  for (const file of files) {
+    const doc = (await db.query(`SELECT id, deal_id, processing_state, checksum FROM mca_documents WHERE workspace_id=$1 AND storage_key=$2 AND deal_id=ANY($3::text[])`, [ws, file.storageKey, dealIds])).rows[0]
+    assert.ok(doc && file.storageKey === `${ws}/${doc.deal_id}/${doc.id}`, `No document row on a seeded deal for ${file.storageKey}`)
+    const bytes = Buffer.from(file.base64, "base64")
+    assert.equal(sha256(bytes), doc.checksum, `Bytes for ${file.storageKey} do not match the document checksum`)
     const target = ["clean", "ready"].includes(doc.processing_state) ? bucket : quarantineBucket()
-    const { error } = await storageClient().storage.from(target).upload(doc.storage_key, Buffer.from(b64, "base64"), { upsert: false, contentType: "application/octet-stream" })
-    if (!error) filesRestored++
+    const { error } = await storageClient().storage.from(target).upload(file.storageKey, bytes, { upsert: false, contentType: "application/octet-stream" })
+    if (error) present++; else restored++
   }
-  return { ...counts, storageObjectsRemoved: removedKeys.length, filesRestored }
+  return { restored, alreadyPresentOrFailed: present }
 }
