@@ -1,6 +1,8 @@
 import * as Sentry from "@sentry/nextjs"
 import { scrubRecordingEvent } from "@/lib/observability/scrub"
 
+const FEEDBACK_ACCENT = { accentBackground: "var(--primary)", accentForeground: "var(--primary-foreground)", successColor: "var(--primary)" }
+
 let replayAdded = false
 let feedbackAdded = false
 
@@ -41,5 +43,8 @@ export function ensureFeedbackIntegration() {
     enableScreenshot: true,
     showBranding: false,
     useSentryUser: { name: "username", email: "email" },
+    // The app's color tokens inherit into the form's shadow root, so the accent follows the brand and the app theme.
+    themeLight: FEEDBACK_ACCENT,
+    themeDark: FEEDBACK_ACCENT,
   }))
 }

@@ -5,6 +5,7 @@ import test from "node:test"
 import { RequestError } from "../src/lib/mca/client"
 import { identifyServerUser, registerReporter, reportException, type ReportContext, type ServerIdentity } from "../src/lib/observability/bridge"
 import { replayAllowedPath, scrubBreadcrumb, scrubEvent, scrubLog, scrubRecordingEvent, scrubSpan, scrubUrl, scrubUrlsInText } from "../src/lib/observability/scrub"
+import { FEEDBACK_FORMS, FEEDBACK_KINDS, feedbackButtonOffset } from "../src/lib/observability/feedback-forms"
 import { DATA_COLLECTION, SENTRY_TUNNEL_ROUTE, sampleRate } from "../src/lib/observability/sentry-options"
 
 function fakeReporter() {
@@ -214,4 +215,26 @@ test("shared server modules reach Sentry only through the dependency-free bridge
     assert.doesNotMatch(readFileSync(resolve(file), "utf8"), /from ["']@sentry\/|import\(["']@sentry\//, file)
   }
   assert.doesNotMatch(readFileSync(resolve("src/lib/observability/bridge.ts"), "utf8"), /^import /m)
+})
+
+test("the floating Feedback button offers issue, feature and improvement forms with distinct tags", () => {
+  assert.deepEqual(FEEDBACK_KINDS, ["bug", "feature_request", "improvement"])
+  assert.deepEqual(FEEDBACK_KINDS.map((kind) => FEEDBACK_FORMS[kind].label), ["Report an issue", "Request a feature", "Suggest an improvement"])
+  assert.deepEqual(FEEDBACK_KINDS.map((kind) => FEEDBACK_FORMS[kind].tags.feedback_type), ["bug", "feature_request", "improvement"])
+  for (const kind of FEEDBACK_KINDS) {
+    const form = FEEDBACK_FORMS[kind]
+    assert.ok(form.formTitle && form.submitButtonLabel && form.successMessageText, kind)
+    assert.match(form.messagePlaceholder, /use Hide to cover merchant or banking details/, kind)
+  }
+})
+
+test("the Feedback button sits beside the sidebar and replaces the header menu", () => {
+  assert.equal(feedbackButtonOffset({ isMobile: true, state: "expanded" }), "1rem")
+  assert.equal(feedbackButtonOffset({ isMobile: false, state: "expanded" }), "calc(var(--sidebar-width) + 1rem)")
+  assert.equal(feedbackButtonOffset({ isMobile: false, state: "collapsed" }), "calc(var(--sidebar-width-icon) + 1rem)")
+  for (const file of ["src/components/site-header.tsx", "src/components/mca/platform/platform-chrome.tsx", "src/components/mca/dashboard-chrome.tsx"]) {
+    assert.doesNotMatch(readFileSync(resolve(file), "utf8"), /feedback-menu|FeedbackMenu/, file)
+  }
+  assert.match(readFileSync(resolve("src/components/mca/dashboard-chrome.tsx"), "utf8"), /<FeedbackButton raised=\{fullBleed\} \/>/)
+  assert.match(readFileSync(resolve("src/components/mca/platform/platform-chrome.tsx"), "utf8"), /<FeedbackButton \/>/)
 })

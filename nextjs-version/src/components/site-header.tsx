@@ -8,7 +8,6 @@ import { CreditNotificationBell } from "@/components/mca/assistant/notification-
 import { NewDealHeaderAction } from "@/components/mca/deals/new-deal-header-action"
 import { useOptionalNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { ModeToggle } from "@/components/mode-toggle"
-import { FeedbackMenu } from "@/components/observability/feedback-menu"
 import type { SessionResponse } from "@/lib/mca/types"
 
 export function SiteHeader({ session }: { session?: SessionResponse }) {
@@ -25,7 +24,6 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
           {session?.platformOwner && <Link href="/platform" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform</Link>}
           {pathname !== "/assistant" && <AssistantButton />}
-          <FeedbackMenu />
           <ModeToggle />
         </div>
       </div>
