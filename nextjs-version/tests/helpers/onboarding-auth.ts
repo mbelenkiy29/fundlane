@@ -25,6 +25,10 @@ export const provider = {
   exchangeInputs: [] as unknown[],
   onOtp: undefined as undefined | (() => Promise<void>),
   onGetUser: undefined as undefined | (() => Promise<void>),
+  createUserInputs: [] as unknown[],
+  passwords: new Map<string, string>(),
+  deletedUserIds: [] as string[],
+  afterCreateUser: undefined as undefined | (() => Promise<void>),
 }
 // Node 24 uses exports; cache also keeps options compatible with the older installed type declarations.
 const headersMock = {
@@ -80,6 +84,25 @@ const serverMock = {
           if (provider.onOtp) await provider.onOtp()
           return { error: provider.otpError }
         },
+        signInWithPassword: async (input: {
+          email: string
+          password: string
+        }) => {
+          const user = [...provider.users.values()].find(
+            (candidate) => candidate.email === input.email
+          )
+          if (!user || provider.passwords.get(input.email) !== input.password)
+            return {
+              error: { status: 400, message: "Invalid login credentials" },
+            }
+          const sessionId = randomUUID()
+          await getDatabase().execute(
+            "INSERT INTO auth.sessions(id,user_id,not_after) VALUES (?,?,now()+interval '1 hour')",
+            [sessionId, user.id]
+          )
+          provider.current = { user, email: input.email, sessionId }
+          return { error: null }
+        },
       },
     }),
     getSupabaseAdminClient: () => ({
@@ -89,6 +112,46 @@ const serverMock = {
             data: { user: provider.users.get(id) ?? null },
             error: null,
           }),
+          createUser: async (input: {
+            email: string
+            password: string
+            email_confirm?: boolean
+          }) => {
+            provider.createUserInputs.push(input)
+            if (
+              [...provider.users.values()].some(
+                (user) => user.email === input.email
+              )
+            )
+              return {
+                data: { user: null },
+                error: {
+                  status: 422,
+                  code: "email_exists",
+                  message: "A user with this email address has already been registered",
+                },
+              }
+            const user = {
+              id: randomUUID(),
+              email: input.email,
+              email_confirmed_at: input.email_confirm ? nowIso() : undefined,
+              app_metadata: {},
+              user_metadata: {},
+              aud: "authenticated",
+              created_at: nowIso(),
+            } as User
+            provider.users.set(user.id, user)
+            provider.passwords.set(input.email, input.password)
+            if (provider.afterCreateUser) await provider.afterCreateUser()
+            return { data: { user }, error: null }
+          },
+          deleteUser: async (id: string) => {
+            provider.deletedUserIds.push(id)
+            const user = provider.users.get(id)
+            if (user?.email) provider.passwords.delete(user.email)
+            provider.users.delete(id)
+            return { data: { user: null }, error: null }
+          },
         },
       },
     }),
@@ -129,7 +192,16 @@ export function resetAuthProvider() {
   provider.otpInputs.length = 0
   provider.verificationInputs.length = 0
   provider.exchangeInputs.length = 0
+  provider.createUserInputs.length = 0
+  provider.passwords.clear()
+  provider.deletedUserIds.length = 0
+  provider.afterCreateUser = undefined
   browserCookies.clear()
+}
+/** Simulates a brand-new owner: the Checkout email has no provider account yet. */
+export function withoutProviderUser(identity: SupabaseIdentity) {
+  provider.users.delete(identity.user.id)
+  provider.current = null
 }
 export async function liveIdentity(email: string): Promise<SupabaseIdentity> {
   const user = {

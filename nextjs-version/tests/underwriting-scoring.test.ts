@@ -21,6 +21,8 @@ import {
 } from "../src/lib/mca/underwriting/scoring"
 import { GET as getFit } from "../src/app/api/mca/underwriting/lender-fit/[dealId]/route"
 import { getLenderFit } from "../src/lib/mca/underwriting/lender-fit"
+import { GET as getEstimates } from "../src/app/api/mca/underwriting/estimates/[dealId]/route"
+import { getDealEstimates } from "../src/lib/mca/underwriting/estimates-loader"
 import type { ScoringInputs } from "../src/lib/mca/underwriting/scoring"
 import type { ExistingPositionCandidate, FunderScore, UnderwritingAggregate } from "../src/lib/mca/underwriting/contracts"
 import { AUTO_SELECT_GRADES } from "../src/lib/mca/underwriting/policy"
@@ -492,6 +494,20 @@ test("MIC-163 deals:read lists, deals:write scores, intake:write is 403, foreign
   assert.equal((await getFit(request("score-other"),params)).status,404)
   const repActor = { ...actor(workspaceId), role: "rep" as const, membershipId: "unassigned-rep", userId: "unassigned-user" }
   await assert.rejects(() => getLenderFit(repActor,deal.id),(error:{status?:number}) => error.status === 404 || error.status === 403)
+  const previousEstimates = process.env.MCA_DEAL_ESTIMATES_ENABLED
+  process.env.MCA_DEAL_ESTIMATES_ENABLED = "true"
+  try {
+    const estimateRequest = (secret: string) => new Request(`http://localhost/api/mca/underwriting/estimates/${deal.id}`, { headers: { authorization: `Bearer mca_${secret}` } })
+    const own = await getEstimates(estimateRequest("score-read"), params)
+    assert.equal(own.status, 200)
+    assert.equal(own.headers.get("cache-control"), "no-store")
+    assert.equal((await own.json() as { label: string }).label, "Estimate — not an offer")
+    assert.equal((await getEstimates(estimateRequest("score-other"), params)).status, 404)
+    assert.equal((await getEstimates(estimateRequest("score-intake"), params)).status, 403)
+    await assert.rejects(() => getDealEstimates(repActor, deal.id, {}), (error: { status?: number }) => error.status === 404 || error.status === 403)
+  } finally {
+    if (previousEstimates === undefined) delete process.env.MCA_DEAL_ESTIMATES_ENABLED; else process.env.MCA_DEAL_ESTIMATES_ENABLED = previousEstimates
+  }
   const other = await postScores(request("score-other", "POST", "{}"), params)
   assert.equal(other.status, 404)
   await assert.rejects(

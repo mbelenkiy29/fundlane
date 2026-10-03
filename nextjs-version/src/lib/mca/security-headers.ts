@@ -123,6 +123,11 @@ export const API_CACHE_HEADERS: NextHeader[] = [
   { key: "Cache-Control", value: "private, no-store, max-age=0" },
 ]
 
+// Invite pages and their POST never leak a referrer; listed after "/(.*)" because the last match wins.
+export const NO_REFERRER_HEADERS: NextHeader[] = [
+  { key: "Referrer-Policy", value: "no-referrer" },
+]
+
 export function nextConfigHeaders(): Array<{ source: string; headers: NextHeader[] }> {
   return [
     {
@@ -136,6 +141,14 @@ export function nextConfigHeaders(): Array<{ source: string; headers: NextHeader
     {
       source: "/(.*)",
       headers: DOCUMENT_SECURITY_HEADERS,
+    },
+    {
+      source: "/enrollment",
+      headers: NO_REFERRER_HEADERS,
+    },
+    {
+      source: "/api/enrollment/invite",
+      headers: NO_REFERRER_HEADERS,
     },
   ]
 }

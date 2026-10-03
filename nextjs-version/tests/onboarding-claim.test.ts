@@ -7,11 +7,13 @@ import {
   resetAuthProvider,
   liveIdentity,
   browserCookies,
+  withoutProviderUser,
 } from "./helpers/onboarding-auth"
+import { randomUUID } from "node:crypto"
 import { getDatabase, newId, nowIso } from "../src/lib/mca/db"
-import { findEnrollment } from "../src/lib/mca/onboarding/store"
+import { enrollmentChallengeScope, enrollmentEmailHash, findEnrollment } from "../src/lib/mca/onboarding/store"
 import { linkSupabaseUser, setActiveWorkspace, WORKSPACE_COOKIE } from "../src/lib/mca/supabase-auth"
-import { encryptSensitive } from "../src/lib/mca/crypto"
+import { createOpaqueToken, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto"
 
 let close: () => Promise<void>
 before(async () => {
@@ -350,4 +352,105 @@ test("revocation at the last durable boundary rolls back all tenant grants", asy
     await db.execute("DROP TRIGGER test_late_revoke ON sms_companies")
     await db.execute("DROP FUNCTION test_late_revoke()")
   }
+})
+/** Mirrors the email worker's freeze-time invite mint. */
+async function mintInvite(f: Awaited<ReturnType<typeof activatedEnrollment>>) {
+  const challengeId = randomUUID(),
+    token = createOpaqueToken(),
+    now = nowIso(),
+    row = (await findEnrollment(f.id))!
+  await getDatabase().execute(
+    "INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,resume_generation,expires_at,created_at,updated_at) VALUES (?,?,'authentication',?,?,?,?,?,?,?)",
+    [
+      challengeId,
+      f.id,
+      hashOpaqueToken(token),
+      encryptSensitive(
+        JSON.stringify({
+          version: 1,
+          email: f.identity.email,
+          emailGeneration: row.emailGeneration,
+          destination: "crm",
+          generation: row.emailGeneration,
+          issuedAt: now,
+          sessionId: null,
+          invite: true,
+        }),
+        enrollmentChallengeScope(challengeId)
+      ),
+      enrollmentEmailHash(f.identity.email),
+      row.resumeGeneration,
+      new Date(Date.parse(now) + 86_400_000).toISOString(),
+      now,
+      now,
+    ]
+  )
+  return { challengeId, token }
+}
+test("an invite-set password creates no company; the explicit claim then creates exactly one owner company", async () => {
+  const f = await activatedEnrollment()
+  withoutProviderUser(f.identity)
+  const auth = await import("../src/lib/mca/onboarding/auth"),
+    db = getDatabase(),
+    invite = await mintInvite(f)
+  const companies = async () =>
+    (await db.queryOne<{ count: number }>(
+      "SELECT count(*)::int count FROM workspaces"
+    ))!.count
+  const before = await companies()
+  await auth.completeEnrollmentInvite({
+    ...invite,
+    email: f.identity.email,
+    password: "Synthetic-Passw0rd-Long",
+  })
+  assert.equal(await companies(), before)
+  assert.equal((await findEnrollment(f.id))?.workspaceId, null)
+  const owner = provider.current!
+  assert.notEqual(owner.user.id, f.identity.user.id)
+  const { claimEnrollment } = await import("../src/lib/mca/onboarding/claim")
+  const a = await claimEnrollment(
+      { enrollmentId: f.id, identity: owner },
+      f.client
+    ),
+    b = await claimEnrollment({ enrollmentId: f.id, identity: owner }, f.client)
+  assert.deepEqual(a, b)
+  assert.equal(await companies(), before + 1)
+  assert.equal(
+    (await findEnrollment(f.id))?.claimedProviderUserId,
+    owner.user.id
+  )
+  for (const table of ["workspace_owners", "memberships", "sms_companies"])
+    assert.equal(
+      (
+        await db.queryOne<{ count: number }>(
+          `SELECT count(*)::int count FROM ${table} WHERE workspace_id=?`,
+          [a.workspaceId]
+        )
+      )?.count,
+      1
+    )
+})
+test("after an email-code sign-in and claim, a still-pending invite is unusable", async () => {
+  const f = await activatedEnrollment()
+  const invite = await mintInvite(f)
+  await claim(f)
+  const auth = await import("../src/lib/mca/onboarding/auth")
+  await assert.rejects(
+    auth.completeEnrollmentInvite({
+      ...invite,
+      email: f.identity.email,
+      password: "Synthetic-Passw0rd-Long",
+    }),
+    { code: "enrollment_challenge_invalid" }
+  )
+  assert.equal(provider.createUserInputs.length, 0)
+  assert.equal(
+    (
+      await getDatabase().queryOne<{ attempts: number }>(
+        "SELECT attempts FROM mca_enrollment_challenges WHERE id=?",
+        [invite.challengeId]
+      )
+    )?.attempts,
+    0
+  )
 })

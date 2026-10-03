@@ -14,12 +14,12 @@ import { assertAccountSignupAllowed } from "./signup-guard"
 
 const emailInput = z.object({ email: z.email().max(320), next: z.string().max(2048).optional() })
 const credentials = emailInput.extend({ password: z.string().min(1).max(256) })
-const newPassword = z.string().min(12, "Use a password with at least 12 characters.").max(256, "Use a password with no more than 256 characters.")
+export const newPassword = z.string().min(12, "Use a password with at least 12 characters.").max(256, "Use a password with no more than 256 characters.")
 export function authOrigin(request: Request) {
   const origin = process.env.MCA_APP_ORIGIN || new URL(request.url).origin
   return new URL(origin).origin
 }
-function authError(error: { message: string; status?: number; code?: string; name?: string; reasons?: unknown } | null) {
+export function authError(error: { message: string; status?: number; code?: string; name?: string; reasons?: unknown } | null) {
   if (error && (error.code === "weak_password" || error.name === "AuthWeakPasswordError")) {
     const reasons = Array.isArray(error.reasons) ? error.reasons : []
     const message = reasons.includes("pwned")

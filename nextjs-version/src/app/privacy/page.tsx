@@ -3,7 +3,7 @@ import { LegalDraft } from "@/components/marketing/legal-draft"
 import { MarketingShell } from "@/components/marketing/shell"
 import { getDemoConfiguration } from "@/lib/marketing/config"
 import { legalDraftPagesEnabled } from "@/lib/marketing/legal-draft-flag"
-import { privacySections } from "@/lib/marketing/legal-drafts"
+import { legalLastUpdated, privacySections } from "@/lib/marketing/legal-drafts"
 import { privacyNotice } from "@/lib/marketing/privacy-notice"
 import { marketingMetadata } from "@/lib/marketing/metadata"
 
@@ -31,6 +31,6 @@ export default function PrivacyPage() {
     </MarketingShell>
   }
   return <MarketingShell jsonLd={{ title: "Privacy Policy", path: "/privacy", description }}>
-    <LegalDraft title="Privacy Policy" sections={privacySections} />
+    <LegalDraft title="Privacy Policy" sections={privacySections} lastUpdated={legalLastUpdated.privacy} />
   </MarketingShell>
 }
