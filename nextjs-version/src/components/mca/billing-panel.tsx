@@ -1,23 +1,19 @@
 "use client"
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { SeatSelector } from "./seat-selector"
+import { BillingDate } from "./billing-date"
 import { requestJson } from "@/lib/mca/client"
-import { billingTimeZone, formatBillingDate, formatBillingMoney, quotedSeatIncrease, validSelectedSeats, type BillingRecovery } from "@/lib/mca/billing-display"
+import { formatBillingDate, formatBillingMoney, quotedSeatIncrease, validSelectedSeats, type BillingRecovery } from "@/lib/mca/billing-display"
 import { monthlyPriceCents } from "@/lib/mca/billing-catalog"
 import type { CompanyAccess } from "@/lib/mca/company-access"
 
 type BillingResponse = { enabled: boolean; seatSyncEnabled:boolean; manualSeatPreviewEnabled:boolean; seatsCountPendingInvites:boolean; testMode: boolean; occupiedSeats: number; activeSeats:number;pendingInvitationSeats:number; canManagePayment: boolean; cardRequiredTrial?: boolean; checkoutUnavailable?: boolean; access: CompanyAccess; recovery: BillingRecovery; actionRequiredInvoice: null | {id:string;url:string|null}; paymentFailedInvoice: null | {id:string}; state: null | {selected_seats:number;pending_seats:number|null;pending_seats_at:string|null}; billing: null | { subscriptionId: string | null; status: string; seatLimit: number; paymentPastDue: number; periodEnd:string|null }; timeZone?: string | null }
-const subscribeNothing = () => () => {}
-/**
- * A billing timestamp in the company's stored time zone, else the viewer's browser zone. With no stored zone the
- * server cannot know the viewer's, so server render and hydration use UTC and the client re-renders in its own zone.
- */
-export function BillingDate({ value, timeZone }: { value:string; timeZone?:string|null }) {
-  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false)
-  const zone = billingTimeZone(timeZone) ?? (hydrated ? undefined : "UTC")
-  return <time dateTime={value}>{formatBillingDate(value, zone)}</time>
+export { BillingDate }
+/** The "Trial ends" line in Plans & Billing: the company's time zone, else the viewer's, with the zone named. */
+export function BillingTrialEnds({ trialEndsAt, timeZone, status, cardRequiredTrial }: { trialEndsAt:string;timeZone?:string|null;status:string;cardRequiredTrial?:boolean }) {
+  return <p>Trial ends <BillingDate value={trialEndsAt} timeZone={timeZone}/>.{status==="trialing"?" Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.":cardRequiredTrial?"":" No card required; up to 5 trial users."}</p>
 }
 export function BillingCancellation({ enabled, busy, onCancel }: { enabled:boolean;busy:boolean;onCancel:()=>void }) {
   return <div className="space-y-2"><Button variant="outline" disabled={!enabled||busy} onClick={onCancel}>Cancel at period end</Button><p className="text-sm text-muted-foreground">Cancellation remains available while company access is paused, including when a seat reduction is scheduled. Cancellation replaces the pending reduction. Monthly fees continue until the effective cancellation date. Outstanding invoices and administrative suspensions remain in effect.</p></div>
@@ -70,7 +66,7 @@ export function BillingPanel({ onboarding = false, onContinue }: { onboarding?: 
       {state.paymentFailedInvoice&&!state.actionRequiredInvoice&&<p role="alert" className="rounded-lg border border-amber-500 p-3 text-sm">Invoice {state.paymentFailedInvoice.id} could not be paid. <a className="underline" href="/settings/billing?billingAction=portal">Update your card in Payment settings &amp; invoices</a>. Seats and access update after payment is verified.</p>}
       <Card><CardHeader><CardTitle>Company access: {state.access.status.replaceAll("_"," ")}</CardTitle></CardHeader><CardContent className="space-y-2">
         {!state.access.allowed&&<p role="alert" className="text-destructive">Access is paused: {state.access.reason?.replaceAll("_"," ")}. {state.access.manualPaused?"Contact support to resolve this suspension.":"Review outstanding invoices and subscription status below to resolve billing. Payment must be verified before eligible access resumes."}</p>}
-        {state.access.trialEndsAt&&<p>Trial ends <BillingDate value={state.access.trialEndsAt} timeZone={state.timeZone}/>.{state.access.status==="trialing"?" Stripe automatically charges for your licensed seats when the trial ends unless you cancel before then in Plans & Billing or the Stripe billing portal.":state.cardRequiredTrial?"":" No card required; up to 5 trial users."}</p>}
+        {state.access.trialEndsAt&&<BillingTrialEnds trialEndsAt={state.access.trialEndsAt} timeZone={state.timeZone} status={state.access.status} cardRequiredTrial={state.cardRequiredTrial}/>}
         {state.access.graceEndsAt&&<p>Payment grace ends <BillingDate value={state.access.graceEndsAt} timeZone={state.timeZone}/>. Settle outstanding invoices to keep access.</p>}
         <p>{state.seatSyncEnabled&&!state.seatsCountPendingInvites?`${state.activeSeats} active licensed members · ${state.pendingInvitationSeats} pending invitations (licensed on acceptance) · Current licensed seat limit: ${state.access.seatLimit}`:`${state.activeSeats} active members + ${state.pendingInvitationSeats} pending invitations = ${state.occupiedSeats} seats reserved · Current invitation limit: ${state.access.seatLimit}`}</p>
         <p>Selected paid seats: {state.state?.selected_seats??1} · Purchased seats: {state.billing?.subscriptionId?state.billing.seatLimit:0}</p>

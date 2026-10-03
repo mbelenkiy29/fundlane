@@ -24,6 +24,7 @@ import {
 } from "../workspaces"
 import { trialAllowedForIdentity } from "../trial-abuse"
 import { getCompanyAccess } from "../company-access"
+import { billingTimeZone } from "../billing-display"
 import {
   enrollmentContinuation,
   type EnrollmentDestination,
@@ -351,6 +352,8 @@ export type EnrollmentPublicStatus = {
   nextAction: "authenticate" | "wait" | "claim" | "continue" | "recover"
   trialEndsAt?: string
   destination?: string
+  /** The claimed workspace's stored time zone, only for the signed-in buyer; dates fall back to the browser zone. */
+  timeZone?: string
 }
 export async function readEnrollmentStatus(
   input: {
@@ -411,8 +414,10 @@ export async function readEnrollmentStatus(
       nextAction: "recover",
       ...(row.trialEndsAt ? { trialEndsAt: row.trialEndsAt } : {}),
     }
+  const timeZone = identityAuthorized && row.workspaceId ? billingTimeZone((await getDatabase().prepare<{ timezone: string | null }>("SELECT timezone FROM workspaces WHERE id=?").get(row.workspaceId))?.timezone) : undefined
   const facts = {
     ...(row.trialEndsAt ? { trialEndsAt: row.trialEndsAt } : {}),
+    ...(timeZone ? { timeZone } : {}),
     ...(identityAuthorized
       ? {
           destination: await enrollmentDestination(

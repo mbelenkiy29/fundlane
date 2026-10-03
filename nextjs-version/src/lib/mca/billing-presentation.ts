@@ -14,3 +14,8 @@ export async function getCompanyBillingPresentation(workspaceId:string) {
     ORDER BY n.created_at DESC LIMIT 1`).get(workspaceId) : Promise.resolve(undefined),getDatabase().prepare<{timezone:string|null}>("SELECT timezone FROM workspaces WHERE id=?").get(workspaceId)])
   return {...billing,manualSeatPreviewEnabled:billingManualSeatPreviewEnabled(),activeSeats:usage?.active??0,pendingInvitationSeats:usage?.pending??0,actionRequiredInvoice:actionRequired?{id:actionRequired.invoice_id,url:actionRequired.invoice_url}:null,paymentFailedInvoice:paymentFailed?{id:paymentFailed.invoice_id}:null,timeZone:billingTimeZone(workspace?.timezone)??null}
 }
+/** The workspace's stored time zone if this runtime recognizes it (same check as Plans & Billing), else null (viewer's zone). */
+export async function workspaceDisplayTimeZone(workspaceId:string):Promise<string|null> {
+  const row=await getDatabase().prepare<{timezone:string|null}>("SELECT timezone FROM workspaces WHERE id=?").get(workspaceId)
+  return billingTimeZone(row?.timezone)??null
+}

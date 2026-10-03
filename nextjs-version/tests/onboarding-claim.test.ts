@@ -92,6 +92,7 @@ test("claimed status leaves B active and explicit authorized replay selects A wi
     const status = await readEnrollmentStatus(input,f.client)
     assert.equal(status.nextAction,"continue")
     assert.equal(status.destination,expected)
+    assert.equal(status.timeZone,(await db.queryOne<{timezone:string}>("SELECT timezone FROM workspaces WHERE id=?",[a.workspaceId]))?.timezone,"signed-in buyer sees the claimed workspace's time zone")
     assert.equal(browserCookies.get(WORKSPACE_COOKIE),b,"observational status must leave ordinary workspace selection alone")
     const replay = await claimEnrollment(input,f.client)
     assert.deepEqual(replay,{workspaceId:a.workspaceId,destination:expected})
@@ -109,6 +110,29 @@ test("claimed status leaves B active and explicit authorized replay selects A wi
   await assert.rejects(claimEnrollment({enrollmentId:f.id,identity:f.identity,destination:"business",generation:enrollment.emailGeneration},f.client),{code:"totp_required"})
   assert.equal(browserCookies.get(WORKSPACE_COOKIE),b)
   assert.deepEqual(await snapshotB(),originalB)
+})
+test("only the signed-in buyer gets the workspace zone: a resume link on a CLAIMED enrollment gets none, and a bad stored zone falls back", async () => {
+  const f = await activatedEnrollment(), a = await claim(f), db = getDatabase()
+  const { readEnrollmentStatus } = await import("../src/lib/mca/onboarding/claim")
+  await db.execute("UPDATE workspaces SET timezone='America/Los_Angeles' WHERE id=?", [a.workspaceId])
+  assert.equal((await findEnrollment(f.id))?.workspaceId, a.workspaceId, "the enrollment is claimed")
+  // Resume link only (no sign-in), and a resume link with a different signed-in account: no workspace facts.
+  const wrong = await liveIdentity("someone-else@example.test")
+  for (const input of [{ enrollmentId: f.id, resumeSecret: f.secret }, { enrollmentId: f.id, resumeSecret: f.secret, identity: wrong }]) {
+    const status = await readEnrollmentStatus(input, f.client)
+    assert.ok(status.trialEndsAt, "the resume link still sees the trial end")
+    assert.equal("timeZone" in status, false, "a resume link must not reveal the claimed workspace's time zone")
+  }
+  // The signed-in buyer sees it.
+  provider.current = f.identity
+  assert.equal((await readEnrollmentStatus({ enrollmentId: f.id, identity: f.identity }, f.client)).timeZone, "America/Los_Angeles")
+  // An unrecognized stored zone is dropped, so the page falls back to the browser's zone instead of failing.
+  for (const bad of ["Not/AZone", "  "]) {
+    await db.execute("UPDATE workspaces SET timezone=? WHERE id=?", [bad, a.workspaceId])
+    const status = await readEnrollmentStatus({ enrollmentId: f.id, identity: f.identity }, f.client)
+    assert.equal(status.nextAction, "continue")
+    assert.equal("timeZone" in status, false, `stored zone ${JSON.stringify(bad)} falls back to the viewer's zone`)
+  }
 })
 test("claim rechecks session revocation after provider refresh and rolls back all grants", async () => {
   const f = await activatedEnrollment()

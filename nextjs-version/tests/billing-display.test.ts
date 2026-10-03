@@ -151,3 +151,17 @@ test("server-rendered trial end is stable regardless of the server's zone, so hy
   // No stored zone: the server cannot know the viewer's, so it renders UTC and the client re-renders after hydration.
   assert.equal(tokyo[1],`<time dateTime="${TRIAL_END}">Oct 15, 2026, 3:30 AM UTC</time>`)
 })
+test("Plans & Billing 'Trial ends' line renders the company zone with its name, not UTC or the plain locale string",()=>{
+  const script=`
+    const React=require('react');const {renderToString}=require('react-dom/server');
+    const {BillingTrialEnds}=require('./src/components/mca/billing-panel.tsx');
+    const props=${JSON.stringify([{trialEndsAt:TRIAL_END,timeZone:"America/Los_Angeles",status:"trialing"},{trialEndsAt:TRIAL_END,timeZone:"Not/AZone",status:"trial",cardRequiredTrial:false}])};
+    console.log(JSON.stringify(props.map(p=>renderToString(React.createElement(BillingTrialEnds,p)))));
+  `
+  // Server zone New York: the old toLocaleString() would print "10/14/2026, 11:30:00 PM" with no zone name.
+  const [company,fallback]=inZone("America/New_York",script)
+  assert.match(company,new RegExp(`^<p>Trial ends <time dateTime="${TRIAL_END}">Oct 14, 2026, 8:30 PM PDT</time>\\.(<!-- -->)? Stripe automatically charges`))
+  assert.doesNotMatch(company,/UTC|10\/14\/2026/)
+  // A bad stored zone falls back to the viewer's zone; on the server that is an explicit, labeled UTC.
+  assert.match(fallback,new RegExp(`^<p>Trial ends <time dateTime="${TRIAL_END}">Oct 15, 2026, 3:30 AM UTC</time>\\.(<!-- -->)? No card required; up to 5 trial users\\.</p>$`))
+})

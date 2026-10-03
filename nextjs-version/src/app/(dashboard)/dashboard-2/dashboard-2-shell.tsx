@@ -19,6 +19,7 @@ import { RecentTransactions } from "./components/recent-transactions"
 import { RevenueBreakdown } from "./components/revenue-breakdown"
 import { SalesChart } from "./components/sales-chart"
 import { TopProducts } from "./components/top-products"
+import { TrialBanner } from "./components/trial-banner"
 
 export function Dashboard2Shell({
   initialKpis,
@@ -28,6 +29,7 @@ export function Dashboard2Shell({
   readinessEnabled = false,
   progressiveSetup = false,
   trialEndsAt = null,
+  trialTimeZone = null,
 }: {
   initialKpis: HomeKpis | null
   initialSetup?: WorkspaceSetup | null
@@ -36,6 +38,8 @@ export function Dashboard2Shell({
   readinessEnabled?: boolean
   progressiveSetup?: boolean
   trialEndsAt?: string | null
+  /** The workspace's validated IANA time zone, or null to use the viewer's browser zone. */
+  trialTimeZone?: string | null
 }) {
   const newDeal = useNewDeal()
   const [dateRange, setDateRange] = React.useState<Dashboard2DateRange>("30d")
@@ -50,7 +54,6 @@ export function Dashboard2Shell({
   const view = mapDashboard2(kpis, { dateRange })
   const lastUpdated = kpis?.asOf ? formatDashboardTimestamp(kpis.asOf, kpis.timezone) : "—"
   const setupPath = progressiveSetup ? "/api/mca/setup?progressive=1" : "/api/mca/setup"
-  const trialEnd = trialEndsAt && Number.isFinite(Date.parse(trialEndsAt)) ? trialEndsAt : null
 
   const loadSetup = React.useCallback(async () => {
     setSetupLoading(true)
@@ -113,7 +116,7 @@ export function Dashboard2Shell({
           lastUpdated={lastUpdated}
         />
         {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-        {trialEnd && <p className="text-sm">Your trial ends <time dateTime={trialEnd}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(trialEnd))} UTC</time>. <Link className="underline" href="/settings/billing">Manage or cancel billing</Link>.</p>}
+        <TrialBanner trialEndsAt={trialEndsAt} timeZone={trialTimeZone} />
         {progressiveSetup && <p className="text-sm text-muted-foreground">Getting started is optional. <Link className="underline" href="/settings/business">Business details</Link> and teammate invitations can wait while you use your CRM.</p>}
 
         <div className="@container/main space-y-6">
