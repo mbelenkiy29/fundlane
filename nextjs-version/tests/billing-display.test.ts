@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import {formatBillingMoney,quotedSeatIncrease,validSelectedSeats} from "../src/lib/mca/billing-display"
+import {billingTimeZone,formatBillingDate,formatBillingMoney,quotedSeatIncrease,validSelectedSeats} from "../src/lib/mca/billing-display"
 import {BILLING_CATALOG,monthlyPriceCents} from "../src/lib/mca/billing-catalog"
 import { spawnSync } from "node:child_process"
 import type { BillingRecovery } from "../src/lib/mca/billing-display"
@@ -113,4 +113,41 @@ test("paused notice directs administrators to payment and cancellation without e
   assert.match(admin, /monthly fees continue during suspension until the effective cancellation date/)
   assert.doesNotMatch(member, /href="\/settings\/billing"/)
   assert.match(member, /Ask your company administrator/)
+})
+
+const TRIAL_END="2026-10-15T03:30:00.000Z"
+function inZone(tz:string, script:string){
+  const result=spawnSync(process.execPath,["--import","tsx","-e",script],{encoding:"utf8",env:{...process.env,TZ:tz}})
+  assert.equal(result.status,0,result.stderr)
+  return JSON.parse(result.stdout.trim()) as string[]
+}
+test("trial end shows in the company's stored time zone, not UTC, with the zone named",()=>{
+  assert.equal(formatBillingDate(TRIAL_END,"America/New_York"),"Oct 14, 2026, 11:30 PM EDT")
+  assert.equal(formatBillingDate(TRIAL_END,"America/Los_Angeles"),"Oct 14, 2026, 8:30 PM PDT")
+  assert.equal(formatBillingDate(TRIAL_END,"UTC"),"Oct 15, 2026, 3:30 AM UTC")
+  assert.equal(formatBillingDate("not a date","America/New_York"),"not a date")
+  assert.equal(billingTimeZone(" America/Chicago "),"America/Chicago")
+  for(const zone of [null,undefined,""," ","Not/AZone"])assert.equal(billingTimeZone(zone),undefined)
+})
+test("without a stored company zone the trial end uses the viewer's own zone",()=>{
+  // TZ stands in for the viewer's browser zone; the company zone wins whenever one is stored.
+  const [none,invalid,company]=inZone("Asia/Tokyo",`
+    const {formatBillingDate}=require('./src/lib/mca/billing-display.ts');
+    console.log(JSON.stringify([formatBillingDate(${JSON.stringify(TRIAL_END)},null),formatBillingDate(${JSON.stringify(TRIAL_END)},"Not/AZone"),formatBillingDate(${JSON.stringify(TRIAL_END)},"America/New_York")]))
+  `)
+  assert.equal(none,"Oct 15, 2026, 12:30 PM GMT+9")
+  assert.equal(invalid,none)
+  assert.equal(company,"Oct 14, 2026, 11:30 PM EDT")
+})
+test("server-rendered trial end is stable regardless of the server's zone, so hydration matches",()=>{
+  const script=`
+    const React=require('react');const {renderToString}=require('react-dom/server');
+    const {BillingDate}=require('./src/components/mca/billing-panel.tsx');
+    console.log(JSON.stringify([${JSON.stringify("America/New_York")},null].map(timeZone=>renderToString(React.createElement(BillingDate,{value:${JSON.stringify(TRIAL_END)},timeZone})))));
+  `
+  const tokyo=inZone("Asia/Tokyo",script), chicago=inZone("America/Chicago",script)
+  assert.deepEqual(tokyo,chicago)
+  assert.equal(tokyo[0],`<time dateTime="${TRIAL_END}">Oct 14, 2026, 11:30 PM EDT</time>`)
+  // No stored zone: the server cannot know the viewer's, so it renders UTC and the client re-renders after hydration.
+  assert.equal(tokyo[1],`<time dateTime="${TRIAL_END}">Oct 15, 2026, 3:30 AM UTC</time>`)
 })
