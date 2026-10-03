@@ -10955,8 +10955,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/onboarding-operator/entry.tsx": {
-    "mtime": 1790995998.8189433,
-    "ast_hash": "9fc9abbb372e0bd18d78a8af04e25445",
+    "mtime": 1791001172.2007365,
+    "ast_hash": "652c716aa51256033ac40ae0b6b8e327",
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/onboarding-operator/run.mjs": {
@@ -10970,8 +10970,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/platform/entry.tsx": {
-    "mtime": 1790995998.819271,
-    "ast_hash": "49a68bb1404dd567b7362b6e90728dae",
+    "mtime": 1791001172.1980767,
+    "ast_hash": "1c4aeddf69d591b6110d918d26b78c09",
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/platform/fixtures.mjs": {
@@ -11115,8 +11115,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/platform-shell.test.ts": {
-    "mtime": 1790995998.8377693,
-    "ast_hash": "93493a67307a9bfa48460f9a42e61ac6",
+    "mtime": 1791001174.3646913,
+    "ast_hash": "ad6cb8c3803c10473c1c7c6b22319fe2",
     "semantic_hash": ""
   },
   "nextjs-version/docs/acceptance/auth-refractor.md": {
