@@ -24,6 +24,8 @@ import {
 } from "../auth-navigation"
 import { startPasswordTotpChallenge } from "../totp-service"
 import { supabaseIdentity, type SupabaseIdentity } from "../supabase-auth"
+import { safeIdentifier } from "../operations/contracts"
+import { recordOperationalError } from "../operations/telemetry"
 import { onboardingOrigin } from "./checkout"
 import {
   assertEnrollmentGeneration,
@@ -232,23 +234,32 @@ export async function requestEnrollmentAuthentication(input: {
     })
   )
   callback.searchParams.set("challenge", id)
+  let failure: unknown = null
   try {
     const client = await createSupabaseServerClient()
-    const { error } = await client.auth.signInWithOtp({
+    ;({ error: failure } = await client.auth.signInWithOtp({
       email,
       options: { shouldCreateUser: true, emailRedirectTo: callback.toString() },
-    })
-    if (error)
-      await getDatabase().execute(
-        "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE id=? AND state='pending'",
-        [nowIso(), id]
-      )
-  } catch {
-    await getDatabase().execute(
-      "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE id=? AND state='pending'",
-      [nowIso(), id]
-    )
+    }))
+  } catch (error) {
+    failure = error ?? "thrown"
   }
+  if (!failure) return
+  await getDatabase().execute(
+    "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE id=? AND state='pending'",
+    [nowIso(), id]
+  )
+  // Provider identifiers only: never the email, token, cookie or provider message.
+  const f = failure as { code?: unknown; status?: unknown; name?: unknown }
+  await recordOperationalError("enrollment_auth", "enrollment_auth_email_failed", {
+    provider: {
+      code: safeIdentifier(f.code),
+      status: typeof f.status === "number" ? f.status : null,
+      name: safeIdentifier(f.name),
+    },
+    enrollmentId: row.id,
+    challengeId: id,
+  }).catch(() => undefined)
 }
 
 export async function requireIssuedEnrollmentChallenge(

@@ -63,6 +63,18 @@ export function commandEnv(connection: Record<string, string | undefined>): Node
   return env
 }
 
+// Keeps the last 2 KB of a tool's stderr so failures explain themselves without unbounded logs.
+export function captureStderr(stream: NodeJS.ReadableStream | null): () => string {
+  let text = ""
+  stream?.on("data", (chunk: Buffer) => { text = (text + chunk.toString()).slice(-2048) })
+  return () => text.trim()
+}
+
+export function toolFailure(message: string, stderr: string, env: Record<string, string | undefined>): Error {
+  const detail = env.PGPASSWORD ? stderr.split(env.PGPASSWORD).join("[redacted]") : stderr
+  return new Error(detail ? `${message}: ${detail}` : message)
+}
+
 export async function sha256(path: string): Promise<string> {
   const hash = createHash("sha256")
   for await (const chunk of createReadStream(path)) hash.update(chunk)
