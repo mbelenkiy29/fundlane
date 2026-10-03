@@ -4,7 +4,7 @@ export function LegalDraft({ title, sections }: { title: string; sections: reado
   return <main id="main" className="fl-container fl-legal-page">
     <div className="fl-legal-draft-banner" role="status">{legalDraftBanner}</div>
     <h1>{title}</h1>
-    <p>Effective date: {legalPlaceholders.effectiveDate}</p>
+    <p>Effective date: {legalPlaceholders.effectiveDate}{legalPlaceholders.lastUpdated ? <> · Last updated: {legalPlaceholders.lastUpdated}</> : null}</p>
     {sections.map(section => <section key={section.heading}>
       <h2>{section.heading}</h2>
       {section.paragraphs.map(paragraph => <p key={paragraph}>{paragraph}</p>)}

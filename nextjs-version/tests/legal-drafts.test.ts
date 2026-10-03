@@ -130,7 +130,8 @@ test("rendered enabled routes include every section and the publication notice",
     for (const section of sections) assert.equal(html.split(`<h2>${section.heading}</h2>`).length - 1, 1, section.heading)
   }
   for (const phrase of ["New Jersey", "Monmouth County", "pre-purchased seat model", "prorated and invoiced immediately", "take effect at renewal", "no-card trial", "card-backed Stripe trial", "TCPA", "automatic seat assignment", "fees the customer paid for the Service in the 12 months before the event giving rise to the claim"]) assert.ok(result.terms.includes(phrase), phrase)
-  for (const phrase of ["OpenAI", "Gmail", "Microsoft", "Twilio", "Cloudmersive", "Verisys", "sidebar_state", "Local storage", "Information is retained according to its purpose", "not all Fundlane subprocessors"]) assert.ok(result.privacy.includes(phrase), phrase)
+  for (const phrase of ["OpenAI", "Gmail", "Microsoft", "Twilio", "Cloudmersive", "Verisys", "sidebar_state", "Local storage", "Information is retained according to its purpose", "not all Fundlane subprocessors", "Resend", "Sentry (Functional Software, Inc.)", "all text, form inputs and images masked", "account security pages are not recorded", "not to collect cookies, request bodies, IP addresses"]) assert.ok(result.privacy.includes(phrase), phrase)
+  assert.match(result.privacy, /Last updated: (<!-- -->)?October 3, 2026/)
   assert.equal(result.termsMetadata.description, "Fundlane Terms of Service from Sentinel Tech Solutions LLC, effective September 28, 2026.")
   assert.equal(result.privacyMetadata.description, "How Sentinel Tech Solutions LLC handles information in Fundlane, effective September 28, 2026.")
 })
