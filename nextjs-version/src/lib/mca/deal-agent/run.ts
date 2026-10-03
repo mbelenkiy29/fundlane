@@ -3,6 +3,7 @@ import "server-only"
 import { createHash } from "node:crypto"
 import { getDatabase, newId, nowIso, recordAuditEvent, withTransaction } from "../db"
 import type { DealActor, DealRecord, DealStatus } from "../deals/schema"
+import { recoverStaleActions } from "./actions"
 import { getDealForDocument } from "../deals/service"
 import { isDocumentReady } from "../documents/contracts"
 import { listDocumentRecords } from "../documents/repository"
@@ -21,6 +22,7 @@ import { analyzeDealStatements } from "../underwriting/statements"
 import { getWorkspaceSettings } from "../workspaces"
 
 const DEBOUNCE_MS = 120_000
+const DEBOUNCE_CAP_MS = 10 * 60_000
 const STALE_RUN_MS = 10 * 60_000
 const ACTIVE_STATUSES: ReadonlySet<DealStatus> = new Set(["lead", "new_application", "missing_documents", "ready_to_submit", "submitted", "resubmitting"])
 // A prior job in any other state means this funder already has (or had) the package.
@@ -43,6 +45,16 @@ export async function dealAgentEnabled(workspaceId: string): Promise<boolean> {
 /** Debounced so multi-file uploads and the intake job settle before the run. */
 export async function enqueueDealAgentRun(record: { id: string; workspaceId: string; dealId: string }): Promise<void> {
   if (!(await dealAgentEnabled(record.workspaceId))) return
+  // Push back a still-queued run for this deal instead of adding one; the cap keeps a steady stream of uploads from starving it.
+  // A concurrent double-insert just yields two jobs, which the run's input_key claim dedupes.
+  const queued = await getDatabase().prepare<{ id: string; created_at: string }>("SELECT id,created_at FROM mca_background_jobs WHERE workspace_id=? AND kind='deal_agent' AND resource_id=? AND state='queued' ORDER BY created_at LIMIT 1")
+    .get(record.workspaceId, record.dealId)
+  if (queued) {
+    const availableAt = new Date(Math.min(Date.now() + DEBOUNCE_MS, Date.parse(queued.created_at) + DEBOUNCE_CAP_MS)).toISOString()
+    const pushed = await getDatabase().prepare("UPDATE mca_background_jobs SET available_at=GREATEST(available_at,?),updated_at=? WHERE workspace_id=? AND id=? AND state='queued'")
+      .run(availableAt, nowIso(), record.workspaceId, queued.id)
+    if (pushed.changes) return
+  }
   await enqueueBackgroundJob({
     actor: documentScanActor(record),
     kind: "deal_agent",
@@ -97,10 +109,14 @@ export function submissionProposals(fit: LenderFitResponse, topN: number, select
   return { proposals, skipped }
 }
 
-/** Serialized per deal. Never touches dismissed/approved rows, so a decision sticks until inputs change. */
+/**
+ * Serialized per deal. Never touches dismissed/approved rows, so a decision sticks until inputs change.
+ * A reviewed row (pending with a preview) is never replaced: a newer proposal is parked on it as next_*.
+ */
 export async function upsertProposals(actor: DealActor, dealId: string, runId: string, proposals: Proposal[]): Promise<{ inserted: number; superseded: number; unchanged: number } | { skipped: "newer_run" }> {
   return withTransaction(async (database) => {
     await database.prepare("SELECT pg_advisory_xact_lock(hashtext(?))").get(`deal-agent:${actor.workspaceId}:${dealId}`)
+    await recoverStaleActions(actor, dealId)
     const newer = await database.prepare(`SELECT 1 FROM mca_deal_agent_runs newer JOIN mca_deal_agent_runs mine ON mine.workspace_id=newer.workspace_id AND mine.id=?
       WHERE newer.workspace_id=? AND newer.deal_id=? AND newer.state<>'failed' AND newer.created_at>mine.created_at`).get(runId, actor.workspaceId, dealId)
     if (newer) return { skipped: "newer_run" as const }
@@ -108,20 +124,34 @@ export async function upsertProposals(actor: DealActor, dealId: string, runId: s
     let inserted = 0, superseded = 0, unchanged = 0
     for (const proposal of proposals) {
       superseded += (await database.prepare(`UPDATE mca_deal_agent_actions SET status='superseded',updated_at=?
-        WHERE workspace_id=? AND deal_id=? AND target_key=? AND fingerprint<>? AND status='pending'`).run(now, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint)).changes
-      // An executing approval for the same target keeps its slot; the next run proposes again.
+        WHERE workspace_id=? AND deal_id=? AND target_key=? AND fingerprint<>? AND status='pending' AND preview_id IS NULL`).run(now, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint)).changes
+      // An executing approval or a reviewed row for the same target keeps its slot.
       // A superseded twin comes back; dismissed/approved ones stay decided.
       const added = await database.prepare(`INSERT INTO mca_deal_agent_actions (id,workspace_id,deal_id,run_id,kind,target_key,fingerprint,payload_json,status,created_at,updated_at)
-        SELECT ?,?,?,?,?,?,?,?,'pending',?,? WHERE NOT EXISTS (SELECT 1 FROM mca_deal_agent_actions WHERE workspace_id=? AND deal_id=? AND target_key=? AND status='executing')
+        SELECT ?,?,?,?,?,?,?,?,'pending',?,? WHERE NOT EXISTS (SELECT 1 FROM mca_deal_agent_actions WHERE workspace_id=? AND deal_id=? AND target_key=?
+          AND (status='executing' OR (status='pending' AND preview_id IS NOT NULL)))
         ON CONFLICT (workspace_id,deal_id,target_key,fingerprint) DO UPDATE SET status='pending',run_id=EXCLUDED.run_id,payload_json=EXCLUDED.payload_json,
           preview_id=NULL,error_code=NULL,updated_at=EXCLUDED.updated_at WHERE mca_deal_agent_actions.status='superseded'`)
         .run(newId(), actor.workspaceId, dealId, runId, proposal.kind, proposal.targetKey, proposal.fingerprint, JSON.stringify(proposal.payload), now, now, actor.workspaceId, dealId, proposal.targetKey)
       if (added.changes) inserted += 1
-      else unchanged += 1
+      else {
+        unchanged += 1
+        // The reviewed row is current again, or the newer proposal waits on it until the broker dismisses or reviews again.
+        await database.prepare(`UPDATE mca_deal_agent_actions SET next_fingerprint=NULL,next_payload_json=NULL,
+          error_code=CASE WHEN error_code IN ('inputs_changed','no_longer_suggested') THEN NULL ELSE error_code END,updated_at=?
+          WHERE workspace_id=? AND deal_id=? AND target_key=? AND fingerprint=? AND status='pending' AND preview_id IS NOT NULL`).run(now, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint)
+        await database.prepare(`UPDATE mca_deal_agent_actions SET next_fingerprint=?,next_payload_json=?,error_code='inputs_changed',updated_at=?
+          WHERE workspace_id=? AND deal_id=? AND target_key=? AND fingerprint<>? AND status='pending' AND preview_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM mca_deal_agent_actions d WHERE d.workspace_id=? AND d.deal_id=? AND d.target_key=? AND d.fingerprint=? AND d.status IN ('dismissed','approved'))`)
+          .run(proposal.fingerprint, JSON.stringify(proposal.payload), now, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint, actor.workspaceId, dealId, proposal.targetKey, proposal.fingerprint)
+      }
     }
     const keys = proposals.map(proposal => proposal.targetKey)
+    const notProposed = keys.length ? ` AND target_key NOT IN (${keys.map(() => "?").join(",")})` : ""
     superseded += (await database.prepare(`UPDATE mca_deal_agent_actions SET status='superseded',updated_at=?
-      WHERE workspace_id=? AND deal_id=? AND status='pending'${keys.length ? ` AND target_key NOT IN (${keys.map(() => "?").join(",")})` : ""}`).run(now, actor.workspaceId, dealId, ...keys)).changes
+      WHERE workspace_id=? AND deal_id=? AND status='pending' AND preview_id IS NULL${notProposed}`).run(now, actor.workspaceId, dealId, ...keys)).changes
+    await database.prepare(`UPDATE mca_deal_agent_actions SET error_code='no_longer_suggested',next_fingerprint=NULL,next_payload_json=NULL,updated_at=?
+      WHERE workspace_id=? AND deal_id=? AND status='pending' AND preview_id IS NOT NULL${notProposed}`).run(now, actor.workspaceId, dealId, ...keys)
     return { inserted, superseded, unchanged }
   })
 }
@@ -165,7 +195,6 @@ export async function processDealAgentJob(job: BackgroundJob, actor: DealActor):
     let submissions: ReturnType<typeof submissionProposals> = { proposals: [], skipped: [] }
     let snapshotId: string | null = null
     const { topN } = await readAnalysisSettings(actor.workspaceId)
-    // ponytail: fit only matters once the file is complete; submissions are never proposed before that.
     if (!completeness.ready) await record({ step: "lender_fit", outcome: "skipped", code: "deal_incomplete", summary: "Lender fit waits for a complete file." })
     else {
       try {
