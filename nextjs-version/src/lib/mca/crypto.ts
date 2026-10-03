@@ -79,12 +79,16 @@ export function decryptUserSecret(value: string, userId: string): string {
 }
 
 export function decryptSensitive(value: string, workspaceId: string): string {
-  const [version, nonceValue, tagValue, ciphertextValue] = value.split(".");
+  const parts = value.split(".");
+  const [version, nonceValue, tagValue, ciphertextValue] = parts;
   // An empty plaintext encrypts to an empty ciphertext segment ("v1.<nonce>.<tag>."), so only a missing
   // segment is malformed. The GCM auth tag still authenticates the (empty) value.
-  if (version !== "v1" || !nonceValue || !tagValue || ciphertextValue === undefined) throw new Error("Invalid encrypted value.");
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(nonceValue, "base64url"));
+  if (parts.length !== 4 || version !== "v1" || !nonceValue || !tagValue || ciphertextValue === undefined) throw new Error("Invalid encrypted value.");
+  const nonce = Buffer.from(nonceValue, "base64url"), tag = Buffer.from(tagValue, "base64url");
+  // encryptSensitive always writes a 12-byte nonce and the full 16-byte tag; refuse truncated tags.
+  if (nonce.length !== 12 || tag.length !== 16) throw new Error("Invalid encrypted value.");
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), nonce, { authTagLength: 16 });
   decipher.setAAD(Buffer.from(workspaceId));
-  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+  decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(Buffer.from(ciphertextValue, "base64url")), decipher.final()]).toString("utf8");
 }

@@ -35,3 +35,22 @@ test("sensitive field encryption is bound to the workspace", async () => {
   assert.equal(decryptSensitive(encrypted, "workspace-a"), plaintext);
   assert.throws(() => decryptSensitive(encrypted, "workspace-b"));
 });
+
+test("empty sensitive values round-trip and stay authenticated", async () => {
+  process.env.MCA_DATA_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64url");
+  const empty = encryptSensitive("", "workspace-a");
+  const [version, nonce, tag, ciphertext] = empty.split(".");
+  assert.equal(version, "v1");
+  assert.equal(ciphertext, "");
+  assert.equal(decryptSensitive(empty, "workspace-a"), "");
+  assert.throws(() => decryptSensitive(empty, "workspace-b"));
+  const tagBytes = Buffer.from(tag, "base64url"); tagBytes[0] ^= 1
+  assert.throws(() => decryptSensitive(["v1", nonce, tagBytes.toString("base64url"), ""].join("."), "workspace-a"));
+  const invalid = /Invalid encrypted value/
+  assert.throws(() => decryptSensitive(`v1.${nonce}.${tag}`, "workspace-a"), invalid);
+  assert.throws(() => decryptSensitive(`v1..${tag}.`, "workspace-a"), invalid);
+  assert.throws(() => decryptSensitive(`v1.${nonce}..`, "workspace-a"), invalid);
+  assert.throws(() => decryptSensitive(`v1.${nonce}.${tag}..`, "workspace-a"), invalid);
+  assert.throws(() => decryptSensitive(`v1.${nonce}.${tag.slice(0, 8)}.`, "workspace-a"), invalid);
+  assert.throws(() => decryptSensitive(`v1.${nonce.slice(0, 8)}.${tag}.`, "workspace-a"), invalid);
+});
