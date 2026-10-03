@@ -50,7 +50,7 @@ export function AppSidebar({ session, ...props }: React.ComponentProps<typeof Si
           </Link>
         </SidebarMenuButton></SidebarMenuItem></SidebarMenu>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent data-sentry-unmask>
         {groups.map((group) => <NavMain key={group.label} label={group.label} items={group.items.filter((item) => (!item.page || !session || pages?.[item.page as keyof typeof pages]) && (item.url !== "/payments" || !session || session.permissions?.actions.viewPaymentTable))} />)}
       </SidebarContent>
       <SidebarFooter className="border-t"><NavUser user={{ name: identity.name, email: identity.email, avatar: "" }} /></SidebarFooter>

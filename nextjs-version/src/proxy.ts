@@ -29,4 +29,5 @@ export default async function proxy(request:NextRequest){
   response.headers.set("Cache-Control","private, no-store")
   return response
 }
-export const config={matcher:["/((?!_next/static|_next/image|favicon.ico|icon-192.png|icon-512.png|sw.js|manifest.webmanifest).*)"]}
+// `monitoring` is the Sentry tunnel (next.config.ts); envelopes skip the maintenance gate and session refresh.
+export const config={matcher:["/((?!_next/static|_next/image|favicon.ico|icon-192.png|icon-512.png|sw.js|manifest.webmanifest|monitoring(?:/|$)).*)"]}

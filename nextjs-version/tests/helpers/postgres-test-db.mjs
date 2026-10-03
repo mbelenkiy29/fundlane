@@ -54,7 +54,7 @@ export async function createPostgresTestDatabase(label = "suite", { migrateSchem
     databaseUrl,
     databaseUrlUnpooled,
     env(overrides = {}) {
-      return { ...process.env, DATABASE_URL: databaseUrl, DATABASE_URL_UNPOOLED: databaseUrlUnpooled, MCA_DB_POOL_MAX: "4", MCA_DOCUMENT_STORAGE_PROVIDER: "filesystem", ...overrides };
+      return { ...process.env, DATABASE_URL: databaseUrl, DATABASE_URL_UNPOOLED: databaseUrlUnpooled, MCA_DB_POOL_MAX: "4", MCA_DOCUMENT_STORAGE_PROVIDER: "filesystem", NEXT_PUBLIC_SENTRY_DSN: "", SENTRY_DSN: "", ...overrides };
     },
     /** @param {string} text @param {unknown[]} values */
     query(text, values = []) { return queryPool.query(text, values); },
