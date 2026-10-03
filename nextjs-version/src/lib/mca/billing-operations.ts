@@ -3,7 +3,7 @@ import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent 
 import { billingEnabled, getStripeClient, missingBillingStateFailsClosed, stripePausedTrialEligible, stripeTrialLifecycleEnabled, stripeTrialReminderEligible, syncWorkspaceBilling, reconcileLicensedSeats, trialInvoicePreview, type BillingSubscription, type StripeBillingClient } from "./billing"
 import { getCompanyAccess, captureCompanyPauseBoundary, recordCompanyPauseBoundary } from "./company-access"
 import { enqueueBillingNotification } from "./billing-reconciliation"
-import { deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
+import { billingEmailConfiguration, deliverBillingEmail, renderBillingEmailContent, type BillingEmailMessage } from "./email"
 import { resendSystemEmailEnabled, systemEmailCredentials } from "./system-email"
 import { runEnrollmentMaintenance } from "./onboarding/maintenance"
 import { AppError } from "./errors"
@@ -20,7 +20,7 @@ async function localTrialNoticeStillEligible(workspaceId: string, kind: string, 
 /** At-least-once delivery; downstream receiver deduplicates the stable correlation ID. */
 export async function deliverBillingNotifications(limit = 50, client?: StripeBillingClient) {
   const claimed = await withImmediateTransaction(async db => {
-    const rows = await db.prepare<{ id: string; workspace_id: string; kind: string; data: string; attempts: number; created_at: string; delivery_payload:string|null }>(`SELECT id,workspace_id,kind,data,attempts,created_at,delivery_payload FROM company_billing_notifications
+    const rows = await db.prepare<{ id: string; workspace_id: string; kind: string; data: string; attempts: number; created_at: string; delivery_payload:string|null; last_error:string|null }>(`SELECT id,workspace_id,kind,data,attempts,created_at,delivery_payload,last_error FROM company_billing_notifications
       WHERE delivered_at IS NULL AND available_at<=? AND (lease_until IS NULL OR lease_until<?)
       ORDER BY available_at LIMIT ? FOR UPDATE SKIP LOCKED`).all(nowIso(), nowIso(), limit)
     const lease = new Date(Date.now() + 300000).toISOString()
@@ -82,7 +82,8 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
         if (!process.env.MCA_EMAIL_WEBHOOK_URL && !systemEmailCredentials()) throw new Error(resendSystemEmailEnabled() ? "Configure the billing email webhook or Resend API key and From address" : "Configure the billing email webhook or UseSend API key and From address")
         const data = JSON.parse(row.data)
         const portal = row.kind === "payment_failed" || row.kind === "trial_paused" || (row.kind === "trial_ending" && data.stripeTrial === true)
-        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${portal?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...data,...preview,kind:row.kind,workspaceId:row.workspace_id},transport:process.env.MCA_EMAIL_WEBHOOK_URL?"webhook":"usesend",...(process.env.MCA_EMAIL_WEBHOOK_URL?{}:{from:systemEmailCredentials()!.from,retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
+        const configuration = billingEmailConfiguration()
+        payload={recipient:owner.email,actionUrl:`${new URL(origin).origin}/settings/billing${portal?"?billingAction=portal":""}`,expiresAt:new Date(Date.parse(row.created_at)+30*86400000).toISOString(),data:{...data,...preview,kind:row.kind,workspaceId:row.workspace_id},transport:configuration.provider === "webhook" ? "webhook" : "system",configuration,...(configuration.provider === "webhook" ? {} : {from:configuration.from,retryUntil:new Date(Date.now()+23*3600000).toISOString()})}
         payload.content=renderBillingEmailContent(payload)
         const frozen = await getDatabase().prepare("UPDATE company_billing_notifications SET delivery_payload=? WHERE id=? AND lease_until=?").run(JSON.stringify(payload),row.id,row.lease)
         if (!frozen.changes) continue
@@ -99,6 +100,14 @@ export async function deliverBillingNotifications(limit = 50, client?: StripeBil
       await getDatabase().prepare("UPDATE company_billing_notifications SET delivered_at=?,lease_until=NULL,last_error=NULL WHERE id=? AND lease_until=?").run(nowIso(), row.id, row.lease)
       delivered++
     } catch (error) {
+      if (error instanceof AppError && error.code === "billing_delivery_review_required") {
+        // Durable operator hold, rather than retrying an ambiguous original send.
+        await withImmediateTransaction(async db => {
+          const held = await db.prepare("UPDATE company_billing_notifications SET lease_until=NULL,available_at='9999-12-31T00:00:00.000Z',last_error=? WHERE id=? AND lease_until=?").run(`${error.code}: ${error.message}`, row.id, row.lease)
+          if (held.changes && !row.last_error?.startsWith("billing_delivery_review_required:")) await recordAuditEvent({ context: { workspaceId: row.workspace_id, userId: null }, action: "billing.notification_review_required", resourceType: "billing_notification", resourceId: row.id, metadata: { kind: row.kind, code: error.code }, executor: db })
+        })
+        continue
+      }
       await getDatabase().prepare("UPDATE company_billing_notifications SET lease_until=NULL,available_at=?,last_error=? WHERE id=? AND lease_until=?").run(new Date(Date.now() + Math.min(86400000, 60000 * 2 ** Math.min(row.attempts, 10))).toISOString(), error instanceof Error ? error.message.slice(0, 500) : "Delivery failed", row.id, row.lease)
     }
   }

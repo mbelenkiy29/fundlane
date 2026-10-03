@@ -1490,6 +1490,52 @@ export const mca_auto_submit_decisions = pgTable("mca_auto_submit_decisions", {
 	index("mca_auto_submit_decisions_deal_idx").on(table.workspace_id, table.deal_id, table.created_at.desc()),
 ]);
 
+export const mca_deal_agent_runs = pgTable("mca_deal_agent_runs", {
+	id: text().primaryKey().notNull(),
+	workspace_id: text().notNull(),
+	deal_id: text().notNull(),
+	input_key: text().notNull(),
+	trigger_document_id: text(),
+	state: text().notNull(),
+	inputs_json: text().default('{}').notNull(),
+	steps_json: text().default('[]').notNull(),
+	error_code: text(),
+	created_at: text().notNull(),
+	updated_at: text().notNull(),
+	completed_at: text(),
+}, (table) => [
+	unique("mca_deal_agent_runs_input_unique").on(table.workspace_id, table.deal_id, table.input_key),
+	index("mca_deal_agent_runs_deal_idx").on(table.workspace_id, table.deal_id, table.created_at.desc()),
+	check("mca_deal_agent_runs_state_check", sql`state IN ('running','completed','failed')`),
+]);
+
+export const mca_deal_agent_actions = pgTable("mca_deal_agent_actions", {
+	id: text().primaryKey().notNull(),
+	workspace_id: text().notNull(),
+	deal_id: text().notNull(),
+	run_id: text().notNull(),
+	kind: text().notNull(),
+	target_key: text().notNull(),
+	fingerprint: text().notNull(),
+	payload_json: text().notNull(),
+	next_fingerprint: text(),
+	next_payload_json: text(),
+	status: text().notNull(),
+	preview_id: text(),
+	result_json: text(),
+	error_code: text(),
+	decided_by_user_id: text(),
+	decided_at: text(),
+	decision_note: text(),
+	created_at: text().notNull(),
+	updated_at: text().notNull(),
+}, (table) => [
+	unique("mca_deal_agent_actions_target_unique").on(table.workspace_id, table.deal_id, table.target_key, table.fingerprint),
+	uniqueIndex("mca_deal_agent_actions_open_idx").on(table.workspace_id, table.deal_id, table.target_key).where(sql`status IN ('pending','executing')`),
+	check("mca_deal_agent_actions_kind_check", sql`kind IN ('request_documents','submit_to_funder','schedule_follow_up')`),
+	check("mca_deal_agent_actions_status_check", sql`status IN ('pending','executing','approved','dismissed','superseded','failed')`),
+]);
+
 export const mca_analysis_runs = pgTable("mca_analysis_runs", {
 	id: text().primaryKey().notNull(),
 	workspace_id: text().notNull(),

@@ -5,7 +5,9 @@
  * actually loads. `'unsafe-inline'` stays on script/style because Next.js 16
  * injects inline bootstrapping without a nonce pipeline here; tightening to
  * hashes/nonces is a follow-up, not this change. Images allow any HTTPS host
- * because company logo URLs are operator-supplied.
+ * because company logo URLs are operator-supplied. Sentry needs no CSP entries:
+ * events go through the same-origin `/monitoring` tunnel and the replay worker is
+ * a blob: worker.
  *
  * CORS: HTML and API responses stay same-origin (no ACAO). Public `/fonts`
  * files keep `Access-Control-Allow-Origin: *` so the ChatKit frame can load
@@ -91,7 +93,8 @@ export const PERMISSIONS_POLICY = [
   "accelerometer=()",
   "autoplay=()",
   "camera=()",
-  "display-capture=()",
+  // Sentry User Feedback screenshots use getDisplayMedia on the page itself.
+  "display-capture=(self)",
   "geolocation=()",
   "gyroscope=()",
   "magnetometer=()",

@@ -1,6 +1,7 @@
 import "server-only"
 import { getDatabase, nowIso } from "../db"
 import { AppError } from "../errors"
+import { assertExecutionActive, executionRemainingMs, executionSignal } from "../jobs/execution"
 import { refreshSenderCredential } from "../senders/oauth"
 import {
   decryptSenderCredential,
@@ -30,6 +31,27 @@ export interface OutgoingEmail {
   to: string
   subject: string
   body: string
+}
+export interface InboxBatchOptions { messageLimit: number; deadlineMs: number }
+type InboxResume = {
+  kind: "fundlane:inbox:v1"
+  provider: string
+  since: number
+  until: number
+  page?: string
+  pending?: string[]
+  listed?: boolean
+}
+function inboxResume(cursor?: string): InboxResume | undefined {
+  if (!cursor?.startsWith("{")) return
+  try {
+    const value = JSON.parse(cursor) as InboxResume
+    if (value.kind === "fundlane:inbox:v1" && ["google", "microsoft"].includes(value.provider)
+      && Number.isFinite(value.since) && Number.isFinite(value.until) && value.since <= value.until
+      && (value.page === undefined || typeof value.page === "string")
+      && (value.pending === undefined || (Array.isArray(value.pending) && value.pending.length <= 100 && value.pending.every(id => typeof id === "string" && id.length <= 512)))) return value
+  } catch { /* An invalid resume must never silently advance the polling clock. */ }
+  throw new AppError(409, "reply_cursor_invalid", "Review the mailbox polling checkpoint.")
 }
 export class EmailProviderError extends Error {
   constructor(
@@ -208,6 +230,7 @@ export class Mailbox {
           credential
         )
       } catch (error) {
+        assertExecutionActive()
         if (error instanceof AppError && [429, 503].includes(error.status))
           throw new EmailProviderError(429, 60)
         throw new EmailProviderError(401)
@@ -240,9 +263,13 @@ export class Mailbox {
   private async request<T>(
     url: string,
     init: RequestInit = {},
-    sending = false
+    sending = false,
+    deadlineMs = Infinity
   ): Promise<T> {
     await this.heartbeat()
+    assertExecutionActive()
+    const remaining = Math.min(deadlineMs - Date.now(), executionRemainingMs() ?? Infinity)
+    if (remaining < 1000) throw new AppError(503, "reply_ingest_deadline", "Mailbox polling will resume on the next tick.")
     const expected =
       this.sender.provider === "google"
         ? "gmail.googleapis.com"
@@ -266,7 +293,7 @@ export class Mailbox {
       response = await (testFetch ?? fetch)(url, {
         ...init,
         redirect: "error",
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.floor(Math.min(15000, remaining)))), ...(executionSignal() ? [executionSignal()!] : [])]),
         headers: {
           authorization: `Bearer ${this.token}`,
           "content-type": "application/json",
@@ -275,6 +302,8 @@ export class Mailbox {
         },
       })
     } catch {
+      assertExecutionActive()
+      if (Date.now() >= deadlineMs) throw new AppError(503, "reply_ingest_deadline", "Mailbox polling will resume on the next tick.")
       throw new EmailProviderError(0, 60, sending)
     }
     if (!response.ok) {
@@ -295,6 +324,8 @@ export class Mailbox {
     try {
       return (await response.json()) as T
     } catch {
+      assertExecutionActive()
+      if (Date.now() >= deadlineMs) throw new AppError(503, "reply_ingest_deadline", "Mailbox polling will resume on the next tick.")
       throw new EmailProviderError(0, 60, sending)
     }
   }
@@ -403,7 +434,9 @@ export class Mailbox {
     return messages
   }
   /** Read-only inbox scan with a polling-interval overlap; consumers deduplicate by provider ID. */
-  async listInboxSince(cursor?: string): Promise<{ messages: RemoteEmail[]; nextCursor: string }> {
+  async listInboxSince(cursor?: string, options?: InboxBatchOptions): Promise<{ messages: RemoteEmail[]; nextCursor: string; complete?: boolean }> {
+    // Manual callers can resume a checkpoint produced by the bounded scheduler.
+    if (options || inboxResume(cursor)) return this.listInboxBatch(cursor, options ?? { messageLimit: 100, deadlineMs: Infinity })
     const since = cursor && Number.isFinite(Date.parse(cursor)) ? Date.parse(cursor) - 15 * 60_000 : Date.now() - 7 * 24 * 60 * 60_000
     const messages: RemoteEmail[] = []
     if (this.sender.provider === "google") {
@@ -438,5 +471,76 @@ export class Mailbox {
       if (url) throw new EmailProviderError(429, 60)
     }
     return { messages, nextCursor: new Date(Math.max(Date.now(), ...messages.map(message => Date.parse(message.occurredAt) || 0))).toISOString() }
+  }
+
+  /** One bounded provider page, retaining unfetched IDs and the original scan boundary. */
+  private async listInboxBatch(cursor: string | undefined, options: InboxBatchOptions): Promise<{ messages: RemoteEmail[]; nextCursor: string; complete: boolean }> {
+    if (!Number.isInteger(options.messageLimit) || options.messageLimit < 1 || options.messageLimit > 100
+      || (options.deadlineMs !== Infinity && !Number.isFinite(options.deadlineMs))) throw new AppError(422, "reply_ingest_options_invalid", "Use a valid mailbox budget and message limit.")
+    if (options.deadlineMs - Date.now() < 1000) return { messages: [], nextCursor: cursor ?? "", complete: false }
+    const resumed = inboxResume(cursor)
+    if (resumed && resumed.provider !== this.sender.provider) throw new AppError(409, "reply_cursor_provider_changed", "Review the changed mailbox provider.")
+    const state: InboxResume = resumed ?? {
+      kind: "fundlane:inbox:v1", provider: this.sender.provider,
+      since: cursor && Number.isFinite(Date.parse(cursor)) ? Date.parse(cursor) - 15 * 60_000 : Date.now() - 7 * 24 * 60 * 60_000,
+      until: Date.now(),
+    }
+    const messages: RemoteEmail[] = []
+    if (this.sender.provider === "google") {
+      if (!state.pending?.length && (!state.listed || state.page)) {
+        const query = new URLSearchParams({ q: `in:inbox after:${Math.floor(state.since / 1000)} before:${Math.ceil(state.until / 1000) + 1}`, maxResults: String(options.messageLimit) })
+        if (state.page) query.set("pageToken", state.page)
+        const result = await this.request<{ messages?: { id: string }[]; nextPageToken?: string }>(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${query}`, {}, false, options.deadlineMs)
+        state.pending = (result.messages ?? []).map(row => row.id)
+        if (state.pending.length > 100) throw new EmailProviderError(429, 60)
+        state.page = result.nextPageToken
+        state.listed = true
+      }
+      let fetched = 0
+      while (state.pending?.length && fetched < options.messageLimit && options.deadlineMs - Date.now() >= 1000) {
+        const id = state.pending[0]
+        try {
+          messages.push(gmailMessage(await this.request<GmailMessage>(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`, {}, false, options.deadlineMs)))
+        } catch (error) {
+          // A message deleted since listing is terminal; authentication/rate/transient errors must retry.
+          if (!(error instanceof EmailProviderError) || error.status !== 404) throw error
+        }
+        state.pending.shift()
+        fetched++
+      }
+    } else {
+      const query = new URLSearchParams({
+        $filter: `receivedDateTime ge ${new Date(state.since).toISOString()} and receivedDateTime le ${new Date(state.until).toISOString()}`,
+        $select: "id,conversationId,internetMessageId,internetMessageHeaders,from,toRecipients,body,subject,receivedDateTime,isDraft",
+        $top: String(options.messageLimit),
+      })
+      if (!state.pending?.length && (!state.listed || state.page)) {
+        // Graph continuation URLs retain their original page size; do not rewrite an opaque nextLink.
+        const url = state.page ?? `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?${query}`
+        const result = await this.request<{ value?: GraphMessage[]; "@odata.nextLink"?: string }>(url, {}, false, options.deadlineMs)
+        if ((result.value?.length ?? 0) > 100) throw new EmailProviderError(429, 60)
+        const rows = (result.value ?? []).filter(row => !row.isDraft)
+        messages.push(...rows.slice(0, options.messageLimit).map(graphMessage))
+        // Only provider identities enter the checkpoint; message contents remain encrypted reply data.
+        state.pending = rows.slice(options.messageLimit).map(row => row.id)
+        state.page = result["@odata.nextLink"]
+        state.listed = true
+      } else {
+        let fetched = 0
+        while (state.pending?.length && fetched < options.messageLimit && options.deadlineMs - Date.now() >= 1000) {
+          const id = state.pending[0]
+          try {
+            const row = await this.request<GraphMessage>(`https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(id)}?$select=${encodeURIComponent("id,conversationId,internetMessageId,internetMessageHeaders,from,toRecipients,body,subject,receivedDateTime,isDraft")}`, {}, false, options.deadlineMs)
+            if (!row.isDraft) messages.push(graphMessage(row))
+          } catch (error) {
+            if (!(error instanceof EmailProviderError) || error.status !== 404) throw error
+          }
+          state.pending.shift()
+          fetched++
+        }
+      }
+    }
+    const complete = !!state.listed && !state.page && !state.pending?.length
+    return { messages, nextCursor: complete ? new Date(state.until).toISOString() : JSON.stringify(state), complete }
   }
 }

@@ -49,7 +49,7 @@ test("unset and blank configuration preserve exact provider bodies", async () =>
     const resend = captureBody("resend")
     await sendSystemEmail({ ...message, fetchImpl: resend.fetchImpl })
     assert.equal(resend.body(), JSON.stringify({ from: message.from, to: [message.to], subject: message.subject, text: message.text, html: message.html }))
-    delete process.env.MCA_SYSTEM_EMAIL_PROVIDER
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
   }
 }))
 
@@ -57,6 +57,7 @@ test("plain and named Reply-To values reach both providers and the transactional
   process.env.MCA_USESEND_API_KEY = "key"
   process.env.MCA_USESEND_FROM = message.from
   process.env.MCA_RESEND_API_KEY = "resend-key"
+  process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
   process.env.MCA_TRANSACTIONAL_EMAIL_SYSTEM_PROVIDER_ENABLED = "true"
   for (const value of ["reply@example.test", "Replies <reply@example.test>"]) {
     process.env.MCA_SYSTEM_EMAIL_REPLY_TO = `  ${value}  `
@@ -71,7 +72,7 @@ test("plain and named Reply-To values reach both providers and the transactional
     const resend = captureBody("resend")
     await sendSystemEmail({ ...message, fetchImpl: resend.fetchImpl })
     assert.equal(JSON.parse(resend.body()).reply_to, value)
-    delete process.env.MCA_SYSTEM_EMAIL_PROVIDER
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
   }
   const explicit = captureBody()
   await sendSystemEmail({ ...message, replyTo: "other@example.test", fetchImpl: explicit.fetchImpl })

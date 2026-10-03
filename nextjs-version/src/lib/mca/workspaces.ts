@@ -10,6 +10,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   reports: true,
   payments: false,
   integrations: true,
+  dealAgent: false,
 };
 
 export const DEFAULT_PAGE_VISIBILITY: PageVisibility = {
@@ -46,6 +47,7 @@ interface WorkspaceRow {
 }
 
 function mapWorkspace(row: WorkspaceRow): WorkspaceSettings {
+  const featureFlags = parseJson(row.feature_flags, DEFAULT_FEATURE_FLAGS);
   return {
     workspaceId: row.id,
     brokerageName: row.name,
@@ -53,7 +55,8 @@ function mapWorkspace(row: WorkspaceRow): WorkspaceSettings {
     timezone: row.timezone,
     seatLimit: row.seat_limit,
     seatLimitManaged: billingEnabled(),
-    featureFlags: parseJson(row.feature_flags, DEFAULT_FEATURE_FLAGS),
+    featureFlags: { ...featureFlags, dealAgent: featureFlags.dealAgent === true },
+    featureAvailability: { dealAgent: { available: process.env.MCA_DEAL_AGENT_ENABLED === "true" } },
     pageVisibility: parseJson(row.page_visibility, DEFAULT_PAGE_VISIBILITY),
     actionVisibility: parseJson(row.action_visibility, DEFAULT_ACTION_VISIBILITY),
     require2fa: row.require_2fa === true,
@@ -67,7 +70,7 @@ export async function getWorkspaceSettings(workspaceId: string): Promise<Workspa
   return mapWorkspace(row);
 }
 
-export type WorkspaceSettingsPatch = Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt" | "featureFlags" | "pageVisibility" | "actionVisibility">> & {
+export type WorkspaceSettingsPatch = Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt" | "featureFlags" | "featureAvailability" | "pageVisibility" | "actionVisibility">> & {
   featureFlags?: Partial<FeatureFlags>;
   pageVisibility?: Partial<PageVisibility>;
   actionVisibility?: Partial<ActionVisibility>;

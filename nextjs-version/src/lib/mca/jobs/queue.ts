@@ -18,14 +18,14 @@ export function inBackgroundWorker(): boolean { return execution.getStore() === 
 export function runAsBackgroundWorker<T>(callback: () => Promise<T>): Promise<T> { return execution.run(true, callback) }
 export function backgroundJobsEnabled(): boolean { return process.env.MCA_BACKGROUND_JOBS === "enabled" || Boolean(process.env.VERCEL) }
 
-export type BackgroundJobKind = "auto_submit" | "application_invitation_email" | "application_invitation_reminder" | "intake_process" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
+export type BackgroundJobKind = "auto_submit" | "application_invitation_email" | "application_invitation_reminder" | "intake_process" | "document_upload" | "document_scan" | "draft_scan" | "submission_delivery" | "export" | "export_create" | "deal_agent" | "import_commit" | "import_update_commit" | "draft_extract" | "multipart_task" | "assistant_scan" | "email_intake" | "intake_replay" | "drive_preview" | "drive_apply"
 export interface BackgroundJob {
   id: string; workspace_id: string; kind: BackgroundJobKind; resource_id: string; actor_json: string; payload_json: string
   state: "queued" | "running" | "complete" | "failed"; attempts: number; lease_token: string | null
   result_json: string | null; error_code: string | null; created_at: string; updated_at: string
 }
 
-export async function enqueueBackgroundJob(input: { actor: DealActor; kind: BackgroundJobKind; resourceId: string; idempotencyKey: string; payload?: Record<string, unknown>; payloadHash?: string }): Promise<BackgroundJob> {
+export async function enqueueBackgroundJob(input: { actor: DealActor; kind: BackgroundJobKind; resourceId: string; idempotencyKey: string; payload?: Record<string, unknown>; payloadHash?: string; availableAt?: string }): Promise<BackgroundJob> {
   const principal = [input.actor.source, input.actor.userId, input.actor.membershipId, input.actor.apiKeyId, input.actor.sessionId]
   const scopedKey = createHash("sha256").update(JSON.stringify(principal)).update(input.idempotencyKey).digest("hex")
   const payload = JSON.stringify(input.payload ?? {})
@@ -35,7 +35,7 @@ export async function enqueueBackgroundJob(input: { actor: DealActor; kind: Back
     VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?,?) ON CONFLICT (workspace_id,kind,idempotency_key)
     DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key WHERE mca_background_jobs.payload_hash=EXCLUDED.payload_hash
       AND mca_background_jobs.resource_id=EXCLUDED.resource_id RETURNING *`)
-    .get(newId(), input.actor.workspaceId, input.kind, input.resourceId, scopedKey, JSON.stringify(input.actor), payload, hash, nowIso(), nowIso(), nowIso())
+    .get(newId(), input.actor.workspaceId, input.kind, input.resourceId, scopedKey, JSON.stringify(input.actor), payload, hash, input.availableAt ?? nowIso(), nowIso(), nowIso())
   if (!row) throw new AppError(409, "job_idempotency_conflict", "That retry key was used for another operation.")
   // A completed retry must pass the same current authorization as the status endpoint.
   return getBackgroundJob(input.actor, row.id)
@@ -64,7 +64,7 @@ export async function getBackgroundJob(actor: DealActor, id: string): Promise<Ba
     if (!submission) throw new AppError(404, "job_not_found", "The operation was not found.")
     await getDealForDocument(actor, submission.dealId)
   }
-  if (row.kind === "auto_submit") await getDealForDocument(actor, row.resource_id)
+  if (row.kind === "auto_submit" || row.kind === "deal_agent") await getDealForDocument(actor, row.resource_id)
   if (row.kind === "export") await (await import("../exports/service")).getExportJob(actor, row.resource_id)
   if (row.kind === "export_create") {
     const { assertCanExportKind } = await import("../exports/service")

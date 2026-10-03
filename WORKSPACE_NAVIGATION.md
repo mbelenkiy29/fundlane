@@ -35,6 +35,7 @@ All paths below are relative to `nextjs-version/`.
 | Sidebar/deal AI assistant, credits and admin alerts | `src/lib/mca/assistant/`, `src/components/mca/assistant/`, `src/app/api/mca/assistant/`, `docs/deal-assistant.md` |
 | Intake, application review, documents and imports | `src/lib/mca/intake/` (`review.ts`, `notifications.ts`, `submission-review.ts`), `src/components/mca/intake/application-review.tsx`, `documents/`, `imports/`, `docs/application-intake.md` |
 | Underwriting and funder matching | `src/lib/mca/underwriting/`, `funders/`, `datamerch/` |
+| Deal Agent proposals and broker approval queue | `src/lib/mca/deal-agent/`, `src/components/mca/deal-agent/`, `/api/mca/deal-agent/[dealId]`, `drizzle/0082_deal_agent.sql`, `docs/deal-agent.md` |
 | Submissions and sender configuration | `src/lib/mca/submissions/`, `senders/` |
 | In-app email conversations and worker | `src/lib/mca/email-conversations/`, `src/components/mca/email/`, `src/app/api/mca/email/`, `scripts/messaging/`, `docs/email-conversations.md` |
 | Outbound workflow webhooks and daily report email | `src/lib/mca/comms/webhooks.ts`, `workflow-events.ts`, `digest.ts`, `scheduler.ts`, `src/components/mca/comms/webhook-console.tsx`, `digest-settings.tsx`, `/api/mca/comms/`, `/api/cron/comms`, `docs/outbound-webhooks-and-daily-reports.md` |
@@ -45,6 +46,7 @@ All paths below are relative to `nextjs-version/`.
 | Background jobs | `src/lib/mca/jobs/`, `/api/cron/jobs`, `docs/background-job-runtime.md`; `../render.yaml`, `Dockerfile.worker`, and `docs/render-deployment.md` are historical deployment references |
 | Previous Railway / Render web hosting | `Dockerfile`, `railway.json`, `scripts/railway/`, `../DEPLOYMENT.md`, `docs/milestone-05/provider-activation.md` |
 | Encryption, email and API keys | `src/lib/mca/crypto.ts`, `email.ts`, `api-keys.ts` |
+| Observability (Sentry errors, logs, replay, feedback) | `src/instrumentation.ts`, `src/instrumentation-client.ts`, `src/lib/observability/` (`bridge.ts` for shared server code, `scrub.ts`, `sentry-options.ts`, `sentry-server.ts`), `src/components/observability/` (`sentry-session.tsx`, `feedback-menu.tsx`), `docs/sentry-observability.md`; inert without `NEXT_PUBLIC_SENTRY_DSN` |
 | Tests | `tests/`, `src/lib/mca/deals/acceptance.test.ts`, `tests/supabase-auth.test.ts` |
 | Migration tooling | `scripts/database/`, `scripts/supabase/`, `drizzle.config.ts` |
 | Plans, contracts and verification evidence | `docs/milestone-*/`, `docs/acceptance/`, `docs/supabase-*.md`; `docs/neon-*.md` and `docs/clerk-*.md` are historical |
