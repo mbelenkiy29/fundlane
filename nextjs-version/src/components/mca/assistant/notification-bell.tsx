@@ -11,6 +11,7 @@ import {
   PopoverTrigger
 } from "@/components/ui/popover"
 import { assistantJson } from "./credit-balance"
+import { markCaughtError } from "@/lib/observability/caught-errors"
 type Notice = {
   workspaceId: string
   id: string
@@ -36,14 +37,14 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
   const refresh = useCallback(() => {
     void assistantJson<{ unread: number; notifications: ApplicationNotice[] }>("/api/mca/intake/notifications")
       .then(data => { setApplications(data); setApplicationError("") })
-      .catch(() => setApplicationError("Application alerts could not be loaded."))
+      .catch((caught: unknown) => { markCaughtError(caught); setApplicationError("Application alerts could not be loaded.") })
     if (canManage)
       void assistantJson<typeof state>("/api/mca/assistant/notifications")
         .then((d) => {
           setState(d)
           setError("")
         })
-        .catch(() => setError("Notifications could not be loaded."))
+        .catch((caught: unknown) => { markCaughtError(caught); setError("Notifications could not be loaded.") })
   }, [canManage])
   useEffect(() => {
     refresh()
@@ -64,7 +65,8 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
         body: JSON.stringify({ id })
       })
       refresh()
-    } catch {
+    } catch (caught) {
+      markCaughtError(caught)
       setError("Could not mark this alert as read.")
     }
   }
@@ -76,7 +78,7 @@ export function CreditNotificationBell({ canManage }: { canManage: boolean }) {
       })
       refresh()
       router.push(`/intake/${encodeURIComponent(notice.intakeId)}`)
-    } catch { setApplicationError("Could not mark this application alert as read. Please retry.") }
+    } catch (caught) { markCaughtError(caught); setApplicationError("Could not mark this application alert as read. Please retry.") }
     finally { setOpening("") }
   }
   const unread = applications.unread + (canManage ? state.unread : 0)

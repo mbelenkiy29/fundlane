@@ -9,6 +9,7 @@
  */
 import { RequestError } from "../mca/client"
 import { redactDiagnosticText } from "../mca/error-diagnostics"
+import { wasCaughtError } from "./caught-errors"
 
 type Dict = Record<string, unknown>
 
@@ -103,14 +104,18 @@ interface EventLike {
 }
 
 /**
- * A browser extension that wraps `window.fetch` (e.g. Similarweb's frame_ant.js) can
- * re-raise a network failure our code already caught as an unhandled rejection.
- * Only that exact case is dropped: a no-response fetch TypeError, reported by the
- * global unhandled-rejection handler, whose stack runs through an extension script.
+ * A browser extension that wraps `window.fetch` (e.g. Similarweb's frame_ant.js) can leak a
+ * network failure our code already caught as an unhandled rejection. Such an extension sits in
+ * the stack of every fetch, so an extension frame alone does not prove the error was caught.
+ * An event is dropped only when all of these hold: the error is a no-response fetch TypeError,
+ * it came from the global unhandled-rejection handler, our own code marked it as caught
+ * (`markCaughtError`), and its stack runs through an extension script. An uncaught first-party
+ * fetch failure is always reported, with or without an extension in its stack.
  */
 export function isExtensionFetchNoise(event: EventLike, hint?: { originalException?: unknown }): boolean {
   const error = hint?.originalException
   if (!(error instanceof Error) || error.name !== "TypeError" || !FETCH_NETWORK_FAILURE.test(error.message)) return false
+  if (!wasCaughtError(error)) return false
   if (!event.exception?.values?.some((value) => value.mechanism?.type?.endsWith("onunhandledrejection"))) return false
   return EXTENSION_SCRIPT.test(error.stack ?? "")
 }
