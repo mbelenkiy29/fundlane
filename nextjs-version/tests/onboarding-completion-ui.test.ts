@@ -160,4 +160,14 @@ test("unavailable purchase offers explicit account switch and canonical password
   const html = runClient(`${renderSetup}const assert=require('node:assert/strict');${load}console.log(JSON.stringify(renderToStaticMarkup(React.createElement(EnrollmentCompletion,{continuation:${JSON.stringify(locator)},initialStatus:{state:'unavailable',nextAction:'authenticate'}}))));`) as string
   assert.match(html, /Sign out and use another account/)
   assert.match(html, /href="\/forgot-password\?next=/)
+  assert.match(html, /Email me a new set-password link/)
+})
+
+test("an invite page renders no credential on the server and only accepts a well-formed fragment token", () => {
+  const result = runClient(`${renderSetup}const assert=require('node:assert/strict');${load}const { readInviteFragment }=require('./src/components/mca/onboarding/enrollment-set-password.tsx');const token='a'.repeat(43);
+    console.log(JSON.stringify({html:renderToStaticMarkup(React.createElement(EnrollmentCompletion,{continuation:${JSON.stringify(locator)},inviteId:'20000000-0000-4000-8000-000000000002',initialStatus:{state:'unavailable',nextAction:'authenticate'}})),
+      parsed:[readInviteFragment('#t='+token),readInviteFragment('t='+token),readInviteFragment('#t=short'),readInviteFragment('#x='+token),readInviteFragment('#t='+token.slice(1)+'<'),readInviteFragment('')]}));`) as { html: string; parsed: (string | null)[] }
+  assert.deepEqual(result.parsed, ["a".repeat(43), "a".repeat(43), null, null, null, null])
+  // Before the client reads the fragment, neither the password form nor any token is rendered.
+  assert.doesNotMatch(result.html, /aaaaaaaaaa|Set your password|#t=/)
 })

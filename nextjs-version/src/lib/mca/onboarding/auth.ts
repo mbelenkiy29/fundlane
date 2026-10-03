@@ -41,9 +41,14 @@ import {
   enrollmentEmailHash,
   enrollmentEncryptionScope,
   findEnrollment,
+  newOwnerEnrollment,
   readEnrollmentContact,
 } from "./store"
-import { enqueueOnboardingEmailIntents } from "./email-intents"
+import {
+  enqueueOnboardingEmailIntents,
+  enqueueParkedInvite,
+  nextEmailGeneration,
+} from "./email-intents"
 import type { EnrollmentRecord } from "./contracts"
 
 export { enrollmentChallengeScope }
@@ -60,6 +65,8 @@ const challengePayloadSchema = z
     sessionId: z.uuid().nullable(),
     // Only a challenge minted into the frozen getting_started email proves mailbox control.
     invite: z.literal(true).optional(),
+    // An invite minted to a pending new address; the enrollment moves only when it is consumed.
+    emailChange: z.literal(true).optional(),
   })
   .strict()
 export type EnrollmentChallengePayload = z.infer<typeof challengePayloadSchema>
@@ -112,6 +119,100 @@ function invalidChallenge(): AppError {
     "enrollment_challenge_invalid",
     "Verification is invalid or expired. Request a new email and retry."
   )
+}
+/** One answer for every address collision and for an already-created account. */
+function emailUnavailable(): AppError {
+  return new AppError(
+    409,
+    "enrollment_email_unavailable",
+    "This email can't be used to set a new password. If you already set one, Login with it, or use Forgot password."
+  )
+}
+function isInvite(challenge: EnrollmentChallenge): boolean {
+  if (challenge.purpose !== "authentication") return false
+  try {
+    return readEnrollmentChallengePayload(challenge).invite === true
+  } catch {
+    return false
+  }
+}
+/** Invites are distinguishable only inside the encrypted payload (no column), so revocation decrypts. */
+async function revokePendingInvites(
+  db: DbExecutor,
+  enrollmentId: string,
+  now: string
+): Promise<void> {
+  const pending = (
+    await db.query<EnrollmentChallenge>(
+      "SELECT * FROM mca_enrollment_challenges WHERE enrollment_id=? AND purpose='authentication' AND state='pending' FOR UPDATE",
+      [enrollmentId]
+    )
+  ).rows
+  for (const challenge of pending)
+    if (isInvite(challenge))
+      await db.execute(
+        "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE id=? AND state='pending'",
+        [now, challenge.id]
+      )
+}
+/** Unsent parked invites above the current generation are superseded by a newer one. */
+async function suppressParkedInvites(
+  db: DbExecutor,
+  row: EnrollmentRecord,
+  generation: number,
+  now: string
+): Promise<void> {
+  await db.execute(
+    "UPDATE mca_onboarding_service_emails SET state='suppressed',superseded_by_generation=?,updated_at=? WHERE enrollment_id=? AND generation>? AND state IN ('queued','retry','failed') AND claim_token IS NULL AND provider_message_id IS NULL AND frozen_at IS NULL",
+    [generation, now, row.id, row.emailGeneration]
+  )
+}
+/** Edits and fresh links share a durable window, so a stranger cannot block the owner for longer than a day. */
+async function parkedInviteWindowFull(
+  db: DbExecutor,
+  enrollmentId: string
+): Promise<boolean> {
+  const recent = await db.queryOne<{ count: number }>(
+    "SELECT count(*)::int count FROM mca_onboarding_service_emails m JOIN mca_enrollments e ON e.id=m.enrollment_id WHERE m.enrollment_id=? AND m.purpose='getting_started' AND m.generation>e.email_generation AND m.created_at::timestamptz>now()-interval '1 day'",
+    [enrollmentId]
+  )
+  return (recent?.count ?? 0) >= 5
+}
+/**
+ * Serialises every edit and consume that targets one address. Committed owners always count; at edit time,
+ * other enrollments' live invite challenges and parked unsent rows also reserve the address.
+ */
+async function assertEnrollmentEmailAvailable(
+  db: DbExecutor,
+  enrollmentId: string,
+  email: string,
+  reservations: boolean
+): Promise<void> {
+  const hash = enrollmentEmailHash(email)
+  await db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", [
+    `enrollment-email:${hash}`,
+  ])
+  const taken = await db.queryOne(
+    `SELECT 1 FROM users WHERE lower(email)=?
+    UNION ALL SELECT 1 FROM mca_enrollments WHERE id<>? AND email_hash=? AND activated_at IS NOT NULL AND claim_state IN ('unclaimed','claiming')
+      AND recovery_state<>'canceled' AND billing_state NOT IN ('canceled','incomplete_expired','blocked')
+    UNION ALL SELECT 1 FROM mca_enrollment_challenges WHERE ?::boolean AND enrollment_id<>? AND purpose='authentication' AND email_hash=? AND state='pending' AND expires_at::timestamptz>now()
+    UNION ALL SELECT 1 FROM mca_onboarding_service_emails m JOIN mca_enrollments e ON e.id=m.enrollment_id WHERE ?::boolean AND m.enrollment_id<>? AND m.purpose='getting_started'
+      AND m.recipient_hash=? AND m.frozen_at IS NULL AND m.state IN ('queued','retry','sending') AND m.superseded_by_generation IS NULL AND m.generation>e.email_generation
+    LIMIT 1`,
+    [
+      email.trim().toLowerCase(),
+      enrollmentId,
+      hash,
+      reservations,
+      enrollmentId,
+      hash,
+      reservations,
+      enrollmentId,
+      hash,
+    ]
+  )
+  if (taken) throw emailUnavailable()
 }
 
 /** Persisted authorization, not a browser flow flag, permits enrollment security email. */
@@ -201,16 +302,24 @@ export async function requestEnrollmentAuthentication(input: {
       ))
     )
       return
-    await db.execute(
-      "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE enrollment_id=? AND purpose=? AND email_hash=? AND state='pending' AND id<>?",
-      [
-        now,
-        row.id,
-        authorization ? "contact_recovery" : "authentication",
-        enrollmentEmailHash(email),
-        authorization?.id ?? "",
-      ]
-    )
+    const superseded = (
+      await db.query<EnrollmentChallenge>(
+        "SELECT * FROM mca_enrollment_challenges WHERE enrollment_id=? AND purpose=? AND email_hash=? AND state='pending' AND id<>? FOR UPDATE",
+        [
+          row.id,
+          authorization ? "contact_recovery" : "authentication",
+          enrollmentEmailHash(email),
+          authorization?.id ?? "",
+        ]
+      )
+    ).rows
+    for (const previous of superseded)
+      // An emailed invite is the owner's mailbox proof; a code requested by any browser must not strand it.
+      if (!isInvite(previous))
+        await db.execute(
+          "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE id=? AND state='pending'",
+          [now, previous.id]
+        )
     await db.execute(
       `INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,authorized_by_user_id,purchase_evidence_hash,resume_generation,expires_at,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -268,22 +377,27 @@ export async function requireIssuedEnrollmentChallenge(
   challengeId: string,
   continuation?: string | null,
   db: DbExecutor = getDatabase(),
-  completing = false
+  completing = false,
+  secret?: string
 ): Promise<{
   challenge: EnrollmentChallenge
   payload: EnrollmentChallengePayload
   row: EnrollmentRecord
 }> {
   requireEnrollmentRuntime()
-  const cookie = await readEnrollmentAuthCookie()
-  if (!cookie || cookie.id !== challengeId) throw invalidChallenge()
+  // Emailed invites present their token in a POST body; every other challenge proves this browser via the cookie.
+  const proof =
+    secret === undefined
+      ? await readEnrollmentAuthCookie()
+      : { id: challengeId, secret }
+  if (!proof || proof.id !== challengeId) throw invalidChallenge()
   const challenge = await db.queryOne<EnrollmentChallenge>(
     "SELECT * FROM mca_enrollment_challenges WHERE id=?",
     [challengeId]
   )
   if (
     !challenge ||
-    hashOpaqueToken(cookie.secret) !== challenge.token_hash ||
+    hashOpaqueToken(proof.secret) !== challenge.token_hash ||
     challenge.state !== "pending" ||
     challenge.attempts > (completing ? 5 : 4) ||
     Date.parse(challenge.expires_at) <= Date.now()
@@ -310,8 +424,12 @@ export async function requireIssuedEnrollmentChallenge(
     )
       throw invalidChallenge()
   }
+  // Invites are accepted only by their POSTed token, and only before any account or company exists.
+  if (Boolean(payload.invite) !== (secret !== undefined)) throw invalidChallenge()
+  if (payload.invite && !newOwnerEnrollment(row)) throw invalidChallenge()
   if (
     challenge.purpose === "authentication" &&
+    !(payload.invite && payload.emailChange) &&
     row.emailHash !== challenge.email_hash
   )
     throw invalidChallenge()
@@ -327,7 +445,8 @@ export async function requireIssuedEnrollmentChallenge(
 }
 export async function completeEnrollmentAuthentication(
   challengeId: string,
-  identity: SupabaseIdentity
+  identity: SupabaseIdentity,
+  secret?: string
 ): Promise<{ destination: string }> {
   const candidate = await getDatabase().queryOne<EnrollmentChallenge>(
     "SELECT * FROM mca_enrollment_challenges WHERE id=?",
@@ -342,12 +461,15 @@ export async function completeEnrollmentAuthentication(
       "SELECT id FROM mca_enrollment_challenges WHERE id=? FOR UPDATE",
       [challengeId]
     )
-    const { challenge, payload, row } = await requireIssuedEnrollmentChallenge(
+    const issued = await requireIssuedEnrollmentChallenge(
       challengeId,
       undefined,
       db,
-      true
+      true,
+      secret
     )
+    const { challenge, payload } = issued
+    let row = issued.row
     await assertEnrollmentSession(identity, undefined, db)
     if (enrollmentEmailHash(identity.email) !== challenge.email_hash)
       throw invalidChallenge()
@@ -356,10 +478,41 @@ export async function completeEnrollmentAuthentication(
       row.initiatingProviderUserId !== identity.user.id
     )
       throw invalidChallenge()
+    const now = nowIso(),
+      generation = payload.generation ?? row.emailGeneration
+    if (payload.emailChange) {
+      // The pending address lives on this challenge; the enrollment moves only together with its consumption.
+      if (
+        await db.queryOne(
+          "SELECT 1 FROM mca_onboarding_service_emails WHERE enrollment_id=? AND generation>? LIMIT 1",
+          [row.id, generation]
+        )
+      )
+        throw invalidChallenge()
+      await assertEnrollmentEmailAvailable(db, row.id, payload.email, false)
+      const moved = await db.execute(
+        "UPDATE mca_enrollments SET contact_cipher=?,email_hash=?,email_domain_hash=?,email_generation=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND email_generation=?",
+        [
+          encryptSensitive(
+            JSON.stringify({ ...readEnrollmentContact(row), email: payload.email }),
+            enrollmentEncryptionScope(row.id)
+          ),
+          enrollmentEmailHash(payload.email),
+          enrollmentEmailDomainHash(payload.email),
+          generation,
+          now,
+          row.id,
+          row.revision,
+          payload.emailGeneration,
+        ]
+      )
+      if (moved !== 1) throw invalidChallenge()
+      row = (await findEnrollment(row.id, db))!
+    }
     if (challenge.purpose === "authentication")
       assertEnrollmentIdentity(row, identity)
     const nextPayload = { ...payload, sessionId: identity.sessionId }
-    await db.execute(
+    const consumed = await db.execute(
       "UPDATE mca_enrollment_challenges SET state=?,provider_user_id=?,email_cipher=?,verified_at=?,consumed_at=?,updated_at=? WHERE id=? AND state='pending'",
       [
         challenge.purpose === "authentication" ? "consumed" : "verified",
@@ -374,6 +527,19 @@ export async function completeEnrollmentAuthentication(
         challengeId,
       ]
     )
+    if (consumed !== 1) throw invalidChallenge()
+    if (payload.emailChange) {
+      await db.execute(
+        "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE enrollment_id=? AND state IN ('pending','verified') AND id<>?",
+        [now, row.id, challengeId]
+      )
+      await db.execute(
+        "UPDATE mca_onboarding_service_emails SET state='suppressed',superseded_by_generation=?,updated_at=? WHERE enrollment_id=? AND generation<? AND state IN ('queued','retry','failed') AND claim_token IS NULL AND provider_message_id IS NULL AND frozen_at IS NULL",
+        [generation, now, row.id, generation]
+      )
+      // getting_started at this generation already went out; business details now go to the new address.
+      await enqueueOnboardingEmailIntents(row.id, generation, db)
+    }
     return {
       destination: enrollmentContinuation({
         enrollmentId: row.id,
@@ -387,7 +553,7 @@ export async function completeEnrollmentAuthentication(
 /** Commit one shared OTP/link attempt before any external verification request. */
 export async function reserveEnrollmentAuthenticationAttempt(
   challengeId: string,
-  input: { continuation?: string | null; email?: string } = {}
+  input: { continuation?: string | null; email?: string; secret?: string } = {}
 ): Promise<{
   challenge: EnrollmentChallenge
   payload: EnrollmentChallengePayload
@@ -410,7 +576,9 @@ export async function reserveEnrollmentAuthenticationAttempt(
     const current = await requireIssuedEnrollmentChallenge(
       challengeId,
       input.continuation,
-      db
+      db,
+      false,
+      input.secret
     )
     if (
       input.email !== undefined &&
@@ -439,175 +607,177 @@ export async function reserveEnrollmentCallbackAttempt(
   await reserveEnrollmentAuthenticationAttempt(challengeId, { continuation })
 }
 
-/** Opening an emailed invite only binds it to this browser; nothing is consumed until the POST. */
-export async function openEnrollmentInvite(
-  challengeId: string,
-  token: string
-): Promise<string> {
-  requireEnrollmentRuntime()
-  ;(await cookies()).set(enrollmentAuthCookie, `${challengeId}.${token}`, {
-    secure: true,
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 3600,
-  })
-  const challenge = await getDatabase().queryOne<EnrollmentChallenge>(
-    "SELECT * FROM mca_enrollment_challenges WHERE id=?",
-    [challengeId]
-  )
-  if (!challenge || hashOpaqueToken(token) !== challenge.token_hash)
-    return "/enrollment"
-  const payload = readEnrollmentChallengePayload(challenge)
-  // Expired or used invites still land on their enrollment, which then offers the email-code fallback.
-  return payload.invite
-    ? enrollmentContinuation({
-        enrollmentId: challenge.enrollment_id,
-        ...(payload.destination ? { destination: payload.destination } : {}),
-        ...(payload.generation ? { generation: payload.generation } : {}),
-      })
-    : "/enrollment"
-}
-
-/** A mailbox-proving invite either sets the new owner's password or moves the unclaimed enrollment to a corrected email. */
+/** A mailbox-proving invite sets the new owner's password; a change invite also moves the enrollment in the same consume. */
 export async function completeEnrollmentInvite(input: {
   challengeId: string
+  token: string
   email: string
-  password?: string
-}): Promise<{ destination: string } | { emailChanged: true }> {
-  const { challenge, payload, row } =
-    await reserveEnrollmentAuthenticationAttempt(input.challengeId)
-  if (
-    !payload.invite ||
-    row.workspaceId ||
-    row.claimedProviderUserId ||
-    row.initiatingProviderUserId
+  password: string
+}): Promise<{ destination: string }> {
+  const { payload, row } = await reserveEnrollmentAuthenticationAttempt(
+    input.challengeId,
+    { email: input.email, secret: input.token }
   )
-    throw invalidChallenge()
-  const email = input.email.trim().toLowerCase()
-  if (enrollmentEmailHash(email) !== challenge.email_hash) {
-    if (input.password !== undefined)
-      throw new AppError(
-        400,
-        "validation_failed",
-        "Confirm the new email before setting a password."
-      )
-    return changeEnrollmentEmailFromInvite(input.challengeId, email)
-  }
-  if (input.password === undefined)
-    throw new AppError(400, "validation_failed", "Choose a password.")
+  // Cheap pre-check before any provider account exists; the consume transaction checks again.
+  if (payload.emailChange)
+    await withImmediateTransaction((db) =>
+      assertEnrollmentEmailAvailable(db, row.id, payload.email, false)
+    )
   // The consumed invite proves the mailbox, so the new account is created confirmed.
-  const { error } = await getSupabaseAdminClient().auth.admin.createUser({
+  const { data, error } = await getSupabaseAdminClient().auth.admin.createUser({
     email: payload.email,
     password: input.password,
     email_confirm: true,
   })
   if (error && (error.code === "email_exists" || error.status === 422))
-    throw new AppError(
-      409,
-      "enrollment_account_exists",
-      "An account already uses this email. Login with your password to continue."
-    )
+    throw emailUnavailable()
   authError(error)
-  const client = await createSupabaseServerClient()
-  if (
-    (
-      await client.auth.signInWithPassword({
-        email: payload.email,
-        password: input.password,
-      })
-    ).error
-  )
-    throw invalidChallenge()
-  const identity = await supabaseIdentity()
-  if (!identity) throw invalidChallenge()
-  const result = await completeEnrollmentAuthentication(
-    input.challengeId,
-    identity
-  )
-  await startPasswordTotpChallenge(identity)
+  const created = data.user?.id
+  let identity: SupabaseIdentity | null = null,
+    result: { destination: string }
+  try {
+    const client = await createSupabaseServerClient()
+    if (
+      (
+        await client.auth.signInWithPassword({
+          email: payload.email,
+          password: input.password,
+        })
+      ).error
+    )
+      throw invalidChallenge()
+    identity = await supabaseIdentity()
+    if (!identity || identity.user.id !== created) throw invalidChallenge()
+    result = await completeEnrollmentAuthentication(
+      input.challengeId,
+      identity,
+      input.token
+    )
+  } catch (failure) {
+    // Nothing committed references the account this request created; remove only that one.
+    if (created)
+      await getSupabaseAdminClient()
+        .auth.admin.deleteUser(created)
+        .catch(() => undefined)
+    throw failure
+  }
+  ;(await cookies()).delete(enrollmentAuthCookie)
+  await startPasswordTotpChallenge(identity!)
   return result
 }
 
-async function changeEnrollmentEmailFromInvite(
-  challengeId: string,
-  email: string
-): Promise<{ emailChanged: true }> {
+/** Moves nothing: kills every live invite and parks a new one for the pending address, sent through the outbox. */
+export async function requestEnrollmentEmailChange(input: {
+  challengeId: string
+  token: string
+  newEmail: string
+}): Promise<{ emailChangeRequested: true }> {
+  requireEnrollmentRuntime()
+  const email = input.newEmail.trim().toLowerCase()
+  const candidate = await getDatabase().queryOne<EnrollmentChallenge>(
+    "SELECT * FROM mca_enrollment_challenges WHERE id=?",
+    [input.challengeId]
+  )
+  if (!candidate) throw invalidChallenge()
+  await consumeRequestRateLimit(
+    `enrollment-email-change:${candidate.enrollment_id}`,
+    3
+  )
   await withImmediateTransaction(async (db) => {
-    const candidate = await db.queryOne<EnrollmentChallenge>(
-      "SELECT * FROM mca_enrollment_challenges WHERE id=?",
-      [challengeId]
-    )
-    if (!candidate) throw invalidChallenge()
     await db.queryOne("SELECT id FROM mca_enrollments WHERE id=? FOR UPDATE", [
       candidate.enrollment_id,
     ])
     await db.queryOne(
       "SELECT id FROM mca_enrollment_challenges WHERE id=? FOR UPDATE",
-      [challengeId]
+      [input.challengeId]
     )
-    const { payload, row } = await requireIssuedEnrollmentChallenge(
-      challengeId,
+    const { challenge, row } = await requireIssuedEnrollmentChallenge(
+      input.challengeId,
       undefined,
       db,
-      true
+      false,
+      input.token
     )
     if (
-      !payload.invite ||
-      row.workspaceId ||
-      row.claimedProviderUserId ||
-      row.initiatingProviderUserId ||
-      row.claimState !== "unclaimed"
-    )
-      throw invalidChallenge()
-    if (
-      await db.queryOne("SELECT id FROM users WHERE lower(email)=?", [email])
+      enrollmentEmailHash(email) === challenge.email_hash ||
+      enrollmentEmailHash(email) === row.emailHash
     )
       throw new AppError(
-        409,
-        "enrollment_email_unavailable",
-        "This email already has an account. Login with it instead, or use another email."
+        400,
+        "validation_failed",
+        "Enter a different email, or request a new link for the purchase email."
       )
-    const now = nowIso(),
-      generation = row.emailGeneration + 1
-    await db.execute(
-      "UPDATE mca_enrollment_challenges SET state='consumed',consumed_at=?,updated_at=? WHERE id=? AND state='pending'",
-      [now, now, challengeId]
-    )
-    const changed = await db.execute(
-      "UPDATE mca_enrollments SET contact_cipher=?,email_hash=?,email_domain_hash=?,email_generation=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",
-      [
-        encryptSensitive(
-          JSON.stringify({ ...readEnrollmentContact(row), email }),
-          enrollmentEncryptionScope(row.id)
-        ),
-        enrollmentEmailHash(email),
-        enrollmentEmailDomainHash(email),
-        generation,
-        now,
-        row.id,
-        row.revision,
-      ]
-    )
-    if (changed !== 1)
+    if (await parkedInviteWindowFull(db, row.id))
       throw new AppError(
-        409,
-        "enrollment_revision_conflict",
-        "Reload the purchase page and retry."
+        429,
+        "rate_limit_exceeded",
+        "Too many attempts. Try again shortly."
       )
-    await db.execute(
-      "UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE enrollment_id=? AND state IN ('pending','verified')",
-      [now, row.id]
-    )
-    await db.execute(
-      "UPDATE mca_onboarding_service_emails SET state='suppressed',superseded_by_generation=?,updated_at=? WHERE enrollment_id=? AND generation<? AND state IN ('queued','retry','failed') AND claim_token IS NULL AND provider_message_id IS NULL AND frozen_at IS NULL",
-      [generation, now, row.id, generation]
-    )
-    // The fresh invite must prove the corrected mailbox before any password is set.
-    await enqueueOnboardingEmailIntents(row.id, generation, db)
+    await assertEnrollmentEmailAvailable(db, row.id, email, true)
+    const now = nowIso()
+    await revokePendingInvites(db, row.id, now)
+    const generation = await nextEmailGeneration(row.id, row.emailGeneration, db)
+    await suppressParkedInvites(db, row, generation, now)
+    await enqueueParkedInvite(row.id, generation, email, db)
   })
-  ;(await cookies()).delete(enrollmentAuthCookie)
-  return { emailChanged: true }
+  return { emailChangeRequested: true }
+}
+
+/** Account-neutral: a fresh set-password link goes only to the enrollment's current address and cancels a pending change. */
+export async function requestEnrollmentInvite(input: {
+  enrollmentId: string
+  email: string
+  destination?: EnrollmentDestination
+  generation?: number
+}): Promise<void> {
+  requireEnrollmentRuntime()
+  const email = input.email.trim().toLowerCase()
+  await consumeRequestRateLimit(
+    `enrollment-invite-email:${enrollmentEmailHash(email)}`,
+    3
+  )
+  await consumeRequestRateLimit(`enrollment-invite-id:${input.enrollmentId}`, 3)
+  const eligible = (row: EnrollmentRecord | undefined): row is EnrollmentRecord =>
+    Boolean(
+      row?.activatedAt &&
+        row.recoveryState === "none" &&
+        newOwnerEnrollment(row) &&
+        row.emailHash === enrollmentEmailHash(email)
+    )
+  const row = await findEnrollment(input.enrollmentId)
+  if (!eligible(row)) return
+  try {
+    assertEnrollmentGeneration(row, input.generation)
+  } catch {
+    return
+  }
+  await withImmediateTransaction(async (db) => {
+    await db.queryOne("SELECT id FROM mca_enrollments WHERE id=? FOR UPDATE", [
+      row.id,
+    ])
+    const current = await findEnrollment(row.id, db)
+    if (
+      !eligible(current) ||
+      current.revision !== row.revision ||
+      (await parkedInviteWindowFull(db, row.id))
+    )
+      return
+    const now = nowIso()
+    // Older invites are superseded only by a newer one to this same mailbox.
+    await revokePendingInvites(db, current.id, now)
+    const generation = await nextEmailGeneration(
+      current.id,
+      current.emailGeneration,
+      db
+    )
+    await suppressParkedInvites(db, current, generation, now)
+    await enqueueParkedInvite(
+      current.id,
+      generation,
+      readEnrollmentContact(current).email,
+      db
+    )
+  })
 }
 
 export async function verifyEnrollmentAuthentication(input: {

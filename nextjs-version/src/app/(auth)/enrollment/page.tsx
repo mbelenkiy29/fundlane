@@ -1,22 +1,12 @@
 import Link from "next/link"
+import { z } from "zod"
 import { AuthShell } from "@/components/mca/auth-shell"
 import { EnrollmentCompletion } from "@/components/mca/onboarding/enrollment-completion"
 import { parseEnrollmentContinuation } from "@/lib/mca/auth-navigation"
-import { readEnrollmentAuthCookie, requireIssuedEnrollmentChallenge } from "@/lib/mca/onboarding/auth"
 import { getSupportConfig } from "@/lib/marketing/support-config"
 
 export const dynamic = "force-dynamic"
-export const metadata = { title: "Complete your purchase | Fundlane", robots: { index: false, follow: false } }
-
-/** Only a live emailed invite bound to this browser and this exact locator offers set-password; it is read, not consumed. */
-async function pendingInvite(locator: string): Promise<{ challengeId: string; email: string } | undefined> {
-  const cookie = await readEnrollmentAuthCookie()
-  if (!cookie) return undefined
-  try {
-    const { challenge, payload } = await requireIssuedEnrollmentChallenge(cookie.id, locator)
-    return payload.invite ? { challengeId: challenge.id, email: payload.email } : undefined
-  } catch { return undefined }
-}
+export const metadata = { title: "Complete your purchase | Fundlane", robots: { index: false, follow: false }, referrer: "no-referrer" as const }
 
 export default async function EnrollmentPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams, query = new URLSearchParams()
@@ -25,8 +15,9 @@ export default async function EnrollmentPage({ searchParams }: { searchParams: P
     for (const value of Array.isArray(values) ? values : values === undefined ? [] : [values]) query.append(key, value)
   }
   const continuation = parseEnrollmentContinuation(`/enrollment?${query}`)
-  const invite = continuation ? await pendingInvite(`/enrollment?${query}`) : undefined
+  // The invite id is a non-secret locator; its token stays in the URL fragment, and this GET reads nothing about it.
+  const inviteId = typeof params.invite === "string" && z.uuid().safeParse(params.invite).success ? params.invite : undefined
   return <AuthShell title="Complete your purchase" description="Confirm your trial and securely enter your workspace.">
-    {continuation ? <EnrollmentCompletion continuation={continuation} supportEmail={getSupportConfig().supportEmail} {...(invite ? { invite } : {})} /> : <div className="space-y-4"><p role="alert">This purchase link is invalid. Open the latest link from your email or contact support.</p><Link className="underline" href="/sign-in">Login</Link></div>}
+    {continuation ? <EnrollmentCompletion continuation={continuation} supportEmail={getSupportConfig().supportEmail} {...(inviteId ? { inviteId } : {})} /> : <div className="space-y-4"><p role="alert">This purchase link is invalid. Open the latest link from your email or contact support.</p><Link className="underline" href="/sign-in">Login</Link></div>}
   </AuthShell>
 }

@@ -7,7 +7,7 @@ import { formatBillingMoney } from "@/lib/mca/billing-display"
 import { requestJson } from "@/lib/mca/client"
 import type { EnrollmentPublicStatus } from "@/lib/mca/onboarding/claim"
 import { EnrollmentAuth } from "./enrollment-auth"
-import { EnrollmentSetPassword } from "./enrollment-set-password"
+import { EnrollmentSetPassword, readInviteFragment } from "./enrollment-set-password"
 
 const allowedDestinations = new Set(["/dashboard", "/settings/business", "/settings/billing"])
 const pollLimit = 12, pollDelay = 5000
@@ -18,11 +18,11 @@ function errorCode(error: unknown): string {
 }
 
 /** Status is observational; workspace claim and portal creation require explicit actions. */
-export function EnrollmentCompletion({ continuation, initialStatus, supportEmail, invite }: {
+export function EnrollmentCompletion({ continuation, initialStatus, supportEmail, inviteId }: {
   continuation: EnrollmentContinuation
   initialStatus?: EnrollmentPublicStatus
   supportEmail?: string | null
-  invite?: { challengeId: string; email: string }
+  inviteId?: string
 }) {
   const canonical = enrollmentContinuation(continuation)
   const [status, setStatus] = useState(initialStatus)
@@ -33,8 +33,17 @@ export function EnrollmentCompletion({ continuation, initialStatus, supportEmail
   const [authenticationNeeded, setAuthenticationNeeded] = useState(false)
   const [stopped, setStopped] = useState(false)
   const [refresh, setRefresh] = useState(0)
+  // undefined until mounted; null when no usable fragment token was present.
+  const [inviteToken, setInviteToken] = useState<string | null>()
   const actionPending = useRef(false), errorRef = useRef<HTMLParagraphElement>(null)
   useEffect(() => { if (error) errorRef.current?.focus() }, [error])
+  useEffect(() => {
+    if (!inviteId) return
+    // The fragment never reaches a server; read it once and drop it from the address bar and history.
+    const token = readInviteFragment(window.location.hash)
+    if (window.location.hash) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search)
+    setInviteToken(current => current ?? token)
+  }, [inviteId])
 
   useEffect(() => {
     let cancelled = false, attempts = 0, timer: ReturnType<typeof setTimeout> | undefined
@@ -105,7 +114,7 @@ export function EnrollmentCompletion({ continuation, initialStatus, supportEmail
     {status?.state === "recovery_required" && <p role="status">This purchase needs billing or account review. Manage or cancel billing if available, or contact support. Do not start another purchase.</p>}
     {status?.state === "unavailable" && <p>Use the correct account to recover this purchase. The link alone does not grant access.</p>}
     {validTrialDate && <p>Your original trial ends <time dateTime={validTrialDate}>{trialDate(validTrialDate)} UTC</time>. The subscription automatically converts at the base monthly first-user price of {firstUserMonthlyPrice}/month {BILLING_CATALOG.currency.toUpperCase()} unless canceled before then; applicable Checkout discounts and tax follow your Checkout terms.</p>}
-    {needsAuth && (invite ? <EnrollmentSetPassword continuation={continuation} invite={invite} /> : <EnrollmentAuth continuation={continuation} />)}
+    {needsAuth && (inviteId ? (inviteToken ? <EnrollmentSetPassword continuation={continuation} inviteId={inviteId} token={inviteToken} /> : inviteToken === null ? <EnrollmentAuth continuation={continuation} /> : null) : <EnrollmentAuth continuation={continuation} />)}
     {(wrongAccount || needsAuth) && <button className="inline-flex items-center justify-center rounded-md border px-4 py-3 text-sm font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => void run("sign-out")}>Sign out and use another account</button>}
     {status?.nextAction === "claim" && !needsAuth && !wrongAccount && <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => run("claim")}>{busy ? "Finishing secure access…" : "Enter your CRM"}</button>}
     {status?.nextAction === "continue" && status.destination && allowedDestinations.has(status.destination) && <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => run("claim")}>Continue to your workspace</button>}

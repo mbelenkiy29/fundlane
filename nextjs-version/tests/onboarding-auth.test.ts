@@ -14,9 +14,11 @@ import {
   withoutProviderUser,
   liveIdentity,
 } from "./helpers/onboarding-auth"
-import { getDatabase, nowIso } from "../src/lib/mca/db"
+import { getDatabase, nowIso, withTransaction } from "../src/lib/mca/db"
 import { NextRequest } from "next/server"
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
   createOpaqueToken,
   encryptSensitive,
@@ -26,7 +28,9 @@ import {
   enrollmentChallengeScope,
   enrollmentEmailHash,
   findEnrollment,
+  readEnrollmentContact,
 } from "../src/lib/mca/onboarding/store"
+import { enqueueParkedInvite } from "../src/lib/mca/onboarding/email-intents"
 import { linkSupabaseUser } from "../src/lib/mca/supabase-auth"
 
 let close: () => Promise<void>
@@ -714,12 +718,16 @@ test("ambiguous enrollment and recursive MFA continuations fail closed", () => {
     assert.equal(authContinuation(value), "/onboarding", value)
 })
 
-/** Mirrors the email worker's freeze-time mint (payload contract incl. invite:true). */
-async function mintInvite(f: Awaited<ReturnType<typeof activatedEnrollment>>) {
+/** Mirrors the email worker's freeze-time mint (payload contract incl. invite:true and an optional pending address). */
+async function mintInvite(
+  f: Awaited<ReturnType<typeof activatedEnrollment>>,
+  options: { email?: string; generation?: number; emailChange?: boolean } = {}
+) {
   const id = randomUUID(),
     token = createOpaqueToken(),
     now = nowIso(),
-    row = (await findEnrollment(f.id))!
+    row = (await findEnrollment(f.id))!,
+    email = options.email ?? f.identity.email
   await getDatabase().execute(
     "INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,resume_generation,expires_at,created_at,updated_at) VALUES (?,?,'authentication',?,?,?,?,?,?,?)",
     [
@@ -729,17 +737,18 @@ async function mintInvite(f: Awaited<ReturnType<typeof activatedEnrollment>>) {
       encryptSensitive(
         JSON.stringify({
           version: 1,
-          email: f.identity.email,
+          email,
           emailGeneration: row.emailGeneration,
           destination: "crm",
-          generation: row.emailGeneration,
+          generation: options.generation ?? row.emailGeneration,
           issuedAt: now,
           sessionId: null,
           invite: true,
+          ...(options.emailChange ? { emailChange: true } : {}),
         }),
         enrollmentChallengeScope(id)
       ),
-      enrollmentEmailHash(f.identity.email),
+      enrollmentEmailHash(email),
       row.resumeGeneration,
       new Date(Date.parse(now) + 86_400_000).toISOString(),
       now,
@@ -753,25 +762,16 @@ async function newOwnerInvite() {
   withoutProviderUser(f.identity)
   return { f, invite: await mintInvite(f) }
 }
-async function openInvite(id: string, token: string, extra = "") {
-  const { handleEnrollmentHttp } =
-    await import("../src/lib/mca/onboarding/http")
-  return handleEnrollmentHttp(
-    new Request(
-      `http://localhost:3000/api/enrollment/invite?challenge=${id}&token=${token}${extra}`,
-      { headers: { "x-forwarded-for": randomUUID() } }
-    ),
-    "invite-open"
-  )
-}
-async function postInvite(
+async function postTo(
+  path: string,
+  action: "password" | "resend",
   body: unknown,
   origin: string | null = "http://localhost:3000"
 ) {
   const { handleEnrollmentHttp } =
     await import("../src/lib/mca/onboarding/http")
   return handleEnrollmentHttp(
-    new Request("http://localhost:3000/api/enrollment/invite", {
+    new Request(`http://localhost:3000${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -780,9 +780,13 @@ async function postInvite(
       },
       body: JSON.stringify(body),
     }),
-    "password"
+    action
   )
 }
+const postInvite = (body: unknown, origin?: string | null) =>
+  postTo("/api/enrollment/invite", "password", body, origin)
+const postResend = (body: unknown, origin?: string | null) =>
+  postTo("/api/enrollment/resend", "resend", body, origin)
 async function challengeRow(id: string) {
   return getDatabase().queryOne<{ state: string; attempts: number }>(
     "SELECT state,attempts FROM mca_enrollment_challenges WHERE id=?",
@@ -794,63 +798,77 @@ async function count(table: string) {
     `SELECT count(*)::int count FROM ${table}`
   ))!.count
 }
+async function mails(id: string) {
+  return (
+    await getDatabase().query<{
+      generation: number
+      purpose: string
+      state: string
+      recipient_hash: string
+      template_version: number
+    }>(
+      "SELECT generation,purpose,state,recipient_hash,template_version FROM mca_onboarding_service_emails WHERE enrollment_id=? ORDER BY generation,purpose",
+      [id]
+    )
+  ).rows
+}
+async function parkRows(id: string, generations: number[]) {
+  await withTransaction(async (db) => {
+    for (const generation of generations)
+      await enqueueParkedInvite(id, generation, `parked-${randomUUID()}@example.test`, db)
+  })
+}
 const password = "Synthetic-Passw0rd-Long"
 
-test("opening an invite only sets the browser cookie and 303s to the tokenless enrollment page", async () => {
-  const { f, invite } = await newOwnerInvite()
-  const { enrollmentAuthCookie } =
-    await import("../src/lib/mca/onboarding/auth")
-  const opened = await openInvite(invite.id, invite.token)
-  assert.equal(opened.status, 303)
-  assert.equal(
-    opened.headers.get("location"),
-    `http://localhost:3000/enrollment?enrollment=${f.id}&destination=crm&generation=1`
-  )
-  assert.equal(opened.headers.get("referrer-policy"), "no-referrer")
-  assert.equal(
-    browserCookies.get(enrollmentAuthCookie),
-    `${invite.id}.${invite.token}`
-  )
-  assert.deepEqual(await challengeRow(invite.id), {
-    state: "pending",
-    attempts: 0,
-  })
-  browserCookies.clear()
-  assert.equal(
-    (await openInvite(invite.id, createOpaqueToken())).headers.get("location"),
-    "http://localhost:3000/enrollment"
-  )
-  assert.equal(
-    (
-      await openInvite(invite.id, invite.token, `&token=${invite.token}`)
-    ).headers.get("location"),
-    "http://localhost:3000/enrollment"
-  )
-  assert.equal(
-    (await openInvite("not-a-uuid", invite.token)).headers.get("location"),
-    "http://localhost:3000/enrollment"
-  )
+test("GET has no side effects: no GET route, and the page reads no invite state and sets no cookie", async () => {
+  const { invite } = await newOwnerInvite()
+  const route = await import("../src/app/api/enrollment/invite/route")
+  assert.equal("GET" in route, false)
+  // The page module needs client React (next/link), so its GET purity is asserted from source:
+  // it may only pass the uuid-checked id through, with no auth, DB or cookie access.
+  const page = readFileSync(resolve("src/app/(auth)/enrollment/page.tsx"), "utf8")
+  assert.doesNotMatch(page, /onboarding\/auth|next\/headers|getDatabase|cookies\(|requireIssued|findEnrollment/)
+  assert.match(page, /z\.uuid\(\)\.safeParse\(params\.invite\)/)
+  assert.match(page, /referrer: "no-referrer"/)
+  assert.equal(browserCookies.size, 0)
   assert.deepEqual(await challengeRow(invite.id), {
     state: "pending",
     attempts: 0,
   })
 })
 
-test("an invite sets a confirmed password once and creates no company before claim", async () => {
+test("an invite sets a confirmed password from the POSTed token once and creates no company before claim", async () => {
   const { f, invite } = await newOwnerInvite()
+  const { enrollmentAuthCookie } =
+    await import("../src/lib/mca/onboarding/auth")
   const companies = await count("workspaces"),
     members = await count("memberships")
-  await openInvite(invite.id, invite.token)
-  const response = await postInvite({
+  const body = {
     challengeId: invite.id,
+    token: invite.token,
     email: f.identity.email,
     password,
+  }
+  const wrong = await postInvite({ ...body, token: createOpaqueToken() })
+  assert.equal(wrong.status, 400)
+  assert.equal((await wrong.json()).error.code, "enrollment_challenge_invalid")
+  assert.equal(
+    (await postInvite({ ...body, token: undefined })).status,
+    400
+  )
+  assert.deepEqual(await challengeRow(invite.id), {
+    state: "pending",
+    attempts: 0,
   })
+  browserCookies.set(enrollmentAuthCookie, `${randomUUID()}.${createOpaqueToken()}`)
+  const response = await postInvite(body)
   assert.equal(response.status, 200)
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer")
   assert.deepEqual(await response.json(), {
     success: true,
     destination: `/enrollment?enrollment=${f.id}&destination=crm&generation=1`,
   })
+  assert.equal(browserCookies.has(enrollmentAuthCookie), false)
   assert.deepEqual(provider.createUserInputs, [
     { email: f.identity.email, password, email_confirm: true },
   ])
@@ -858,19 +876,34 @@ test("an invite sets a confirmed password once and creates no company before cla
   assert.equal((await challengeRow(invite.id))?.state, "consumed")
   assert.equal(await count("workspaces"), companies)
   assert.equal(await count("memberships"), members)
-  const reused = await postInvite({
-    challengeId: invite.id,
-    email: f.identity.email,
-    password,
-  })
+  const reused = await postInvite(body)
   assert.equal(reused.status, 400)
   assert.equal((await reused.json()).error.code, "enrollment_challenge_invalid")
   assert.equal(provider.createUserInputs.length, 1)
+  assert.deepEqual(provider.deletedUserIds, [])
+})
+
+test("invite tokens never work through the cookie path", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const auth = await import("../src/lib/mca/onboarding/auth")
+  browserCookies.set(auth.enrollmentAuthCookie, `${invite.id}.${invite.token}`)
+  await assert.rejects(
+    auth.verifyEnrollmentAuthentication({
+      challengeId: invite.id,
+      email: f.identity.email,
+      token: "123456",
+    }),
+    { code: "enrollment_challenge_invalid" }
+  )
+  assert.equal(provider.verificationInputs.length, 0)
+  assert.deepEqual(await challengeRow(invite.id), {
+    state: "pending",
+    attempts: 0,
+  })
 })
 
 test("expired, exhausted and OTP-issued challenges cannot set a password", async () => {
   const { f, invite } = await newOwnerInvite()
-  await openInvite(invite.id, invite.token)
   await getDatabase().execute(
     "UPDATE mca_enrollment_challenges SET expires_at=?,created_at=? WHERE id=?",
     [
@@ -879,26 +912,30 @@ test("expired, exhausted and OTP-issued challenges cannot set a password", async
       invite.id,
     ]
   )
-  const body = { challengeId: invite.id, email: f.identity.email, password }
-  assert.equal((await postInvite(body)).status, 400)
+  const body = { email: f.identity.email, password }
+  assert.equal(
+    (await postInvite({ ...body, challengeId: invite.id, token: invite.token }))
+      .status,
+    400
+  )
   const fresh = await mintInvite(f)
-  await openInvite(fresh.id, fresh.token)
   await getDatabase().execute(
     "UPDATE mca_enrollment_challenges SET attempts=5 WHERE id=?",
     [fresh.id]
   )
   assert.equal(
-    (await postInvite({ ...body, challengeId: fresh.id })).status,
+    (await postInvite({ ...body, challengeId: fresh.id, token: fresh.token }))
+      .status,
     400
   )
-  // A requester-browser OTP challenge is not mailbox proof and never sets a password.
+  // A requester-browser OTP challenge is not mailbox proof, even with its own secret in the body.
   const auth = await import("../src/lib/mca/onboarding/auth")
   await auth.requestEnrollmentAuthentication({
     enrollmentId: f.id,
     email: f.identity.email,
   })
-  const otp = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")[0]
-  const forged = await postInvite({ ...body, challengeId: otp })
+  const [otp, secret] = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")
+  const forged = await postInvite({ ...body, challengeId: otp, token: secret })
   assert.equal(forged.status, 400)
   assert.equal((await forged.json()).error.code, "enrollment_challenge_invalid")
   assert.equal(provider.createUserInputs.length, 0)
@@ -906,8 +943,12 @@ test("expired, exhausted and OTP-issued challenges cannot set a password", async
 
 test("short passwords fail before an attempt; existing accounts, bad origins and disabled runtime are refused", async () => {
   const { f, invite } = await newOwnerInvite()
-  await openInvite(invite.id, invite.token)
-  const body = { challengeId: invite.id, email: f.identity.email, password }
+  const body = {
+    challengeId: invite.id,
+    token: invite.token,
+    email: f.identity.email,
+    password,
+  }
   assert.equal(
     (await postInvite({ ...body, password: "short" })).status,
     400
@@ -919,90 +960,459 @@ test("short passwords fail before an attempt; existing accounts, bad origins and
   delete process.env.MCA_ONBOARDING_RUNTIME_ENABLED
   try {
     assert.equal((await postInvite(body)).status, 503)
-    assert.equal((await openInvite(invite.id, invite.token)).status, 503)
   } finally {
     process.env.MCA_ONBOARDING_RUNTIME_ENABLED = saved
   }
   assert.equal(provider.createUserInputs.length, 0)
-  // The Checkout email already has a provider account: Login instead.
+  // The Checkout email already has a provider account (e.g. a retry after a failure): Login or Forgot password.
   const g = await activatedEnrollment(),
     existing = await mintInvite(g)
-  await openInvite(existing.id, existing.token)
   const conflict = await postInvite({
     challengeId: existing.id,
+    token: existing.token,
     email: g.identity.email,
     password,
   })
   assert.equal(conflict.status, 409)
-  assert.equal((await conflict.json()).error.code, "enrollment_account_exists")
+  const error = (await conflict.json()).error
+  assert.equal(error.code, "enrollment_email_unavailable")
+  assert.match(error.message, /Login/)
+  assert.match(error.message, /Forgot password/)
+  assert.deepEqual(provider.deletedUserIds, [])
 })
 
-test("an edited email consumes the invite, moves the enrollment and queues a fresh invite generation", async () => {
-  const { f, invite } = await newOwnerInvite()
-  const before = (await findEnrollment(f.id))!
-  // Activation already queued generation 1's two intents; they are unsent.
-  assert.equal(
-    (
-      await getDatabase().queryOne<{ count: number }>(
-        "SELECT count(*)::int count FROM mca_onboarding_service_emails WHERE enrollment_id=? AND generation=1 AND state='queued'",
-        [f.id]
-      )
-    )?.count,
-    2
-  )
-  await openInvite(invite.id, invite.token)
-  const email = `typo-fixed-${randomUUID()}@example.test`
-  assert.equal(
-    (
-      await postInvite({ challengeId: invite.id, email, password })
-    ).status,
-    400
-  )
-  const changed = await postInvite({ challengeId: invite.id, email })
-  assert.equal(changed.status, 200)
-  assert.deepEqual(await changed.json(), { success: true, emailChanged: true })
-  const after = (await findEnrollment(f.id))!
-  assert.equal(after.emailHash, enrollmentEmailHash(email))
-  assert.equal(after.activationEmailHash, before.activationEmailHash)
-  assert.equal(after.emailGeneration, before.emailGeneration + 1)
-  assert.equal((await challengeRow(invite.id))?.state, "consumed")
-  const mail = (
-    await getDatabase().query<{ generation: number; state: string }>(
-      "SELECT generation,state FROM mca_onboarding_service_emails WHERE enrollment_id=? ORDER BY generation,purpose",
-      [f.id]
-    )
-  ).rows
-  assert.ok(
-    mail.filter((row) => row.generation === 1).every((row) => row.state === "suppressed")
-  )
-  assert.equal(
-    mail.filter((row) => row.generation === 2 && row.state === "queued").length,
-    2
-  )
-  assert.equal(provider.createUserInputs.length, 0)
-  // A target address that already has an account is refused without changes.
-  const { f: g, invite: second } = await newOwnerInvite()
-  const taken = await liveIdentity(`taken-${randomUUID()}@example.test`)
-  await linkSupabaseUser(taken)
-  await openInvite(second.id, second.token)
-  const collision = await postInvite({
-    challengeId: second.id,
-    email: taken.email,
-  })
-  assert.equal(collision.status, 409)
-  assert.equal(
-    (await findEnrollment(g.id))!.emailHash,
-    enrollmentEmailHash(g.identity.email)
-  )
-  assert.equal((await challengeRow(second.id))?.state, "pending")
-})
-
-test("requesting an email code at the purchase page revokes a pending invite", async () => {
+test("requesting an email code leaves a pending invite pending and usable", async () => {
   const { f, invite } = await newOwnerInvite()
   const auth = await import("../src/lib/mca/onboarding/auth")
   await auth.requestEnrollmentAuthentication({
     enrollmentId: f.id,
     email: f.identity.email,
   })
+  const firstOtp = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")[0]
+  await auth.requestEnrollmentAuthentication({
+    enrollmentId: f.id,
+    email: f.identity.email,
+  })
+  assert.equal((await challengeRow(firstOtp))?.state, "revoked")
+  assert.equal((await challengeRow(invite.id))?.state, "pending")
+  const response = await postInvite({
+    challengeId: invite.id,
+    token: invite.token,
+    email: f.identity.email,
+    password,
+  })
+  assert.equal(response.status, 200)
+})
+
+test("an email edit kills the old invite now; the enrollment moves only when the new-address invite sets the password", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const before = (await findEnrollment(f.id))!
+  const email = `typo-fixed-${randomUUID()}@example.test`
+  const changed = await postInvite({
+    challengeId: invite.id,
+    token: invite.token,
+    newEmail: email,
+  })
+  assert.equal(changed.status, 200)
+  assert.deepEqual(await changed.json(), {
+    success: true,
+    emailChangeRequested: true,
+  })
+  // (a) The old invite stops working immediately.
   assert.equal((await challengeRow(invite.id))?.state, "revoked")
+  const stale = await postInvite({
+    challengeId: invite.id,
+    token: invite.token,
+    email: f.identity.email,
+    password,
+  })
+  assert.equal(stale.status, 400)
+  // (b) Nothing about the enrollment moved; only a parked invite to the new address exists.
+  const pending = (await findEnrollment(f.id))!
+  assert.equal(pending.emailHash, before.emailHash)
+  assert.equal(readEnrollmentContact(pending).email, f.identity.email)
+  assert.equal(pending.emailGeneration, 1)
+  assert.equal(pending.revision, before.revision)
+  let mail = await mails(f.id)
+  assert.ok(
+    mail.filter((row) => row.generation === 1).every((row) => row.state === "queued")
+  )
+  assert.deepEqual(
+    mail.filter((row) => row.generation === 2),
+    [
+      {
+        generation: 2,
+        purpose: "getting_started",
+        state: "queued",
+        recipient_hash: enrollmentEmailHash(email),
+        template_version: 2,
+      },
+    ]
+  )
+  assert.equal(provider.createUserInputs.length, 0)
+  // The pending change still works when it is not cancelled.
+  const change = await mintInvite(f, { email, generation: 2, emailChange: true })
+  const done = await postInvite({
+    challengeId: change.id,
+    token: change.token,
+    email,
+    password,
+  })
+  assert.equal(done.status, 200)
+  assert.equal(
+    (await done.json()).destination,
+    `/enrollment?enrollment=${f.id}&destination=crm&generation=2`
+  )
+  const after = (await findEnrollment(f.id))!
+  assert.equal(after.emailHash, enrollmentEmailHash(email))
+  assert.equal(readEnrollmentContact(after).email, email)
+  assert.equal(after.emailGeneration, 2)
+  assert.equal(after.activationEmailHash, before.activationEmailHash)
+  assert.equal((provider.createUserInputs[0] as { email: string }).email, email)
+  assert.equal((await challengeRow(change.id))?.state, "consumed")
+  mail = await mails(f.id)
+  assert.ok(
+    mail
+      .filter((row) => row.generation === 1)
+      .every((row) => row.state === "suppressed")
+  )
+  assert.equal(
+    mail.find(
+      (row) => row.generation === 2 && row.purpose === "business_information_requested"
+    )?.state,
+    "queued"
+  )
+})
+
+test("every address collision gets the same generic 409 at edit time", async () => {
+  const bodies: unknown[] = []
+  async function refused(target: string) {
+    const { f, invite } = await newOwnerInvite()
+    const response = await postInvite({
+      challengeId: invite.id,
+      token: invite.token,
+      newEmail: target,
+    })
+    assert.equal(response.status, 409)
+    bodies.push(await response.json())
+    assert.equal(
+      (await findEnrollment(f.id))!.emailHash,
+      enrollmentEmailHash(f.identity.email)
+    )
+    assert.equal((await challengeRow(invite.id))?.state, "pending")
+  }
+  // An existing app user.
+  const taken = await liveIdentity(`taken-${randomUUID()}@example.test`)
+  await linkSupabaseUser(taken)
+  await refused(taken.email)
+  // Another open enrollment's current email.
+  const open = await activatedEnrollment()
+  await refused(open.identity.email)
+  // Another enrollment's live invite to a pending address.
+  const reserved = await activatedEnrollment(),
+    reservedEmail = `reserved-${randomUUID()}@example.test`
+  await mintInvite(reserved, {
+    email: reservedEmail,
+    generation: 2,
+    emailChange: true,
+  })
+  await refused(reservedEmail)
+  // Another enrollment's parked, not-yet-minted change row.
+  const parked = await activatedEnrollment(),
+    parkedEmail = `parked-${randomUUID()}@example.test`
+  await withTransaction((db) =>
+    enqueueParkedInvite(parked.id, 2, parkedEmail, db)
+  )
+  await refused(parkedEmail)
+  for (const body of bodies) assert.deepEqual(body, bodies[0])
+  assert.equal(
+    (bodies[0] as { error: { code: string } }).error.code,
+    "enrollment_email_unavailable"
+  )
+  // A blocked enrollment's address is not reserved.
+  const blocked = await activatedEnrollment()
+  await getDatabase().execute(
+    "UPDATE mca_enrollments SET claim_state='blocked',revision=revision+1 WHERE id=?",
+    [blocked.id]
+  )
+  const { invite } = await newOwnerInvite()
+  assert.equal(
+    (
+      await postInvite({
+        challengeId: invite.id,
+        token: invite.token,
+        newEmail: blocked.identity.email,
+      })
+    ).status,
+    200
+  )
+})
+
+test("two enrollments racing to one address: the second edit is refused, and only one consume can win", async () => {
+  const a = await newOwnerInvite(),
+    b = await newOwnerInvite(),
+    target = `shared-${randomUUID()}@example.test`
+  const edit = (who: typeof a) =>
+    postInvite({
+      challengeId: who.invite.id,
+      token: who.invite.token,
+      newEmail: target,
+    })
+  assert.equal((await edit(a)).status, 200)
+  assert.equal((await edit(b)).status, 409)
+  // Once A's row is frozen, its minted challenge is the reservation.
+  await getDatabase().execute(
+    "UPDATE mca_onboarding_service_emails SET frozen_at=? WHERE enrollment_id=? AND generation=2",
+    [nowIso(), a.f.id]
+  )
+  await mintInvite(a.f, { email: target, generation: 2, emailChange: true })
+  assert.equal((await edit(b)).status, 409)
+  assert.equal((await challengeRow(b.invite.id))?.state, "pending")
+  // Forced double reservation: both reach consume; the first wins, the second gets the generic 409.
+  const c = await newOwnerInvite(),
+    d = await newOwnerInvite(),
+    shared = `double-${randomUUID()}@example.test`
+  const cInvite = await mintInvite(c.f, {
+    email: shared,
+    generation: 2,
+    emailChange: true,
+  })
+  const dInvite = await mintInvite(d.f, {
+    email: shared,
+    generation: 2,
+    emailChange: true,
+  })
+  const consume = (invite: { id: string; token: string }) =>
+    postInvite({
+      challengeId: invite.id,
+      token: invite.token,
+      email: shared,
+      password,
+    })
+  assert.equal((await consume(cInvite)).status, 200)
+  const lost = await consume(dInvite)
+  assert.equal(lost.status, 409)
+  assert.equal((await lost.json()).error.code, "enrollment_email_unavailable")
+  assert.equal(
+    (await findEnrollment(d.f.id))!.emailHash,
+    enrollmentEmailHash(d.f.identity.email)
+  )
+  assert.equal((await challengeRow(dInvite.id))?.state, "pending")
+  assert.equal(
+    (
+      await getDatabase().queryOne<{ count: number }>(
+        "SELECT count(*)::int count FROM mca_enrollments WHERE email_hash=?",
+        [enrollmentEmailHash(shared)]
+      )
+    )?.count,
+    1
+  )
+})
+
+test("a signup landing between edit and consume is refused in the consume transaction and the new account is removed", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const target = `late-${randomUUID()}@example.test`
+  assert.equal(
+    (
+      await postInvite({
+        challengeId: invite.id,
+        token: invite.token,
+        newEmail: target,
+      })
+    ).status,
+    200
+  )
+  const change = await mintInvite(f, {
+    email: target,
+    generation: 2,
+    emailChange: true,
+  })
+  let created = ""
+  provider.afterCreateUser = async () => {
+    provider.afterCreateUser = undefined
+    created = [...provider.users.values()].find((user) => user.email === target)!.id
+    await linkSupabaseUser(await liveIdentity(target))
+  }
+  const before = (await findEnrollment(f.id))!
+  const response = await postInvite({
+    challengeId: change.id,
+    token: change.token,
+    email: target,
+    password,
+  })
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).error.code, "enrollment_email_unavailable")
+  assert.deepEqual(await findEnrollment(f.id), before)
+  assert.equal((await challengeRow(change.id))?.state, "pending")
+  assert.deepEqual(provider.deletedUserIds, [created])
+  assert.equal(provider.users.has(created), false)
+})
+
+test("a failure after createUser removes the account this request created, so a retry succeeds", async () => {
+  const { f, invite } = await newOwnerInvite()
+  provider.afterCreateUser = async () => {
+    provider.afterCreateUser = undefined
+    provider.passwords.set(f.identity.email, "another-password-entirely")
+  }
+  const body = {
+    challengeId: invite.id,
+    token: invite.token,
+    email: f.identity.email,
+    password,
+  }
+  const failed = await postInvite(body)
+  assert.equal(failed.status, 400)
+  assert.equal(provider.deletedUserIds.length, 1)
+  assert.deepEqual(await challengeRow(invite.id), {
+    state: "pending",
+    attempts: 1,
+  })
+  assert.equal((await postInvite(body)).status, 200)
+  assert.equal((await challengeRow(invite.id))?.state, "consumed")
+})
+
+test("after a typo edit, the purchase address can request a fresh link that cancels the pending change", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const typo = `typo-${randomUUID()}@example.test`
+  assert.equal(
+    (
+      await postInvite({
+        challengeId: invite.id,
+        token: invite.token,
+        newEmail: typo,
+      })
+    ).status,
+    200
+  )
+  const change = await mintInvite(f, {
+    email: typo,
+    generation: 2,
+    emailChange: true,
+  })
+  const resent = await postResend({
+    enrollmentId: f.id,
+    destination: "crm",
+    email: f.identity.email,
+  })
+  assert.equal(resent.status, 200)
+  assert.deepEqual(await resent.json(), { success: true })
+  assert.equal((await challengeRow(change.id))?.state, "revoked")
+  const mail = await mails(f.id)
+  assert.equal(mail.find((row) => row.generation === 2)?.state, "suppressed")
+  assert.equal(
+    mail.find((row) => row.generation === 3)?.recipient_hash,
+    enrollmentEmailHash(f.identity.email)
+  )
+  assert.equal(
+    (
+      await postInvite({
+        challengeId: change.id,
+        token: change.token,
+        email: typo,
+        password,
+      })
+    ).status,
+    400
+  )
+  // The fresh link (minted from the generation-3 row) sets the password at the unchanged address.
+  const fresh = await mintInvite(f)
+  const done = await postInvite({
+    challengeId: fresh.id,
+    token: fresh.token,
+    email: f.identity.email,
+    password,
+  })
+  assert.equal(done.status, 200)
+  assert.equal(
+    (await findEnrollment(f.id))!.emailHash,
+    enrollmentEmailHash(f.identity.email)
+  )
+})
+
+test("fresh-link requests are account-neutral, Origin-checked and rate-limited, and never strand the owner", async () => {
+  const neutral = async (body: unknown) => {
+    const response = await postResend(body)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { success: true })
+  }
+  await neutral({ enrollmentId: randomUUID(), email: "nobody@example.test" })
+  const g = await activatedEnrollment()
+  withoutProviderUser(g.identity)
+  await neutral({ enrollmentId: g.id, email: "someone-else@example.test" })
+  const blocked = await activatedEnrollment()
+  await getDatabase().execute(
+    "UPDATE mca_enrollments SET claim_state='blocked',revision=revision+1 WHERE id=?",
+    [blocked.id]
+  )
+  await neutral({ enrollmentId: blocked.id, email: blocked.identity.email })
+  for (const id of [g.id, blocked.id])
+    assert.equal((await mails(id)).filter((row) => row.generation > 1).length, 0)
+  assert.equal(
+    (await postResend({ enrollmentId: g.id, email: g.identity.email }, "https://foreign.test")).status,
+    403
+  )
+  // Per-minute limit.
+  const h = await activatedEnrollment()
+  for (let index = 0; index < 3; index++)
+    await neutral({ enrollmentId: h.id, email: h.identity.email })
+  assert.equal(
+    (await postResend({ enrollmentId: h.id, email: h.identity.email })).status,
+    429
+  )
+  // A full 24h window is a silent no-op that leaves the latest invite usable.
+  const k = await newOwnerInvite()
+  await parkRows(k.f.id, [2, 3, 4, 5, 6])
+  const latest = await mintInvite(k.f)
+  await neutral({ enrollmentId: k.f.id, email: k.f.identity.email })
+  assert.equal((await mails(k.f.id)).some((row) => row.generation === 7), false)
+  assert.equal((await challengeRow(latest.id))?.state, "pending")
+  const saved = process.env.MCA_ONBOARDING_RUNTIME_ENABLED
+  delete process.env.MCA_ONBOARDING_RUNTIME_ENABLED
+  try {
+    assert.equal(
+      (await postResend({ enrollmentId: k.f.id, email: k.f.identity.email })).status,
+      503
+    )
+  } finally {
+    process.env.MCA_ONBOARDING_RUNTIME_ENABLED = saved
+  }
+})
+
+test("an edit refuses the current and purchase addresses, and the 24h window caps edits", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const target = `next-${randomUUID()}@example.test`
+  assert.equal(
+    (
+      await postInvite({
+        challengeId: invite.id,
+        token: invite.token,
+        newEmail: target,
+      })
+    ).status,
+    200
+  )
+  const change = await mintInvite(f, {
+    email: target,
+    generation: 2,
+    emailChange: true,
+  })
+  for (const newEmail of [target, f.identity.email]) {
+    const response = await postInvite({
+      challengeId: change.id,
+      token: change.token,
+      newEmail,
+    })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error.code, "validation_failed")
+  }
+  assert.equal((await challengeRow(change.id))?.state, "pending")
+  const g = await newOwnerInvite()
+  await parkRows(g.f.id, [2, 3, 4, 5, 6])
+  const capped = await postInvite({
+    challengeId: g.invite.id,
+    token: g.invite.token,
+    newEmail: `capped-${randomUUID()}@example.test`,
+  })
+  assert.equal(capped.status, 429)
+  assert.equal((await challengeRow(g.invite.id))?.state, "pending")
 })

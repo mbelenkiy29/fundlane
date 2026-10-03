@@ -2,12 +2,12 @@ import test, { before, after, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { authDatabase, activatedEnrollment, browserCookies, liveIdentity, provider, resetAuthProvider } from "./helpers/onboarding-auth"
-import { getDatabase, nowIso } from "../src/lib/mca/db"
+import { getDatabase, nowIso, withTransaction } from "../src/lib/mca/db"
 import { encryptSensitive } from "../src/lib/mca/crypto"
 import { linkSupabaseUser } from "../src/lib/mca/supabase-auth"
 import { findEnrollment, verifyEnrollmentResume, readEnrollmentContact } from "../src/lib/mca/onboarding/store"
 import { onboardingEmailConfiguration, onboardingEmailProviderIdentity } from "../src/lib/mca/onboarding/email-transport"
-import { onboardingEmailEncryptionScope } from "../src/lib/mca/onboarding/email-intents"
+import { enqueueParkedInvite, onboardingEmailEncryptionScope } from "../src/lib/mca/onboarding/email-intents"
 import type { SuperAdminActor } from "../src/lib/mca/platform-auth"
 import { resumeSecret, stripeFixture } from "./helpers/onboarding-billing"
 
@@ -486,7 +486,7 @@ test("contact recovery revokes a pending invite and reissue for the recovered ow
   let invite = ""
   const f = await corrected(false, async enrollment => {
     const sent = await sendQueuedMail(enrollment.id)
-    assert.match(sent.find(mail => mail.subject === "Set your Fundlane password")!.text, /\/api\/enrollment\/invite\?challenge=/)
+    assert.match(sent.find(mail => mail.subject === "Set your Fundlane password")!.text, /\/enrollment\?enrollment=[^&]+&destination=crm&invite=[0-9a-f-]{36}#t=/)
     const minted = await pendingInvites(enrollment.id)
     assert.equal(minted.length, 1)
     invite = minted[0].id
@@ -497,6 +497,17 @@ test("contact recovery revokes a pending invite and reissue for the recovered ow
   const sent = await sendQueuedMail(f.id)
   const welcome = sent.find(mail => mail.subject === "Get started with Fundlane")!
   assert.match(welcome.text, new RegExp(`/enrollment\\?enrollment=${f.id}&destination=crm&generation=3`))
-  assert.doesNotMatch(sent.map(mail => mail.text).join(), /token=/)
+  assert.doesNotMatch(sent.map(mail => mail.text).join(), /token=|#t=/)
   assert.equal((await pendingInvites(f.id)).filter(row => row.state === "pending").length, 0)
+})
+
+test("contact recovery and reissue skip past a parked email-change generation", async () => {
+  const f = await corrected(false, enrollment => withTransaction(db => enqueueParkedInvite(enrollment.id, 2, `parked-${randomUUID()}@example.test`, db)))
+  assert.equal(f.approved.emailGeneration, 3)
+  const rows = async () => (await getDatabase().query<{ generation: number; purpose: string; state: string }>("SELECT generation,purpose,state FROM mca_onboarding_service_emails WHERE enrollment_id=? ORDER BY generation,purpose", [f.id])).rows
+  assert.equal((await rows()).find(row => row.generation === 2)?.state, "suppressed")
+  assert.ok((await rows()).some(row => row.generation === 3 && row.purpose === "getting_started"))
+  await freshStepUp(f.actor)
+  assert.equal((await command(f.id, reissue(f))).status, 200)
+  assert.equal((await findEnrollment(f.id))!.emailGeneration, 4)
 })

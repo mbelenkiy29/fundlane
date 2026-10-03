@@ -12,21 +12,20 @@ const inputSchema = z.object({
 }).strict();
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
-/** Locators carry no authority. Only a freeze-time new-owner invite carries a single-use, hashed-at-rest credential. */
+/** Locators carry no authority. Only a freeze-time new-owner invite carries a single-use, hashed-at-rest credential, in the URL fragment. */
 export function renderOnboardingEmail(input: { purpose: OnboardingEmailPurpose; enrollmentId: string; generation: number; trialEndsAt: string; origin: string; invite?: { challengeId: string; token: string } }): EmailContent {
   const value = inputSchema.parse(input), origin = new URL(value.origin);
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) throw new Error("Configure a secure onboarding application origin.");
   const business = value.purpose === "business_information_requested", invite = value.invite;
   if (business && invite) throw new Error("Business details email carries no credential.");
-  const action = new URL(invite ? "/api/enrollment/invite" : "/enrollment", origin);
+  const action = new URL("/enrollment", origin);
+  action.searchParams.set("enrollment", value.enrollmentId);
+  action.searchParams.set("destination", business ? "business" : "crm");
+  // The token rides only in the fragment, which browsers never send to any server; the page POSTs it.
   if (invite) {
-    action.searchParams.set("challenge", invite.challengeId);
-    action.searchParams.set("token", invite.token);
-  } else {
-    action.searchParams.set("enrollment", value.enrollmentId);
-    action.searchParams.set("destination", business ? "business" : "crm");
-    action.searchParams.set("generation", String(value.generation));
-  }
+    action.searchParams.set("invite", invite.challengeId);
+    action.hash = `t=${invite.token}`;
+  } else action.searchParams.set("generation", String(value.generation));
   const subject = business ? "Complete your Fundlane business details" : invite ? "Set your Fundlane password" : "Get started with Fundlane";
   const trial = `Original trial end: ${value.trialEndsAt}. Open Plans & Billing in Fundlane to review your current subscription, charges, and cancellation options.`;
   const paragraphs = business ? [

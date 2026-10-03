@@ -54,13 +54,23 @@ test("CORS wildcard is scoped to public fonts only", () => {
   assert.equal(headerValue(FONT_CORS_HEADERS, "Access-Control-Allow-Origin"), "*")
   assert.equal(headerValue(API_CACHE_HEADERS, "Access-Control-Allow-Origin"), undefined)
   const sources = nextConfigHeaders()
-  assert.deepEqual(sources.map((entry) => entry.source), ["/fonts/:path*", "/api/:path*", "/(.*)"])
+  assert.deepEqual(sources.map((entry) => entry.source), ["/fonts/:path*", "/api/:path*", "/(.*)", "/enrollment", "/api/enrollment/invite"])
   const font = sources.find((entry) => entry.source === "/fonts/:path*")
   const documents = sources.find((entry) => entry.source === "/(.*)")
   const api = sources.find((entry) => entry.source === "/api/:path*")
   assert.equal(headerValue(font!.headers, "Access-Control-Allow-Origin"), "*")
   assert.equal(headerValue(documents!.headers, "Access-Control-Allow-Origin"), undefined)
   assert.equal(headerValue(api!.headers, "Access-Control-Allow-Origin"), undefined)
+})
+
+test("invite pages and their POST send no referrer; the later entry overrides the document default", () => {
+  const sources = nextConfigHeaders()
+  const documents = sources.findIndex((entry) => entry.source === "/(.*)")
+  for (const path of ["/enrollment", "/api/enrollment/invite"]) {
+    const index = sources.findIndex((entry) => entry.source === path)
+    assert.ok(index > documents, path)
+    assert.equal(headerValue(sources[index].headers, "Referrer-Policy"), "no-referrer")
+  }
 })
 
 test("next.config applies the shared header map", () => {

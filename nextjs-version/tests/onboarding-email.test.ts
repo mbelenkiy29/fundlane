@@ -6,8 +6,8 @@ import pg from "pg";
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs";
 import { assertTransactionExecutor, closeDatabaseForTests, getDatabase, withTransaction } from "../src/lib/mca/db";
 import { decryptSensitive, encryptSensitive, hashOpaqueToken } from "../src/lib/mca/crypto";
-import { createEnrollment, findEnrollment, recordEnrollmentActivation } from "../src/lib/mca/onboarding/store";
-import { enqueueOnboardingEmailIntents } from "../src/lib/mca/onboarding/email-intents";
+import { createEnrollment, enrollmentEmailHash, findEnrollment, recordEnrollmentActivation } from "../src/lib/mca/onboarding/store";
+import { enqueueOnboardingEmailIntents, enqueueParkedInvite } from "../src/lib/mca/onboarding/email-intents";
 import type { EnrollmentActivation, EnrollmentOffer, EnrollmentRecord } from "../src/lib/mca/onboarding/contracts";
 import { enrollmentEvidenceScope, readVerifiedEnrollmentBilling, type VerifiedEnrollmentBilling } from "../src/lib/mca/onboarding/evidence";
 import { onboardingEmailConfiguration, onboardingEmailProviderIdentity } from "../src/lib/mca/onboarding/email-transport";
@@ -71,7 +71,7 @@ type ChallengeRow = { id: string; enrollment_id: string; purpose: string; token_
 async function challenges(id?: string) {
   return (await getDatabase().query<ChallengeRow>(`SELECT * FROM mca_enrollment_challenges ${id ? "WHERE enrollment_id=?" : ""} ORDER BY created_at,id`, id ? [id] : [])).rows;
 }
-const inviteLink = /https:\/\/app\.example\.test\/api\/enrollment\/invite\?challenge=([0-9a-f-]{36})&token=([A-Za-z0-9_-]{32,256})/;
+const inviteLink = /https:\/\/app\.example\.test\/enrollment\?enrollment=[^&#\s]+&destination=crm&invite=([0-9a-f-]{36})#t=([A-Za-z0-9_-]{32,256})/;
 function namedReplyToConfiguration(provider: "usesend" | "resend" | "webhook") {
   process.env.MCA_SYSTEM_EMAIL_REPLY_TO = "  Replies <Reply@Example.test>  ";
   if (provider === "resend") Object.assign(process.env, { MCA_SYSTEM_EMAIL_PROVIDER: "resend", MCA_RESEND_API_KEY: "synthetic-resend", MCA_RESEND_FROM: "Fundlane <service@example.test>" });
@@ -106,13 +106,18 @@ test("new-owner invite renders a single-use set-password link only for getting_s
   const invite = { challengeId: randomUUID(), token: "a".repeat(43) };
   const mail = renderOnboardingEmail({ purpose: "getting_started", enrollmentId: "opaque-id", generation: 2, trialEndsAt: end, origin: "https://app.example.test", invite });
   assert.equal(mail.subject, "Set your Fundlane password");
-  assert.match(mail.text, new RegExp(`https://app.example.test/api/enrollment/invite\\?challenge=${invite.challengeId}&token=${invite.token}`));
+  const link = new URL(mail.text.match(/https:\/\/\S+/)![0]);
+  assert.equal(link.href, `https://app.example.test/enrollment?enrollment=opaque-id&destination=crm&invite=${invite.challengeId}#t=${invite.token}`);
+  // The credential rides only in the fragment, which browsers never send to a server.
+  assert.equal(link.hash, `#t=${invite.token}`);
+  assert.ok(!link.search.includes(invite.token));
+  assert.deepEqual([...link.searchParams.keys()], ["enrollment", "destination", "invite"]);
   assert.match(mail.text, /works once/);
   assert.match(mail.text, /24 hours/);
   assert.match(mail.text, /does not create a company/);
   assert.match(mail.text, /Plans & Billing/);
-  assert.match(mail.html, /&amp;token=a{43}/);
-  assert.doesNotMatch(mail.text, /\/enrollment\?enrollment=/);
+  assert.match(mail.html, new RegExp(`&amp;invite=${invite.challengeId}#t=a{43}`));
+  assert.doesNotMatch(JSON.stringify(mail), /\/api\/enrollment\/invite|token=/);
   assert.throws(() => renderOnboardingEmail({ purpose: "business_information_requested", enrollmentId: "opaque-id", generation: 2, trialEndsAt: end, origin: "https://app.example.test", invite }));
   for (const bad of [{ challengeId: "not-a-uuid", token: invite.token }, { challengeId: invite.challengeId, token: "short" }, { challengeId: invite.challengeId, token: `${"a".repeat(40)}<x>` }]) assert.throws(() => renderOnboardingEmail({ purpose: "getting_started", enrollmentId: "opaque-id", generation: 2, trialEndsAt: end, origin: "https://app.example.test", invite: bad }));
   const business = renderOnboardingEmail({ purpose: "business_information_requested", enrollmentId: "opaque-id", generation: 2, trialEndsAt: end, origin: "https://app.example.test" });
@@ -151,7 +156,116 @@ test("existing accounts receive the sign-in link and no invite", async () => {
   assert.equal((await challenges(row.id)).length, 0);
   const welcome = sent.map(body => JSON.parse(body)).find(body => body.subject === "Get started with Fundlane");
   assert.match(welcome.text, /\/enrollment\?enrollment=.*&destination=crm&generation=1/);
-  assert.doesNotMatch(sent.join(), /token=/);
+  assert.doesNotMatch(sent.join(), /token=|#t=/);
+});
+
+/** Re-labels a stored intent as template v1 (as if written before the invite), bypassing the immutability trigger. */
+async function relabelAsV1(id: string) {
+  await withTransaction(async db => {
+    await db.execute("CREATE TEMP TABLE v1_mail ON COMMIT DROP AS SELECT * FROM mca_onboarding_service_emails WHERE id=?", [id]);
+    await db.execute("UPDATE v1_mail SET template_version=1");
+    await db.execute("CREATE TEMP TABLE v1_receipts ON COMMIT DROP AS SELECT * FROM mca_onboarding_service_email_receipts WHERE email_id=?", [id]);
+    await db.execute("DELETE FROM mca_onboarding_service_email_receipts WHERE email_id=?", [id]);
+    await db.execute("DELETE FROM mca_onboarding_service_emails WHERE id=?", [id]);
+    await db.execute("INSERT INTO mca_onboarding_service_emails SELECT * FROM v1_mail");
+    await db.execute("INSERT INTO mca_onboarding_service_email_receipts SELECT * FROM v1_receipts");
+  });
+}
+type ChallengeCipherRow = ChallengeRow & { email_cipher: string; email_hash: string };
+async function challengePayloads(id: string) {
+  return (await getDatabase().query<ChallengeCipherRow>("SELECT * FROM mca_enrollment_challenges WHERE enrollment_id=? ORDER BY created_at,id", [id])).rows
+    .map(row => ({ row, payload: JSON.parse(decryptSensitive(row.email_cipher, `onboarding:challenge:${row.id}`)) as Record<string, unknown> }));
+}
+
+test("getting_started intents use template v2; business details stay v1", async () => {
+  const { row } = await activate();
+  const versions = (await getDatabase().query<{ purpose: string; template_version: number }>("SELECT purpose,template_version FROM mca_onboarding_service_emails WHERE enrollment_id=? ORDER BY purpose", [row.id])).rows;
+  assert.deepEqual(versions, [{ purpose: "business_information_requested", template_version: 1 }, { purpose: "getting_started", template_version: 2 }]);
+});
+
+test("a queued v1 getting_started row fails closed: never sent, never mints an invite", async () => {
+  const { row } = await activate();
+  const welcome = (await emails(row.id)).find(mail => mail.purpose === "getting_started")!;
+  await relabelAsV1(welcome.id);
+  const subjects: string[] = [];
+  globalThis.fetch = async (_url, init) => { subjects.push(JSON.parse(String(init?.body)).subject); return Response.json({ emailId: randomUUID() }); };
+  await runOnboardingEmails({ clock: instant });
+  const failed = (await emails(row.id)).find(mail => mail.purpose === "getting_started")!;
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.error_code, "onboarding_email_template_unavailable");
+  assert.equal(failed.content_cipher, null);
+  assert.deepEqual(subjects, ["Complete your Fundlane business details"]);
+  assert.equal((await challenges(row.id)).length, 0);
+});
+
+test("a frozen v1 getting_started retry is never re-sent", async t => {
+  const { row } = await activate();
+  globalThis.fetch = async () => Response.json({}, { status: 429 });
+  await runOnboardingEmails({ clock: instant });
+  const frozen = (await emails(row.id)).find(mail => mail.purpose === "getting_started")!;
+  assert.equal(frozen.state, "retry");
+  await relabelAsV1(frozen.id);
+  const subjects: string[] = [];
+  globalThis.fetch = async (_url, init) => { subjects.push(JSON.parse(String(init?.body)).subject); return Response.json({ emailId: randomUUID() }); };
+  t.mock.timers.setTime(Date.parse("2030-01-01T12:15:00.000Z"));
+  await runOnboardingEmails({ clock: "2030-01-01T12:15:00.000Z" });
+  const failed = (await emails(row.id)).find(mail => mail.purpose === "getting_started")!;
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.error_code, "onboarding_email_template_unavailable");
+  assert.deepEqual(subjects, ["Complete your Fundlane business details"]);
+  assert.equal((await challenges(row.id)).length, 1);
+});
+
+test("a parked change row goes to the new address and mints a change invite; generation 1 stays with the owner", async () => {
+  const { row } = await activate();
+  await runOnboardingEmails({ clock: instant });
+  const before = (await findEnrollment(row.id))!;
+  await withTransaction(db => enqueueParkedInvite(row.id, 2, "Corrected@Example.test", db));
+  const sent: { to: string; subject: string; text: string }[] = [];
+  globalThis.fetch = async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ emailId: randomUUID() }); };
+  await runOnboardingEmails({ clock: instant });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "corrected@example.test");
+  assert.equal(sent[0].subject, "Set your Fundlane password");
+  const [, challengeId] = sent[0].text.match(inviteLink)!;
+  const minted = (await challengePayloads(row.id)).find(item => item.row.id === challengeId)!;
+  assert.equal(minted.row.email_hash, enrollmentEmailHash("corrected@example.test"));
+  assert.equal(minted.payload.email, "corrected@example.test");
+  assert.equal(minted.payload.emailChange, true);
+  assert.equal(minted.payload.emailGeneration, 1);
+  assert.equal(minted.payload.generation, 2);
+  const after = (await findEnrollment(row.id))!;
+  assert.equal(after.emailHash, before.emailHash);
+  assert.equal(after.emailGeneration, 1);
+  assert.equal(after.revision, before.revision);
+  assert.equal((await emails(row.id)).find(mail => mail.generation === 2)?.state, "accepted");
+});
+
+test("a parked row to the current address mints a plain fresh invite", async () => {
+  const { row } = await activate();
+  await withTransaction(db => enqueueParkedInvite(row.id, 2, "owner@example.test", db));
+  await runOnboardingEmails({ clock: instant });
+  const fresh = (await challengePayloads(row.id)).filter(item => item.row.email_hash === enrollmentEmailHash("owner@example.test"));
+  assert.equal(fresh.length, 2);
+  for (const item of fresh) {
+    assert.equal(item.payload.emailChange, undefined);
+    assert.equal(item.payload.generation, 1);
+  }
+});
+
+test("only the latest parked row is live; older parked rows are superseded without minting", async () => {
+  const { row } = await activate();
+  await withTransaction(async db => {
+    await enqueueParkedInvite(row.id, 2, "first@example.test", db);
+    await enqueueParkedInvite(row.id, 3, "second@example.test", db);
+  });
+  await runOnboardingEmails({ clock: instant });
+  const mail = await emails(row.id);
+  assert.equal(mail.find(item => item.generation === 2)?.state, "suppressed");
+  assert.equal(mail.find(item => item.generation === 3)?.state, "accepted");
+  const hashes = (await challengePayloads(row.id)).map(item => item.row.email_hash);
+  assert.ok(!hashes.includes(enrollmentEmailHash("first@example.test")));
+  assert.ok(hashes.includes(enrollmentEmailHash("second@example.test")));
 });
 
 test("renderer rejects unsafe origins, invalid locators and generations", () => {

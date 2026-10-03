@@ -15,9 +15,10 @@ import { newPassword } from "../supabase-auth-http"
 import {
   completeEnrollmentInvite,
   enrollmentBindingCookie,
-  openEnrollmentInvite,
   readEnrollmentAuthCookie,
   requestEnrollmentAuthentication,
+  requestEnrollmentEmailChange,
+  requestEnrollmentInvite,
   verifyEnrollmentAuthentication,
 } from "./auth"
 import {
@@ -52,14 +53,12 @@ type EnrollmentHttpAction =
   | "verify"
   | "claim"
   | "billing"
-  | "invite-open"
   | "password"
-const inviteQuerySchema = z
-  .object({
-    challenge: z.uuid(),
-    token: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/),
-  })
-  .strict()
+  | "resend"
+const inviteProof = {
+  challengeId: z.uuid(),
+  token: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/),
+}
 export async function handleEnrollmentHttp(
   request: Request,
   action: EnrollmentHttpAction
@@ -103,28 +102,6 @@ export async function handleEnrollmentHttp(
         }),
         { headers: enrollmentHttpHeaders }
       )
-    }
-    if (action === "invite-open") {
-      // Emailed links are GETs; like Auth callbacks, the bound token replaces an Origin check.
-      await consumeRequestRateLimit(
-        clientRateKey(request, "enrollment:invite"),
-        15
-      )
-      const query = new URL(request.url).searchParams
-      const parsed = inviteQuerySchema.safeParse(
-        Object.fromEntries(query.entries())
-      )
-      const location =
-        parsed.success && [...query.keys()].length === 2
-          ? await openEnrollmentInvite(
-              parsed.data.challenge,
-              parsed.data.token
-            )
-          : "/enrollment"
-      return NextResponse.redirect(new URL(location, onboardingOrigin()), {
-        status: 303,
-        headers: { ...enrollmentHttpHeaders, "Referrer-Policy": "no-referrer" },
-      })
     }
     assertEnrollmentMutation(request)
     await consumeRequestRateLimit(
@@ -201,18 +178,40 @@ export async function handleEnrollmentHttp(
       )
     }
     if (action === "password") {
+      // The invite token arrives only here, read by the page from its URL fragment.
       const input = await readJson(
         request,
-        z
-          .object({
-            challengeId: z.uuid(),
-            email: z.email().max(320),
-            password: newPassword.optional(),
-          })
-          .strict()
+        z.union([
+          z
+            .object({
+              ...inviteProof,
+              email: z.email().max(320),
+              password: newPassword,
+            })
+            .strict(),
+          z.object({ ...inviteProof, newEmail: z.email().max(320) }).strict(),
+        ])
       )
       return NextResponse.json(
-        { success: true, ...(await completeEnrollmentInvite(input)) },
+        {
+          success: true,
+          ...("newEmail" in input
+            ? await requestEnrollmentEmailChange(input)
+            : await completeEnrollmentInvite(input)),
+        },
+        {
+          headers: { ...enrollmentHttpHeaders, "Referrer-Policy": "no-referrer" },
+        }
+      )
+    }
+    if (action === "resend") {
+      const input = await readJson(
+        request,
+        enrollmentLocatorSchema.extend({ email: z.email().max(320) }).strict()
+      )
+      await requestEnrollmentInvite(input)
+      return NextResponse.json(
+        { success: true },
         { headers: enrollmentHttpHeaders }
       )
     }

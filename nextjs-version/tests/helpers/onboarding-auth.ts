@@ -27,6 +27,8 @@ export const provider = {
   onGetUser: undefined as undefined | (() => Promise<void>),
   createUserInputs: [] as unknown[],
   passwords: new Map<string, string>(),
+  deletedUserIds: [] as string[],
+  afterCreateUser: undefined as undefined | (() => Promise<void>),
 }
 // Node 24 uses exports; cache also keeps options compatible with the older installed type declarations.
 const headersMock = {
@@ -139,7 +141,15 @@ const serverMock = {
             } as User
             provider.users.set(user.id, user)
             provider.passwords.set(input.email, input.password)
+            if (provider.afterCreateUser) await provider.afterCreateUser()
             return { data: { user }, error: null }
+          },
+          deleteUser: async (id: string) => {
+            provider.deletedUserIds.push(id)
+            const user = provider.users.get(id)
+            if (user?.email) provider.passwords.delete(user.email)
+            provider.users.delete(id)
+            return { data: { user: null }, error: null }
           },
         },
       },
@@ -183,6 +193,8 @@ export function resetAuthProvider() {
   provider.exchangeInputs.length = 0
   provider.createUserInputs.length = 0
   provider.passwords.clear()
+  provider.deletedUserIds.length = 0
+  provider.afterCreateUser = undefined
   browserCookies.clear()
 }
 /** Simulates a brand-new owner: the Checkout email has no provider account yet. */

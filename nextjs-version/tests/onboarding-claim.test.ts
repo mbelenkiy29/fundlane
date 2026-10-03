@@ -353,16 +353,13 @@ test("revocation at the last durable boundary rolls back all tenant grants", asy
     await db.execute("DROP FUNCTION test_late_revoke()")
   }
 })
-test("an invite-set password creates no company; the explicit claim then creates exactly one owner company", async () => {
-  const f = await activatedEnrollment()
-  withoutProviderUser(f.identity)
-  const auth = await import("../src/lib/mca/onboarding/auth"),
-    db = getDatabase(),
-    challengeId = randomUUID(),
+/** Mirrors the email worker's freeze-time invite mint. */
+async function mintInvite(f: Awaited<ReturnType<typeof activatedEnrollment>>) {
+  const challengeId = randomUUID(),
     token = createOpaqueToken(),
     now = nowIso(),
     row = (await findEnrollment(f.id))!
-  await db.execute(
+  await getDatabase().execute(
     "INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,resume_generation,expires_at,created_at,updated_at) VALUES (?,?,'authentication',?,?,?,?,?,?,?)",
     [
       challengeId,
@@ -388,14 +385,21 @@ test("an invite-set password creates no company; the explicit claim then creates
       now,
     ]
   )
-  browserCookies.set(auth.enrollmentAuthCookie, `${challengeId}.${token}`)
+  return { challengeId, token }
+}
+test("an invite-set password creates no company; the explicit claim then creates exactly one owner company", async () => {
+  const f = await activatedEnrollment()
+  withoutProviderUser(f.identity)
+  const auth = await import("../src/lib/mca/onboarding/auth"),
+    db = getDatabase(),
+    invite = await mintInvite(f)
   const companies = async () =>
     (await db.queryOne<{ count: number }>(
       "SELECT count(*)::int count FROM workspaces"
     ))!.count
   const before = await companies()
   await auth.completeEnrollmentInvite({
-    challengeId,
+    ...invite,
     email: f.identity.email,
     password: "Synthetic-Passw0rd-Long",
   })
@@ -425,4 +429,28 @@ test("an invite-set password creates no company; the explicit claim then creates
       )?.count,
       1
     )
+})
+test("after an email-code sign-in and claim, a still-pending invite is unusable", async () => {
+  const f = await activatedEnrollment()
+  const invite = await mintInvite(f)
+  await claim(f)
+  const auth = await import("../src/lib/mca/onboarding/auth")
+  await assert.rejects(
+    auth.completeEnrollmentInvite({
+      ...invite,
+      email: f.identity.email,
+      password: "Synthetic-Passw0rd-Long",
+    }),
+    { code: "enrollment_challenge_invalid" }
+  )
+  assert.equal(provider.createUserInputs.length, 0)
+  assert.equal(
+    (
+      await getDatabase().queryOne<{ attempts: number }>(
+        "SELECT attempts FROM mca_enrollment_challenges WHERE id=?",
+        [invite.challengeId]
+      )
+    )?.attempts,
+    0
+  )
 })

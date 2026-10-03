@@ -31,6 +31,13 @@ export function EnrollmentAuth({ continuation }: { continuation: EnrollmentConti
       setNotice("If this email can continue the purchase, we've sent a verification code and link. Codes expire after 15 minutes.")
     })
   }
+  async function resend() {
+    await run(async () => {
+      // Account-neutral: a fresh link goes only to the purchase email on file, and cancels a pending email change.
+      await requestJson("/api/enrollment/resend", { method: "POST", body: JSON.stringify({ ...continuation, email }) })
+      setNotice("If this purchase still needs a password, we've emailed a new set-password link to the purchase email.")
+    })
+  }
   async function verify(event: FormEvent) {
     event.preventDefault()
     if (!challenge) return
@@ -59,7 +66,8 @@ export function EnrollmentAuth({ continuation }: { continuation: EnrollmentConti
       <button type="button" className="underline" disabled={busy} onClick={() => { setChallenge(null); setCode(""); setError(""); setNotice("") }}>Change email</button>
     </form> : <form className="space-y-3" onSubmit={e => { e.preventDefault(); void send() }}>
       <label className="grid gap-2" htmlFor="enrollment-email">Checkout email<input className="rounded-md border p-2" id="enrollment-email" name="email" type="email" autoComplete="email" required disabled={busy} value={email} onChange={e => setEmail(e.target.value)} /></label>
-      <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="submit" disabled={busy}>{busy ? "Sending verification…" : "Send verification code"}</button>
+      <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="submit" disabled={busy}>{busy ? "Sending verification…" : "Send verification code"}</button>{" "}
+      <button type="button" className="underline" disabled={busy || !email} onClick={() => void resend()}>Email me a new set-password link</button>
     </form>}
     <button className="inline-flex items-center justify-center rounded-md border px-4 py-3 text-sm font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="button" disabled={busy} onClick={() => void google()}>Continue with Google</button>
     <p><Link className="underline" href={`/sign-in?next=${encodeURIComponent(canonical)}`}>Login with password</Link></p>
