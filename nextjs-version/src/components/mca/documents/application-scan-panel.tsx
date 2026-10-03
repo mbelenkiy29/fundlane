@@ -168,7 +168,7 @@ export function ApplicationScanPanel({ embedded = false, onCreated }: { embedded
       setDocument(payload)
       setReview(undefined)
       renew()
-      setMessage(payload.processingState === "clean" ? "Application uploaded and scanned." : "Application saved but locked until malware scanning succeeds.")
+      setMessage(payload.processingState === "clean" ? "Application uploaded and ready." : "Application saved but locked until malware scanning succeeds.")
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Upload failed.") }
     finally { setBusy(false); setUploadProgress(undefined) }
   }
@@ -194,7 +194,7 @@ export function ApplicationScanPanel({ embedded = false, onCreated }: { embedded
     try {
       const updated = await requestJson<Draft>(`/api/mca/documents/application/drafts/${document.id}/scan`, { method: "POST", body: "{}" })
       setDocument(updated)
-      setMessage(updated.processingState === "clean" ? "Malware scan passed. Extraction is available." : "Scanner is still unavailable or did not clear the file.")
+      setMessage(updated.processingState === "clean" ? "File cleared. Extraction is available." : "Scanner is still unavailable or did not clear the file.")
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Scan retry failed.") }
     finally { setBusy(false) }
   }

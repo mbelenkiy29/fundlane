@@ -12,7 +12,7 @@ import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { escapeHtml } from "../operations/email-transport"
 import { parseEmailAddress } from "../intake/usesend"
-import { sendFrozenSystemEmail, systemEmailConfiguration, type FrozenSystemEmailConfiguration } from "../system-email"
+import { senderDisplayName, sendFrozenSystemEmail, systemEmailConfiguration, type FrozenSystemEmailConfiguration } from "../system-email"
 import type { FunderRecord, FunderRoute } from "../funders/contracts"
 import { getFunder, listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
@@ -136,6 +136,8 @@ export interface RenderedSubmissionEmail {
   /** Broker mailbox identity remains separate from the actual system From shown for approval. */
   submissionSenderAddress?: string
   systemProvider?: FrozenSystemEmailConfiguration
+  /** Broker company (workspace) name, used for the system sender's display name. */
+  companyName?: string
 }
 
 export interface SubmissionEmailPreview extends RenderedSubmissionEmail {
@@ -663,6 +665,7 @@ async function renderEmail(input: {
     signature,
     templateId: resolved.templateId,
     attachments: attachmentsFor(input.documents, input.route, input.includedDocumentIds),
+    companyName: workspaceName,
   }
 }
 
@@ -706,8 +709,26 @@ function submissionSystemConfiguration(): FrozenSystemEmailConfiguration | undef
 function withSystemSender(rendered: RenderedSubmissionEmail, configuration = submissionSystemConfiguration()): RenderedSubmissionEmail {
   if (!configuration) return rendered
   const fromAddress = parseEmailAddress(configuration.from)!
-  const fromName = configuration.from.match(/^(.*?)\s*<[^>]+>$/)?.[1]?.trim() || fromAddress
+  const fromName = systemSenderName(rendered.companyName, configuration.from) || fromAddress
   return { ...rendered, submissionSenderAddress: rendered.submissionSenderAddress ?? rendered.fromAddress, fromAddress, fromName, systemProvider: configuration }
+}
+
+/** The From line exactly as a funder sees it, for broker review screens. */
+export function displayFrom(email: Pick<RenderedSubmissionEmail, "fromName" | "fromAddress">): string {
+  const name = email.fromName?.trim()
+  return name && name.toLowerCase() !== email.fromAddress.toLowerCase() ? `${name} <${email.fromAddress}>` : email.fromAddress
+}
+
+/**
+ * Funders see who the submission is from: "<Broker company> via <platform name>", e.g. "Acme Capital via Fundlane".
+ * The address stays the platform's verified sender and Reply-To stays the broker's mailbox. Without a company
+ * name the configured platform display name is used unchanged.
+ */
+export function systemSenderName(companyName: string | undefined, configuredFrom: string): string {
+  const platform = senderDisplayName(configuredFrom) || "Fundlane"
+  const company = (companyName ?? "").replace(/[\u0000-\u001f\u007f<>"\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 64).trim()
+  if (!company) return senderDisplayName(configuredFrom) ?? ""
+  return `${company} via ${platform}`
 }
 
 function systemProviderAttemptRef(rendered: RenderedSubmissionEmail, attemptedMessageId: string, delivery: "sent" | "uncertain", providerEmailId?: string): EmailAttemptRef {
@@ -732,6 +753,7 @@ async function deliverViaSystemProvider(rendered: RenderedSubmissionEmail, corre
   let providerEmailId: string
   try {
     const sent = await sendFrozenSystemEmail({
+      fromName: rendered.fromName,
       to: rendered.to,
       cc: rendered.cc,
       replyTo: rendered.replyTo || rendered.fromAddress,

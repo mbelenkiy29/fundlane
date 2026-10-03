@@ -2,7 +2,7 @@ import "server-only"
 
 import { newId } from "../db"
 import type { DealActor } from "../deals/schema"
-import { documentScanner, type ScanResult } from "../documents/scanner"
+import { documentScanner, scanBypassEnabled, type ScanResult } from "../documents/scanner"
 import { quarantineBucket, storageClient } from "../documents/storage"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, getBackgroundJob, inBackgroundWorker } from "./queue"
@@ -14,7 +14,7 @@ function assertClean(result: ScanResult): void {
 
 /** Generated assistant files stay private while a Render worker runs the native scanner. */
 export async function scanOnWorker(actor: DealActor, filename: string, bytes: Buffer): Promise<void> {
-  if (inBackgroundWorker()) { assertClean(await documentScanner().scan(bytes, filename)); return }
+  if (inBackgroundWorker() || scanBypassEnabled()) { assertClean(await documentScanner().scan(bytes, filename)); return }
   const key = `${actor.workspaceId}/scans/${newId()}`
   const storage = storageClient().storage.from(quarantineBucket())
   const { error } = await storage.upload(key, bytes, { upsert: false, contentType: "application/octet-stream" })
