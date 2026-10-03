@@ -128,14 +128,18 @@ test("shared lender term helpers: days convert to months, clamp at both ends, mo
   assert.equal(lenderTermRuleMonths({ value:180, unit:"count" }), null)
   assert.equal(lenderTermRuleMonths({ value:0, unit:"days" }), null)
   assert.equal(lenderTermRuleMonths({ value:-30, unit:"months" }), null)
-  // Scoring's hard-rule helper rounds DOWN and never clamps; estimates still read 180 days as 6 (above).
-  assert.equal(lenderTermRuleWholeMonths({ value:200, unit:"days" }), 6)
-  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"days" }), 5)
-  assert.equal(lenderTermRuleWholeMonths({ value:365, unit:"days" }), 12)
-  assert.equal(lenderTermRuleWholeMonths({ value:24, unit:"months" }), 24)
-  assert.equal(lenderTermRuleWholeMonths({ value:3, unit:"years" }), 36)
-  assert.equal(lenderTermRuleWholeMonths({ value:0, unit:"days" }), null)
-  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"count" }), null)
+  // Scoring's hard-rule helper rounds a max down and a min up and never clamps; estimates still read 180 days as 6 (above).
+  assert.equal(lenderTermRuleWholeMonths({ value:200, unit:"days", operator:"max" }), 6)
+  assert.equal(lenderTermRuleWholeMonths({ value:200, unit:"days", operator:"min" }), 7)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"days", operator:"max" }), 5)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"days", operator:"min" }), 6)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"days", operator:"eq" }), 6)
+  assert.equal(lenderTermRuleWholeMonths({ value:365, unit:"days", operator:"max" }), 12)
+  assert.equal(lenderTermRuleWholeMonths({ value:365, unit:"days", operator:"min" }), 12)
+  assert.equal(lenderTermRuleWholeMonths({ value:24, unit:"months", operator:"max" }), 24)
+  assert.equal(lenderTermRuleWholeMonths({ value:3, unit:"years", operator:"min" }), 36)
+  assert.equal(lenderTermRuleWholeMonths({ value:0, unit:"days", operator:"max" }), null)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"count", operator:"max" }), null)
 })
 
 test("zero or negative lender term is ignored with a warning, not clamped up to 2 months", () => {

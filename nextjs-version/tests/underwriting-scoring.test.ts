@@ -343,7 +343,7 @@ test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pas
   assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
 })
 
-test("hard term rules in days or years are converted to the lender's real term in whole months, rounded down and not clamped", async () => {
+test("hard term rules in days or years are converted to the lender's real term in whole months, rounded toward the lender's side and not clamped", async () => {
   const workspaceId = "workspace-score-term-units"
   const termResult = async (term: Partial<EligibilityRule>, termMonths: number) => {
     const rules = fitRules().map((rule) => rule.field === "term" ? { ...rule, ...term } as EligibilityRule : rule)
@@ -353,10 +353,15 @@ test("hard term rules in days or years are converted to the lender's real term i
   // Days are months, not raw numbers: a 180-day max no longer passes a 12-month request.
   assert.equal(await termResult({ unit: "days", value: 180 }, 12), "fail")
   assert.equal(await termResult({ operator: "min", unit: "days", value: 180 }, 3), "fail")
-  // Rounded down so a deal is never longer than the lender allows: 200 days reads as 6 months.
+  // A maximum rounds DOWN so a deal is never longer than the lender allows: a 200-day max reads as 6 months.
   assert.equal(await termResult({ unit: "days", value: 200 }, 6), "pass")
   assert.equal(await termResult({ unit: "days", value: 200 }, 7), "fail")
-  // 180 days is 5.9 months, so it reads as 5: a 6-month (about 182-day) request exceeds it.
+  // A minimum rounds UP so a deal is never shorter than the lender requires: a 200-day min reads as 7 months.
+  assert.equal(await termResult({ operator: "min", unit: "days", value: 200 }, 6), "fail")
+  assert.equal(await termResult({ operator: "min", unit: "days", value: 200 }, 7), "pass")
+  // An exact term rounds to the nearest month: 180 days = 6.
+  assert.equal(await termResult({ operator: "eq", unit: "days", value: 180 }, 6), "pass")
+  // 180 days is 5.9 months, so as a maximum it reads as 5: a 6-month (about 182-day) request exceeds it.
   assert.equal(await termResult({ unit: "days", value: 180 }, 5), "pass")
   assert.equal(await termResult({ unit: "days", value: 180 }, 6), "fail")
   assert.equal(await termResult({ unit: "days", value: 365 }, 12), "pass")
