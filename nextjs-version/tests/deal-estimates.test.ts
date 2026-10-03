@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { estimateDeal, type EstimateDealInput } from "../src/lib/mca/underwriting/estimates"
 import type { EligibilityRule } from "../src/lib/mca/funders/contracts"
 
-const rule = (field: string, operator: EligibilityRule["operator"], value: number): EligibilityRule => ({ id:`${field}:${operator}`, funderId:"f", field, operator, unit:"usd", value, unspecified:false })
+const rule = (field: string, operator: EligibilityRule["operator"], value: number, unit: EligibilityRule["unit"] = field === "term" ? "months" : "usd"): EligibilityRule => ({ id:`${field}:${operator}`, funderId:"f", field, operator, unit, value, unspecified:false })
 const month = (period: string, deposits: number | null, warnings: string[] = []) => ({ period, deposits, warnings })
 const base: EstimateDealInput = {
   asOf:"2026-10-01T12:00:00Z",
@@ -90,4 +90,28 @@ test("assumptions recalculate and record their source", () => {
 
 test("deterministic output", () => {
   assert.deepEqual(estimateDeal(base), estimateDeal(structuredClone(base)))
+})
+
+test("lender term uses its rule unit, is clamped, and never yields zero payments or infinite amounts", () => {
+  const days = one({}, [rule("term","eq",180,"days")])
+  assert.equal(days.termMonths, 6)
+  assert.equal(days.assumptionsSource.termMonths, "lender")
+  assert.equal(one({}, [rule("term","eq",1,"years")]).termMonths, 12)
+  const tiny = one({}, [rule("term","eq",1,"days")])
+  assert.equal(tiny.status, "estimate")
+  assert.equal(tiny.termMonths, 2)
+  assert.ok(tiny.payments! > 0 && Number.isFinite(tiny.advanceHigh!) && Number.isFinite(tiny.paymentHigh!))
+  assert.ok(tiny.warnings.some((warning) => warning.includes("clamped to 2")))
+  assert.equal(one({}, [rule("term","eq",600)]).termMonths, 18)
+  const unknown = one({}, [rule("term","eq",180,"count")])
+  assert.equal(unknown.termMonths, 6)
+  assert.equal(unknown.assumptionsSource.termMonths, "default")
+  assert.ok(unknown.warnings.some((warning) => warning.includes("unknown unit")))
+})
+
+test("negative existing payments do not raise capacity", () => {
+  const none = one()
+  const negative = one({ positions:[{ estimatedPayment:-5000 }] })
+  assert.equal(negative.inputs.existingDailyPayments, 0)
+  assert.equal(negative.advanceHigh, none.advanceHigh)
 })

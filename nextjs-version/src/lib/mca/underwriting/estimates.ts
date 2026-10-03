@@ -56,11 +56,24 @@ function ruleValue(rules: EligibilityRule[], field: string, operator: Eligibilit
   return typeof rule?.value === "number" && Number.isFinite(rule.value) ? rule.value : undefined
 }
 
-function lenderTerm(rules: EligibilityRule[]): number | undefined {
-  const eq = ruleValue(rules, "term", "eq"), min = ruleValue(rules, "term", "min"), max = ruleValue(rules, "term", "max")
-  if (eq != null) return eq
-  if (min != null && max != null) return Math.round((min + max) / 2)
-  return min ?? max
+const TERM_MONTHS_PER_UNIT: Partial<Record<EligibilityRule["unit"], number>> = { days: 12 / 365, months: 1, years: 12 }
+
+/** A lender term rule in months: converted from its own unit, rules without a known time unit ignored, then clamped. */
+function lenderTerm(rules: EligibilityRule[], warnings: string[]): number | undefined {
+  const months = (operator: EligibilityRule["operator"]) => {
+    const rule = rules.find((item) => item.field === "term" && item.operator === operator && !item.unspecified)
+    if (typeof rule?.value !== "number" || !Number.isFinite(rule.value)) return undefined
+    const factor = TERM_MONTHS_PER_UNIT[rule.unit]
+    if (factor == null) { warnings.push(`Lender term rule ignored: unknown unit "${rule.unit}"`); return undefined }
+    return rule.value * factor
+  }
+  const eq = months("eq"), min = months("min"), max = months("max")
+  const raw = eq ?? (min != null && max != null ? (min + max) / 2 : min ?? max)
+  if (raw == null) return undefined
+  const [low, high] = ESTIMATE_LIMITS.termMonths
+  const clamped = Math.min(high, Math.max(low, Math.round(raw)))
+  if (clamped !== Math.round(raw)) warnings.push(`Lender term ${Math.round(raw * 10) / 10} months clamped to ${clamped}`)
+  return clamped
 }
 
 function broker(name: keyof typeof ESTIMATE_LIMITS, value: number | undefined, warnings: string[]): number | undefined {
@@ -91,7 +104,8 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
   if (positions.length > paid.length) shared.push(`${positions.length - paid.length} existing position(s) have no payment amount and are excluded`)
   // No cadence is stored for positions; treating each payment as daily is the most conservative reading.
   if (paid.length) shared.push("Existing position payments assumed daily")
-  const existingDailyPayments = cents(paid.reduce((sum, position) => sum + position.estimatedPayment!, 0))
+  // A negative payment would raise capacity; treat it as zero.
+  const existingDailyPayments = cents(paid.reduce((sum, position) => sum + Math.max(0, position.estimatedPayment!), 0))
 
   const brokerWarnings: string[] = []
   const brokerFactor = broker("factor", assumptions.factor, brokerWarnings)
@@ -103,7 +117,8 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
   return {
     label: ESTIMATE_LABEL, formulaVersion: ESTIMATE_FORMULA_VERSION, asOf,
     lenders: lenders.map(({ funderId, name, rules }): LenderEstimate => {
-      const ruleTerm = lenderTerm(rules)
+      const termWarnings: string[] = []
+      const ruleTerm = brokerTerm == null ? lenderTerm(rules, termWarnings) : undefined
       const factor = brokerFactor ?? ESTIMATE_DEFAULTS.factor
       const termMonths = brokerTerm ?? ruleTerm ?? ESTIMATE_DEFAULTS.termMonths
       const base = {
@@ -115,7 +130,7 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
           frequency: assumptions.frequency ? "broker" : "default",
           holdbackPct: brokerHoldback != null ? "broker" : "default",
         },
-        warnings: [...brokerWarnings, ...shared],
+        warnings: [...brokerWarnings, ...termWarnings, ...shared],
       } satisfies Partial<LenderEstimate>
       const none = (status: EstimateStatus, reason: string): LenderEstimate => ({
         ...base, status, reason, advanceLow: null, advanceHigh: null, factor: null, termMonths: null,
@@ -134,6 +149,7 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
       if (lenderMin != null && high < lenderMin) return none("below_lender_minimum", `Estimated maximum is below the lender minimum of $${lenderMin}`)
       const low = Math.max(roundDown(Math.min(REVENUE_LOW_MULTIPLE * avgMonthlyDeposits, high)), lenderMin ?? 0)
       const paybackLow = cents(low * factor), paybackHigh = cents(high * factor)
+      if (payments < 1 || ![low, high, paybackLow, paybackHigh].every(Number.isFinite)) return none("insufficient_data", "Term or amounts could not be calculated")
       return {
         ...base, status: "estimate", advanceLow: low, advanceHigh: high, factor, termMonths, payments,
         paybackLow, paybackHigh, paymentLow: cents(paybackLow / payments), paymentHigh: cents(paybackHigh / payments),
