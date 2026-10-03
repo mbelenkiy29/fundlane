@@ -15,11 +15,11 @@ Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto
 
 ## Trigger and run
 
-1. `completeDocumentUpload` (every upload source) reaches a clean scan. With both flags on it enqueues `kind=deal_agent`, `resource_id=<dealId>`, idempotency key `deal-agent:<documentId>`, available 120 seconds later so multi-file uploads and the intake job settle. Enqueue failures are logged as `deal_agent_enqueue_failed` and never fail the upload.
+1. `completeDocumentUpload` (every upload source) reaches a clean scan. With both flags on it enqueues `kind=deal_agent`, `resource_id=<dealId>`, idempotency key `deal-agent:<documentId>`, available 120 seconds later so multi-file uploads and the intake job settle. If the deal already has a queued (unclaimed) `deal_agent` job, that job's `available_at` is pushed to now + 120 seconds instead, never more than 10 minutes after the job was created, so a steady stream of uploads cannot starve the run. Enqueue failures are logged as `deal_agent_enqueue_failed` and never fail the upload.
 2. The worker re-checks the flags and skips deals outside `lead`…`resubmitting`.
 3. The run is claimed by `input_key` (hash of the deal's ready documents as `category:checksum`) with `INSERT … ON CONFLICT`. Identical inputs, duplicate jobs and retries are no-ops (`{skipped:"unchanged"}`); a failed or stale (10 min) run is reclaimed by the retry.
 4. Steps, each recorded in `mca_deal_agent_runs.steps_json` as it finishes: `statements` (skipped when no extraction provider), `completeness`, `lender_fit` (only when complete: `scoreDeal` analyze-only + `getLenderFit`, top N from the workspace analysis settings), `proposals`, `write`.
-5. `write` takes a per-deal advisory lock, supersedes stale pending proposals and inserts new ones. A proposal's identity is target + fingerprint (`c<completenessVersion>` or `s<scoreSnapshotId>`), so a dismissed or approved proposal is not re-proposed until its inputs change.
+5. `write` takes a per-deal advisory lock, supersedes stale pending proposals and inserts new ones. A proposal's identity is target + fingerprint (`c<completenessVersion>` or `s<scoreSnapshotId>`), so a dismissed or approved proposal is not re-proposed until its inputs change. A reviewed proposal (pending with a stored preview) is never replaced: a newer proposal for its target is parked on it (`next_fingerprint`/`next_payload_json`, `error_code=inputs_changed`) unless that fingerprint was already dismissed or approved, and a target the run no longer proposes gets `error_code=no_longer_suggested`. The broker can approve exactly what they reviewed, review again (which promotes the parked proposal first), or dismiss (which inserts the parked proposal as a new pending row). Follow-ups have no review step and are always replaceable.
 
 ## Actions
 
@@ -29,7 +29,13 @@ Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto
 | `schedule_follow_up` | With every document request | — | `saveActivity` follow-up for the approver, all-day, +2 days in the company timezone |
 | `submit_to_funder` | Complete deal; matched funder within top N; preflight clean; no prior non-failed submission | `prepareDealSubmission` exact package preview | `confirmSubmissions` with that preview (duplicate guard, broker-approved delivery) |
 
-States: `pending → executing → approved | failed`, `pending → dismissed`, `pending → superseded`. A 4xx from the send path (stale preview, unusable sender…) returns the action to `pending` with `error_code`; anything else marks it `failed` and is never retried automatically — check the Submissions/Closing records. Every decision writes an audit event (`deal_agent.action_reviewed|approved|dismissed|failed`, `deal_agent.run_completed`).
+States: `pending → executing → approved | failed`, `pending → dismissed`, `pending → superseded`. A 4xx from the send path (stale preview, unusable sender…) returns the action to `pending` with `error_code`; anything else marks it `failed` — check the Submissions/Closing records. Nothing is re-sent automatically.
+
+An action left `executing` for more than 15 minutes (the process died mid-approval) is recovered when the panel loads or a run writes proposals, from the downstream record: a confirmed submission preview, a `sent`/`failed` closing preview, or a matching follow-up activity for the approver marks it `approved`/`failed`; otherwise it returns to `pending` with `error_code=interrupted` and the broker approves again (confirm and delivery are idempotent). Every write is guarded by `status='executing' AND updated_at<cutoff`, so a slow live request is never overwritten.
+
+Dismissing a document request waives the stipulations that action created that are still open (`idempotency_key` prefix `deal-agent:<actionId>:`); stipulations reused from an earlier request stay open.
+
+Every decision writes an audit event (`deal_agent.action_reviewed|approved|dismissed|failed|recovered`, `deal_agent.run_completed`, and `closing.stipulation_waived` per waived stipulation).
 
 ## Permissions
 
@@ -37,7 +43,7 @@ States: `pending → executing → approved | failed`, `pending → dismissed`, 
 
 ## Migration and rollout
 
-- Migration `drizzle/0082_deal_agent.sql` is additive (two tables, RLS + `mca_app` grants). Apply it through the reviewed release process before setting the flag; it depends on the `deals_workspace_id_id_unique` index from `0071`.
+- Migration `drizzle/0082_deal_agent.sql` is additive (two tables including the nullable `next_fingerprint`/`next_payload_json` columns, RLS + `mca_app` grants, policies guarded by `pg_policies` so a re-run is safe). Apply it through the reviewed release process before setting the flag; it depends on the `deals_workspace_id_id_unique` index from `0071`.
 - Rollback: unset `MCA_DEAL_AGENT_ENABLED` (or turn the workspace switch off). The cron runtime stops claiming `deal_agent`; any queued job a worker still claims completes as `{skipped:"disabled"}`. Pending rows remain and reappear in the panel if re-enabled.
 - With `MCA_JOB_RUNTIME=vercel_cron`, `deal_agent` is in the default runtime kinds when the flag is on; it needs no scanner.
 
