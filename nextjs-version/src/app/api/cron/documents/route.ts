@@ -6,6 +6,7 @@ import { withExecutionDeadline } from "@/lib/mca/jobs/execution"
 import { runDueAttachmentJobs } from "@/lib/mca/intake/service"
 import { scheduleIntakeProcessing } from "@/lib/mca/intake/processing"
 import type { BackgroundJobKind } from "@/lib/mca/jobs/queue"
+import { scanBypassEnabled } from "@/lib/mca/documents/scanner"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
     const expected = Buffer.from(`Bearer ${secret}`)
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) throw new AppError(401, "unauthorized", "Invalid scheduler credentials.")
     const started = Date.now()
-    const kinds = process.env.MCA_DOCUMENT_SCANNER === "cloudmersive" ? [...API_KINDS, ...SCAN_KINDS] : API_KINDS
+    const kinds = process.env.MCA_DOCUMENT_SCANNER === "cloudmersive" || scanBypassEnabled() ? [...API_KINDS, ...SCAN_KINDS] : API_KINDS
     let processed = 0
     let attachments = 0
     let scheduled = 0

@@ -18,7 +18,7 @@ import {
   updateDocumentScan,
   type DocumentRecord,
 } from "./repository"
-import { documentScanner, type ScanResult } from "./scanner"
+import { documentScanner, scanBypassEnabled, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
 import { backgroundJobsEnabled, inBackgroundWorker } from "../jobs/queue"
 import { enqueueDocumentScan } from "./scan-job"
@@ -83,7 +83,8 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
   } catch (error) {
     await failUploadCompletion(actor, record, error)
   }
-  if (backgroundJobsEnabled() && !inBackgroundWorker()) {
+  // With the scan bypass there is nothing to wait for, so files become available inline instead of via the documents cron.
+  if (backgroundJobsEnabled() && !inBackgroundWorker() && !scanBypassEnabled()) {
     const pending = record.processingState === "pending_scan"
       ? record
       : await updateDocumentScan(actor.workspaceId, record.id, "pending_scan", "queued", { queued: true }, nowIso())
@@ -98,7 +99,7 @@ async function completeDocumentUpload(actor: DealActor, record: DocumentRecord, 
       await failUploadCompletion(actor, record, error)
     }
   }
-  const malwareScanPerformed = result.status === "clean" || result.status === "infected"
+  const malwareScanPerformed = (result.status === "clean" || result.status === "infected") && result.evidence.scanBypassed !== true
   const state = scanState(result)
   const updated = await updateDocumentScan(actor.workspaceId, record.id, state, result.provider, { checksumVerified: true, ...result.evidence, malwareScanPerformed }, nowIso())
   await recordAuditEvent({
@@ -316,6 +317,8 @@ export function scannerConfiguration(): { configured: boolean; provider: string;
   return {
     configured: scanner.name !== "unconfigured",
     provider: scanner.name,
-    action: scanner.name === "unconfigured" ? "Set MCA_DOCUMENT_SCANNER to cloudmersive, clamdscan, or clamscan, then retry pending uploads." : "Scanner is configured; pending and failed uploads can be retried.",
+    action: scanner.name === "unconfigured" ? "Set MCA_DOCUMENT_SCANNER to cloudmersive, clamdscan, or clamscan, then retry pending uploads."
+      : scanBypassEnabled() ? "Virus scanning is turned off (MCA_DOCUMENT_SCAN_BYPASS=true). Uploads are accepted without a scan."
+      : "Scanner is configured; pending and failed uploads can be retried.",
   }
 }

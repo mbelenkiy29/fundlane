@@ -129,6 +129,36 @@ test("Vercel/jobs-enabled deal uploads enqueue document_scan and do not promote 
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
 })
 
+test("MCA_DOCUMENT_SCAN_BYPASS=true makes jobs-enabled uploads available inline, marked not scanned, and releases pending files", async () => {
+  countingScanner()
+  const pending = await storeDocument(actor(), { dealId, idempotencyKey: "bypass-pending", filename: "pending.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+  assert.equal(pending.processingState, "pending_scan")
+  setDocumentScannerForTests()
+  const previous = process.env.MCA_DOCUMENT_SCAN_BYPASS
+  const originalWarn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: unknown) => { warnings.push(String(message)) }
+  process.env.MCA_DOCUMENT_SCAN_BYPASS = "true"
+  try {
+    const stored = await storeDocument(actor(), { dealId, idempotencyKey: "bypass-upload", filename: "bypass.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    assert.equal(stored.processingState, "clean")
+    const jobs = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_background_jobs WHERE resource_id = ? AND kind = 'document_scan'").get(stored.id)
+    assert.equal(jobs?.count, 0)
+    const row = await getDatabase().prepare<{ scan_provider: string; scan_evidence: string }>("SELECT scan_provider, scan_evidence FROM mca_documents WHERE id = ?").get(stored.id)
+    assert.equal(row?.scan_provider, "not_scanned")
+    const evidence = JSON.parse(row!.scan_evidence)
+    assert.equal(evidence.scanBypassed, true)
+    assert.equal(evidence.malwareScanPerformed, false)
+    assert.match(evidence.note, /^Not scanned/)
+    assert.ok(warnings.some((warning) => warning.includes("document_scan_bypassed")))
+    // The existing retry/recovery path releases a file that was stuck before the bypass was turned on.
+    assert.equal((await retryDocumentScan(actor(), pending.id)).processingState, "clean")
+  } finally {
+    console.warn = originalWarn
+    if (previous === undefined) delete process.env.MCA_DOCUMENT_SCAN_BYPASS; else process.env.MCA_DOCUMENT_SCAN_BYPASS = previous
+  }
+})
+
 test("storeDocument inside the background worker still scans inline without extra document_scan jobs", async () => {
   const scanner = countingScanner()
   const stored = await runAsBackgroundWorker(() => storeDocument(actor(), { dealId, idempotencyKey: "jobs-worker-inline", filename: "inline.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "other_stip", source: "test" }))
