@@ -33,7 +33,7 @@ States: `pending → executing → approved | failed`, `pending → dismissed`, 
 
 An action left `executing` for more than 15 minutes (the process died mid-approval) is recovered when the panel loads or a run writes proposals, from the downstream record: a confirmed submission preview, a `sent`/`failed` closing preview, or a matching follow-up activity for the approver marks it `approved`/`failed`; otherwise it returns to `pending` with `error_code=interrupted` and the broker approves again (confirm and delivery are idempotent). Every write is guarded by `status='executing' AND updated_at<cutoff`, so a slow live request is never overwritten.
 
-Dismissing a document request waives the stipulations that action created that are still open (`idempotency_key` prefix `deal-agent:<actionId>:`); stipulations reused from an earlier request stay open.
+Dismissing a document request waives the stipulations that action created that are still open (`idempotency_key` prefix `deal-agent:<actionId>:`); stipulations reused from an earlier request stay open. Reviewing again after a newer proposal was parked does the same for the items the new version no longer asks for; items in both versions keep their stipulation, which the new preview reuses.
 
 Every decision writes an audit event (`deal_agent.action_reviewed|approved|dismissed|failed|recovered`, `deal_agent.run_completed`, and `closing.stipulation_waived` per waived stipulation).
 

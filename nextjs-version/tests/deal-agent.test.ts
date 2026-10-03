@@ -818,3 +818,68 @@ test("an older run does not overwrite proposals while a newer run is in flight",
   const result = await upsertProposals(documentScanActor({ workspaceId, dealId, id: "race" }), dealId, `older-${dealId}`, [{ kind: "request_documents", targetKey: "request_documents", fingerprint: "c1", payload: {} }])
   assert.deepEqual(result, { skipped: "newer_run" })
 })
+
+test("re-review waives only the stipulations the new version drops; shared ones are reused", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const now = new Date().toISOString()
+  const runId = `revise-${dealId}`
+  await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at) VALUES (?,?,?,?,'running',?,?)`).run(runId, workspaceId, dealId, runId, now, now)
+  const actor = documentScanActor({ workspaceId, dealId, id: "revise" })
+  const A = { category: "driver_license", label: "Driver license (front)", code: "missing_driver_license" }
+  const B = { category: "voided_check", label: "Voided business check", code: "missing_voided_check" }
+  const C = { category: "application", label: "Signed merchant application", code: "missing_application" }
+  const request = (fingerprint: string, items: unknown[]) => [{ kind: "request_documents" as const, targetKey: "request_documents", fingerprint, payload: { items, otherFindings: [] } }]
+  await upsertProposals(actor, dealId, runId, request("c1", [A, B]))
+  const action = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  await decide(broker, dealId, action.id, "review", { senderId })
+  const stips = () => getDatabase().prepare<{ id: string; status: string; idempotency_key: string }>("SELECT id,status,idempotency_key FROM mca_closing_stipulations WHERE deal_id=?").all(dealId)
+  const byKey = async (category: string) => (await stips()).find(row => row.idempotency_key === `deal-agent:${action.id}:${category}`)
+  const [a, b] = [(await byKey("driver_license"))!, (await byKey("voided_check"))!]
+  await upsertProposals(actor, dealId, runId, request("c2", [B, C]))
+  assert.equal((await actionRow(dealId, action.id)).next_fingerprint, "c2")
+  const fresh = (await decide(broker, dealId, action.id, "review", { senderId })).preview as { body: string }
+  const after = await stips()
+  assert.equal(after.find(row => row.id === a.id)?.status, "waived")
+  assert.equal(after.find(row => row.id === b.id)?.status, "open")
+  const c = (await byKey("application"))!
+  assert.equal(c.status, "open")
+  assert.equal(after.length, 3)
+  assert.match(fresh.body, new RegExp(`secure-upload:${b.id}`))
+  assert.match(fresh.body, new RegExp(`secure-upload:${c.id}`))
+  assert.doesNotMatch(fresh.body, new RegExp(`secure-upload:${a.id}`))
+  const waivedAudits = (id: string) => getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE action='closing.stipulation_waived' AND resource_id=?").get(id)
+  assert.equal((await waivedAudits(a.id))?.n, 1)
+  assert.equal((await waivedAudits(b.id))?.n, 0)
+})
+
+test("a run completes when a reviewed row and a superseded twin share the target", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const reviewed = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  const preview = (await decide(broker, dealId, reviewed.id, "review", { senderId })).preview as { id: string }
+  // Learn the version-2 fingerprint from a real run, then rebuild the crash state: reviewed v1 plus a superseded v2 twin.
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const v2 = (await actionRow(dealId, reviewed.id)).next_fingerprint!
+  assert.ok(v2 && v2 !== reviewed.fingerprint)
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET next_fingerprint=NULL,next_payload_json=NULL,error_code=NULL WHERE id=?").run(reviewed.id)
+  const { run_id: runId } = (await getDatabase().prepare<{ run_id: string }>("SELECT run_id FROM mca_deal_agent_actions WHERE id=?").get(reviewed.id))!
+  const now = new Date().toISOString()
+  const twinId = `twin-${dealId}`
+  await getDatabase().prepare(`INSERT INTO mca_deal_agent_actions (id,workspace_id,deal_id,run_id,kind,target_key,fingerprint,payload_json,status,created_at,updated_at)
+    VALUES (?,?,?,?,'request_documents','request_documents',?,?,'superseded',?,?)`).run(twinId, workspaceId, dealId, runId, v2, reviewed.payload_json, now, now)
+  // A document that leaves completeness unchanged: a new run that proposes v2 again.
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "other_stip"))
+  await runAgent(dealId)
+  const runs = await runsFor(dealId)
+  assert.equal(runs.length, 3)
+  assert.equal(runs[2].state, "completed", JSON.stringify(runs[2]))
+  const actions = await actionsFor(dealId)
+  const row = actions.find(item => item.id === reviewed.id)!
+  assert.deepEqual([row.status, row.preview_id, row.fingerprint, row.next_fingerprint, row.error_code], ["pending", preview.id, reviewed.fingerprint, v2, "inputs_changed"])
+  assert.equal(actions.find(item => item.id === twinId)?.status, "superseded")
+  assert.equal(actions.filter(item => item.kind === "request_documents" && item.status === "pending").length, 1)
+})
