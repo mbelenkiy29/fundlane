@@ -80,6 +80,26 @@ test("scrubEvent drops expected 4xx RequestErrors but keeps server failures", ()
   assert.ok(scrubEvent({}, { originalException: new Error("Boom") }))
 })
 
+test("scrubEvent drops fetch failures re-raised by a browser extension's fetch wrapper (FUNDLANE-1, FUNDLANE-2)", () => {
+  const unhandled = { type: "auto.browser.global_handlers.onunhandledrejection", handled: false }
+  const event = () => ({ exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { ...unhandled } }] } })
+  const networkError = (message: string, stack: string) => Object.assign(new TypeError(message), { stack: `TypeError: ${message}\n${stack}` })
+  // Production stack: Similarweb's frame_ant.js wraps window.fetch and leaks the rejection our poller already caught.
+  const similarweb = "    at o (chrome-extension://hoklmmgfnpapgjgcpechhaamimifchmp/frame_ant/frame_ant.js:2:14445)\n    at window.fetch (chrome-extension://hoklmmgfnpapgjgcpechhaamimifchmp/frame_ant/frame_ant.js:2:14510)\n    at requestJson (https://fundlane.io/_next/static/chunks/app.js:16:26)"
+  const firstParty = "    at requestJson (https://fundlane.io/_next/static/chunks/app.js:16:26)"
+  assert.equal(scrubEvent(event(), { originalException: networkError("Failed to fetch", similarweb) }), null)
+  assert.equal(scrubEvent(event(), { originalException: networkError("Failed to fetch (fundlane.io)", similarweb) }), null)
+  assert.equal(scrubEvent(event(), { originalException: networkError("Load failed", "fetch@safari-web-extension://abc/content.js:1:2") }), null)
+  assert.equal(scrubEvent(event(), { originalException: networkError("NetworkError when attempting to fetch resource.", "fetch@moz-extension://abc/content.js:1:2") }), null)
+  // Everything else is still reported.
+  assert.ok(scrubEvent(event(), { originalException: networkError("Failed to fetch", firstParty) }), "a fetch failure without an extension frame is kept")
+  assert.ok(scrubEvent(event(), { originalException: networkError("Cannot read properties of undefined", similarweb) }), "a real TypeError is kept")
+  assert.ok(scrubEvent(event(), { originalException: Object.assign(new Error("Failed to fetch"), { stack: similarweb }) }), "a non-TypeError is kept")
+  const handled = { exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { type: "generic", handled: true } }] } }
+  assert.ok(scrubEvent(handled, { originalException: networkError("Failed to fetch", similarweb) }), "an explicitly captured failure is kept")
+  assert.ok(scrubEvent(event(), { originalException: new RequestError(502, "Bad gateway") }), "server failures are kept")
+})
+
 test("scrubEvent scrubs replay event URLs", () => {
   const event = scrubEvent({ type: "replay_event", urls: ["https://app.example/pipeline?deal=1", "/merchant-upload/abc"] })
   assert.deepEqual(event!.urls, ["https://app.example/pipeline?deal=[Filtered]", "/merchant-upload/[token]"])

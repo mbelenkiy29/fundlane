@@ -23,6 +23,9 @@ const MESSAGE_LIMIT = 1000
 const LOG_LIMIT = 4000
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
 const NODE_DEPRECATION = /^\(node:\d+\) \[DEP\d+\] DeprecationWarning/
+// Chrome, Safari and Firefox wording for a fetch that got no HTTP response; Sentry may append " (host)".
+const FETCH_NETWORK_FAILURE = /^(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.)(?: \([^)]*\))?$/
+const EXTENSION_SCRIPT = /\b(?:chrome|moz|safari(?:-web)?)-extension:\/\//
 
 /** `redactDiagnosticText` that keeps record and correlation UUIDs readable for tracing. */
 function redact(value: string, max: number): string {
@@ -90,7 +93,7 @@ interface EventLike {
   message?: string
   logentry?: { message?: string }
   transaction?: string
-  exception?: { values?: Array<{ value?: string }> }
+  exception?: { values?: Array<{ value?: string; mechanism?: { type?: string } }> }
   request?: { url?: string; headers?: Record<string, string>; cookies?: unknown; data?: unknown; query_string?: unknown }
   contexts?: Record<string, Dict | undefined>
   breadcrumbs?: BreadcrumbLike[]
@@ -99,9 +102,23 @@ interface EventLike {
   urls?: string[]
 }
 
+/**
+ * A browser extension that wraps `window.fetch` (e.g. Similarweb's frame_ant.js) can
+ * re-raise a network failure our code already caught as an unhandled rejection.
+ * Only that exact case is dropped: a no-response fetch TypeError, reported by the
+ * global unhandled-rejection handler, whose stack runs through an extension script.
+ */
+export function isExtensionFetchNoise(event: EventLike, hint?: { originalException?: unknown }): boolean {
+  const error = hint?.originalException
+  if (!(error instanceof Error) || error.name !== "TypeError" || !FETCH_NETWORK_FAILURE.test(error.message)) return false
+  if (!event.exception?.values?.some((value) => value.mechanism?.type?.endsWith("onunhandledrejection"))) return false
+  return EXTENSION_SCRIPT.test(error.stack ?? "")
+}
+
 export function scrubEvent<T extends EventLike>(event: T, hint?: { originalException?: unknown }): T | null {
   // Expected 4xx API responses are shown to the user and are not defects.
   if (hint?.originalException instanceof RequestError && hint.originalException.status < 500) return null
+  if (isExtensionFetchNoise(event, hint)) return null
 
   if (typeof event.message === "string") event.message = redact(event.message, MESSAGE_LIMIT)
   if (typeof event.logentry?.message === "string") event.logentry.message = redact(event.logentry.message, MESSAGE_LIMIT)
