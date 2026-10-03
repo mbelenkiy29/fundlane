@@ -141,6 +141,48 @@ export async function updateDocumentScan(
   return (await findDocumentById(workspaceId, id))!
 }
 
+/** The scan columns exactly as stored, for compare-and-set writes. */
+export interface DocumentScanSnapshot {
+  processingState: string
+  scanProvider: string | null
+  scanEvidence: string | null
+  scanAttemptedAt: string | null
+}
+
+/** A document plus the raw scan columns read in the same query. */
+export async function findDocumentWithScanSnapshot(workspaceId: string, id: string): Promise<{ record: DocumentRecord; seen: DocumentScanSnapshot } | undefined> {
+  const row = await db().prepare<DocumentRow>("SELECT * FROM mca_documents WHERE workspace_id = ? AND id = ?").get(workspaceId, id)
+  return row ? { record: fromRow(row), seen: { processingState: row.processing_state, scanProvider: row.scan_provider, scanEvidence: row.scan_evidence, scanAttemptedAt: row.scan_attempted_at } } : undefined
+}
+
+// Null-safe match on every scan column: a concurrent scan that keeps the same state but changes the provider,
+// evidence (bypass marker) or scan time must not be overwritten.
+const SCAN_UNCHANGED = `workspace_id = ? AND id = ? AND processing_state = ?
+    AND scan_provider IS NOT DISTINCT FROM CAST(? AS text) AND scan_evidence IS NOT DISTINCT FROM CAST(? AS text)
+    AND scan_attempted_at IS NOT DISTINCT FROM CAST(? AS text)`
+const seenValues = (workspaceId: string, id: string, seen: DocumentScanSnapshot) =>
+  [workspaceId, id, seen.processingState, seen.scanProvider, seen.scanEvidence, seen.scanAttemptedAt]
+
+/** Compare-and-set scan update: writes only if the scan columns still equal `seen`. Returns false when nothing was written. */
+export async function updateDocumentScanIfUnchanged(executor: DbExecutor, workspaceId: string, id: string, seen: DocumentScanSnapshot,
+  next: { state: DocumentProcessingState; provider: string; evidence: Record<string, unknown>; attemptedAt: string }): Promise<boolean> {
+  const { changes } = await executor.prepare(`UPDATE mca_documents SET processing_state = ?, scan_provider = ?, scan_evidence = ?, scan_attempted_at = ?, updated_at = ?
+    WHERE ${SCAN_UNCHANGED}`).run(next.state, next.provider, JSON.stringify(next.evidence), next.attemptedAt, next.attemptedAt, ...seenValues(workspaceId, id, seen))
+  return changes > 0
+}
+
+/**
+ * Compare-and-set: adds the "not scanned" marker to an available file without changing its state or scan time,
+ * only if the scan columns still equal `seen`. Returns false when nothing was written.
+ */
+export async function markDocumentNotScannedIfUnchanged(executor: DbExecutor, workspaceId: string, id: string, seen: DocumentScanSnapshot,
+  evidence: Record<string, unknown>, updatedAt: string): Promise<boolean> {
+  if (seen.processingState !== "clean" && seen.processingState !== "ready") return false
+  const { changes } = await executor.prepare(`UPDATE mca_documents SET scan_provider = 'not_scanned', scan_evidence = ?, updated_at = ?
+    WHERE ${SCAN_UNCHANGED}`).run(JSON.stringify(evidence), updatedAt, ...seenValues(workspaceId, id, seen))
+  return changes > 0
+}
+
 export async function updateDocumentDisplayFilename(workspaceId: string, id: string, displayFilename: string, updatedAt: string): Promise<DocumentRecord> {
   await db().prepare("UPDATE mca_documents SET display_filename = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
     .run(displayFilename, updatedAt, workspaceId, id)

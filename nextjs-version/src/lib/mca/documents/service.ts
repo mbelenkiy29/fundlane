@@ -1,6 +1,6 @@
 import "server-only"
 
-import { isDocumentReady } from "./contracts"
+import { isDocumentReady, wasScanBypassed } from "./contracts"
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { AppError } from "../errors"
@@ -28,7 +28,9 @@ const ALLOWED_MIME_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"
 
 function summary(record: DocumentRecord): DocumentSummary {
   const { id, dealId, workspaceId, originalFilename, displayFilename, mimeType, byteLength, checksum, category, version, createdAt, processingState } = record
-  return { id, dealId, workspaceId, originalFilename, displayFilename, mimeType, byteLength, checksum, category, version, createdAt, processingState }
+  const result: DocumentSummary = { id, dealId, workspaceId, originalFilename, displayFilename, mimeType, byteLength, checksum, category, version, createdAt, processingState }
+  if (isDocumentReady(processingState) && wasScanBypassed(record.scanProvider, record.scanEvidence)) result.scanBypassed = true
+  return result
 }
 
 function normalizedFilename(value: string): string {

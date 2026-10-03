@@ -5,7 +5,7 @@ import { AppError } from "../errors"
 import { newId, nowIso, recordAuditEvent } from "../db"
 import { createDeal, getDeal, getDealForDocument, updateDealRecord } from "../deals/service"
 import type { DealActor, DealDetail, DealOwnerInput, DealRecord, DealWriteInput } from "../deals/schema"
-import type { DocumentProcessingState } from "./contracts"
+import { wasScanBypassed, type DocumentProcessingState } from "./contracts"
 import { extractApplication } from "./extraction"
 import { documentScanner, scanBypassEnabled, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
@@ -27,6 +27,8 @@ export interface ApplicationDraftReview {
   id: string; filename: string; processingState: DocumentProcessingState; extractionVersion: number; fields: DealWriteInput
   approvedFields: DealWriteInput; evidence: Record<string, { confidence: number; page?: number; text?: string; unknown?: boolean }>
   warnings: string[]; lowConfidenceFields: string[]; provider?: string; state: "uploaded" | "review" | "confirmed"; confirmedDealId?: string
+  /** Present (true) only for a clean draft that the scan bypass let through without a virus scan. */
+  scanBypassed?: true
 }
 
 function view(record: ApplicationDraftRecord): ApplicationDraftReview {
@@ -34,7 +36,8 @@ function view(record: ApplicationDraftRecord): ApplicationDraftReview {
   return { id: record.id, filename: record.filename, processingState: record.processingState, extractionVersion: record.extractionVersion,
     fields: record.fields as DealWriteInput, approvedFields: record.approvedFields as DealWriteInput, evidence, warnings: record.warnings,
     lowConfidenceFields: Object.entries(evidence).filter(([, item]) => item.unknown || item.confidence < 0.8).map(([field]) => field),
-    provider: record.extractionProvider, state: record.state, confirmedDealId: record.confirmedDealId }
+    provider: record.extractionProvider, state: record.state, confirmedDealId: record.confirmedDealId,
+    ...(record.processingState === "clean" && wasScanBypassed(record.scanProvider, record.scanEvidence) ? { scanBypassed: true as const } : {}) }
 }
 
 function cleanFilename(value: string): string {

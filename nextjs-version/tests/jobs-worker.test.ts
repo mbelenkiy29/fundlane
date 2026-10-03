@@ -145,6 +145,7 @@ test("MCA_DOCUMENT_SCAN_BYPASS=true makes jobs-enabled uploads available inline,
   try {
     const stored = await storeDocument(actor(), { dealId, idempotencyKey: "bypass-upload", filename: "bypass.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
     assert.equal(stored.processingState, "clean")
+    assert.equal(stored.scanBypassed, true)
     const jobs = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_background_jobs WHERE resource_id = ? AND kind = 'document_scan'").get(stored.id)
     assert.equal(jobs?.count, 0)
     const row = await getDatabase().prepare<{ scan_provider: string; scan_evidence: string }>("SELECT scan_provider, scan_evidence FROM mca_documents WHERE id = ?").get(stored.id)
@@ -243,6 +244,7 @@ test("scan bypass keeps quarantined and scan_failed application drafts blocked o
   countingScanner()
   const draftPdf = (label: string) => new Uint8Array(Buffer.from(`%PDF-1.4\n${label}\n%%EOF\n`))
   const infected = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-infected", filename: "infected.pdf", mimeType: "application/pdf", bytes: draftPdf("infected") })
+  assert.equal(infected.scanBypassed, undefined)
   const failed = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-failed", filename: "failed.pdf", mimeType: "application/pdf", bytes: draftPdf("failed") })
   const now = new Date().toISOString()
   await updateApplicationDraftScan(actor().workspaceId, infected.id, "quarantined", "fixture", { infected: true }, now)
@@ -259,6 +261,7 @@ test("scan bypass keeps quarantined and scan_failed application drafts blocked o
     // A never-scanned draft is still accepted, and its audit does not claim a real scan.
     const fresh = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-fresh", filename: "fresh.pdf", mimeType: "application/pdf", bytes: draftPdf("fresh") })
     assert.equal(fresh.processingState, "clean")
+    assert.equal(fresh.scanBypassed, true)
     const audit = await getDatabase().prepare<{ metadata: unknown }>("SELECT metadata FROM audit_events WHERE resource_id = ? AND action = 'application_draft.scanned' ORDER BY created_at DESC LIMIT 1").get(fresh.id)
     const metadata = typeof audit?.metadata === "string" ? JSON.parse(audit.metadata) : audit?.metadata
     assert.equal((metadata as { actualScannerEvidence?: boolean }).actualScannerEvidence, false)
