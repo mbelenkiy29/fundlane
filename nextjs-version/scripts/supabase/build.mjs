@@ -14,7 +14,7 @@ for (const name of targets) {
     outfile: `${output}/runtime.js`,
     bundle: true, minify: true, platform: "node", format: "esm", target: "es2022", metafile: true,
     banner: { js: 'import { Buffer } from "node:buffer"; import process from "node:process"; import { createRequire as __edgeCreateRequire } from "node:module"; const require = __edgeCreateRequire(import.meta.url); const global = globalThis;' },
-    alias: { "server-only": "./scripts/assistant/server-only.cjs", "next/headers": "./scripts/supabase/edge-cookies.ts" },
+    alias: { "server-only": "./scripts/assistant/server-only.cjs", "next/headers": "./scripts/supabase/edge-cookies.ts", "next/server": "./scripts/supabase/edge-next-server.ts" },
     external: ["pg-native"],
     plugins: [{ name: "edge-node-builtins", setup(builder) {
       builder.onResolve({ filter: /\/gcm-runtime$/ }, () => ({ path: resolve(root, "src/lib/mca/gcm-portable.ts") }))
