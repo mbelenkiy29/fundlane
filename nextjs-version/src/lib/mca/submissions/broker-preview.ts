@@ -10,7 +10,7 @@ import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
 import { backgroundJobsEnabled } from "../jobs/queue"
 import type { ApprovedSubmissionPackage, QueueSubmissionsResult } from "./contracts"
-import { prepareApprovedSubmissionEmail } from "./email-templates"
+import { prepareApprovedSubmissionEmail, displayFrom } from "./email-templates"
 import { eligibleAtFromReason } from "./duplicate-rules"
 import { toQueuedSummary } from "./jobs"
 import { processJobDelivery } from "./outbox"
@@ -60,7 +60,7 @@ function previewView(id: string, expiresAt: string, snapshot: Snapshot): BrokerS
   return { id, expiresAt, destinations: snapshot.destinations.map(({ funderId, name, route, errors, approved }) => {
     let destination = route.destination
     if (route.kind === "custom_webhook") { const target = resolveWebhookTarget(destination); destination = target.ok ? target.target.url : "Webhook" }
-    return { funderId, name, method: route.kind, destination, ...providerReadinessView(route), errors, documents: (approved?.documents ?? []).map(d => ({ id: d.documentId, filename: approved?.filenames[d.originalDocumentId] ?? d.documentId, checksum: d.checksum })), email: approved?.email ? { from: approved.email.fromAddress, to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined }
+    return { funderId, name, method: route.kind, destination, ...providerReadinessView(route), errors, documents: (approved?.documents ?? []).map(d => ({ id: d.documentId, filename: approved?.filenames[d.originalDocumentId] ?? d.documentId, checksum: d.checksum })), email: approved?.email ? { from: displayFrom(approved.email), to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined }
   }) }
 }
 export async function prepareDealSubmission(actor: DealActor, dealId: string, funderIds: unknown): Promise<BrokerSubmissionPreview> {

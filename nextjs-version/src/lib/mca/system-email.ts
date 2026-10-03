@@ -42,14 +42,32 @@ export function systemEmailConfiguration(selectedProvider?: SystemProvider): Fro
 }
 
 /** Explicit frozen provider path, independent of the legacy sendSystemEmail environment selector. */
-type FrozenSystemEmailInput = Omit<Parameters<typeof requestSystemEmail>[0], "provider" | "apiKey" | "from" | "baseUrl">
+type FrozenSystemEmailInput = Omit<Parameters<typeof requestSystemEmail>[0], "provider" | "apiKey" | "from" | "baseUrl"> & {
+  /** Optional display name for this message. The frozen From address (and so the sending account) never changes. */
+  fromName?: string
+}
 
-export async function requestFrozenSystemEmail(input: FrozenSystemEmailInput, configuration: FrozenSystemEmailConfiguration, options?: { preserveProvider?: boolean }): Promise<Awaited<ReturnType<typeof requestSystemEmail>>> {
+/** Display name of a `Name <address>` sender, or undefined for a bare address. */
+export function senderDisplayName(from: string): string | undefined {
+  const name = from.match(/^(.*?)\s*<[^<>]+>\s*$/)?.[1]?.trim().replace(/^"(.*)"$/, "$1").trim()
+  return name || undefined
+}
+
+/** Replace only the display name of a From header; header-unsafe characters are dropped. */
+export function withSenderDisplayName(from: string, fromName: string | undefined): string {
+  const address = from.match(/<([^<>]+)>\s*$/)?.[1]?.trim() ?? from.trim()
+  const name = (fromName ?? "").replace(/[\u0000-\u001f\u007f<>"\\]/g, " ").replace(/\s+/g, " ").trim()
+  if (!name || name.toLowerCase() === address.toLowerCase()) return from
+  // RFC 5322: a display name with specials (comma, period, etc.) must be a quoted string.
+  return /[()[\]:;@,.]/.test(name) ? `"${name}" <${address}>` : `${name} <${address}>`
+}
+
+export async function requestFrozenSystemEmail({ fromName, ...input }: FrozenSystemEmailInput, configuration: FrozenSystemEmailConfiguration, options?: { preserveProvider?: boolean }): Promise<Awaited<ReturnType<typeof requestSystemEmail>>> {
   let current: FrozenSystemEmailConfiguration
   try { current = systemEmailConfiguration(options?.preserveProvider ? configuration.provider : undefined) } catch { throw new AppError(503, "onboarding_email_provider_unavailable", "The frozen service email provider is unavailable.") }
   if (JSON.stringify(current) !== JSON.stringify(configuration)) throw new AppError(409, "onboarding_email_provider_changed", "Review the changed service email provider configuration.")
   const credentials = systemEmailCredentials(configuration.provider)!
-  return requestSystemEmail({ ...input, provider: configuration.provider, apiKey: credentials.apiKey, from: configuration.from, ...(input.replyTo !== undefined ? {} : configuration.replyTo ? { replyTo: configuration.replyTo } : {}), baseUrl: new URL(configuration.endpoint).origin })
+  return requestSystemEmail({ ...input, provider: configuration.provider, apiKey: credentials.apiKey, from: withSenderDisplayName(configuration.from, fromName), ...(input.replyTo !== undefined ? {} : configuration.replyTo ? { replyTo: configuration.replyTo } : {}), baseUrl: new URL(configuration.endpoint).origin })
 }
 
 /** Send a frozen payload without substituting another provider or account. */
