@@ -14,6 +14,7 @@ import { criteriaReadiness } from "../funders/criteria-readiness"
 import type { EligibilityRule, FunderRecord } from "../funders/contracts"
 import type { CompletenessResult, ExistingPositionCandidate, FunderScore, MetricEvidence, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { getCompleteness } from "./completeness"
+import { lenderTermRuleWholeMonths } from "./estimates"
 import {
   AUTO_SELECT_GRADES,
   DEFAULT_ADB_SCALE,
@@ -261,6 +262,11 @@ function specifiedRules(rules: EligibilityRule[], field: string): EligibilityRul
   return rules.filter((rule) => rule.field === field && !rule.unspecified)
 }
 
+/** "minimum", "maximum" or "limit", so unknown-input reasons read correctly for the rule's operator. */
+function limitWord(rule: EligibilityRule): string {
+  return rule.operator === "min" ? "minimum" : rule.operator === "max" ? "maximum" : "limit"
+}
+
 function compareUnknown(rule: EligibilityRule, detail: string): Reason {
   return { ruleId: `hard.${rule.field}`, result: "unknown", detail }
 }
@@ -417,43 +423,51 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
       }
       if (field === "time_in_business") {
         reasons.push(inputs.tibMonths == null
-          ? compareUnknown(rule, "Time in business is unknown, so the funder's minimum cannot pass.")
+          ? compareUnknown(rule, `Time in business is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.tibMonths, "Time in business (months)", String(inputs.tibMonths)))
         continue
       }
       if (field === "fico") {
         reasons.push(inputs.fico == null
-          ? compareUnknown(rule, "FICO is unknown, so the funder's minimum cannot pass.")
+          ? compareUnknown(rule, `FICO is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.fico, "FICO", String(inputs.fico)))
         continue
       }
       if (field === "revenue") {
         reasons.push(inputs.revenueUnknown || inputs.monthlyRevenue == null
-          ? compareUnknown(rule, "Monthly revenue is unknown, so the funder's minimum cannot pass.")
+          ? compareUnknown(rule, `Monthly revenue is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.monthlyRevenue, "Monthly revenue", String(inputs.monthlyRevenue)))
         continue
       }
       if (field === "average_daily_balance") {
         reasons.push(inputs.adbUnknown || inputs.averageDailyBalance == null
-          ? compareUnknown(rule, "Average daily balance is unknown, so the funder's minimum cannot pass.")
+          ? compareUnknown(rule, `Average daily balance is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.averageDailyBalance, "Average daily balance", String(inputs.averageDailyBalance)))
         continue
       }
       if (field === "requested_amount") {
         reasons.push(inputs.requestedAmount == null
-          ? compareUnknown(rule, "Requested amount is unknown, so the funder's maximum cannot pass.")
+          ? compareUnknown(rule, `Requested amount is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.requestedAmount, "Requested amount", String(inputs.requestedAmount)))
         continue
       }
       if (field === "term") {
-        reasons.push(inputs.termMonths == null
-          ? compareUnknown(rule, "Term is unknown, so the funder's maximum cannot pass.")
-          : evaluateNumeric(rule, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
+        if (inputs.termMonths == null) {
+          reasons.push(compareUnknown(rule, `Term is unknown, so the funder's ${limitWord(rule)} cannot pass.`))
+          continue
+        }
+        // Lender term rules can be in days or years. A maximum uses a 30-day month rounded down, a minimum uses a
+        // 365/12-day month rounded up, and an exact term must be a whole number of months (lenderTermRuleWholeMonths).
+        // The estimates' 2-18 month clamp is not applied here.
+        const ruleMonths = lenderTermRuleWholeMonths(rule)
+        reasons.push(ruleMonths == null
+          ? compareUnknown(rule, `Funder term rule has no usable value or time unit, or is under one month (${rule.value} ${rule.unit}).`)
+          : evaluateNumeric({ ...rule, value: ruleMonths }, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
         continue
       }
       if (field === "deposit_count") {
         reasons.push(inputs.depositUnknown || inputs.depositCount == null
-          ? compareUnknown(rule, "Deposit count is unknown, so the funder's minimum cannot pass.")
+          ? compareUnknown(rule, `Deposit count is unknown, so the funder's ${limitWord(rule)} cannot pass.`)
           : evaluateNumeric(rule, inputs.depositCount, "Deposit count", String(inputs.depositCount)))
         continue
       }

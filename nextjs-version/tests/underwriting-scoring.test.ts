@@ -343,6 +343,67 @@ test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pas
   assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
 })
 
+test("hard term rules: max = floor(days/30), min = ceil(days*12/365), eq whole months only, no clamp", async () => {
+  const workspaceId = "workspace-score-term-units"
+  const term = async (rule: Partial<EligibilityRule>, termMonths: number) => {
+    const rules = fitRules().map((item) => item.field === "term" ? { ...item, ...rule } as EligibilityRule : item)
+    const score = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths }, funderRecord("term-units", workspaceId, "Term Units"), rules)
+    return score.reasons.find((reason) => reason.ruleId === "hard.term")
+  }
+  const result = async (rule: Partial<EligibilityRule>, termMonths: number) => (await term(rule, termMonths))?.result
+  const max = (value: number): Partial<EligibilityRule> => ({ operator: "max", unit: "days", value })
+  const min = (value: number): Partial<EligibilityRule> => ({ operator: "min", unit: "days", value })
+  const eq = (value: number): Partial<EligibilityRule> => ({ operator: "eq", unit: "days", value })
+  // Maximums: a 30-day month, rounded down.
+  assert.equal(await result(max(180), 6), "pass")
+  assert.equal(await result(max(180), 7), "fail")
+  assert.equal(await result(max(180), 12), "fail")
+  assert.equal(await result(max(365), 12), "pass")
+  assert.equal(await result(max(365), 13), "fail")
+  assert.equal(await result(max(200), 6), "pass")
+  assert.equal(await result(max(200), 7), "fail")
+  // Minimums: a 365/12 month, rounded up.
+  assert.equal(await result(min(365), 12), "pass")
+  assert.equal(await result(min(365), 11), "fail")
+  assert.equal(await result(min(90), 3), "pass")
+  assert.equal(await result(min(90), 2), "fail")
+  assert.equal(await result(min(200), 7), "pass")
+  assert.equal(await result(min(200), 6), "fail")
+  // 190 days = 6.25 months: rounding up gives 7. Round-to-nearest would give 6 and wrongly pass a 6-month request.
+  assert.equal(await result(min(190), 6), "fail")
+  assert.equal(await result(min(190), 7), "pass")
+  // Exact terms match only a whole number of months.
+  assert.equal(await result(eq(365), 12), "pass")
+  assert.equal(await result(eq(180), 6), "pass")
+  assert.equal(await result(eq(180), 7), "fail")
+  for (const months of [6, 7]) assert.equal(await result(eq(200), months), "fail", `200 days equals no whole month (${months})`)
+  // A max under one month is unknown (needs review), not 0.
+  assert.equal(await result(max(20), 1), "unknown")
+  // No 2-18 clamp on hard rules; years are x12; months unchanged.
+  assert.equal(await result({ operator: "max", unit: "months", value: 24 }, 20), "pass")
+  assert.equal(await result({ operator: "max", unit: "months", value: 24 }, 25), "fail")
+  assert.equal(await result({ operator: "max", unit: "years", value: 3 }, 36), "pass")
+  assert.equal(await result({ operator: "max", unit: "years", value: 3 }, 37), "fail")
+  assert.equal(await result({ operator: "min", unit: "years", value: 1 }, 11), "fail")
+  assert.equal(await result({ operator: "max", unit: "months", value: 12 }, 12), "pass")
+  assert.equal(await result({ operator: "max", unit: "months", value: 12 }, 13), "fail")
+  // A non-time unit or a zero/negative value cannot pass or fail; it needs review.
+  assert.equal(await result({ unit: "count", value: 180 }, 6), "unknown")
+  assert.equal(await result(max(0), 6), "unknown")
+  assert.equal(await result({ operator: "max", unit: "months", value: -6 }, 6), "unknown")
+})
+
+test("unknown-term reasons name the rule's own limit (minimum vs maximum)", async () => {
+  const workspaceId = "workspace-score-term-wording"
+  const detail = async (operator: EligibilityRule["operator"]) => {
+    const rules = fitRules().map((item) => item.field === "term" ? { ...item, operator } as EligibilityRule : item)
+    const score = await evaluateFunderScore(actor(workspaceId), { ...harborInputs, termMonths: undefined }, funderRecord("term-wording", workspaceId, "Term Wording"), rules)
+    return score.reasons.find((reason) => reason.ruleId === "hard.term")?.detail
+  }
+  assert.equal(await detail("min"), "Term is unknown, so the funder's minimum cannot pass.")
+  assert.equal(await detail("max"), "Term is unknown, so the funder's maximum cannot pass.")
+})
+
 test("industry not_in 7132 fails NAICS prefix 713210", async () => {
   assert.equal(naicsPrefixMatch("7132", "713210"), true)
   assert.equal(naicsPrefixMatch("713210", "7132"), true)
