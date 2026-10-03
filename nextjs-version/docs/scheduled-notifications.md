@@ -60,6 +60,8 @@ With `MCA_RENEWAL_ALERTS_ENABLED=true` (default off; only `"true"` enables), eac
 
 Renewal alert emails go to brokers through the system email provider (Resend, or useSend as the fallback). They never use a company's connected mailbox, and merchants never receive them. **Infrastructure is the single owner** of this rollout and of the `/api/cron/comms` schedule. Nobody else should install the schedule or flip these flags.
 
+**How the schedule runs:** install `/api/cron/comms` as exactly one Supabase `pg_cron` job that calls the route over HTTPS, the same way `/api/cron/billing` already runs (`fundlane-billing-maintenance`). Do not also add a Vercel cron: `vercel.json` is currently `{}` and must stay that way for this route, so there is only one consumer.
+
 **Scheduling `/api/cron/comms` does more than renewal alerts.** Every tick also:
 
 - sends due daily report emails (enabled `mca_digest_subscriptions`);
@@ -76,13 +78,14 @@ With `MCA_NOTIFICATION_RUNTIME=enabled`, every queued notification goes out too,
 SELECT workspace_id, count(*) FROM mca_workflow_webhook_outbox WHERE state = 'pending' AND attempts < 5 GROUP BY 1;
 -- Daily report subscriptions that will start sending
 SELECT workspace_id, count(*) FROM mca_digest_subscriptions WHERE enabled = 1 GROUP BY 1;
--- Notifications that will be dispatched once MCA_NOTIFICATION_RUNTIME=enabled
-SELECT kind, state, count(*) FROM mca_notifications WHERE state IN ('queued','retry') GROUP BY 1, 2;
+-- Notifications that will be dispatched once MCA_NOTIFICATION_RUNTIME=enabled,
+-- grouped by audience and channel so merchant or SMS rows stand out
+SELECT audience, channel, kind, state, count(*) FROM mca_notifications WHERE state IN ('queued','retry') GROUP BY 1, 2, 3, 4;
 ```
 
 **Order** (each step only after the previous one is confirmed):
 
-1. **Migrations:** `0008` (renewal policies and actions) and `0071` (notification foundation) are applied.
+1. **Migrations:** `0008` (renewal policies and actions), `0071` (notification foundation) and `0073_document_notification_discovery` (document notification discovery, read by every send tick: `worker.ts` runs discovery before it claims anything, so without `0073` the whole tick fails) are applied. In practice, production is migrated through the repo head.
 2. **Environment, then redeploy:**
    - `MCA_APP_ORIGIN` is the public `https://` app origin. Every alert carries an unsubscribe link built from it. A missing or non-https origin suppresses each alert with `notification_origin_invalid`.
    - System email is configured: `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM`, or the useSend equivalents.
@@ -94,7 +97,7 @@ SELECT kind, state, count(*) FROM mca_notifications WHERE state IN ('queued','re
 
 **Expect a first burst.** The first tick after step 5 alerts every advance that is *already* eligible, not only new ones. Saving any new policy version re-alerts every advance that is still eligible, because the event key includes the policy version. Change policies deliberately.
 
-**Rollback:** unset `MCA_NOTIFICATION_RUNTIME` (stops all sending) and `MCA_RENEWAL_ALERTS_ENABLED` (stops new alerts), then redeploy. Remove the schedule if the other comms jobs must stop too. Queued rows are kept for review.
+**Rollback:** unset `MCA_NOTIFICATION_RUNTIME` (stops all sending) and `MCA_RENEWAL_ALERTS_ENABLED` (stops new alerts), then redeploy. Remove the schedule if the other comms jobs must stop too. Queued rows are kept for review. Rows that are mid-send at rollback become `uncertain` (`interrupted_dispatch`) once their lease expires and are never resent automatically; review them by hand.
 
 Staging verification on 2026-10-03 (Supabase `djnhfcxbuigsnqwcpdrz`, synthetic "Staging Drill Co", main `6c4bcac`, stub transport so nothing was sent):
 
