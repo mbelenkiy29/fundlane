@@ -6,13 +6,16 @@ import { createDeal } from "../src/lib/mca/deals/service"
 import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
-import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+import { documentScanner, setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+import { recoverWorkspaceDocuments } from "../src/lib/mca/documents/recovery"
+import { updateApplicationDraftScan, updateDocumentScan } from "../src/lib/mca/documents/repository"
+import { createApplicationDraft, getApplicationDraft, retryApplicationDraftScan } from "../src/lib/mca/documents/application-drafts"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
 import { recoverSubmissionOutbox, runNextBackgroundJob, touchDocumentWorkerHeartbeat } from "../src/lib/mca/jobs/worker"
 import { GET as runCron, jobRuntimeKinds } from "../src/app/api/cron/jobs/route"
-import { GET as runDocumentsCron } from "../src/app/api/cron/documents/route"
+import { GET as runDocumentsCron, documentCronKinds } from "../src/app/api/cron/documents/route"
 import { withExecutionDeadline } from "../src/lib/mca/jobs/execution"
 import { createExportJob } from "../src/lib/mca/exports/service"
 import { setAutoSubmitSettings } from "../src/lib/mca/underwriting/auto-submit"
@@ -127,6 +130,139 @@ test("Vercel/jobs-enabled deal uploads enqueue document_scan and do not promote 
   assert.equal(await runNextBackgroundJob(), true)
   assert.equal(scanner.count(), 1)
   assert.equal((await getDocument(actor(), stored.id)).processingState, "clean")
+})
+
+test("MCA_DOCUMENT_SCAN_BYPASS=true makes jobs-enabled uploads available inline, marked not scanned, and releases pending files", async () => {
+  countingScanner()
+  const pending = await storeDocument(actor(), { dealId, idempotencyKey: "bypass-pending", filename: "pending.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+  assert.equal(pending.processingState, "pending_scan")
+  setDocumentScannerForTests()
+  const previous = process.env.MCA_DOCUMENT_SCAN_BYPASS
+  const originalWarn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: unknown) => { warnings.push(String(message)) }
+  process.env.MCA_DOCUMENT_SCAN_BYPASS = "true"
+  try {
+    const stored = await storeDocument(actor(), { dealId, idempotencyKey: "bypass-upload", filename: "bypass.pdf", mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+    assert.equal(stored.processingState, "clean")
+    const jobs = await getDatabase().prepare<{ count: number }>("SELECT COUNT(*)::int AS count FROM mca_background_jobs WHERE resource_id = ? AND kind = 'document_scan'").get(stored.id)
+    assert.equal(jobs?.count, 0)
+    const row = await getDatabase().prepare<{ scan_provider: string; scan_evidence: string }>("SELECT scan_provider, scan_evidence FROM mca_documents WHERE id = ?").get(stored.id)
+    assert.equal(row?.scan_provider, "not_scanned")
+    const evidence = JSON.parse(row!.scan_evidence)
+    assert.equal(evidence.scanBypassed, true)
+    assert.equal(evidence.malwareScanPerformed, false)
+    assert.match(evidence.note, /^Not scanned/)
+    assert.ok(warnings.some((warning) => warning.includes("document_scan_bypassed")))
+    // The existing retry/recovery path releases a file that was stuck before the bypass was turned on.
+    assert.equal((await retryDocumentScan(actor(), pending.id)).processingState, "clean")
+  } finally {
+    console.warn = originalWarn
+    if (previous === undefined) delete process.env.MCA_DOCUMENT_SCAN_BYPASS; else process.env.MCA_DOCUMENT_SCAN_BYPASS = previous
+  }
+})
+
+function withEnv(values: Record<string, string | undefined>, run: () => Promise<void> | void) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]))
+  const restore = () => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+  for (const [key, value] of Object.entries(values)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+  let result: Promise<void> | void
+  try { result = run() } catch (error) { restore(); throw error }
+  return Promise.resolve(result).finally(restore)
+}
+
+test("MCA_DOCUMENT_SCAN_BYPASS only turns on for exactly 'true' and wins over Cloudmersive", async () => {
+  setDocumentScannerForTests()
+  for (const value of [undefined, "", "TRUE", "True", " true", "true ", "1", "yes", "false"]) {
+    await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: value, MCA_DOCUMENT_SCANNER: "cloudmersive" }, () => {
+      assert.equal(documentScanner().name, "cloudmersive", `bypass value ${JSON.stringify(value)} must stay off`)
+    })
+    await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: value, MCA_DOCUMENT_SCANNER: undefined }, () => {
+      assert.equal(documentScanner().name, "unconfigured", `bypass value ${JSON.stringify(value)} must stay off`)
+    })
+  }
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true", MCA_DOCUMENT_SCANNER: "cloudmersive" }, () => {
+    assert.equal(documentScanner().name, "not_scanned")
+  })
+})
+
+test("documents cron claims scan jobs only with Cloudmersive or the bypass", async () => {
+  const scanKinds = ["document_upload", "document_scan", "draft_scan", "assistant_scan", "intake_process"]
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: undefined, MCA_DOCUMENT_SCANNER: undefined }, () => assert.deepEqual(documentCronKinds(), ["draft_extract"]))
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "TRUE", MCA_DOCUMENT_SCANNER: "clamscan" }, () => assert.deepEqual(documentCronKinds(), ["draft_extract"]))
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true", MCA_DOCUMENT_SCANNER: undefined }, () => assert.deepEqual(documentCronKinds(), ["draft_extract", ...scanKinds]))
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: undefined, MCA_DOCUMENT_SCANNER: "cloudmersive" }, () => assert.deepEqual(documentCronKinds(), ["draft_extract", ...scanKinds]))
+})
+
+test("scan bypass keeps scan_failed and quarantined documents blocked; recover previews per state and releases only pending_scan", async () => {
+  const workspaceId = "workspace-bypass-recover"
+  await addWorkspace(workspaceId)
+  const recoverActor = (): DealActor => ({ ...actor(), workspaceId, correlationId: "corr-bypass-recover" })
+  const recoverDeal = (await createDeal(recoverActor(), { idempotencyKey: "bypass-recover", legalName: "Bypass recover" })).deal.id
+  const upload = (key: string) => storeDocument(recoverActor(), { dealId: recoverDeal, idempotencyKey: key, filename: `${key}.pdf`, mimeType: "application/pdf", bytes: minimalPdf, category: "statement", source: "test" })
+  countingScanner()
+  const pending = await upload("rec-pending")
+  const failed = await upload("rec-scan-failed")
+  const infected = await upload("rec-infected")
+  const uploadFailed = await upload("rec-upload-failed")
+  const now = new Date().toISOString()
+  await updateDocumentScan(workspaceId, failed.id, "scan_failed", "fixture", { error: "scanner_error" }, now)
+  await updateDocumentScan(workspaceId, infected.id, "quarantined", "fixture", { infected: true }, now)
+  await updateDocumentScan(workspaceId, uploadFailed.id, "upload_failed", "storage", { recoverable: true }, now)
+  setDocumentScannerForTests()
+  const snapshot = async () => ({
+    documents: await getDatabase().prepare("SELECT * FROM mca_documents WHERE workspace_id = ? ORDER BY id").all(workspaceId),
+    audits: (await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM audit_events WHERE workspace_id = ?").get(workspaceId))?.count,
+    jobs: (await getDatabase().prepare<{ count: number }>("SELECT count(*)::int AS count FROM mca_background_jobs WHERE workspace_id = ?").get(workspaceId))?.count,
+  })
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true", MCA_DOCUMENT_SCANNER: "cloudmersive", MCA_DEAL_AGENT_ENABLED: undefined }, async () => {
+    // The user "Retry scan" path, intake processing and merchant re-upload all go through completeDocumentUpload.
+    assert.equal((await retryDocumentScan(recoverActor(), failed.id)).processingState, "scan_failed")
+    assert.equal((await retryDocumentScan(recoverActor(), infected.id)).processingState, "quarantined")
+    assert.equal((await upload("rec-scan-failed")).processingState, "scan_failed")
+    const before = await snapshot()
+    const preview = await recoverWorkspaceDocuments(recoverActor())
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(preview.scanBypass, true)
+    assert.deepEqual(preview.byState, { pending_scan: 1, quarantined: 1, scan_failed: 1, upload_failed: 1 })
+    assert.equal(preview.candidates, 1)
+    assert.equal(preview.recovered, 0)
+    const applied = await recoverWorkspaceDocuments(recoverActor(), true)
+    assert.equal(applied.candidates, 1)
+    assert.equal(applied.recovered, 1)
+    assert.deepEqual(applied.failed, [])
+    const row = await getDatabase().prepare<{ processing_state: string; scan_provider: string }>("SELECT processing_state, scan_provider FROM mca_documents WHERE id = ?").get(pending.id)
+    assert.deepEqual({ ...row }, { processing_state: "clean", scan_provider: "not_scanned" })
+    assert.equal((await getDocument(recoverActor(), failed.id)).processingState, "scan_failed")
+    assert.equal((await getDocument(recoverActor(), infected.id)).processingState, "quarantined")
+    assert.equal((await getDocument(recoverActor(), uploadFailed.id)).processingState, "upload_failed")
+  })
+})
+
+test("scan bypass keeps quarantined and scan_failed application drafts blocked on retry, draft_scan job and re-upload", async () => {
+  countingScanner()
+  const draftPdf = (label: string) => new Uint8Array(Buffer.from(`%PDF-1.4\n${label}\n%%EOF\n`))
+  const infected = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-infected", filename: "infected.pdf", mimeType: "application/pdf", bytes: draftPdf("infected") })
+  const failed = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-failed", filename: "failed.pdf", mimeType: "application/pdf", bytes: draftPdf("failed") })
+  const now = new Date().toISOString()
+  await updateApplicationDraftScan(actor().workspaceId, infected.id, "quarantined", "fixture", { infected: true }, now)
+  await updateApplicationDraftScan(actor().workspaceId, failed.id, "scan_failed", "fixture", { error: "scanner_error" }, now)
+  setDocumentScannerForTests()
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true", MCA_NATIVE_DOCUMENT_EXECUTOR: "true" }, async () => {
+    for (const [draft, state, label] of [[infected, "quarantined", "infected"], [failed, "scan_failed", "failed"]] as const) {
+      assert.equal((await retryApplicationDraftScan(actor(), draft.id)).processingState, state)
+      assert.equal((await createApplicationDraft(actor(), { idempotencyKey: `bypass-draft-${label}`, filename: `${label}.pdf`, mimeType: "application/pdf", bytes: draftPdf(label) })).processingState, state)
+      await enqueueBackgroundJob({ actor: actor(), kind: "draft_scan", resourceId: draft.id, idempotencyKey: `bypass-draft-job-${label}` })
+      assert.equal(await runNextBackgroundJob(["draft_scan"]), true)
+      assert.equal((await getApplicationDraft(actor(), draft.id)).processingState, state)
+    }
+    // A never-scanned draft is still accepted, and its audit does not claim a real scan.
+    const fresh = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-fresh", filename: "fresh.pdf", mimeType: "application/pdf", bytes: draftPdf("fresh") })
+    assert.equal(fresh.processingState, "clean")
+    const audit = await getDatabase().prepare<{ metadata: unknown }>("SELECT metadata FROM audit_events WHERE resource_id = ? AND action = 'application_draft.scanned' ORDER BY created_at DESC LIMIT 1").get(fresh.id)
+    const metadata = typeof audit?.metadata === "string" ? JSON.parse(audit.metadata) : audit?.metadata
+    assert.equal((metadata as { actualScannerEvidence?: boolean }).actualScannerEvidence, false)
+  })
 })
 
 test("storeDocument inside the background worker still scans inline without extra document_scan jobs", async () => {

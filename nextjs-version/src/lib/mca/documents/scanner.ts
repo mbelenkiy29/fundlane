@@ -62,6 +62,21 @@ export class ClamAvScanner implements DocumentScanner {
   }
 }
 
+/** Owner opt-in to accept files without any malware scan. Only exactly "true" enables it, and it wins over a configured scanner. */
+export function scanBypassEnabled(): boolean {
+  return process.env.MCA_DOCUMENT_SCAN_BYPASS === "true"
+}
+
+export const SCAN_BYPASS_NOTE = "Not scanned: virus scanning is turned off (MCA_DOCUMENT_SCAN_BYPASS=true)."
+
+class BypassScanner implements DocumentScanner {
+  readonly name = "not_scanned"
+  async scan(bytes: Uint8Array): Promise<ScanResult> {
+    console.warn(JSON.stringify({ event: "document_scan_bypassed", bytes: bytes.byteLength }))
+    return { status: "clean", provider: this.name, evidence: { scanBypassed: true, malwareScanPerformed: false, note: SCAN_BYPASS_NOTE } }
+  }
+}
+
 class UnavailableScanner implements DocumentScanner {
   readonly name = "unconfigured"
   async scan(): Promise<ScanResult> {
@@ -77,6 +92,7 @@ export function setDocumentScannerForTests(scanner?: DocumentScanner): void {
 
 export function documentScanner(): DocumentScanner {
   if (scannerOverride) return scannerOverride
+  if (scanBypassEnabled()) return new BypassScanner()
   const mode = process.env.MCA_DOCUMENT_SCANNER
   if (mode === "cloudmersive") return new CloudmersiveScanner()
   if (mode === "clamdscan" || mode === "clamscan") {

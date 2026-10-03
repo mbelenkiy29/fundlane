@@ -7,7 +7,7 @@ import { createDeal, getDeal, getDealForDocument, updateDealRecord } from "../de
 import type { DealActor, DealDetail, DealOwnerInput, DealRecord, DealWriteInput } from "../deals/schema"
 import type { DocumentProcessingState } from "./contracts"
 import { extractApplication } from "./extraction"
-import { documentScanner, type ScanResult } from "./scanner"
+import { documentScanner, scanBypassEnabled, type ScanResult } from "./scanner"
 import { documentStorage } from "./storage"
 import { MAX_DOCUMENT_BYTES, storeDocument } from "./service"
 import {
@@ -67,9 +67,11 @@ export async function getApplicationDraft(actor: DealActor, id: string): Promise
 }
 
 async function scanDraft(actor: DealActor, record: ApplicationDraftRecord, bytes: Uint8Array): Promise<ApplicationDraftRecord> {
+  // Infected drafts are never re-released; scan_failed (a scanner ran and could not verify) must not be released by the bypass.
+  if (record.processingState === "quarantined" || (record.processingState === "scan_failed" && scanBypassEnabled())) return record
   const result = await documentScanner().scan(bytes, record.filename)
   const updated = await updateApplicationDraftScan(actor.workspaceId, record.id, scanState(result), result.provider, result.evidence, nowIso())
-  await recordAuditEvent({ context: actor, action: "application_draft.scanned", resourceType: "application_draft", resourceId: record.id, metadata: { state: updated.processingState, provider: result.provider, actualScannerEvidence: result.status === "clean" || result.status === "infected" }, correlationId: actor.correlationId })
+  await recordAuditEvent({ context: actor, action: "application_draft.scanned", resourceType: "application_draft", resourceId: record.id, metadata: { state: updated.processingState, provider: result.provider, actualScannerEvidence: (result.status === "clean" || result.status === "infected") && result.evidence.scanBypassed !== true }, correlationId: actor.correlationId })
   return updated
 }
 
