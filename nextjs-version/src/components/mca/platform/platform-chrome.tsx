@@ -3,7 +3,7 @@
 import { useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Activity, ArrowLeft, Building2, CircleGauge, ClipboardList, Mail, Map, MessageSquare, ShieldCheck, WalletCards } from "lucide-react"
+import { Activity, ArrowLeft, Building2, CircleGauge, ClipboardList, Map, MessageSquare, ShieldCheck, WalletCards } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -47,7 +47,6 @@ function PlatformSidebar({ email, roadmapEnabled }: { email: string; roadmapEnab
     ] },
     { label: "Administration", items: [
       { title: "Audit", url: "/platform/audit", icon: ClipboardList },
-      { title: "Demo requests", url: "/platform/demo-requests", icon: Mail },
       ...(roadmapEnabled ? [{ title: "Roadmap", url: "/platform/roadmap", icon: Map }] : []),
       { title: "Account security", url: "/account-security", icon: ShieldCheck },
     ] },
@@ -66,7 +65,7 @@ function PlatformSidebar({ email, roadmapEnabled }: { email: string; roadmapEnab
 
 function PlatformHeader() {
   const pathname = usePathname()
-  const titles: Record<string, string> = { companies: "Companies", payments: "Payments", monitoring: "Monitoring", onboarding: "Trial enrollments", sms: "SMS", audit: "Audit", "demo-requests": "Demo requests", roadmap: "Roadmap" }
+  const titles: Record<string, string> = { companies: "Companies", payments: "Payments", monitoring: "Monitoring", onboarding: "Trial enrollments", sms: "SMS", audit: "Audit", roadmap: "Roadmap" }
   const section = pathname.split("/")[2]
   return <header className="sticky top-0 z-30 flex h-(--header-height) shrink-0 items-center border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
     <div className="flex w-full min-w-0 items-center gap-3 px-4 lg:px-6">

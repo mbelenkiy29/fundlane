@@ -141,7 +141,7 @@ export function LandingNavbar() {
             <Link href="/auth/sign-in">Sign In</Link>
           </Button>
           <Button asChild className="cursor-pointer">
-            <Link href="/auth/sign-up">Get Started</Link>
+            <Link href="/">Get Started</Link>
           </Button>
         </div>
 
@@ -260,7 +260,7 @@ export function LandingNavbar() {
                       <Link href="/auth/sign-in">Sign In</Link>
                     </Button>
                     <Button asChild size="lg" className="cursor-pointer" >
-                      <Link href="/auth/sign-up">Get Started</Link>
+                      <Link href="/">Get Started</Link>
                     </Button>
                   </div>
                 </div>

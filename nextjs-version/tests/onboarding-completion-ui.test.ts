@@ -147,13 +147,13 @@ test("removing coordinator support before an existing handler runs still makes n
   assert.match(result.html, /browser cannot safely start a new trial/i)
 })
 
-test("generic signup routes to pricing under the dedicated rollout without provider readiness", () => {
+test("generic signup always redirects home, including under the dedicated rollout", () => {
   const result = runClient(`${renderSetup}
     mock.module('next/navigation',{exports:{redirect:destination=>{throw {destination}}}});
     const Page=require('./src/app/(auth)/sign-up/page.tsx').default;
     let destination;try{Page()}catch(error){destination=error.destination}console.log(JSON.stringify({destination}));
   `, { MCA_STRIPE_FIRST_ONBOARDING_ENABLED: "true", MCA_SIGNUP_MODE: "open" })
-  assert.equal(result.destination, "/pricing")
+  assert.equal(result.destination, "/")
 })
 
 test("unavailable purchase offers explicit account switch and canonical password recovery", () => {
