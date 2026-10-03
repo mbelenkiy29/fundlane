@@ -451,8 +451,9 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           reasons.push(compareUnknown(rule, "Term is unknown, so the funder's maximum cannot pass."))
           continue
         }
-        // Lender term rules can be in days or years; convert to months with the estimates rule. Hard rules
-        // compare against the lender's real term, so the estimates' 2-18 month clamp is not applied here.
+        // Lender term rules can be in days or years; convert with the estimates unit rule, rounded down to whole
+        // months so a deal is never longer than the lender allows. Hard rules use the lender's real term, so the
+        // estimates' 2-18 month clamp is not applied here.
         const ruleMonths = lenderTermRuleWholeMonths(rule)
         reasons.push(ruleMonths == null
           ? compareUnknown(rule, `Funder term rule has no usable value or time unit (${rule.unit}).`)

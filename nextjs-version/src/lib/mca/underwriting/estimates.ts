@@ -70,12 +70,14 @@ export function lenderTermRuleMonths(rule: Pick<EligibilityRule, "value" | "unit
 }
 
 /**
- * A lender term rule in whole months, rounded but NOT clamped: the lender's real term, for hard-rule
- * scoring (180 days = 6, 24 months = 24). Null like `lenderTermRuleMonths`.
+ * A lender term rule in whole months for hard-rule scoring: rounded DOWN and NOT clamped, so a deal
+ * is never longer than the lender allows (200 days = 6, 180 days = 5, 24 months = 24). Null like
+ * `lenderTermRuleMonths`. Estimates keep their own rounding and 2-18 clamp (`clampLenderTermMonths`).
  */
 export function lenderTermRuleWholeMonths(rule: Pick<EligibilityRule, "value" | "unit">): number | null {
   const months = lenderTermRuleMonths(rule)
-  return months == null ? null : Math.round(months)
+  // The epsilon absorbs float error in the unit factor (365 days * 12/365 = 11.999…, which is 12 months).
+  return months == null ? null : Math.floor(months + 1e-9)
 }
 
 /** Estimates only: rounds a lender term to whole months and clamps it to ESTIMATE_LIMITS.termMonths (2–18). */
