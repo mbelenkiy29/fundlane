@@ -129,23 +129,17 @@ async function requestSystemEmail(input) {
           "user-agent": "Mozilla/5.0 (compatible; MCA-Intake/1.0; +https://fundlane.io)"
         }
       },
-      body: JSON.stringify(
-        resend ? {
-          from: input.from,
-          to: [input.to],
-          subject: input.subject,
-          text: input.text,
-          html: input.html,
-          ...input.replyTo !== void 0 ? { reply_to: input.replyTo } : {}
-        } : {
-          to: input.to,
-          from: input.from,
-          subject: input.subject,
-          text: input.text,
-          html: input.html,
-          ...input.replyTo !== void 0 ? { replyTo: input.replyTo } : {}
-        }
-      ),
+      body: JSON.stringify({
+        from: input.from,
+        to: resend ? [input.to].flat() : input.to,
+        subject: input.subject,
+        text: input.text,
+        html: input.html,
+        ...input.replyTo !== void 0 ? { [resend ? "reply_to" : "replyTo"]: input.replyTo } : {},
+        ...input.cc?.length ? { cc: input.cc } : {},
+        ...input.attachments?.length ? { attachments: input.attachments } : {},
+        ...input.headers ? { headers: input.headers } : {}
+      }),
       redirect: "error",
       signal: AbortSignal.timeout(15e3)
     }

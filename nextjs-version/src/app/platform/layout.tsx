@@ -6,5 +6,5 @@ export const dynamic = "force-dynamic"
 
 export default async function PlatformLayout({ children }: { children: React.ReactNode }) {
   const actor = await requirePlatformPage()
-  return <PlatformChrome email={actor.email} roadmapEnabled={publicRoadmapEnabled()}>{children}</PlatformChrome>
+  return <PlatformChrome userId={actor.userId} email={actor.email} roadmapEnabled={publicRoadmapEnabled()}>{children}</PlatformChrome>
 }
