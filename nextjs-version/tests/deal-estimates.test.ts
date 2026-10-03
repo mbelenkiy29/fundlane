@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { estimateDeal, type EstimateDealInput } from "../src/lib/mca/underwriting/estimates"
+import { clampLenderTermMonths, estimateDeal, lenderTermRuleMonths, lenderTermRuleWholeMonths, type EstimateDealInput } from "../src/lib/mca/underwriting/estimates"
 import type { EligibilityRule } from "../src/lib/mca/funders/contracts"
 
 const rule = (field: string, operator: EligibilityRule["operator"], value: number, unit: EligibilityRule["unit"] = field === "term" ? "months" : "usd"): EligibilityRule => ({ id:`${field}:${operator}`, funderId:"f", field, operator, unit, value, unspecified:false })
@@ -33,6 +33,7 @@ test("lender min/max funding clamps the range", () => {
   assert.deepEqual([raised.advanceLow, raised.advanceHigh], [31000, 32000])
   const below = one({}, [rule("requested_amount","min",40000)])
   assert.equal(below.status, "below_lender_minimum")
+  assert.equal(below.reason, "Estimated maximum is below the lender minimum of $40,000")
   assert.ok(nulls(below).every((value) => value === null))
 })
 
@@ -114,4 +115,57 @@ test("negative existing payments do not raise capacity", () => {
   const negative = one({ positions:[{ estimatedPayment:-5000 }] })
   assert.equal(negative.inputs.existingDailyPayments, 0)
   assert.equal(negative.advanceHigh, none.advanceHigh)
+})
+
+test("shared lender term helpers: days convert to months, clamp at both ends, months unchanged", () => {
+  assert.equal(clampLenderTermMonths(lenderTermRuleMonths({ value:180, unit:"days" })!), 6)
+  assert.equal(lenderTermRuleMonths({ value:12, unit:"months" }), 12)
+  assert.equal(clampLenderTermMonths(lenderTermRuleMonths({ value:12, unit:"months" })!), 12)
+  assert.equal(lenderTermRuleMonths({ value:1, unit:"years" }), 12)
+  const warnings: string[] = []
+  assert.equal(clampLenderTermMonths(lenderTermRuleMonths({ value:30, unit:"days" })!, warnings), 2)
+  assert.equal(clampLenderTermMonths(lenderTermRuleMonths({ value:3, unit:"years" })!, warnings), 18)
+  assert.deepEqual(warnings, ["Lender term 1 months clamped to 2", "Lender term 36 months clamped to 18"])
+  assert.equal(lenderTermRuleMonths({ value:180, unit:"count" }), null)
+  assert.equal(lenderTermRuleMonths({ value:0, unit:"days" }), null)
+  assert.equal(lenderTermRuleMonths({ value:-30, unit:"months" }), null)
+  // Scoring's hard-rule helper (integer day math, no clamp); estimates still read 180 days as 6 (above).
+  const hard = (value: number, operator: EligibilityRule["operator"], unit: EligibilityRule["unit"] = "days") => lenderTermRuleWholeMonths({ value, unit, operator })
+  assert.deepEqual([hard(180,"max"), hard(200,"max"), hard(365,"max"), hard(20,"max")], [6, 6, 12, null])
+  assert.deepEqual([hard(90,"min"), hard(200,"min"), hard(365,"min")], [3, 7, 12])
+  // 190 days = 6.25 months: a minimum rounds up to 7 (round-to-nearest would give 6), so 6 months fails and 7 passes.
+  const min190 = hard(190,"min")!
+  assert.equal(min190, 7)
+  assert.equal(6 >= min190, false, "a 6-month request fails a 190-day minimum")
+  assert.equal(7 >= min190, true, "a 7-month request passes a 190-day minimum")
+  assert.deepEqual([hard(180,"eq"), hard(365,"eq"), hard(200,"eq")], [6, 12, 6.67])
+  assert.deepEqual([hard(24,"max","months"), hard(3,"max","years"), hard(1,"min","years")], [24, 36, 12])
+  assert.equal(lenderTermRuleWholeMonths({ value:0, unit:"days", operator:"max" }), null)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"count", operator:"max" }), null)
+})
+
+test("zero or negative lender term is ignored with a warning, not clamped up to 2 months", () => {
+  for (const value of [0, -90]) {
+    const estimate = one({}, [rule("term","eq",value,"days")])
+    assert.equal(estimate.termMonths, 6)
+    assert.equal(estimate.assumptionsSource.termMonths, "default")
+    assert.ok(estimate.warnings.includes(`Lender term rule ignored: invalid value ${value}`))
+    assert.ok(!estimate.warnings.some((warning) => warning.includes("clamped")))
+  }
+})
+
+test("repeated warnings are de-duplicated so the panel's keys stay unique", () => {
+  const estimate = one({}, [rule("term","eq",6,"count"), rule("term","min",4,"count"), rule("term","max",9,"count")])
+  assert.equal(estimate.warnings.filter((warning) => warning === 'Lender term rule ignored: unknown unit "count"').length, 1)
+  assert.equal(new Set(estimate.warnings).size, estimate.warnings.length)
+})
+
+test("a lender maximum under the $500 rounding step reports the lender maximum, not holdback capacity", () => {
+  const estimate = one({}, [rule("requested_amount","max",400)])
+  assert.equal(estimate.status, "no_capacity")
+  assert.equal(estimate.reason, "Lender maximum of $400 is below the $500 estimate rounding step")
+  assert.equal(one({}, [rule("requested_amount","max",499.5)]).reason, "Lender maximum of $499.50 is below the $500 estimate rounding step")
+  assert.ok(nulls(estimate).every((value) => value === null))
+  const exhausted = one({ positions:[{ estimatedPayment:1000 }] })
+  assert.equal(exhausted.reason, "Existing payments already use the holdback capacity")
 })

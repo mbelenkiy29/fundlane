@@ -74,6 +74,11 @@ function emptyRule(): RuleDraft {
   return { key: crypto.randomUUID(), field: "revenue", operator: "min", unit: "usd_monthly", value: "", sourceText: "", sourceAsOf: "", validUntil: "", unspecified: false }
 }
 
+/** Changing a rule's field to Term resets its unit to months, so a leftover money or count unit can't make the term unreadable. */
+export function withRuleField(rule: RuleDraft, field: RuleDraft["field"]): RuleDraft {
+  return field === "term" && rule.field !== "term" ? { ...rule, field, unit: "months" } : { ...rule, field }
+}
+
 function formatValue(value: EligibilityRule["value"]): string {
   if (value == null) return ""
   if (Array.isArray(value)) return value.join(", ")
@@ -211,7 +216,7 @@ export function CriteriaPanel({ funderId }: { funderId: string }) {
         <form onSubmit={(event) => void publish(event)} className="space-y-4">
           {!rules.length ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No eligibility rules yet. Add revenue, FICO, industry, and other limits, or mark a field unspecified.</div> : rules.map((rule, index) => <div key={rule.key} className="space-y-3 rounded-lg border p-3">
             <div className="grid gap-2 lg:grid-cols-[1fr_8rem_9rem_1fr_auto]">
-              <Select value={rule.field} disabled={!canManage} onValueChange={(field) => setRules((current) => current.map((item) => item.key === rule.key ? { ...item, field: field as (typeof FIELDS)[number] } : item))}>
+              <Select value={rule.field} disabled={!canManage} onValueChange={(field) => setRules((current) => current.map((item) => item.key === rule.key ? withRuleField(item, field as (typeof FIELDS)[number]) : item))}>
                 <SelectTrigger aria-label={`Rule ${index + 1} field`}><SelectValue /></SelectTrigger>
                 <SelectContent>{FIELDS.map((field) => <SelectItem key={field} value={field}>{fieldLabels[field]}</SelectItem>)}</SelectContent>
               </Select>

@@ -50,6 +50,7 @@ export interface EstimateDealInput {
 
 const cents = (value: number) => Math.round(value * 100) / 100
 const roundDown = (value: number) => Math.floor(cents(value) / ROUND_TO) * ROUND_TO
+const usd = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: Number.isInteger(value) ? 0 : 2 }).format(value)
 
 function ruleValue(rules: EligibilityRule[], field: string, operator: EligibilityRule["operator"]): number | undefined {
   const rule = rules.find((item) => item.field === field && item.operator === operator && !item.unspecified)
@@ -58,22 +59,69 @@ function ruleValue(rules: EligibilityRule[], field: string, operator: Eligibilit
 
 const TERM_MONTHS_PER_UNIT: Partial<Record<EligibilityRule["unit"], number>> = { days: 12 / 365, months: 1, years: 12 }
 
-/** A lender term rule in months: converted from its own unit, rules without a known time unit ignored, then clamped. */
+/**
+ * One lender term rule in months, converted from its own unit (180 days = ~5.9 months).
+ * Null when the unit is not a time unit or the value is not a positive number. Shared with
+ * lender-fit scoring so both read day- and year-based term rules the same way.
+ */
+export function lenderTermRuleMonths(rule: Pick<EligibilityRule, "value" | "unit">): number | null {
+  if (typeof rule.value !== "number" || !Number.isFinite(rule.value) || rule.value <= 0) return null
+  const factor = TERM_MONTHS_PER_UNIT[rule.unit]
+  return factor == null ? null : rule.value * factor
+}
+
+/**
+ * A lender term rule in whole months for hard-rule scoring (not estimates). Same valid units and values as
+ * `lenderTermRuleMonths`, NOT clamped, and rounded toward the lender's side. Days use integer math only; the
+ * estimates' 12/365 float factor is never used here, because float error can land just above or below a whole
+ * month and so flip a floor or ceil by one.
+ * - max: a 30-day month, rounded down: floor(days / 30). 180 = 6, 200 = 6, 365 = 12. Under 30 days is unknown.
+ * - min: a 365/12 month, rounded up: ceil(days * 12 / 365). 90 = 3, 200 = 7, 365 = 12.
+ * - eq: matches only a whole number of months, days / 30 or days * 12 / 365, whichever is whole (180 = 6,
+ *   365 = 12). Otherwise (200 days) the fractional value is returned, so no whole-month request equals it.
+ * Months are used as given and years are x12, with the same rounding. Null means unknown (needs review).
+ */
+export function lenderTermRuleWholeMonths(rule: Pick<EligibilityRule, "value" | "unit" | "operator">): number | null {
+  // Same validity as lenderTermRuleMonths (known time unit, positive value) without its float conversion.
+  const value = rule.value
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || TERM_MONTHS_PER_UNIT[rule.unit] == null) return null
+  if (rule.unit === "days") {
+    if (rule.operator === "max") { const months = Math.floor(value / 30); return months >= 1 ? months : null }
+    if (rule.operator === "min") return Math.ceil((value * 12) / 365)
+    if (value % 30 === 0) return value / 30
+    if ((value * 12) % 365 === 0) return (value * 12) / 365
+    // Not a whole month: keep it fractional (two decimals for the reason text) so it equals no whole-month request.
+    const shown = Math.round((value / 30) * 100) / 100
+    return Number.isInteger(shown) ? value / 30 : shown
+  }
+  const months = rule.unit === "years" ? value * 12 : value
+  if (rule.operator === "max") { const whole = Math.floor(months); return whole >= 1 ? whole : null }
+  if (rule.operator === "min") return Math.ceil(months)
+  return months
+}
+
+/** Estimates only: rounds a lender term to whole months and clamps it to ESTIMATE_LIMITS.termMonths (2–18). */
+export function clampLenderTermMonths(raw: number, warnings?: string[]): number {
+  const [low, high] = ESTIMATE_LIMITS.termMonths
+  const rounded = Math.round(raw)
+  const clamped = Math.min(high, Math.max(low, rounded))
+  if (clamped !== rounded) warnings?.push(`Lender term ${Math.round(raw * 10) / 10} months clamped to ${clamped}`)
+  return clamped
+}
+
+/** A lender term rule in months: converted from its own unit, rules without a known time unit or a positive value ignored, then clamped. */
 function lenderTerm(rules: EligibilityRule[], warnings: string[]): number | undefined {
   const months = (operator: EligibilityRule["operator"]) => {
     const rule = rules.find((item) => item.field === "term" && item.operator === operator && !item.unspecified)
     if (typeof rule?.value !== "number" || !Number.isFinite(rule.value)) return undefined
-    const factor = TERM_MONTHS_PER_UNIT[rule.unit]
-    if (factor == null) { warnings.push(`Lender term rule ignored: unknown unit "${rule.unit}"`); return undefined }
-    return rule.value * factor
+    if (TERM_MONTHS_PER_UNIT[rule.unit] == null) { warnings.push(`Lender term rule ignored: unknown unit "${rule.unit}"`); return undefined }
+    const converted = lenderTermRuleMonths(rule)
+    if (converted == null) { warnings.push(`Lender term rule ignored: invalid value ${rule.value}`); return undefined }
+    return converted
   }
   const eq = months("eq"), min = months("min"), max = months("max")
   const raw = eq ?? (min != null && max != null ? (min + max) / 2 : min ?? max)
-  if (raw == null) return undefined
-  const [low, high] = ESTIMATE_LIMITS.termMonths
-  const clamped = Math.min(high, Math.max(low, Math.round(raw)))
-  if (clamped !== Math.round(raw)) warnings.push(`Lender term ${Math.round(raw * 10) / 10} months clamped to ${clamped}`)
-  return clamped
+  return raw == null ? undefined : clampLenderTermMonths(raw, warnings)
 }
 
 function broker(name: keyof typeof ESTIMATE_LIMITS, value: number | undefined, warnings: string[]): number | undefined {
@@ -130,7 +178,8 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
           frequency: assumptions.frequency ? "broker" : "default",
           holdbackPct: brokerHoldback != null ? "broker" : "default",
         },
-        warnings: [...brokerWarnings, ...termWarnings, ...shared],
+        // De-duplicated: the panel keys warnings by text, and eq/min/max rules can repeat a warning.
+        warnings: [...new Set([...brokerWarnings, ...termWarnings, ...shared])],
       } satisfies Partial<LenderEstimate>
       const none = (status: EstimateStatus, reason: string): LenderEstimate => ({
         ...base, status, reason, advanceLow: null, advanceHigh: null, factor: null, termMonths: null,
@@ -145,8 +194,12 @@ export function estimateDeal({ asOf, months, positions, lenders, assumptions }: 
       const lenderMax = ruleValue(rules, "requested_amount", "max")
       const lenderMin = ruleValue(rules, "requested_amount", "min")
       const high = roundDown(Math.min(REVENUE_HIGH_MULTIPLE * avgMonthlyDeposits, capacityMaxAdvance, lenderMax ?? Infinity))
-      if (high <= 0) return none("no_capacity", "Existing payments already use the holdback capacity")
-      if (lenderMin != null && high < lenderMin) return none("below_lender_minimum", `Estimated maximum is below the lender minimum of $${lenderMin}`)
+      if (high <= 0) {
+        return lenderMax != null && roundDown(lenderMax) <= 0
+          ? none("no_capacity", `Lender maximum of ${usd(lenderMax)} is below the ${usd(ROUND_TO)} estimate rounding step`)
+          : none("no_capacity", "Existing payments already use the holdback capacity")
+      }
+      if (lenderMin != null && high < lenderMin) return none("below_lender_minimum", `Estimated maximum is below the lender minimum of ${usd(lenderMin)}`)
       const low = Math.max(roundDown(Math.min(REVENUE_LOW_MULTIPLE * avgMonthlyDeposits, high)), lenderMin ?? 0)
       const paybackLow = cents(low * factor), paybackHigh = cents(high * factor)
       if (payments < 1 || ![low, high, paybackLow, paybackHigh].every(Number.isFinite)) return none("insufficient_data", "Term or amounts could not be calculated")
