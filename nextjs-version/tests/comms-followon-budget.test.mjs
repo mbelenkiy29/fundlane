@@ -112,18 +112,18 @@ async function schedulerBoundaryProbe() {
     async function load(specifier) {
       const key = specifier === "./followon-budget" ? path.join(root, "followon-budget.ts") : specifier
       if (cache.has(key)) return cache.get(key)
-      let module
+      let fixtureModule
       if (Object.hasOwn(stubs, specifier)) {
         const exports = stubs[specifier]
-        module = new vm.SyntheticModule(Object.keys(exports), function () {
+        fixtureModule = new vm.SyntheticModule(Object.keys(exports), function () {
           for (const key of Object.keys(exports)) this.setExport(key, exports[key])
         }, { context, identifier: specifier })
-        cache.set(key, module)
-        await module.link(() => { throw new Error("Unexpected fixture dependency") })
+        cache.set(key, fixtureModule)
+        await fixtureModule.link(() => { throw new Error("Unexpected fixture dependency") })
       } else {
         assert.ok(specifier === "scheduler" || specifier === "./followon-budget", specifier)
         const file = path.join(root, specifier === "scheduler" ? "scheduler.ts" : "followon-budget.ts")
-        module = new vm.SourceTextModule(stripTypeScriptTypes(fs.readFileSync(file, "utf8"), { mode: "strip" }), {
+        fixtureModule = new vm.SourceTextModule(stripTypeScriptTypes(fs.readFileSync(file, "utf8"), { mode: "strip" }), {
           context, identifier: file, importModuleDynamically: async id => {
             imports.push(id)
             const dependency = await load(id)
@@ -131,10 +131,10 @@ async function schedulerBoundaryProbe() {
             return dependency
           },
         })
-        cache.set(key, module)
-        await module.link(id => load(id))
+        cache.set(key, fixtureModule)
+        await fixtureModule.link(id => load(id))
       }
-      return module
+      return fixtureModule
     }
     const scheduler = await load("scheduler")
     await scheduler.evaluate()
