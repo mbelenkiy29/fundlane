@@ -2,23 +2,25 @@ import { spawn } from "node:child_process"
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { commandEnv, connectionEnv, isLoopback, option, parseDatabaseUrl, pruneArchives, requireSwitch, sha256 } from "./safety"
+import { captureStderr, commandEnv, connectionEnv, isLoopback, option, parseDatabaseUrl, pruneArchives, requireSwitch, sha256, toolFailure } from "./safety"
 
 export type CommandRunner = (command: string, args: string[], env: Record<string, string | undefined>, encryption?: { recipient: string; output: string }) => Promise<number>
 
 export const runCommand: CommandRunner = (command, args, env, encryption) => new Promise((resolveRun, reject) => {
-  const child = spawn(command, args, { env: commandEnv(env), stdio: ["ignore", encryption ? "pipe" : "ignore", "ignore"] })
+  const child = spawn(command, args, { env: commandEnv(env), stdio: ["ignore", encryption ? "pipe" : "ignore", "pipe"] })
+  const stderr = captureStderr(child.stderr)
   if (encryption) {
-    const age = spawn("age", ["-r", encryption.recipient, "-o", encryption.output], { stdio: ["pipe", "ignore", "ignore"] })
+    const age = spawn("age", ["-r", encryption.recipient, "-o", encryption.output], { stdio: ["pipe", "ignore", "pipe"] })
+    const ageStderr = captureStderr(age.stderr)
     let stdoutBytes = 0
     child.stdout!.on("data", (chunk: Buffer) => { stdoutBytes += chunk.length })
     age.stdin!.on("error", () => undefined)
     child.stdout!.pipe(age.stdin!)
     const results = Promise.all([new Promise<number>((ok, fail) => { child.on("error", fail); child.on("close", (code) => ok(code ?? 1)) }), new Promise<number>((ok, fail) => { age.on("error", fail); age.on("close", (code) => ok(code ?? 1)) })])
-    results.then(([dumpCode, ageCode]) => dumpCode === 0 && ageCode === 0 ? resolveRun(stdoutBytes) : reject(new Error(`Backup tools failed (${dumpCode}, ${ageCode}).`)), reject)
+    results.then(([dumpCode, ageCode]) => dumpCode === 0 && ageCode === 0 ? resolveRun(stdoutBytes) : reject(toolFailure(`Backup tools failed (${dumpCode}, ${ageCode})`, [stderr(), ageStderr()].filter(Boolean).join("\n"), env)), reject)
   } else {
     child.on("error", reject)
-    child.on("close", (code) => code === 0 ? resolveRun(0) : reject(new Error(`Database tool failed (${code}).`)))
+    child.on("close", (code) => code === 0 ? resolveRun(0) : reject(toolFailure(`Database tool failed (${code})`, stderr(), env)))
   }
 })
 
