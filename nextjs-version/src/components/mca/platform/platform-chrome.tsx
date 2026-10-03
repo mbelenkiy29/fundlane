@@ -12,7 +12,7 @@ import { SiteFooter } from "@/components/site-footer"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { PlatformLiveRefresh } from "./live-refresh"
-import { FeedbackMenu } from "@/components/observability/feedback-menu"
+import { FeedbackButton } from "@/components/observability/feedback-button"
 import { SentrySession } from "@/components/observability/sentry-session"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
@@ -20,6 +20,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, Si
 export function PlatformChrome({ children, userId, email, roadmapEnabled }: { children: React.ReactNode; userId: string; email: string; roadmapEnabled: boolean }) {
   return <SidebarProvider style={{ "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}>
     <SentrySession user={{ id: userId, email, name: "Super admin" }} platformOperator />
+    <FeedbackButton />
     <PlatformSidebar email={email} roadmapEnabled={roadmapEnabled} />
     <SidebarInset id="platform-content" className="min-w-0 overflow-x-clip">
       <PlatformHeader />
@@ -70,7 +71,7 @@ function PlatformHeader() {
     <div className="flex w-full min-w-0 items-center gap-3 px-4 lg:px-6">
       <SidebarTrigger className="-ml-1" />
       <Breadcrumb className="min-w-0" data-sentry-unmask><BreadcrumbList><BreadcrumbItem>{section ? <BreadcrumbLink asChild><Link href="/platform">Platform</Link></BreadcrumbLink> : <BreadcrumbPage>Platform overview</BreadcrumbPage>}</BreadcrumbItem>{section && <><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{titles[section] ?? "Platform"}</BreadcrumbPage></BreadcrumbItem></>}</BreadcrumbList></Breadcrumb>
-      <div className="ml-auto flex shrink-0 items-center gap-2" data-sentry-unmask><PlatformLiveRefresh /><Badge variant="outline" className="hidden sm:inline-flex"><ShieldCheck /> Super admin</Badge><Button variant="ghost" size="sm" asChild><Link href="/dashboard"><ArrowLeft className="size-4" /><span className="hidden md:inline">Dashboard</span><span className="sr-only md:hidden">Return to dashboard</span></Link></Button><FeedbackMenu /><ModeToggle /></div>
+      <div className="ml-auto flex shrink-0 items-center gap-2" data-sentry-unmask><PlatformLiveRefresh /><Badge variant="outline" className="hidden sm:inline-flex"><ShieldCheck /> Super admin</Badge><Button variant="ghost" size="sm" asChild><Link href="/dashboard"><ArrowLeft className="size-4" /><span className="hidden md:inline">Dashboard</span><span className="sr-only md:hidden">Return to dashboard</span></Link></Button><ModeToggle /></div>
     </div>
   </header>
 }

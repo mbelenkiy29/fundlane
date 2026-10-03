@@ -5,12 +5,14 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SiteFooter } from "@/components/site-footer"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { FeedbackButton } from "@/components/observability/feedback-button"
 import { SentrySession } from "@/components/observability/sentry-session"
 import type { SessionResponse } from "@/lib/mca/types"
 
 export function DashboardChrome({ children, session, supportEmail = null, assistantEnabled = false, assistantDomainKey = "", assistantRuntime = "chatkit", fullBleed = false }: { children: React.ReactNode; session: SessionResponse; supportEmail?: string | null; assistantEnabled?: boolean; assistantDomainKey?: string; assistantRuntime?: "chatkit" | "supabase"; fullBleed?: boolean }) {
   const chrome = <SidebarProvider style={{ "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}>
     {session.user && <SentrySession user={session.user} workspace={session.membership && { id: session.membership.workspaceId, name: session.membership.workspaceName, role: session.membership.role }} />}
+    {session.user && <FeedbackButton raised={fullBleed} />}
     <AppSidebar variant="sidebar" collapsible="icon" side="left" session={session} />
     <SidebarInset className={fullBleed ? "min-h-svh min-w-0 overflow-hidden" : "min-w-0 overflow-x-clip"}>
       <SiteHeader session={session} />

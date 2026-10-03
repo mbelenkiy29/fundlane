@@ -110,6 +110,24 @@ async function insertOwners(db: Q, table: "deal_owners" | "mca_merchant_owners",
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [o.id, ws, parentId, o.first_name, o.last_name, o.ownership_percent, o.is_primary, encryptSensitive(o.email, ws), encryptSensitive(o.phone, ws)])
 }
 
+/** Unchanged content that is clean or still waiting for its malware scan is left alone (never re-uploaded). */
+const UNCHANGED_STATES = ["clean", "ready", "pending_scan"]
+const unchanged = (current: Row | undefined, bytes: Uint8Array) => Boolean(current && UNCHANGED_STATES.includes(current.processing_state) && current.checksum === sha256(bytes))
+
+/**
+ * Deletes queued/finished document_scan jobs left behind by this job's own deleted demo uploads: the job's document row is gone,
+ * its actor names a seeded deal, and the document was uploaded by this job (audit document.uploaded with this job's correlation id
+ * for that deal). Running jobs are never touched.
+ */
+async function removeOrphanScanJobs(db: Q, ws: string, dealIds: string[]) {
+  return (await db.query(`DELETE FROM mca_background_jobs j WHERE j.workspace_id=$1 AND j.kind='document_scan' AND j.state IN ('queued','failed','complete')
+    AND (j.actor_json::jsonb->>'intakeDealId')=ANY($2::text[])
+    AND NOT EXISTS (SELECT 1 FROM mca_documents d WHERE d.id=j.resource_id)
+    AND NOT EXISTS (SELECT 1 FROM mca_documents d WHERE d.workspace_id=$1 AND d.storage_key=$1 || '/' || (j.actor_json::jsonb->>'intakeDealId') || '/' || j.resource_id)
+    AND EXISTS (SELECT 1 FROM audit_events a WHERE a.workspace_id=$1 AND a.action='document.uploaded' AND a.resource_id=j.resource_id
+      AND a.correlation_id LIKE $3 AND (a.metadata::jsonb->>'dealId')=(j.actor_json::jsonb->>'intakeDealId'))`, [ws, dealIds, `${VERSION}:%`])).rowCount ?? 0
+}
+
 const pdfDeal = (p: Plan): PdfDeal => ({ profile: p.profile, monthlyRevenue: p.monthlyRevenue, requestedAmount: p.requestedAmount, startDate: p.startDate, createdAt: p.deal.created_at, displayId: p.displayId })
 
 async function documentJobs(db: Q, ws: string, plans: Plan[]) {
@@ -132,8 +150,7 @@ export async function dryRun(ws: string) {
   let docsReady = 0, docsMissing = 0, docsStale = 0
   for (const j of jobs) {
     if (!j.current) { docsMissing++; continue }
-    const ready = ["clean", "ready"].includes(j.current.processing_state) && j.current.checksum === sha256((await j.build()).bytes)
-    if (ready) docsReady++; else docsStale++
+    if (unchanged(j.current, (await j.build()).bytes)) docsReady++; else docsStale++
   }
   const otherDeals = (await db.query(`SELECT count(*)::int n FROM deals WHERE workspace_id=$1 AND (idempotency_key IS NULL OR idempotency_key NOT LIKE $2)`, [ws, `${SEED_BATCH}:deal:%`])).rows[0].n
   return {
@@ -246,7 +263,7 @@ export async function applyDocuments(ws: string, limit: number, budgetMs: number
   const work: Array<{ job: (typeof jobs)[number]; pdf: { bytes: Uint8Array; filename: string } }> = []
   for (const job of jobs) {
     const pdf = await job.build()
-    if (job.current && ["clean", "ready"].includes(job.current.processing_state) && job.current.checksum === sha256(pdf.bytes)) continue
+    if (unchanged(job.current, pdf.bytes)) continue
     work.push({ job, pdf })
   }
   const actor = (await db.query(`SELECT u.id user_id, m.id membership_id, m.role FROM memberships m JOIN users u ON u.id=m.user_id
@@ -255,7 +272,8 @@ export async function applyDocuments(ws: string, limit: number, budgetMs: number
   const dealActor = { workspaceId: ws, userId: actor.user_id, membershipId: actor.membership_id, role: actor.role, managedMembershipIds: [], activeMembershipIds: [actor.membership_id], source: "system" as const, correlationId: `${VERSION}:${randomUUID()}` }
   const { storeDocument } = await import("../documents/service")
   const { storageClient, quarantineBucket } = await import("../documents/storage")
-  const result: Record<string, number> = { replaced: 0, failed: 0 }
+  const dealIds = plans.map(p => p.deal.id)
+  const result: Record<string, number> = { replaced: 0, failed: 0, orphanScanJobsRemoved: await removeOrphanScanJobs(db, ws, dealIds) }
   let done = 0
   for (const { job, pdf } of work.slice(0, limit)) {
     if (Date.now() - started > budgetMs) break
@@ -268,6 +286,7 @@ export async function applyDocuments(ws: string, limit: number, budgetMs: number
         assert.equal(del.rowCount, 1, `Could not remove stale document ${job.current.id}`)
         for (const bucket of [process.env.MCA_SUPABASE_DOCUMENT_BUCKET ?? "fundlane-documents", quarantineBucket()]) await storageClient().storage.from(bucket).remove([job.current.storage_key])
         result.replaced++
+        result.orphanScanJobsRemoved += await removeOrphanScanJobs(db, ws, dealIds)
       }
       const doc = await storeDocument(dealActor, { dealId: job.plan.deal.id, idempotencyKey: job.key, filename: pdf.filename, mimeType: "application/pdf", bytes: pdf.bytes, category: job.category, source: "demo_seed", sourceReference: VERSION })
       result[doc.processingState] = (result[doc.processingState] ?? 0) + 1
@@ -308,12 +327,12 @@ export async function verify(ws: string, sampleNames: string[]) {
       documents: docs.map(d => ({ id: d.id, filename: d.original_filename, state: d.processing_state })) })
   }
   // Read one stored PDF back through the app's storage and compare its checksum.
-  const doc = (await db.query(`SELECT storage_key, checksum, original_filename FROM mca_documents WHERE workspace_id=$1 AND deal_id=ANY($2::text[]) AND processing_state IN ('clean','ready') ORDER BY created_at LIMIT 1`, [ws, dealIds])).rows[0]
+  const doc = (await db.query(`SELECT storage_key, checksum, original_filename, processing_state FROM mca_documents WHERE workspace_id=$1 AND deal_id=ANY($2::text[]) AND processing_state IN ('clean','ready','pending_scan') ORDER BY processing_state='pending_scan', created_at LIMIT 1`, [ws, dealIds])).rows[0]
   let storageReadBack: Record<string, unknown> = { available: false }
   if (doc) {
     const { documentStorage } = await import("../documents/storage")
     const bytes = await documentStorage().get(doc.storage_key)
-    storageReadBack = { available: true, filename: doc.original_filename, bytes: bytes.byteLength, checksumMatches: sha256(bytes) === doc.checksum, pdfHeader: Buffer.from(bytes.subarray(0, 5)).toString() === "%PDF-" }
+    storageReadBack = { available: true, state: doc.processing_state, filename: doc.original_filename, bytes: bytes.byteLength, checksumMatches: sha256(bytes) === doc.checksum, pdfHeader: Buffer.from(bytes.subarray(0, 5)).toString() === "%PDF-" }
   }
   return { targetDeals: plans.length, pending: { deals: plans.filter(p => p.dealChanged).length, owners: plans.filter(p => p.ownersChanged).length, merchants: plans.filter(p => p.merchantChanged).length },
     submissionReady: plans.filter(p => p.deal.draft_state === "submission_ready").length, testText, docStates, samples, storageReadBack }
@@ -337,6 +356,8 @@ async function assertBackupScope(db: Q, ws: string, data: Backup, deals: Row[]) 
   const merchantIds = new Set(t.deals.map(r => r.merchant_id).filter(Boolean))
   for (const r of t.mca_merchants) assert.ok(merchantIds.has(r.id), `Backup merchant ${r.id} is not linked to a seeded deal in the backup`)
   for (const r of t.mca_merchant_owners) assert.ok(merchantIds.has(r.merchant_id), `Backup merchant owner ${r.id} is not on a backed-up merchant`)
+  const shared = (await db.query(`SELECT 1 FROM deals WHERE workspace_id=$1 AND merchant_id=ANY($2::text[]) AND NOT id=ANY($3::text[]) LIMIT 1`, [ws, [...merchantIds], dealIds])).rows
+  assert.equal(shared.length, 0, "A backup merchant is used by a deal outside the seeded deals")
   const advances = new Set((await db.query(`SELECT id FROM mca_advances WHERE workspace_id=$1 AND deal_id=ANY($2::text[])`, [ws, dealIds])).rows.map(r => r.id))
   for (const r of t.mca_advance_status_history) assert.ok(advances.has(r.advance_id), `Backup status history ${r.id} is not on a seeded deal's advance`)
   for (const r of t.mca_documents) assert.equal(r.storage_key, `${ws}/${r.deal_id}/${r.id}`, `Backup document ${r.id} has an unexpected storage key`)
