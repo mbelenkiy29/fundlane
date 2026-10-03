@@ -2,7 +2,7 @@ import { parseArgs } from "node:util"
 import { randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { closeDatabaseForTests } from "../../src/lib/mca/db"
-import { rescanBypassedDocuments } from "../../src/lib/mca/documents/rescan"
+import { isProductionDatabase, productionDatabaseWarning, rescanBypassedDocuments } from "../../src/lib/mca/documents/rescan"
 
 const USAGE = "Usage: rescan.ts --workspace-id=ID [--ids-file=PATH] [--include-audit] [--backfill-marker] [--apply --confirm-database=HOST/DB]. Preview is the default."
 
@@ -22,11 +22,15 @@ async function main() {
   const workspaceId = values["workspace-id"]?.trim()
   if (!workspaceId) throw new Error(USAGE)
   const ids = values["ids-file"] ? readIds(values["ids-file"]) : undefined
+  const production = isProductionDatabase()
+  // Printed before any database access and again after the result, for preview and apply alike.
+  if (production) console.error(productionDatabaseWarning(values.apply))
   const result = await rescanBypassedDocuments({ workspaceId, userId: null, membershipId: null, role: "admin", source: "system",
     managedMembershipIds: [], activeMembershipIds: [], correlationId: `document-rescan-${randomUUID()}` }, {
     apply: values.apply, ids, includeAudit: values["include-audit"], backfillMarker: values["backfill-marker"], confirmDatabase: values["confirm-database"]?.trim(),
   })
   console.log(JSON.stringify({ workspaceId, idsFromFile: ids?.length ?? 0, ...result }))
+  if (production) console.error(productionDatabaseWarning(values.apply))
   if (result.failed.length) process.exitCode = 1
 }
 

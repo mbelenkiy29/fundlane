@@ -8,7 +8,7 @@ import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
 import { updateDocumentScan } from "../src/lib/mca/documents/repository"
 import { getDocument, getDocumentContent, listDocuments, storeDocument } from "../src/lib/mca/documents/service"
-import { databaseIdentity, rescanBypassedDocuments } from "../src/lib/mca/documents/rescan"
+import { databaseIdentity, isProductionDatabase, productionDatabaseWarning, rescanBypassedDocuments } from "../src/lib/mca/documents/rescan"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
 
 delete process.env.MCA_DOCUMENT_SCANNER
@@ -103,6 +103,32 @@ test("databaseIdentity names host/database without credentials or port", () => {
   assert.ok(confirm.endsWith(new URL(testDatabase.databaseUrl).pathname.slice(1)))
 })
 
+test("production database detection matches the prod project ref in host or username only, and the warning leaks nothing", () => {
+  const ref = "drubsfvhlggmtyiigwxy"
+  for (const url of [
+    `postgresql://postgres.${ref}:s3cret-pass@aws-0-us-east-1.pooler.supabase.com:6543/postgres`,
+    `postgresql://postgres:s3cret-pass@db.${ref}.supabase.co:5432/postgres`,
+    `postgres://POSTGRES.${ref.toUpperCase()}:x@pooler.example.test/postgres`,
+    `postgres://postgres%2E${ref}:x@pooler.example.test/postgres`,
+  ]) assert.equal(isProductionDatabase(url), true, url.replace(/:[^:@/]+@/, ":***@"))
+  for (const url of [
+    testDatabase.databaseUrl,
+    "postgres://postgres:postgres@127.0.0.1:5432/fundlane_test_documents_rescan_ab12cd34ef",
+    "postgresql://postgres.abcdefghijklmnopqrst:x@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+    `postgres://postgres:${ref}@localhost:5432/postgres`,
+    `postgres://postgres:x@localhost:5432/${ref}`,
+    "",
+  ]) assert.equal(isProductionDatabase(url), false, url)
+  assert.equal(isProductionDatabase(undefined), false)
+  assert.equal(isProductionDatabase(testDatabase.databaseUrl), false)
+  for (const apply of [false, true]) {
+    const warning = productionDatabaseWarning(apply)
+    assert.match(warning, /PRODUCTION DATABASE/)
+    assert.match(warning, apply ? /--apply WILL CHANGE PRODUCTION/ : /Preview only/)
+    assert.doesNotMatch(warning, /s3cret|postgres:|supabase\.co|pooler/)
+  }
+})
+
 test("bypassed deal documents carry a not-virus-checked marker; real scans do not", async () => {
   const byId = new Map((await listDocuments(actor(), dealId)).map(doc => [doc.id, doc]))
   assert.equal(byId.get(docs["clean-a"])?.scanBypassed, true)
@@ -135,6 +161,7 @@ test("preview lists marked files in this workspace only and writes nothing", asy
   assert.equal(preview.apply, false)
   assert.equal(preview.scannerReady, true)
   assert.equal(preview.database, confirm)
+  assert.equal(preview.productionDatabase, false)
   assert.equal(preview.candidates, 5)
   assert.deepEqual(new Set(preview.notFound), new Set([docs.other, "missing-id"]))
   assert.deepEqual(preview.notReady, [{ id: docs.blocked, state: "quarantined" }])

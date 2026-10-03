@@ -26,6 +26,8 @@ export interface RescanResult {
   mode: "rescan" | "backfill_marker"
   apply: boolean
   database: string
+  /** The target is the production database (see isProductionDatabase). */
+  productionDatabase: boolean
   scanner: string
   scannerReady: boolean
   candidates: number
@@ -49,6 +51,33 @@ export function databaseIdentity(url = process.env.DATABASE_URL): string {
     const parsed = new URL(url)
     return `${parsed.hostname}/${decodeURIComponent(parsed.pathname.replace(/^\/+/, ""))}`
   } catch { return "" }
+}
+
+/** Supabase project ref of the production database. */
+export const PRODUCTION_PROJECT_REF = "drubsfvhlggmtyiigwxy"
+
+/**
+ * True when the URL's host or username contains the production project ref, e.g. the pooler user
+ * `postgres.<ref>` or the direct host `db.<ref>.supabase.co`. Only host and username are inspected; nothing is returned or logged.
+ */
+export function isProductionDatabase(url = process.env.DATABASE_URL): boolean {
+  if (!url) return false
+  const ref = PRODUCTION_PROJECT_REF
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname.toLowerCase().includes(ref) || decodeURIComponent(parsed.username).toLowerCase().includes(ref)
+  } catch {
+    // Unparseable URL: err on the side of warning.
+    return url.toLowerCase().includes(ref)
+  }
+}
+
+/** Loud banner for operators; contains no part of the connection string. */
+export function productionDatabaseWarning(apply: boolean): string {
+  const bar = "!".repeat(78)
+  return [bar, `!!! PRODUCTION DATABASE (Supabase project ${PRODUCTION_PROJECT_REF}) !!!`,
+    apply ? "!!! --apply WILL CHANGE PRODUCTION DOCUMENTS. Infrastructure only, with a fresh backup taken first. !!!"
+      : "!!! Preview only (nothing is written), but this is PRODUCTION. Any --apply goes through Infrastructure. !!!", bar].join("\n")
 }
 
 function assertCanWrite(options: RescanOptions, database: string) {
@@ -118,7 +147,7 @@ export async function rescanBypassedDocuments(actor: DealActor, options: RescanO
     throw new AppError(503, "rescan_scanner_unavailable", "Refusing to rescan: turn MCA_DOCUMENT_SCAN_BYPASS off and configure a real MCA_DOCUMENT_SCANNER first.")
   }
   const result: RescanResult = {
-    mode: options.backfillMarker ? "backfill_marker" : "rescan", apply, database, scanner: scanner.name, scannerReady: ready,
+    mode: options.backfillMarker ? "backfill_marker" : "rescan", apply, database, productionDatabase: isProductionDatabase(), scanner: scanner.name, scannerReady: ready,
     candidates: 0, notFound: [], notReady: [], alreadyScanned: 0, rescannedClean: 0, quarantined: [], markerBackfilled: 0, failed: [],
   }
   for (const id of await candidateIds(actor.workspaceId, options)) {

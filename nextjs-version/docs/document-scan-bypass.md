@@ -58,6 +58,8 @@ Unset `MCA_DOCUMENT_SCAN_BYPASS` and configure a scanner (see `docs/cloudmersive
 
 `scripts/documents/rescan.ts` rescans deal documents (`mca_documents`) with the configured real scanner.
 
+> **Who runs it.** The first real run, and any `--apply` (rescan or `--backfill-marker`) against production, goes through **Infrastructure**. A fresh database backup is taken first. It is never run ad hoc. When the target is the production database (the host or username contains the Supabase project ref `drubsfvhlggmtyiigwxy`, e.g. pooler user `postgres.drubsfvhlggmtyiigwxy` or host `db.drubsfvhlggmtyiigwxy.supabase.co`), the script prints a loud **PRODUCTION DATABASE** warning to stderr before and after both preview and apply. The output JSON also carries `productionDatabase: true`. The warning never prints the connection string. It doesn't block the run: the `--confirm-database` and real-scanner guards below still apply.
+
 ```bash
 cd nextjs-version
 # Env: DATABASE_URL, MCA_DATA_ENCRYPTION_KEY, MCA_DOCUMENT_STORAGE_PROVIDER=supabase, SUPABASE_URL, SUPABASE_SECRET_KEY,
