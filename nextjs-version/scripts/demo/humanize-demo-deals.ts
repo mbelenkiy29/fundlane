@@ -20,7 +20,7 @@ export const SEED_BATCH = "ben-demo-20260916-v1"
 const PROD_REF = "drubsfvhlggmtyiigwxy"
 const VERSION = "humanize-demo-v1"
 type Row = Record<string, any>
-type Options = { workspace: string; csv: string; apply: boolean; documents: boolean; allowProd: boolean; actorEmail?: string; pdfOut?: string; out?: string }
+type Options = { workspace: string; csv: string; apply: boolean; documents: boolean; allowProd: boolean; onlyCsvRows?: boolean; replaceStaleDocuments?: boolean; actorEmail?: string; pdfOut?: string; out?: string }
 
 const detId = (workspace: string, key: string) => {
   const hex = createHash("sha256").update(`${VERSION}:${workspace}:${key}`).digest("hex")
@@ -44,6 +44,7 @@ type OwnerRow = { id: string; first_name: string; last_name: string; ownership_p
 type Plan = {
   deal: Row; profile: DealProfile; displayId: string; merchantId: string; missing: string[]; draftState: string
   owners: OwnerRow[]; merchantOwners: OwnerRow[]; dealChanged: boolean; ownersChanged: boolean; merchantChanged: boolean
+  startDate?: string; monthlyRevenue?: number; requestedAmount?: number
 }
 
 function ownersFor(ws: string, prefix: string, profile: DealProfile): OwnerRow[] {
@@ -54,10 +55,12 @@ function sameOwners(ws: string, current: Row[], desired: OwnerRow[]) {
   return norm(current, true) === norm(desired, false)
 }
 
-export async function planHumanize(client: pg.Client, workspace: string, businesses: ReturnType<typeof parseBusinessesCsv>): Promise<Plan[]> {
-  const deals = (await client.query(`SELECT * FROM deals WHERE workspace_id=$1 AND idempotency_key LIKE $2 ORDER BY split_part(idempotency_key, ':', 3)::int`, [workspace, `${SEED_BATCH}:deal:%`])).rows
-  assert.ok(deals.length > 0, `No ${SEED_BATCH} demo deals in workspace ${workspace}`)
-  assert.equal(businesses.length, deals.length, `CSV has ${businesses.length} businesses but the workspace has ${deals.length} demo deals; they must match`)
+export async function planHumanize(client: pg.Client, workspace: string, businesses: ReturnType<typeof parseBusinessesCsv>, onlyCsvRows = false): Promise<Plan[]> {
+  const allDeals = (await client.query(`SELECT * FROM deals WHERE workspace_id=$1 AND idempotency_key LIKE $2 ORDER BY split_part(idempotency_key, ':', 3)::int`, [workspace, `${SEED_BATCH}:deal:%`])).rows
+  assert.ok(allDeals.length > 0, `No ${SEED_BATCH} demo deals in workspace ${workspace}`)
+  // --only-csv-rows: a shorter CSV updates the first N demo deals and leaves the rest exactly as they are (data and documents).
+  if (!(onlyCsvRows && businesses.length < allDeals.length)) assert.equal(businesses.length, allDeals.length, `CSV has ${businesses.length} businesses but the workspace has ${allDeals.length} demo deals; they must match (or pass --only-csv-rows to update just the first ${businesses.length})`)
+  const deals = allDeals.slice(0, businesses.length)
   const dealIds = deals.map(d => d.id)
   const ownerRows = (await client.query(`SELECT * FROM deal_owners WHERE workspace_id=$1 AND deal_id=ANY($2::text[]) ORDER BY id`, [workspace, dealIds])).rows
   const merchants = new Map((await client.query(`SELECT * FROM mca_merchants WHERE workspace_id=$1 AND id IN (SELECT merchant_id FROM deals WHERE workspace_id=$1 AND id=ANY($2::text[]))`, [workspace, dealIds])).rows.map(m => [m.id, m]))
@@ -70,7 +73,11 @@ export async function planHumanize(client: pg.Client, workspace: string, busines
   const used = new Set<string>()
   return deals.map((deal, i) => {
     let profile = buildProfile(i, businesses[i], used)
-    while (outsideEinHashes.has(einLookupHash(workspace, profile.ein))) profile = buildProfile(i, businesses[i], used)
+    if (businesses[i].details) assert.ok(!outsideEinHashes.has(einLookupHash(workspace, profile.ein)), `CSV EIN for ${profile.dbaName} is already used by another record in this workspace`)
+    else while (outsideEinHashes.has(einLookupHash(workspace, profile.ein))) profile = buildProfile(i, businesses[i], used)
+    const startDate = profile.startDate ?? deal.start_date ?? undefined
+    const monthlyRevenue = profile.monthlyRevenue ?? (deal.monthly_revenue === null ? undefined : Number(deal.monthly_revenue))
+    const requestedAmount = profile.requestedAmount ?? (deal.requested_amount === null ? undefined : Number(deal.requested_amount))
     // The app's own format for new deals (deals/service.ts createDeal).
     const displayId = `MCA-${String(deal.id).slice(0, 8).toUpperCase()}`
     assert.ok(!outsideDisplayIds.has(displayId), `Display id ${displayId} is already used by another deal`)
@@ -78,8 +85,7 @@ export async function planHumanize(client: pg.Client, workspace: string, busines
     assert.ok(!sharedMerchants.includes(merchantId), `Deal ${deal.id} links to a merchant shared with other deals; refusing to edit it`)
     const missing = submissionMissingFields({
       legalName: profile.legalName, entityType: profile.entityType, address: profile.address, contactPhone: profile.contactPhone,
-      startDate: deal.start_date ?? undefined, industry: profile.industry, monthlyRevenue: deal.monthly_revenue ?? undefined,
-      requestedAmount: deal.requested_amount ?? undefined, fundingPurpose: profile.fundingPurpose,
+      startDate, industry: profile.industry, monthlyRevenue, requestedAmount, fundingPurpose: profile.fundingPurpose,
       owners: profile.owners.map((o, n) => ({ id: String(n), firstName: o.firstName, lastName: o.lastName, ownershipPercent: o.ownershipPercent, isPrimary: o.isPrimary })),
     } as Pick<DealRecord, "legalName" | "entityType" | "address" | "contactPhone" | "startDate" | "industry" | "monthlyRevenue" | "requestedAmount" | "fundingPurpose" | "owners">)
     const draftState = missing.length ? "partial" : "submission_ready"
@@ -89,6 +95,8 @@ export async function planHumanize(client: pg.Client, workspace: string, busines
     const dealChanged = deal.display_id !== displayId || deal.legal_name !== profile.legalName || deal.dba_name !== profile.dbaName || deal.entity_type !== profile.entityType
       || deal.address_json !== JSON.stringify(profile.address) || deal.contact_name !== profile.contactName || deal.industry !== profile.industry || deal.funding_purpose !== profile.fundingPurpose
       || deal.missing_required_json !== JSON.stringify(missing) || deal.draft_state !== draftState || deal.merchant_id !== merchantId
+      || (deal.start_date ?? undefined) !== startDate || (deal.monthly_revenue === null ? undefined : Number(deal.monthly_revenue)) !== monthlyRevenue
+      || (deal.requested_amount === null ? undefined : Number(deal.requested_amount)) !== requestedAmount
       || dec(deal.ein_cipher, ws) !== profile.ein || deal.ein_lookup_hash !== einLookupHash(ws, profile.ein)
       || dec(deal.contact_email_cipher, ws) !== profile.contactEmail || dec(deal.contact_phone_cipher, ws) !== profile.contactPhone
     const ownersChanged = !sameOwners(ws, ownerRows.filter(o => o.deal_id === deal.id), owners)
@@ -96,7 +104,7 @@ export async function planHumanize(client: pg.Client, workspace: string, busines
     const merchantChanged = !m || m.legal_name !== profile.legalName || m.dba_name !== profile.dbaName || m.contact_name !== profile.contactName || m.address_json !== JSON.stringify(profile.address)
       || dec(m.ein_cipher, ws) !== profile.ein || m.ein_lookup_hash !== einLookupHash(ws, profile.ein) || dec(m.contact_email_cipher, ws) !== profile.contactEmail || dec(m.contact_phone_cipher, ws) !== profile.contactPhone
       || !sameOwners(ws, merchantOwnerRows.filter(o => o.merchant_id === merchantId), merchantOwners)
-    return { deal, profile, displayId, merchantId, missing, draftState, owners, merchantOwners, dealChanged, ownersChanged, merchantChanged }
+    return { deal, profile, displayId, merchantId, missing, draftState, owners, merchantOwners, dealChanged, ownersChanged, merchantChanged, startDate, monthlyRevenue, requestedAmount }
   })
 }
 
@@ -123,9 +131,11 @@ async function applyPlan(client: pg.Client, ws: string, plans: Plan[]) {
     }
     if (p.dealChanged) {
       const result = await client.query(`UPDATE deals SET display_id=$3, legal_name=$4, dba_name=$5, entity_type=$6, address_json=$7, contact_name=$8, contact_email_cipher=$9, contact_phone_cipher=$10,
-        ein_cipher=$11, ein_lookup_hash=$12, industry=$13, funding_purpose=$14, missing_required_json=$15, draft_state=$16, merchant_id=$17, version=version+1, updated_at=$18
+        ein_cipher=$11, ein_lookup_hash=$12, industry=$13, funding_purpose=$14, missing_required_json=$15, draft_state=$16, merchant_id=$17, version=version+1, updated_at=$18,
+        start_date=$20, monthly_revenue=$21, requested_amount=$22
         WHERE workspace_id=$1 AND id=$2 AND version=$19`, [ws, p.deal.id, p.displayId, p.profile.legalName, p.profile.dbaName, p.profile.entityType, JSON.stringify(p.profile.address), p.profile.contactName,
-        enc(p.profile.contactEmail), enc(p.profile.contactPhone), enc(p.profile.ein), einLookupHash(ws, p.profile.ein), p.profile.industry, p.profile.fundingPurpose, JSON.stringify(p.missing), p.draftState, p.merchantId, now, p.deal.version])
+        enc(p.profile.contactEmail), enc(p.profile.contactPhone), enc(p.profile.ein), einLookupHash(ws, p.profile.ein), p.profile.industry, p.profile.fundingPurpose, JSON.stringify(p.missing), p.draftState, p.merchantId, now, p.deal.version,
+        p.startDate ?? null, p.monthlyRevenue ?? null, p.requestedAmount ?? null])
       assert.equal(result.rowCount, 1, `Deal ${p.deal.id} changed concurrently`)
       counts.deals++
     }
@@ -153,34 +163,60 @@ async function resolveActor(client: pg.Client, ws: string, email?: string) {
 }
 
 function pdfDeal(p: Plan): PdfDeal {
-  return { profile: p.profile, monthlyRevenue: Number(p.deal.monthly_revenue ?? 50000), requestedAmount: Number(p.deal.requested_amount ?? 50000), startDate: p.deal.start_date, createdAt: p.deal.created_at, displayId: p.displayId }
+  return { profile: p.profile, monthlyRevenue: p.monthlyRevenue ?? 50000, requestedAmount: p.requestedAmount ?? 50000, startDate: p.startDate ?? null, createdAt: p.deal.created_at, displayId: p.displayId }
 }
+
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 
 async function uploadDocuments(client: pg.Client, ws: string, plans: Plan[], options: Options) {
   if (options.pdfOut) await mkdir(options.pdfOut, { recursive: true })
-  const existing = new Map((await client.query(`SELECT idempotency_key, processing_state FROM mca_documents WHERE workspace_id=$1 AND idempotency_key LIKE $2`, [ws, `${VERSION}:%`])).rows.map(r => [r.idempotency_key, r.processing_state]))
-  const jobs: Array<{ plan: Plan; key: string; category: "statement" | "application"; build: () => Promise<{ bytes: Uint8Array; filename: string }> }> = []
+  const existing = new Map((await client.query(`SELECT id, idempotency_key, processing_state, checksum, storage_key FROM mca_documents WHERE workspace_id=$1 AND idempotency_key LIKE $2`, [ws, `${VERSION}:%`])).rows.map(r => [r.idempotency_key, r]))
+  type Job = { plan: Plan; key: string; category: "statement" | "application"; pdf: { bytes: Uint8Array; filename: string }; stale?: Row }
+  const jobs: Job[] = []
   for (const plan of plans) {
-    jobs.push({ plan, key: `${VERSION}:${plan.deal.id}:statement`, category: "statement", build: () => bankStatementPdf(pdfDeal(plan)) })
-    jobs.push({ plan, key: `${VERSION}:${plan.deal.id}:application`, category: "application", build: () => signedApplicationPdf(pdfDeal(plan)) })
+    jobs.push({ plan, key: `${VERSION}:${plan.deal.id}:statement`, category: "statement", pdf: await bankStatementPdf(pdfDeal(plan)) })
+    jobs.push({ plan, key: `${VERSION}:${plan.deal.id}:application`, category: "application", pdf: await signedApplicationPdf(pdfDeal(plan)) })
   }
-  const pending = jobs.filter(j => !["clean", "ready"].includes(existing.get(j.key) ?? ""))
-  const result: Record<string, number> = { alreadyReady: jobs.length - pending.length }
-  if (options.pdfOut) for (const j of jobs.slice(0, 10)) { const pdf = await j.build(); await writeFile(join(options.pdfOut, `${j.plan.displayId}-${pdf.filename}`), pdf.bytes) }
-  if (!options.apply) return { ...result, wouldUpload: pending.length }
+  // A ready document whose bytes differ from what the deal data now produces is stale (e.g. owners or EIN changed since it was generated).
+  const pending: Job[] = [], stale: Job[] = []
+  let alreadyReady = 0
+  for (const j of jobs) {
+    const cur = existing.get(j.key)
+    if (cur && ["clean", "ready"].includes(cur.processing_state) && cur.checksum === sha256(j.pdf.bytes)) alreadyReady++
+    else if (cur) stale.push({ ...j, stale: cur })
+    else pending.push(j)
+  }
+  const result: Record<string, number> = { alreadyReady, missing: pending.length, stale: stale.length }
+  if (options.pdfOut) for (const j of jobs.slice(0, 10)) await writeFile(join(options.pdfOut, `${j.plan.displayId}-${j.pdf.filename}`), j.pdf.bytes)
+  if (!options.apply) return { ...result, wouldUpload: pending.length + (options.replaceStaleDocuments ? stale.length : 0), wouldReplace: options.replaceStaleDocuments ? stale.length : 0 }
+  if (stale.length && !options.replaceStaleDocuments) console.error(JSON.stringify({ event: "stale_documents_kept", count: stale.length, hint: "pass --replace-stale-documents to regenerate them" }))
   if (process.env.MCA_DOCUMENT_STORAGE_PROVIDER !== "supabase") throw new Error("Set MCA_DOCUMENT_STORAGE_PROVIDER=supabase (plus SUPABASE_URL/SUPABASE_SECRET_KEY) so documents use the app's real storage path")
   const { documentScanner } = await import("../../src/lib/mca/documents/scanner")
   if (documentScanner().name === "unconfigured") throw new Error("Configure MCA_DOCUMENT_SCANNER (e.g. clamdscan) so uploads are scanned and promoted like in the app")
   const { storeDocument } = await import("../../src/lib/mca/documents/service")
+  const { storageClient, quarantineBucket } = await import("../../src/lib/mca/documents/storage")
   const actor = await resolveActor(client, ws, options.actorEmail)
   const dealActor = { workspaceId: ws, userId: actor.user_id, membershipId: actor.membership_id, role: actor.role, managedMembershipIds: [], activeMembershipIds: [actor.membership_id], source: "system" as const, correlationId: `${VERSION}:${randomUUID()}` }
+  const work = [...pending, ...(options.replaceStaleDocuments ? stale : [])]
+  if (options.replaceStaleDocuments && stale.length) {
+    const ids = stale.map(j => j.stale!.id)
+    const refs = (await client.query(`SELECT count(*)::int n FROM mca_outgoing_derivatives WHERE original_document_id=ANY($1::text[])`, [ids])).rows[0].n
+    assert.equal(refs, 0, "Some stale demo documents have outgoing derivatives (they were sent somewhere); refusing to replace them")
+  }
   let next = 0
   const worker = async () => {
-    while (next < pending.length) {
-      const job = pending[next++]
-      const pdf = await job.build()
+    while (next < work.length) {
+      const job = work[next++]
       try {
-        const doc = await storeDocument(dealActor, { dealId: job.plan.deal.id, idempotencyKey: job.key, filename: pdf.filename, mimeType: "application/pdf", bytes: pdf.bytes, category: job.category, source: "demo_seed", sourceReference: VERSION })
+        if (job.stale) {
+          // Replace = remove the generated row and its stored object, then upload the new PDF under the same idempotency key.
+          const del = await client.query(`DELETE FROM mca_documents WHERE workspace_id=$1 AND id=$2 AND idempotency_key=$3 AND source='demo_seed' AND source_reference=$4`, [ws, job.stale.id, job.key, VERSION])
+          assert.equal(del.rowCount, 1, `Could not remove stale document ${job.stale.id}`)
+          const storage = storageClient()
+          for (const bucket of [process.env.MCA_SUPABASE_DOCUMENT_BUCKET ?? "fundlane-documents", quarantineBucket()]) await storage.storage.from(bucket).remove([job.stale.storage_key])
+          result.replaced = (result.replaced ?? 0) + 1
+        }
+        const doc = await storeDocument(dealActor, { dealId: job.plan.deal.id, idempotencyKey: job.key, filename: job.pdf.filename, mimeType: "application/pdf", bytes: job.pdf.bytes, category: job.category, source: "demo_seed", sourceReference: VERSION })
         result[doc.processingState] = (result[doc.processingState] ?? 0) + 1
       } catch (error) {
         result.failed = (result.failed ?? 0) + 1
@@ -189,6 +225,8 @@ async function uploadDocuments(client: pg.Client, ws: string, plans: Plan[], opt
     }
   }
   await Promise.all(Array.from({ length: Number(process.env.HUMANIZE_UPLOAD_CONCURRENCY ?? 2) }, worker))
+  if (result.replaced) await client.query(`INSERT INTO audit_events (id, workspace_id, actor_user_id, source, action, resource_type, resource_id, metadata, correlation_id, created_at)
+    VALUES ($1,$2,NULL,'system','demo.humanize.documents_replaced','demo_batch',$3,$4,$5,$6)`, [randomUUID(), ws, SEED_BATCH, JSON.stringify({ version: VERSION, replaced: result.replaced }), VERSION, new Date().toISOString()])
   return result
 }
 
@@ -200,17 +238,18 @@ export async function humanize(client: pg.Client, options: Options) {
   let plans: Plan[], counts: Record<string, number> | undefined
   try {
     if (options.apply) await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${VERSION}:${options.workspace}`])
-    plans = await planHumanize(client, options.workspace, businesses)
+    plans = await planHumanize(client, options.workspace, businesses, options.onlyCsvRows)
     if (options.apply) { counts = await applyPlan(client, options.workspace, plans); await client.query(`INSERT INTO audit_events (id, workspace_id, actor_user_id, source, action, resource_type, resource_id, metadata, correlation_id, created_at)
       VALUES ($1,$2,NULL,'system','demo.humanize.applied','demo_batch',$3,$4,$5,$6)`, [randomUUID(), options.workspace, SEED_BATCH, JSON.stringify({ version: VERSION, counts }), VERSION, new Date().toISOString()]) }
     await client.query(options.apply && counts && Object.values(counts).some(Boolean) ? "COMMIT" : "ROLLBACK")
   } catch (error) { await client.query("ROLLBACK"); throw error }
   // Documents need the deal data in place first (the PDFs show it).
-  const documents = options.documents ? await uploadDocuments(client, options.workspace, options.apply ? await planHumanize(client, options.workspace, businesses) : plans, options) : undefined
+  const documents = options.documents ? await uploadDocuments(client, options.workspace, options.apply ? await planHumanize(client, options.workspace, businesses, options.onlyCsvRows) : plans, options) : undefined
   return {
     mode: options.apply ? "apply" : "dry-run", workspace, deals: plans.length,
     planned: { dealUpdates: plans.filter(p => p.dealChanged).length, ownerSets: plans.filter(p => p.ownersChanged).length, merchantUpserts: plans.filter(p => p.merchantChanged).length, secondOwners: plans.filter(p => p.owners.length > 1).length, incomplete: plans.filter(p => p.missing.length).length },
-    applied: counts, documents, unmatchedIndustry: plans.filter(p => !matchedIndustryRule(p.profile.dbaName)).map(p => p.profile.dbaName),
+    applied: counts, documents, unmatchedIndustry: plans.filter((p, i) => !businesses[i].details && !matchedIndustryRule(p.profile.dbaName)).map(p => p.profile.dbaName),
+    csvDriven: businesses.some(b => b.details), untouchedDemoDeals: options.onlyCsvRows ? Math.max(0, (await client.query(`SELECT count(*)::int n FROM deals WHERE workspace_id=$1 AND idempotency_key LIKE $2`, [options.workspace, `${SEED_BATCH}:deal:%`])).rows[0].n - plans.length) : 0,
     plans,
   }
 }
@@ -218,8 +257,8 @@ export async function humanize(client: pg.Client, options: Options) {
 function arg(name: string) { return process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3) }
 
 async function main() {
-  const options: Options = { workspace: arg("workspace") ?? "", csv: arg("csv") ?? "", apply: process.argv.includes("--apply"), documents: process.argv.includes("--documents"), allowProd: process.argv.includes("--allow-prod"), actorEmail: arg("actor-email"), pdfOut: arg("pdf-out"), out: arg("out") }
-  assert.ok(options.workspace && options.csv, "Usage: humanize-demo-deals.ts --workspace=<id> --csv=<businesses.csv> [--documents] [--apply] [--pdf-out=dir] [--out=plan.json] [--reencrypt-unreadable]")
+  const options: Options = { workspace: arg("workspace") ?? "", csv: arg("csv") ?? "", apply: process.argv.includes("--apply"), documents: process.argv.includes("--documents"), allowProd: process.argv.includes("--allow-prod"), actorEmail: arg("actor-email"), pdfOut: arg("pdf-out"), out: arg("out"), onlyCsvRows: process.argv.includes("--only-csv-rows"), replaceStaleDocuments: process.argv.includes("--replace-stale-documents") }
+  assert.ok(options.workspace && options.csv, "Usage: humanize-demo-deals.ts --workspace=<id> --csv=<businesses.csv> [--documents] [--replace-stale-documents] [--only-csv-rows] [--apply] [--pdf-out=dir] [--out=plan.json] [--reencrypt-unreadable]")
   allowUnreadable = process.argv.includes("--reencrypt-unreadable")
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL required")
   const ref = /([a-z]{20})/.exec(new URL(process.env.DATABASE_URL).username + " " + new URL(process.env.DATABASE_URL).hostname)?.[1] ?? "unknown"
@@ -229,7 +268,7 @@ async function main() {
   await client.connect()
   try {
     const result = await humanize(client, options)
-    const sample = result.plans.slice(0, 5).map(p => ({ displayId: p.displayId, legalName: p.profile.legalName, dba: p.profile.dbaName, owner: p.profile.contactName, owners: p.profile.owners.map(o => `${o.firstName} ${o.lastName} ${o.ownershipPercent}%`), phone: p.profile.contactPhone, email: p.profile.contactEmail, ein: p.profile.ein, industry: p.profile.industry, purpose: p.profile.fundingPurpose, city: `${p.profile.address.city}, ${p.profile.address.state}` }))
+    const sample = result.plans.slice(0, 5).map(p => ({ displayId: p.displayId, legalName: p.profile.legalName, dba: p.profile.dbaName, owner: p.profile.contactName, owners: p.profile.owners.map(o => `${o.firstName} ${o.lastName} ${o.ownershipPercent}%`), phone: p.profile.contactPhone, email: p.profile.contactEmail, ein: p.profile.ein, entityType: p.profile.entityType, industry: p.profile.industry, purpose: p.profile.fundingPurpose, city: `${p.profile.address.city}, ${p.profile.address.state}`, startDate: p.startDate, monthlyRevenue: p.monthlyRevenue, requestedAmount: p.requestedAmount, ownerContacts: p.profile.owners.map(o => `${o.email} ${o.phone}`) }))
     if (options.out) await writeFile(resolve(options.out), JSON.stringify({ ...result, plans: result.plans.map(p => ({ dealId: p.deal.id, from: p.deal.legal_name, displayId: p.displayId, merchantId: p.merchantId, draftState: p.draftState, profile: p.profile })) }, null, 2) + "\n", { mode: 0o600 })
     console.log(JSON.stringify({ projectRef: ref, ...result, plans: undefined, unreadableCiphersReencrypted: unreadableCount, sample }, null, 2))
   } finally { await client.end() }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib"
-import type { DealProfile } from "./humanize-demo-profiles"
+import { ENTITY_LABELS, type DealProfile } from "./humanize-demo-profiles"
 
 /** Sample PDFs for demo deals. Every page carries the testing-only footer; bank names are invented. Output is deterministic. */
 export const SAMPLE_FOOTER = "SAMPLE — FOR SOFTWARE TESTING ONLY"
@@ -120,7 +120,7 @@ export async function signedApplicationPdf(deal: PdfDeal): Promise<{ bytes: Uint
   const section = (page: PDFPage, title: string) => { page.drawRectangle({ x: 40, y: y - 4, width: 532, height: 18, color: rgb(0.9, 0.93, 0.97) }); page.drawText(title, { x: 46, y, size: 10, font: fonts.bold }); y -= 24 }
   const field = (page: PDFPage, label: string, value: string, x = 46, w = 250) => { page.drawText(label, { x, y: y + 10, size: 7, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) }); page.drawText(value, { x, y: y - 2, size: 10, font: fonts.regular }); page.drawLine({ start: { x, y: y - 6 }, end: { x: x + w, y: y - 6 }, thickness: 0.4, color: rgb(0.7, 0.7, 0.7) }) }
   const row = (page: PDFPage, a: [string, string], b?: [string, string]) => { field(page, a[0], a[1]); if (b) field(page, b[0], b[1], 316); y -= 30 }
-  const entity = p.entityType === "llc" ? "Limited Liability Company" : "Corporation"
+  const entity = ENTITY_LABELS[p.entityType]
   const usd = (dollars: number) => money(Math.round(dollars * 100)).replace(/\.00$/, "")
   section(page1, "Business information")
   row(page1, ["Legal business name", p.legalName], ["DBA", p.dbaName])

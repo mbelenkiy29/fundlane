@@ -40,3 +40,20 @@ node --conditions=react-server --env-file=<env> --import tsx scripts/demo/humani
 The env file needs `DATABASE_URL` and the `MCA_DATA_ENCRYPTION_KEY` used by the app that will read the data. `--documents` also needs `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `MCA_DOCUMENT_STORAGE_PROVIDER=supabase` and a working scanner (`MCA_DOCUMENT_SCANNER`). Applying against production refuses to run without `--allow-prod`. Deals are matched by the batch idempotency key, never by name. Values are derived deterministically from the deal position, so staging and production get the same sample data.
 
 If existing encrypted values were written with a different key, the script stops. Pass `--reencrypt-unreadable` only when the key in the env file is the right one for the app; the script then rewrites those demo values with it.
+
+### Full client CSV (CSV-driven)
+
+If the CSV has the full client layout, its values are used as given instead of generated ones:
+
+`Business Name,Email,EIN,Entity Type,Street Address,City,State,ZIP Code,Contact Phone,Business Start Date,Industry,Monthly Revenue,Requested Funding,Use of Funds,Owners`
+
+- `Owners` looks like `Joseph Patel (50%); Daniel Morrison (25%); Grace Moreno (25%)`; percentages must add up to 100 and the first owner is the primary contact.
+- `Entity Type` maps to the app's enum: LLC → `llc`, C Corporation → `corporation`, S Corporation → `s_corporation`, Partnership → `partnership`, Sole Proprietorship → `sole_proprietor`. Legal names become "X LLC" / "X Inc."; partnerships and sole proprietors keep the business name.
+- `Use of Funds` becomes `funding_purpose`; start date, monthly revenue and requested amount are written to the deal. Offers and advances already on the deal are not changed.
+- Only owner emails (`first.last@<business domain>`) and owner mobile numbers (`555-01XX`, same area code as the business) are generated.
+
+Extra flags:
+
+- `--only-csv-rows`: the CSV may be shorter than the batch; the first N demo deals are updated and the rest are left exactly as they are (data and documents).
+- `--replace-stale-documents`: a generated PDF whose bytes no longer match the deal data (for example after owners or the EIN changed) is replaced: the old `demo_seed` row and its stored object are removed and the new PDF is uploaded under the same idempotency key. Without the flag, stale documents are only counted.
+

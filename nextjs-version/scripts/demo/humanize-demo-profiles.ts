@@ -2,13 +2,22 @@ import { createHash } from "node:crypto"
 
 /** Deterministic, realistic-looking sample data for demo deals. Pure functions only (no DB, no secrets). */
 
-export type Business = { name: string; email: string }
+export type EntityType = "llc" | "corporation" | "s_corporation" | "partnership" | "sole_proprietor"
+/** Client-supplied details (the full CSV). When present they are used as-is; only owner emails/phones and the bank are generated. */
+export type BusinessDetails = {
+  ein: string; entityType: EntityType; address: { line1: string; city: string; state: string; postalCode: string; country: "US" }
+  contactPhone: string; startDate: string; industry: string; monthlyRevenue: number; requestedAmount: number; fundingPurpose: string
+  owners: Array<{ firstName: string; lastName: string; ownershipPercent: number }>
+}
+export type Business = { name: string; email: string; details?: BusinessDetails }
 export type OwnerProfile = { firstName: string; lastName: string; ownershipPercent: number; isPrimary: boolean; email: string; phone: string; title: string }
 export type DealProfile = {
-  legalName: string; dbaName: string; entityType: "llc" | "corporation"; industry: string; fundingPurpose: string
+  legalName: string; dbaName: string; entityType: EntityType; industry: string; fundingPurpose: string
   contactName: string; contactEmail: string; contactPhone: string; ein: string
   address: { line1: string; city: string; state: string; postalCode: string; country: "US" }
   owners: OwnerProfile[]; bankName: string; accountSuffix: string
+  /** Only set for CSV-driven rows; the legacy name-only path keeps the deal's existing values. */
+  startDate?: string; monthlyRevenue?: number; requestedAmount?: number
 }
 
 /** Every `TEST …` funder name seeded by seed-ben.ts, mapped to an invented (non-real) funder name. */
@@ -23,8 +32,16 @@ export const FUNDER_NAMES: Record<string, string> = {
 /** Invented bank names for sample statements. None of these is a real bank. */
 export const BANK_NAMES = ["Bramblewood Community Bank", "Kestrel Valley Savings Bank", "Ashgrove Merchants Bank", "Pinemoor Federal Savings", "Quillfield Commerce Bank", "Hollowmere Trust Bank"]
 
-/** Simple CSV reader: header row, `#` comment lines and blank lines skipped, double-quoted fields supported. */
-export function parseBusinessesCsv(text: string): Business[] {
+/** CSV entity labels → the app's entity enum (src/lib/mca/deals/schema.ts ENTITY_TYPES). */
+export const ENTITY_TYPE_MAP: Record<string, EntityType> = {
+  "llc": "llc", "limited liability company": "llc",
+  "c corporation": "corporation", "c corp": "corporation", "corporation": "corporation", "inc": "corporation",
+  "s corporation": "s_corporation", "s corp": "s_corporation",
+  "partnership": "partnership", "general partnership": "partnership",
+  "sole proprietorship": "sole_proprietor", "sole proprietor": "sole_proprietor",
+}
+
+function readCsv(text: string): string[][] {
   const rows: string[][] = []
   for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
     if (!raw.trim() || raw.trimStart().startsWith("#")) continue
@@ -38,12 +55,60 @@ export function parseBusinessesCsv(text: string): Business[] {
     }
     cells.push(cell); rows.push(cells.map(c => c.trim()))
   }
-  const [header, ...body] = rows
-  if (!header || !/business/i.test(header[0] ?? "") || !/email/i.test(header[1] ?? "")) throw new Error("CSV header must be: Business Name,Email")
-  return body.map(([name, email], index) => {
-    if (!name || !email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error(`CSV row ${index + 2} needs a business name and a valid email`)
-    if (/\btest\b/i.test(name) || /\d/.test(name)) throw new Error(`CSV row ${index + 2}: business names must not contain "Test" or numbers`)
-    return { name, email: email.toLowerCase() }
+  return rows
+}
+
+const DETAIL_COLUMNS = ["ein", "entity type", "street address", "city", "state", "zip code", "contact phone", "business start date", "industry", "monthly revenue", "requested funding", "use of funds", "owners"] as const
+
+/**
+ * CSV reader: header row, `#` comment lines and blank lines skipped, double-quoted fields supported.
+ * Two layouts: `Business Name,Email` (everything else generated), or the full client layout
+ * `Business Name,Email,EIN,Entity Type,Street Address,City,State,ZIP Code,Contact Phone,Business Start Date,Industry,Monthly Revenue,Requested Funding,Use of Funds,Owners`
+ * where Owners looks like `Joseph Patel (50%); Daniel Morrison (25%); Grace Moreno (25%)`.
+ */
+export function parseBusinessesCsv(text: string): Business[] {
+  const [header, ...body] = readCsv(text)
+  const cols = (header ?? []).map(h => h.toLowerCase())
+  if (!/business/.test(cols[0] ?? "") || !/email/.test(cols[1] ?? "")) throw new Error("CSV header must start with: Business Name,Email")
+  const rich = DETAIL_COLUMNS.some(c => cols.includes(c))
+  if (rich) { const missing = DETAIL_COLUMNS.filter(c => !cols.includes(c)); if (missing.length) throw new Error(`CSV is missing columns: ${missing.join(", ")}`) }
+  const seenEins = new Set<string>()
+  return body.map((cells, index) => {
+    const line = index + 2, [name, rawEmail] = cells, email = (rawEmail ?? "").toLowerCase()
+    const fail = (msg: string): never => { throw new Error(`CSV row ${line} (${name}): ${msg}`) }
+    if (!name || !email || !/^\S+@\S+\.\S+$/.test(email)) fail("needs a business name and a valid email")
+    if (/\btest\b/i.test(name) || /\d/.test(name)) fail('business names must not contain "Test" or numbers')
+    if (!rich) return { name, email }
+    const get = (c: typeof DETAIL_COLUMNS[number]) => cells[cols.indexOf(c)] ?? ""
+    const einDigits = get("ein").replace(/\D/g, "")
+    if (einDigits.length !== 9) fail("EIN must have 9 digits")
+    const ein = `${einDigits.slice(0, 2)}-${einDigits.slice(2)}`
+    if (seenEins.has(ein)) fail(`EIN ${ein} is used by another row`); seenEins.add(ein)
+    const entityType = ENTITY_TYPE_MAP[get("entity type").toLowerCase().replace(/[.,]/g, "").trim()] ?? fail(`unknown entity type "${get("entity type")}"`)
+    const state = get("state").toUpperCase(), postalCode = get("zip code")
+    if (!/^[A-Z]{2}$/.test(state)) fail("State must be a 2-letter code")
+    if (!/^\d{5}$/.test(postalCode)) fail("ZIP Code must be 5 digits")
+    const phoneDigits = get("contact phone").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "")
+    if (phoneDigits.length !== 10) fail("Contact Phone must be a 10-digit US number")
+    const contactPhone = `(${phoneDigits.slice(0, 3)}) ${phoneDigits.slice(3, 6)}-${phoneDigits.slice(6)}`
+    const startDate = get("business start date")
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || Number.isNaN(Date.parse(startDate))) fail("Business Start Date must be YYYY-MM-DD")
+    const money = (c: "monthly revenue" | "requested funding") => { const v = Number(get(c).replace(/[$,\s]/g, "")); if (!Number.isFinite(v) || v <= 0) fail(`${c} must be a positive number`); return v }
+    const owners = get("owners").split(";").map(s => s.trim()).filter(Boolean).map(s => {
+      const m = /^(.+?)\s*\((\d+(?:\.\d+)?)\s*%\)$/.exec(s) ?? fail(`owner "${s}" must look like "First Last (50%)"`)
+      const parts = m[1].trim().split(/\s+/); if (parts.length < 2) fail(`owner "${s}" needs a first and last name`)
+      return { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1], ownershipPercent: Number(m[2]) }
+    })
+    if (!owners.length) fail("needs at least one owner")
+    const total = owners.reduce((a, o) => a + o.ownershipPercent, 0)
+    if (Math.abs(total - 100) > 0.01) fail(`owner percentages add up to ${total}, not 100`)
+    if (entityType === "sole_proprietor" && owners.length !== 1) fail("a sole proprietorship has exactly one owner")
+    const required = { street: get("street address"), city: get("city"), industry: get("industry"), purpose: get("use of funds") }
+    for (const [k, v] of Object.entries(required)) if (!v) fail(`${k} is empty`)
+    return { name, email, details: {
+      ein, entityType, address: { line1: required.street, city: required.city, state, postalCode, country: "US" as const }, contactPhone, startDate,
+      industry: required.industry, monthlyRevenue: money("monthly revenue"), requestedAmount: money("requested funding"), fundingPurpose: required.purpose, owners,
+    } }
   })
 }
 
@@ -134,6 +199,7 @@ const phone = (area: string, seed: string) => `(${area}) 555-01${String(num(seed
 
 /** `used` carries EINs and owner names already handed out in this batch, so each stays unique. */
 export function buildProfile(index: number, business: Business, used: Set<string>): DealProfile {
+  if (business.details) return buildProfileFromDetails(business, business.details)
   const seed = `humanize-v1:${business.name}`
   const kind = KINDS.find(([re]) => re.test(business.name))?.[1] ?? FALLBACK
   const place = PLACE_HINTS.find(([re]) => re.test(business.name))?.[1] ?? pick(PLACES, `${seed}:place`)
@@ -172,6 +238,45 @@ export function buildProfile(index: number, business: Business, used: Set<string
     contactPhone, ein,
     address: { line1: `${10 + num(`${seed}:street-no`) % 4980} ${pick(STREETS, `${seed}:street`)}`, city: place.city, state: place.state, postalCode: place.zip, country: "US" },
     owners, bankName: pick(BANK_NAMES, `${seed}:bank`), accountSuffix: String(num(`${seed}:acct`) % 10000).padStart(4, "0"),
+  }
+}
+
+/** Legal name the way the business would register it: "X LLC", "X Inc."; partnerships and sole proprietors trade under the name itself. */
+export function legalNameFor(name: string, entityType: EntityType): string {
+  const base = name.replace(/[.,]+$/, "")
+  if (entityType === "llc") return /\bLLC$/i.test(base) ? base : `${base} LLC`
+  if (entityType === "corporation" || entityType === "s_corporation") return /\b(Inc|Corp|Corporation)$/i.test(base) ? `${base}.` : name.endsWith("Co.") ? `${name}, Inc.` : `${base} Inc.`
+  return name
+}
+export const ENTITY_LABELS: Record<EntityType, string> = { llc: "Limited Liability Company", corporation: "C Corporation", s_corporation: "S Corporation", partnership: "Partnership", sole_proprietor: "Sole Proprietorship" }
+function ownerTitle(entityType: EntityType, n: number, count: number): string {
+  if (entityType === "sole_proprietor") return "Owner"
+  if (entityType === "partnership") return n === 0 ? "Managing Partner" : "Partner"
+  if (entityType === "llc") return n === 0 ? "Managing Member" : "Member"
+  return n === 0 ? "President" : count > 2 && n === 2 ? "Secretary" : "Vice President"
+}
+
+/** CSV-driven profile: client values used as given; only owner emails (.test domain of the business) and 555-01XX mobile numbers are generated. */
+function buildProfileFromDetails(business: Business, d: BusinessDetails): DealProfile {
+  const seed = `humanize-v1:${business.name}`
+  const domain = business.email.split("@")[1]
+  const area = d.contactPhone.slice(1, 4)
+  const taken = new Set([d.contactPhone]), emails = new Set<string>()
+  const owners: OwnerProfile[] = d.owners.map((o, n) => {
+    let ph = "", attempt = 0
+    do ph = phone(area, `${seed}:owner-phone:${n}:${attempt++}`); while (taken.has(ph) && attempt < 500)
+    taken.add(ph)
+    const local = `${o.firstName}.${o.lastName}`.toLowerCase().normalize("NFD").replace(/[^a-z.]/g, "")
+    let email = `${local}@${domain}`, k = 2
+    while (emails.has(email)) email = `${local}${k++}@${domain}`
+    emails.add(email)
+    return { firstName: o.firstName, lastName: o.lastName, ownershipPercent: o.ownershipPercent, isPrimary: n === 0, email, phone: ph, title: ownerTitle(d.entityType, n, d.owners.length) }
+  })
+  return {
+    legalName: legalNameFor(business.name, d.entityType), dbaName: business.name, entityType: d.entityType, industry: d.industry, fundingPurpose: d.fundingPurpose,
+    contactName: `${owners[0].firstName} ${owners[0].lastName}`, contactEmail: business.email, contactPhone: d.contactPhone, ein: d.ein, address: d.address, owners,
+    bankName: pick(BANK_NAMES, `${seed}:bank`), accountSuffix: String(num(`${seed}:acct`) % 10000).padStart(4, "0"),
+    startDate: d.startDate, monthlyRevenue: d.monthlyRevenue, requestedAmount: d.requestedAmount,
   }
 }
 
