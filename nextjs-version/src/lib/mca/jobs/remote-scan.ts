@@ -2,14 +2,14 @@ import "server-only"
 
 import { newId } from "../db"
 import type { DealActor } from "../deals/schema"
-import { documentScanner, type ScanResult } from "../documents/scanner"
+import { documentScanner, scannerFailure, type ScanResult } from "../documents/scanner"
 import { quarantineBucket, storageClient } from "../documents/storage"
 import { AppError } from "../errors"
 import { enqueueBackgroundJob, getBackgroundJob, inBackgroundWorker } from "./queue"
 
 function assertClean(result: ScanResult): void {
   if (result.status === "infected") throw new AppError(422, "file_quarantined", "Security scanning rejected this file.")
-  if (result.status !== "clean") throw new AppError(503, "scanner_unavailable", "Security scanning must succeed before this file is available.")
+  if (result.status !== "clean") throw scannerFailure(result.evidence, "Security scanning must succeed before this file is available.")
 }
 
 /** Generated assistant files stay private while a Render worker runs the native scanner. */

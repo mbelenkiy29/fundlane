@@ -2,7 +2,7 @@ import "server-only"
 
 import type { DealActor } from "../deals/schema"
 import { taskUploadFile } from "../documents/direct-uploads"
-import { documentScanner } from "../documents/scanner"
+import { documentScanner, scannerFailure } from "../documents/scanner"
 import { AppError } from "../errors"
 import { previewSpreadsheetImport, previewCsvUpdate } from "../imports/service"
 import { previewArchiveMatches, applyArchiveMatches } from "../imports/archive-service"
@@ -32,7 +32,7 @@ export async function processMultipartTask(actor: DealActor, input: MultipartTas
     const file = await taskUploadFile(actor, reference.uploadId, input.endpoint)
     const scan = await documentScanner().scan(file.bytes, file.filename)
     if (scan.status === "infected") throw new AppError(422, "file_quarantined", "Security scanning rejected this file.")
-    if (scan.status !== "clean") throw new AppError(503, "scanner_unavailable", "Security scanning must succeed before this file can be processed.")
+    if (scan.status !== "clean") throw scannerFailure(scan.evidence, "Security scanning must succeed before this file can be processed.")
     files.push({ ...file, field: reference.field })
   }
   const fields = input.fields

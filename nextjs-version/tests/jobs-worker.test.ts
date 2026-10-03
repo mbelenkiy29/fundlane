@@ -7,6 +7,7 @@ import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
+import { CloudmersiveScanner } from "../src/lib/mca/documents/cloudmersive"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
@@ -783,6 +784,45 @@ test("document cron retries scanner outage and refuses infected file without pro
     if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
     if (previousScanner === undefined) delete process.env.MCA_DOCUMENT_SCANNER; else process.env.MCA_DOCUMENT_SCANNER = previousScanner
     if (previousSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousSecret
+  }
+})
+
+test("document cron fails a file over the Cloudmersive limit permanently without calling the provider", async () => {
+  const previousRuntime = process.env.MCA_DOCUMENT_JOB_RUNTIME
+  const previousScanner = process.env.MCA_DOCUMENT_SCANNER
+  const previousSecret = process.env.CRON_SECRET
+  const previousKey = process.env.MCA_CLOUDMERSIVE_API_KEY
+  const originalFetch = globalThis.fetch
+  process.env.MCA_DOCUMENT_JOB_RUNTIME = "vercel_cron"
+  process.env.MCA_DOCUMENT_SCANNER = "cloudmersive"
+  process.env.CRON_SECRET = "synthetic-document-cron-secret"
+  process.env.MCA_CLOUDMERSIVE_API_KEY = "synthetic-key"
+  let providerCalls = 0
+  try {
+    setDocumentScannerForTests(new CloudmersiveScanner())
+    globalThis.fetch = async (input, init) => {
+      if (String(input).startsWith("https://api.cloudmersive.com")) providerCalls++
+      return originalFetch(input, init)
+    }
+    const bytes = Buffer.concat([Buffer.from(minimalPdf), Buffer.alloc(3_600_000, 0x20)])
+    const document = await storeDocument(actor(), { dealId, idempotencyKey: "cron-too-large", filename: "large.pdf", mimeType: "application/pdf", bytes, category: "statement", source: "test" })
+    assert.equal(document.processingState, "pending_scan")
+    const response = await runDocumentsCron(new Request("https://fundlane.test/api/cron/documents", { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } }))
+    assert.equal(response.status, 200)
+    assert.equal(providerCalls, 0)
+    const scanned = await getDocument(actor(), document.id)
+    assert.equal(scanned.processingState, "scan_failed")
+    const job = await getDatabase().prepare<{ state: string; error_code: string }>("SELECT state,error_code FROM mca_background_jobs WHERE kind='document_scan' AND resource_id=?").get(document.id)
+    assert.deepEqual(job, { state: "failed", error_code: "scan_file_too_large" })
+    const evidence = await getDatabase().prepare<{ scan_evidence: string }>("SELECT scan_evidence FROM mca_documents WHERE id=?").get(document.id)
+    assert.equal(JSON.parse(evidence!.scan_evidence).message, "File too large for virus scan (max 3.5 MB)")
+  } finally {
+    globalThis.fetch = originalFetch
+    setDocumentScannerForTests()
+    if (previousRuntime === undefined) delete process.env.MCA_DOCUMENT_JOB_RUNTIME; else process.env.MCA_DOCUMENT_JOB_RUNTIME = previousRuntime
+    if (previousScanner === undefined) delete process.env.MCA_DOCUMENT_SCANNER; else process.env.MCA_DOCUMENT_SCANNER = previousScanner
+    if (previousSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousSecret
+    if (previousKey === undefined) delete process.env.MCA_CLOUDMERSIVE_API_KEY; else process.env.MCA_CLOUDMERSIVE_API_KEY = previousKey
   }
 })
 

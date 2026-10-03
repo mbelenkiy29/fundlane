@@ -8,6 +8,23 @@ const receipt = z.object({
   FoundViruses: z.array(z.object({ FileName: z.string(), VirusName: z.string() })).nullable().optional(),
 })
 
+/** Cloudmersive's free plan rejects files over 3.5 MB and allows one call per second. */
+export const CLOUDMERSIVE_MAX_SCAN_BYTES = 3_500_000
+export const CLOUDMERSIVE_MIN_INTERVAL_MS = 1_000
+export const SCAN_TOO_LARGE_REASON = "file_too_large"
+export const SCAN_TOO_LARGE_MESSAGE = "File too large for virus scan (max 3.5 MB)"
+
+let nextCallAt = 0
+/** Reserve the next one-second slot synchronously so concurrent scans in one process stay spaced out. */
+async function throttle(): Promise<void> {
+  const now = Date.now()
+  const wait = Math.max(0, nextCallAt - now)
+  nextCallAt = Math.max(now, nextCallAt) + CLOUDMERSIVE_MIN_INTERVAL_MS
+  if (wait) await new Promise((resolve) => setTimeout(resolve, wait))
+}
+
+export function resetCloudmersiveThrottleForTests(): void { nextCallAt = 0 }
+
 /** Scan the exact supplied bytes; a transport failure never authorizes promotion. */
 export class CloudmersiveScanner implements DocumentScanner {
   readonly name = "cloudmersive"
@@ -15,6 +32,9 @@ export class CloudmersiveScanner implements DocumentScanner {
   async scan(bytes: Uint8Array, filename: string): Promise<ScanResult> {
     const key = process.env.MCA_CLOUDMERSIVE_API_KEY
     if (!key) return { status: "unavailable", provider: this.name, evidence: { reason: "scanner_unconfigured" } }
+    if (bytes.byteLength > CLOUDMERSIVE_MAX_SCAN_BYTES) {
+      return { status: "error", provider: this.name, evidence: { reason: SCAN_TOO_LARGE_REASON, message: SCAN_TOO_LARGE_MESSAGE, bytes: bytes.byteLength, maxBytes: CLOUDMERSIVE_MAX_SCAN_BYTES } }
+    }
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120) || "upload.bin"
     // Native FormData is required: the hosted Edge runtime's custom multipart
     // stream did not deliver the complete fixture to the provider in acceptance.
@@ -27,6 +47,7 @@ export class CloudmersiveScanner implements DocumentScanner {
         headers: { Apikey: key, Accept: "application/json" },
         signal: AbortSignal.any([AbortSignal.timeout(75_000), ...(signal ? [signal] : [])]),
       }
+      await throttle()
       const response = await fetch("https://api.cloudmersive.com/virus/scan/file", init)
       if (!response.ok) {
         await response.body?.cancel()
