@@ -11,10 +11,14 @@ import { createOpaqueToken } from "../crypto"
 import { apiError, AppError } from "../errors"
 import { readJson } from "../http"
 import { supabaseIdentity } from "../supabase-auth"
+import { newPassword } from "../supabase-auth-http"
 import {
+  completeEnrollmentInvite,
   enrollmentBindingCookie,
   readEnrollmentAuthCookie,
   requestEnrollmentAuthentication,
+  requestEnrollmentEmailChange,
+  requestEnrollmentInvite,
   verifyEnrollmentAuthentication,
 } from "./auth"
 import {
@@ -50,6 +54,12 @@ type EnrollmentHttpAction =
   | "verify"
   | "claim"
   | "billing"
+  | "password"
+  | "resend"
+const inviteProof = {
+  challengeId: z.uuid(),
+  token: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/),
+}
 export async function handleEnrollmentHttp(
   request: Request,
   action: EnrollmentHttpAction
@@ -169,6 +179,44 @@ export async function handleEnrollmentHttp(
       )
       return NextResponse.json(
         { success: true, ...(await verifyEnrollmentAuthentication(input)) },
+        { headers: enrollmentHttpHeaders }
+      )
+    }
+    if (action === "password") {
+      // The invite token arrives only here, read by the page from its URL fragment.
+      const input = await readJson(
+        request,
+        z.union([
+          z
+            .object({
+              ...inviteProof,
+              email: z.email().max(320),
+              password: newPassword,
+            })
+            .strict(),
+          z.object({ ...inviteProof, newEmail: z.email().max(320) }).strict(),
+        ])
+      )
+      return NextResponse.json(
+        {
+          success: true,
+          ...("newEmail" in input
+            ? await requestEnrollmentEmailChange(input)
+            : await completeEnrollmentInvite(input)),
+        },
+        {
+          headers: { ...enrollmentHttpHeaders, "Referrer-Policy": "no-referrer" },
+        }
+      )
+    }
+    if (action === "resend") {
+      const input = await readJson(
+        request,
+        enrollmentLocatorSchema.extend({ email: z.email().max(320) }).strict()
+      )
+      await requestEnrollmentInvite(input)
+      return NextResponse.json(
+        { success: true },
         { headers: enrollmentHttpHeaders }
       )
     }

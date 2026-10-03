@@ -1,14 +1,15 @@
 import "server-only";
 import { z } from "zod";
 import { getDatabase, newId, nowIso, withTransaction, type DbExecutor } from "../db";
-import { decryptSensitive, encryptSensitive, hmacScopedToken } from "../crypto";
+import { createOpaqueToken, decryptSensitive, encryptSensitive, hashOpaqueToken, hmacScopedToken } from "../crypto";
 import { AppError } from "../errors";
 import { evaluateCompanyAccess, getCompanyAccess } from "../company-access";
 import { parseEmailAddress } from "../intake/usesend";
-import type { OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
+import type { EnrollmentRecord, OnboardingEmailPurpose, OnboardingEmailState } from "./contracts";
+import type { EnrollmentChallengePayload } from "./auth";
 import { onboardingEmailEnabled } from "./config";
-import { onboardingEmailEncryptionScope } from "./email-intents";
-import { enrollmentEmailHash, findEnrollment } from "./store";
+import { ONBOARDING_EMAIL_TEMPLATE_VERSIONS, onboardingEmailEncryptionScope } from "./email-intents";
+import { enrollmentChallengeScope, enrollmentEmailHash, findEnrollment, newOwnerEnrollment } from "./store";
 import { renderOnboardingEmail } from "./email-content";
 import { readVerifiedEnrollmentBilling } from "./evidence";
 import { dispatchOnboardingEmail, onboardingEmailConfiguration, onboardingEmailProviderIdentity, type FrozenOnboardingEmailConfiguration, type OnboardingEmailDispatchOutcome } from "./email-transport";
@@ -40,7 +41,12 @@ async function leasedRow(db: DbExecutor, id: string, token: string, clock: strin
 
 async function eligibility(db: DbExecutor, row: EmailRow) {
   const enrollment = await findEnrollment(row.enrollment_id, db);
-  if (!enrollment?.activatedAt || enrollment.checkoutState !== "complete" || enrollment.emailGeneration !== row.generation || row.superseded_by_generation || enrollment.emailHash !== row.recipient_hash) throw new AppError(409, "onboarding_email_superseded", "The email intent is no longer current.");
+  // A parked getting_started row (above the current generation) is a pending email change or a fresh link; only the latest is live.
+  const parked = enrollment && row.purpose === "getting_started" && row.generation > enrollment.emailGeneration;
+  if (!enrollment?.activatedAt || enrollment.checkoutState !== "complete" || row.superseded_by_generation
+    || (parked
+      ? !newOwnerEnrollment(enrollment) || await db.queryOne("SELECT 1 FROM mca_onboarding_service_emails WHERE enrollment_id=? AND generation>? LIMIT 1", [row.enrollment_id, row.generation])
+      : enrollment.emailGeneration !== row.generation || enrollment.emailHash !== row.recipient_hash)) throw new AppError(409, "onboarding_email_superseded", "The email intent is no longer current.");
   if (enrollment.billingState === "blocked" || ["canceling", "canceled", "uncertain", "operator_required"].includes(enrollment.recoveryState)) throw new AppError(409, "onboarding_email_suppressed", "The enrollment requires recovery review.");
   let access;
   if (enrollment.workspaceId) {
@@ -82,20 +88,39 @@ async function expireClaims(clock: string) {
 
 async function freeze(row: EmailRow): Promise<EmailRow | undefined> {
   return withTransaction(async db => {
+    // Enrollment before email row, like every invite writer (they hold FOR UPDATE), so a minted invite is always
+    // visible to their revocation; KEY SHARE does not block ordinary billing updates.
+    await db.queryOne("SELECT id FROM mca_enrollments WHERE id=? FOR KEY SHARE", [row.enrollment_id]);
     const clock = nowIso(), live = await leasedRow(db, row.id, row.claim_token!, clock);
     if (!live) return;
     const enrollment = await eligibility(db, live);
+    // Checked before the frozen short-circuit: an older snapshot is never re-sent as current copy.
+    if (live.template_version !== ONBOARDING_EMAIL_TEMPLATE_VERSIONS[live.purpose]) throw new AppError(409, "onboarding_email_template_unavailable", "Review the service email template version.");
     if (live.frozen_at) return live;
-    if (live.template_version !== 1) throw new AppError(409, "onboarding_email_template_unavailable", "Review the service email template version.");
     const payload = payloadSchema.parse(JSON.parse(decryptSensitive(live.payload_cipher, scope(live))));
     if (payload.enrollmentId !== live.enrollment_id || payload.generation !== live.generation || payload.purpose !== live.purpose || payload.trialEndsAt !== enrollment.trialEndsAt || enrollmentEmailHash(payload.email) !== live.recipient_hash || hmacScopedToken("onboarding-email-payload", live.enrollment_id, JSON.stringify(payload)) !== live.payload_hash) throw new AppError(409, "onboarding_email_payload_changed", "Review the service email intent.");
     const configuration = onboardingEmailConfiguration();
+    // Only a brand-new owner gets a password invite; existing accounts already have a sign-in path.
+    const invite = payload.purpose === "getting_started" && newOwnerEnrollment(enrollment)
+      ? { challengeId: newId(), token: createOpaqueToken() } : undefined;
+    // A parked row to another address is a pending email change; the minted challenge becomes its source of truth.
+    const emailChange = live.generation > enrollment.emailGeneration && live.recipient_hash !== enrollment.emailHash;
     let content: ReturnType<typeof renderOnboardingEmail>;
-    try { content = renderOnboardingEmail({ purpose: payload.purpose, enrollmentId: payload.enrollmentId, generation: payload.generation, trialEndsAt: payload.trialEndsAt, origin: process.env.MCA_APP_ORIGIN?.trim() ?? "" }); }
+    try { content = renderOnboardingEmail({ purpose: payload.purpose, enrollmentId: payload.enrollmentId, generation: payload.generation, trialEndsAt: payload.trialEndsAt, origin: process.env.MCA_APP_ORIGIN?.trim() ?? "", ...(invite ? { invite } : {}) }); }
     catch { throw new AppError(503, "onboarding_email_origin_invalid", "Configure a secure onboarding application origin."); }
     const writeClock = nowIso();
-    return db.queryOne<EmailRow>("UPDATE mca_onboarding_service_emails SET recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=?,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND frozen_at IS NULL RETURNING *", [encryptSensitive(payload.email, scope(live)), encryptSensitive(JSON.stringify(content), scope(live)), encryptSensitive(JSON.stringify(configuration), scope(live)), configuration.provider, onboardingEmailProviderIdentity(configuration), writeClock, writeClock, live.id, live.claim_token, writeClock]);
+    const frozen = await db.queryOne<EmailRow>("UPDATE mca_onboarding_service_emails SET recipient_cipher=?,content_cipher=?,provider_config_cipher=?,provider=?,provider_account_id=?,frozen_at=?,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND frozen_at IS NULL RETURNING *", [encryptSensitive(payload.email, scope(live)), encryptSensitive(JSON.stringify(content), scope(live)), encryptSensitive(JSON.stringify(configuration), scope(live)), configuration.provider, onboardingEmailProviderIdentity(configuration), writeClock, writeClock, live.id, live.claim_token, writeClock]);
+    // Minted once, only with the snapshot that carries it; frozen retries return above and never mint again.
+    // A change invite returns the generation the enrollment moves to; any other invite returns the current one.
+    if (frozen && invite) await insertInvite(db, enrollment, payload, invite, writeClock, emailChange ? live.generation : enrollment.emailGeneration, emailChange);
+    return frozen;
   });
+}
+
+/** The DB keeps only the token hash; the CHECK caps expiry at created_at + 1 day, so both derive from one clock. */
+async function insertInvite(db: DbExecutor, enrollment: EnrollmentRecord, payload: z.infer<typeof payloadSchema>, invite: { challengeId: string; token: string }, now: string, generation: number, emailChange: boolean) {
+  const challenge: EnrollmentChallengePayload = { version: 1, email: payload.email.trim().toLowerCase(), emailGeneration: enrollment.emailGeneration, destination: "crm", generation, issuedAt: now, sessionId: null, invite: true, ...(emailChange ? { emailChange: true as const } : {}) };
+  await db.execute("INSERT INTO mca_enrollment_challenges(id,enrollment_id,purpose,token_hash,email_cipher,email_hash,resume_generation,expires_at,created_at,updated_at) VALUES (?,?,'authentication',?,?,?,?,?,?,?)", [invite.challengeId, enrollment.id, hashOpaqueToken(invite.token), encryptSensitive(JSON.stringify(challenge), enrollmentChallengeScope(invite.challengeId)), enrollmentEmailHash(payload.email), enrollment.resumeGeneration, new Date(Date.parse(now) + 86_400_000).toISOString(), now, now]);
 }
 
 /** Configuration failures before a frozen send keep durable work without consuming a provider attempt. */
@@ -126,13 +151,15 @@ export async function recordOnboardingEmailDispatchOutcome(id: string, token: st
   return withTransaction(async db => {
     const clock = nowIso(), row = await leasedRow(db, id, token, clock);
     if (!row) return false;
-    if (outcome.state !== "suppressed" && (row.superseded_by_generation || (await findEnrollment(row.enrollment_id, db))?.emailGeneration !== row.generation)) return false;
+    // Parked invites sit above the current generation; only older generations are stale.
+    const current = (await findEnrollment(row.enrollment_id, db))?.emailGeneration;
+    if (outcome.state !== "suppressed" && (row.superseded_by_generation || current === undefined || current > row.generation)) return false;
     const state = outcome.state === "retry" && row.attempts >= 3 ? "failed" : outcome.state;
     const providerId = outcome.providerMessageId?.trim() || null;
     if (state === "accepted" && !providerId) throw new AppError(422, "onboarding_email_acceptance_invalid", "Acceptance requires a provider identifier.");
     const error = ["retry", "failed", "uncertain", "suppressed"].includes(state) ? safeCode(outcome.errorCode) : null;
     const writeClock = nowIso(), next = state === "retry" ? afterMinutes(writeClock, row.attempts === 1 ? 15 : 30) : writeClock;
-    const updated = await db.execute("UPDATE mca_onboarding_service_emails SET state=?,provider_message_id=?,error_code=?,next_attempt_at=?,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND (? OR (superseded_by_generation IS NULL AND EXISTS(SELECT 1 FROM mca_enrollments e WHERE e.id=mca_onboarding_service_emails.enrollment_id AND e.email_generation=mca_onboarding_service_emails.generation)))", [state, providerId, error, next, writeClock, id, token, writeClock, state === "suppressed"]);
+    const updated = await db.execute("UPDATE mca_onboarding_service_emails SET state=?,provider_message_id=?,error_code=?,next_attempt_at=?,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='sending' AND claim_token=? AND lease_until>? AND lease_until::timestamptz>clock_timestamp() AND (? OR (superseded_by_generation IS NULL AND EXISTS(SELECT 1 FROM mca_enrollments e WHERE e.id=mca_onboarding_service_emails.enrollment_id AND e.email_generation<=mca_onboarding_service_emails.generation)))", [state, providerId, error, next, writeClock, id, token, writeClock, state === "suppressed"]);
     if (!updated) return false;
     if (outcome.evidence && row.provider && row.provider_account_id) await db.execute("INSERT INTO mca_onboarding_service_email_receipts(id,enrollment_id,email_id,provider,provider_account_id,event_key,state,provider_message_id,evidence_type,error_code,occurred_at,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,provider_account_id,event_key) DO NOTHING", [newId(), row.enrollment_id, id, row.provider, row.provider_account_id, `dispatch:${id}:${row.attempts}:${token}`, state, providerId, outcome.evidence, error, writeClock, writeClock]);
     return true;

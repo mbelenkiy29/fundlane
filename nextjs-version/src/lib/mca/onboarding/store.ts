@@ -30,6 +30,10 @@ export function enrollmentEmailDomainHash(email: string): string {
   return hmacScopedToken("onboarding-email-domain", "platform", normalized.slice(normalized.lastIndexOf("@") + 1));
 }
 export const enrollmentEncryptionScope = (id: string): string => `onboarding:enrollment:${id}`;
+export const enrollmentChallengeScope = (id: string): string => `onboarding:challenge:${id}`;
+/** Only an unclaimed enrollment with no prior account may receive or use a set-password invite. */
+export const newOwnerEnrollment = (row: EnrollmentRecord): boolean =>
+  !row.workspaceId && !row.claimedProviderUserId && !row.initiatingProviderUserId && row.claimState === "unclaimed";
 
 function mapEnrollment(row: EnrollmentRow): EnrollmentRecord {
   return {

@@ -2,12 +2,12 @@ import test, { before, after, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { authDatabase, activatedEnrollment, browserCookies, liveIdentity, provider, resetAuthProvider } from "./helpers/onboarding-auth"
-import { getDatabase, nowIso } from "../src/lib/mca/db"
+import { getDatabase, nowIso, withTransaction } from "../src/lib/mca/db"
 import { encryptSensitive } from "../src/lib/mca/crypto"
 import { linkSupabaseUser } from "../src/lib/mca/supabase-auth"
 import { findEnrollment, verifyEnrollmentResume, readEnrollmentContact } from "../src/lib/mca/onboarding/store"
 import { onboardingEmailConfiguration, onboardingEmailProviderIdentity } from "../src/lib/mca/onboarding/email-transport"
-import { onboardingEmailEncryptionScope } from "../src/lib/mca/onboarding/email-intents"
+import { enqueueParkedInvite, onboardingEmailEncryptionScope } from "../src/lib/mca/onboarding/email-intents"
 import type { SuperAdminActor } from "../src/lib/mca/platform-auth"
 import { resumeSecret, stripeFixture } from "./helpers/onboarding-billing"
 
@@ -60,8 +60,10 @@ async function expiredEnrollment() {
   const complete = f.complete(), row = await reconcileEnrollment(started.enrollmentId, f.client), identity = await liveIdentity(complete.customer_details!.email!)
   return { ...f, row, identity, secret, id: row.id }
 }
-async function corrected(expiredTrial = false) {
-  const f = await (expiredTrial ? expiredEnrollment() : activatedEnrollment()), actor = await operator(), email = `corrected-${randomUUID()}@example.test`
+async function corrected(expiredTrial = false, beforeRecovery?: (f: Awaited<ReturnType<typeof activatedEnrollment>>) => Promise<void>) {
+  const f = await (expiredTrial ? expiredEnrollment() : activatedEnrollment())
+  await beforeRecovery?.(f)
+  const actor = await operator(), email = `corrected-${randomUUID()}@example.test`
   const recovery = await import("../src/lib/mca/onboarding/recovery"), auth = await import("../src/lib/mca/onboarding/auth")
   const common = { enrollmentId: f.id, reason: "Reviewed independently controlled purchase evidence", purchaseEvidence: "support:purchase-12345" }
   await recovery.authorizeEnrollmentContactVerification(actor, { ...common, correctedEmail: email, expectedRevision: (await findEnrollment(f.id))!.revision }, request({}), f.client)
@@ -460,4 +462,52 @@ test("original trial boundary caps stale projection during manual reissue", asyn
   const { GET } = await import("../src/app/api/platform/onboarding/[id]/route")
   const response = await GET(request(), { params: Promise.resolve({ id: f.id }) })
   assert.equal((await response.json()).availableActions.includes("reissue_emails"), false)
+})
+
+/** Runs the real email worker for one enrollment with an https origin, accepting every send. */
+async function sendQueuedMail(id: string): Promise<{ subject: string; text: string }[]> {
+  const { runOnboardingEmails } = await import("../src/lib/mca/onboarding/email-worker")
+  // Earlier tests share this database; park their unsent work so only this enrollment is dispatched.
+  await getDatabase().execute("UPDATE mca_onboarding_service_emails SET state='suppressed',updated_at=? WHERE enrollment_id<>? AND state IN ('queued','retry')", [nowIso(), id])
+  const saved = { origin: process.env.MCA_APP_ORIGIN, enabled: process.env.MCA_ONBOARDING_EMAIL_ENABLED }, savedFetch = globalThis.fetch, sent: { subject: string; text: string }[] = []
+  Object.assign(process.env, { MCA_APP_ORIGIN: "https://app.example.test", MCA_ONBOARDING_EMAIL_ENABLED: "true" })
+  globalThis.fetch = async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ emailId: `accepted-${randomUUID()}` }) }
+  try { await runOnboardingEmails() } finally {
+    globalThis.fetch = savedFetch
+    for (const [key, value] of [["MCA_APP_ORIGIN", saved.origin], ["MCA_ONBOARDING_EMAIL_ENABLED", saved.enabled]] as const) if (value === undefined) delete process.env[key]; else process.env[key] = value
+  }
+  return sent
+}
+async function pendingInvites(id: string) {
+  return (await getDatabase().query<{ id: string; state: string }>("SELECT id,state FROM mca_enrollment_challenges WHERE enrollment_id=? AND purpose='authentication' ORDER BY created_at", [id])).rows
+}
+
+test("contact recovery revokes a pending invite and reissue for the recovered owner sends a sign-in link, not an invite", async () => {
+  let invite = ""
+  const f = await corrected(false, async enrollment => {
+    const sent = await sendQueuedMail(enrollment.id)
+    assert.match(sent.find(mail => mail.subject === "Set your Fundlane password")!.text, /\/enrollment\?enrollment=[^&]+&destination=crm&invite=[0-9a-f-]{36}#t=/)
+    const minted = await pendingInvites(enrollment.id)
+    assert.equal(minted.length, 1)
+    invite = minted[0].id
+  })
+  assert.equal((await pendingInvites(f.id)).find(row => row.id === invite)?.state, "revoked")
+  await freshStepUp(f.actor)
+  assert.equal((await command(f.id, reissue(f))).status, 200)
+  const sent = await sendQueuedMail(f.id)
+  const welcome = sent.find(mail => mail.subject === "Get started with Fundlane")!
+  assert.match(welcome.text, new RegExp(`/enrollment\\?enrollment=${f.id}&destination=crm&generation=3`))
+  assert.doesNotMatch(sent.map(mail => mail.text).join(), /token=|#t=/)
+  assert.equal((await pendingInvites(f.id)).filter(row => row.state === "pending").length, 0)
+})
+
+test("contact recovery and reissue skip past a parked email-change generation", async () => {
+  const f = await corrected(false, enrollment => withTransaction(db => enqueueParkedInvite(enrollment.id, 2, `parked-${randomUUID()}@example.test`, db)))
+  assert.equal(f.approved.emailGeneration, 3)
+  const rows = async () => (await getDatabase().query<{ generation: number; purpose: string; state: string }>("SELECT generation,purpose,state FROM mca_onboarding_service_emails WHERE enrollment_id=? ORDER BY generation,purpose", [f.id])).rows
+  assert.equal((await rows()).find(row => row.generation === 2)?.state, "suppressed")
+  assert.ok((await rows()).some(row => row.generation === 3 && row.purpose === "getting_started"))
+  await freshStepUp(f.actor)
+  assert.equal((await command(f.id, reissue(f))).status, 200)
+  assert.equal((await findEnrollment(f.id))!.emailGeneration, 4)
 })

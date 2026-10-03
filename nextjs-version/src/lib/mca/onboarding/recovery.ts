@@ -45,7 +45,10 @@ import {
 import { assertEnrollmentMutation } from "./http"
 import { reconcileEnrollment } from "./reconcile"
 import { createEnrollmentBillingPortal } from "./billing"
-import { enqueueOnboardingEmailIntents } from "./email-intents"
+import {
+  enqueueOnboardingEmailIntents,
+  nextEmailGeneration,
+} from "./email-intents"
 import type { EnrollmentRecord } from "./contracts"
 
 export type EnrollmentRecoveryEvidence = {
@@ -377,7 +380,11 @@ export async function recoverEnrollmentContact(
           "enrollment_recovery_identity_conflict",
           "This target has an existing account or company requiring deliberate recovery."
         )
-      const generation = current.emailGeneration + 1,
+      const generation = await nextEmailGeneration(
+          row.id,
+          current.emailGeneration,
+          db
+        ),
         contact = { ...readEnrollmentContact(current), email }
       await assertOperatorInTransaction(actor, db)
       await db.execute(

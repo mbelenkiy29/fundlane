@@ -12,7 +12,7 @@ import { evaluateCompanyAccess } from "../company-access"
 import { findEnrollment, enrollmentEmailHash } from "./store"
 import type { EnrollmentRecord, OnboardingEmailState } from "./contracts"
 import { readVerifiedEnrollmentBilling } from "./evidence"
-import { enqueueOnboardingEmailIntents, onboardingEmailEncryptionScope } from "./email-intents"
+import { enqueueOnboardingEmailIntents, nextEmailGeneration, onboardingEmailEncryptionScope } from "./email-intents"
 import { onboardingEmailProviderIdentity, type FrozenOnboardingEmailConfiguration } from "./email-transport"
 import { readEnrollmentChallengePayload, type EnrollmentChallenge } from "./auth"
 import { assertOperatorInTransaction, operatorPermission, type EnrollmentRecoveryEvidence } from "./recovery"
@@ -155,7 +155,8 @@ export async function reissueOnboardingEmails(expected: SuperAdminActor, input: 
     const lastReissue = await db.queryOne<{ step_up_at: string }>("SELECT step_up_at FROM platform_admin_audit WHERE action='enrollment.email_generation_reissued' AND target_id=? ORDER BY created_at DESC,id DESC LIMIT 1", [row.id])
     if (Date.parse(stepUpAt) <= Date.parse(approved.approval.step_up_at) || Date.parse(stepUpAt) < Date.parse(approved.approval.created_at) || (lastReissue && Date.parse(stepUpAt) <= Date.parse(lastReissue.step_up_at))) throw new AppError(403, "step_up_required", "Complete a NEW operator step-up after contact approval or the previous reissue.")
     if (proof !== approved.approval.after_json.purchaseEvidenceHash || !await liveSupabaseSession(approved.payload.sessionId!, target.id) || await db.queryOne("SELECT m.id FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.supabase_user_id=? AND m.status='active' LIMIT 1", [target.id]) || await db.queryOne("SELECT id FROM users WHERE lower(email)=? AND (supabase_user_id IS NULL OR supabase_user_id<>?)", [target.email!.trim().toLowerCase(), target.id])) throw conflict("onboarding_email_reissue_not_allowed", "The approved purchase, target session or company association has changed.")
-    const generation = row.emailGeneration + 1, clock = nowIso()
+    // Parked invites may already occupy the next generation.
+    const generation = await nextEmailGeneration(row.id, row.emailGeneration, db), clock = nowIso()
     await operatorFence(actor, stepUpAt, db)
     if (!await db.execute("UPDATE mca_enrollments SET email_generation=?,resume_generation=resume_generation+1,resume_secret_hash=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?", [generation, hashOpaqueToken(createOpaqueToken()), clock, row.id, row.revision])) throw conflict("enrollment_revision_conflict", "Enrollment changed during reissue.")
     await db.execute("UPDATE mca_enrollment_challenges SET state='revoked',updated_at=? WHERE enrollment_id=? AND state IN ('pending','verified')", [clock, row.id])

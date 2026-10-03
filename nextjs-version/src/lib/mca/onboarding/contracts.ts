@@ -83,7 +83,7 @@ export interface EnrollmentRecord {
 
 export interface EnrollmentContact { email: string; businessName: string }
 
-/** No EIN, Auth token, or provider portal capability belongs in mail render inputs. */
+/** No EIN, Auth token, or provider portal capability belongs in this stored payload. A new-owner invite token is minted only at freeze time and exists solely in the encrypted frozen content. */
 export interface OnboardingEmailPayload {
   version: 1;
   enrollmentId: string;
