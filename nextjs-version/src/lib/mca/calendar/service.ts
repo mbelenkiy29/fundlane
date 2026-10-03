@@ -58,10 +58,12 @@ export async function saveActivity(actor: DealActor, raw: unknown, id?: string):
     const start = input.allDay ? input.start : new Date(input.start).toISOString()
     const end = input.allDay ? input.end : new Date(input.end).toISOString()
     const recordId = old?.id ?? newId()
+    // Empty notes are stored as NULL: encrypting "" yields an empty ciphertext segment.
+    const notesCipher = input.notes ? encryptSensitive(input.notes, actor.workspaceId) : null
     if (old) {
-      await db.prepare(`UPDATE mca_calendar_activities SET assignee_id=?,title=?,starts_at=?,ends_at=?,all_day=?,timezone=?,notes_cipher=?,status=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`).run(input.assigneeId,input.title,start,end,Number(input.allDay),input.timezone,encryptSensitive(input.notes,actor.workspaceId),input.status,now,recordId,actor.workspaceId)
+      await db.prepare(`UPDATE mca_calendar_activities SET assignee_id=?,title=?,starts_at=?,ends_at=?,all_day=?,timezone=?,notes_cipher=?,status=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`).run(input.assigneeId,input.title,start,end,Number(input.allDay),input.timezone,notesCipher,input.status,now,recordId,actor.workspaceId)
     } else {
-      await db.prepare(`INSERT INTO mca_calendar_activities (id,workspace_id,deal_id,assignee_id,kind,title,starts_at,ends_at,all_day,timezone,notes_cipher,status,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`).run(recordId,actor.workspaceId,input.dealId,input.assigneeId,input.kind,input.title,start,end,Number(input.allDay),input.timezone,encryptSensitive(input.notes,actor.workspaceId),input.status,actor.userId,now,now)
+      await db.prepare(`INSERT INTO mca_calendar_activities (id,workspace_id,deal_id,assignee_id,kind,title,starts_at,ends_at,all_day,timezone,notes_cipher,status,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`).run(recordId,actor.workspaceId,input.dealId,input.assigneeId,input.kind,input.title,start,end,Number(input.allDay),input.timezone,notesCipher,input.status,actor.userId,now,now)
     }
     await wakeCalendar(actor.workspaceId)
     await recordAuditEvent({ context: actor, action: old ? "calendar.activity_updated" : "calendar.activity_created", resourceType: "calendar_activity", resourceId: recordId, metadata: { dealId: input.dealId, status: input.status }, executor: db })
