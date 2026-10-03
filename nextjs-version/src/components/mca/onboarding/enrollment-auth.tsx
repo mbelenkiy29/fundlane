@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { enrollmentContinuation, parseEnrollmentContinuation, type EnrollmentContinuation } from "@/lib/mca/auth-navigation"
 import { requestJson } from "@/lib/mca/client"
+import { enrollmentCodeError, normalizeEnrollmentCode } from "@/lib/mca/onboarding/enrollment-code"
 
 /** Enrollment-issued email authentication is distinct from ordinary magic-link login. */
 export function EnrollmentAuth({ continuation }: { continuation: EnrollmentContinuation }) {
@@ -33,9 +34,10 @@ export function EnrollmentAuth({ continuation }: { continuation: EnrollmentConti
   }
   async function verify(event: FormEvent) {
     event.preventDefault()
-    if (!challenge) return
+    const invalid = challenge ? enrollmentCodeError(code) : "Your code request expired. Request a new code and try again."
+    if (!challenge || invalid) { setError(invalid!); setNotice(""); return }
     await run(async () => {
-      const result = await requestJson<{ destination: string }>("/api/enrollment/verify", { method: "POST", body: JSON.stringify({ challengeId: challenge.id, email: challenge.email, token: code }) })
+      const result = await requestJson<{ destination: string }>("/api/enrollment/verify", { method: "POST", body: JSON.stringify({ challengeId: challenge.id, email: challenge.email, token: normalizeEnrollmentCode(code) }) })
       const next = parseEnrollmentContinuation(result.destination)
       if (!next || next.enrollmentId !== continuation.enrollmentId) throw new Error("Invalid continuation")
       window.location.assign(enrollmentContinuation(next))
@@ -52,8 +54,8 @@ export function EnrollmentAuth({ continuation }: { continuation: EnrollmentConti
     <p className="text-sm text-muted-foreground">Use the email entered at Checkout. An existing account can also Login with its password or Google. No company form is required.</p>
     {error && <p ref={errorRef} tabIndex={-1} role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-    {challenge ? <form className="space-y-3" onSubmit={verify}>
-      <label className="grid gap-2" htmlFor="enrollment-code">Email verification code<input className="rounded-md border p-2" id="enrollment-code" ref={codeRef} name="token" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,10}" minLength={6} maxLength={10} required disabled={busy} value={code} onChange={e => setCode(e.target.value)} /></label>
+    {challenge ? <form className="space-y-3" noValidate onSubmit={verify}>
+      <label className="grid gap-2" htmlFor="enrollment-code">Email verification code<input className="rounded-md border p-2" id="enrollment-code" ref={codeRef} name="token" inputMode="numeric" autoComplete="one-time-code" maxLength={20} disabled={busy} value={code} onChange={e => setCode(e.target.value)} /></label>
       <button className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify and continue"}</button>
       <button type="button" className="underline" disabled={busy} onClick={() => void send()}>Request a new code</button>{" "}
       <button type="button" className="underline" disabled={busy} onClick={() => { setChallenge(null); setCode(""); setError(""); setNotice("") }}>Change email</button>

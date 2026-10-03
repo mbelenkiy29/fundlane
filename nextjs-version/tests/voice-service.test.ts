@@ -93,8 +93,9 @@ test("member history filters before the company 100-call limit",async()=>{
 })
 
 test("restricted mca_app can use Voice tables but cannot disable RLS",async()=>{
+ const runtimePassword="synthetic_runtime_password_only_123"
  await fixture.query("ALTER ROLE mca_app LOGIN")
- execFileSync(process.execPath,["--import","tsx","scripts/database/secure-runtime.ts"],{env:fixture.env({MCA_DB_RUNTIME_PASSWORD:"synthetic_runtime_password_only_123",MCA_TEST_DATABASE_DISPOSABLE:"true"}),encoding:"utf8"})
+ execFileSync(process.execPath,["--import","tsx","scripts/database/secure-runtime.ts","--rotate-password"],{env:fixture.env({MCA_DB_RUNTIME_PASSWORD:runtimePassword,MCA_TEST_DATABASE_DISPOSABLE:"true"}),encoding:"utf8"})
  const client=new pg.Client({connectionString:fixture.databaseUrl});await client.connect()
  try{
   await client.query("BEGIN; SET LOCAL ROLE mca_app; SELECT workspace_id FROM voice_config; SELECT identity FROM voice_presence; SELECT id FROM voice_dial_intents; SELECT id FROM voice_calls;")
@@ -106,7 +107,7 @@ test("restricted mca_app can use Voice tables but cannot disable RLS",async()=>{
   await client.query("ROLLBACK")
   const result=await client.query("SELECT has_table_privilege('mca_app','voice_calls','DELETE') AS delete_calls,has_table_privilege('mca_app','voice_config','TRUNCATE') AS truncate_config")
   assert.equal(result.rows[0].delete_calls,false);assert.equal(result.rows[0].truncate_config,false)
-  const runtimeUrl=new URL(fixture.databaseUrl);runtimeUrl.username="mca_app";runtimeUrl.password=""
+  const runtimeUrl=new URL(fixture.databaseUrl);runtimeUrl.username="mca_app";runtimeUrl.password=runtimePassword
   const output=execFileSync(process.execPath,["--conditions=react-server","--import","tsx","--input-type=module","-e","const svc=await import('./src/lib/mca/voice/service.ts');const {issueToken,listVoiceHistory,setPresence}=svc.default??svc;const db=await import('./src/lib/mca/db.ts');const {closeDatabaseForTests}=db.default??db;const actor=JSON.parse(process.env.VOICE_TEST_ACTOR);await issueToken(actor);await listVoiceHistory(actor);await setPresence(actor,true);await setPresence(actor,false);await closeDatabaseForTests();console.log('restricted service OK')"],{env:fixture.env({DATABASE_URL:runtimeUrl.toString(),DATABASE_URL_UNPOOLED:runtimeUrl.toString(),VOICE_TEST_ACTOR:JSON.stringify(actor)}),encoding:"utf8"})
   assert.match(output,/restricted service OK/)
  }finally{await client.query("ROLLBACK");await client.end()}
