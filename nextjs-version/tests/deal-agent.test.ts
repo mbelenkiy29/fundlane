@@ -142,9 +142,9 @@ async function runAgent(dealId: string): Promise<Array<Record<string, unknown>>>
 }
 
 type RunRow = { id: string; state: string; steps_json: string; error_code: string | null; created_at: string }
-type ActionRow = { id: string; kind: string; target_key: string; fingerprint: string; status: string; payload_json: string; preview_id: string | null; error_code: string | null; decided_by_user_id: string | null }
+type ActionRow = { id: string; kind: string; target_key: string; fingerprint: string; status: string; payload_json: string; next_fingerprint: string | null; next_payload_json: string | null; preview_id: string | null; result_json: string | null; error_code: string | null; decided_by_user_id: string | null }
 const runsFor = (dealId: string) => getDatabase().prepare<RunRow>("SELECT id,state,steps_json,error_code,created_at FROM mca_deal_agent_runs WHERE deal_id=? ORDER BY created_at").all(dealId)
-const actionsFor = (dealId: string) => getDatabase().prepare<ActionRow>("SELECT id,kind,target_key,fingerprint,status,payload_json,preview_id,error_code,decided_by_user_id FROM mca_deal_agent_actions WHERE deal_id=? ORDER BY created_at,target_key").all(dealId)
+const actionsFor = (dealId: string) => getDatabase().prepare<ActionRow>("SELECT id,kind,target_key,fingerprint,status,payload_json,next_fingerprint,next_payload_json,preview_id,result_json,error_code,decided_by_user_id FROM mca_deal_agent_actions WHERE deal_id=? ORDER BY created_at,target_key").all(dealId)
 
 async function enabledDeal(): Promise<{ workspaceId: string; dealId: string }> {
   const workspaceId = await seedWorkspace({ dealAgent: true })
@@ -338,12 +338,32 @@ test("burst uploads coalesce to one run", async () => {
   const { workspaceId, dealId } = await enabledDeal()
   for (const category of ["application", "driver_license", "voided_check"]) await withAgentEnv("true", () => upload(workspaceId, dealId, category))
   const results = await runAgent(dealId)
-  assert.equal(results.length, 3)
+  assert.equal(results.length, 1)
   const runs = await runsFor(dealId)
   assert.equal(runs.length, 1)
   assert.equal(runs[0].state, "completed")
-  assert.deepEqual(results.filter(result => result.skipped === "unchanged").length, 2)
+  assert.equal(results.filter(result => result.skipped === "unchanged").length, 0)
   assert.equal((await actionsFor(dealId)).filter(action => action.kind === "request_documents").length, 1)
+})
+
+test("debounce: uploads push the queued job later, capped 10 minutes after it was created", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "application"))
+  const [first] = await agentJobs(dealId)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  for (const category of ["driver_license", "voided_check"]) await withAgentEnv("true", () => upload(workspaceId, dealId, category))
+  const jobs = await agentJobs(dealId)
+  assert.equal(jobs.length, 1)
+  assert.equal(jobs[0].id, first.id)
+  assert.equal(jobs[0].state, "queued")
+  assert.ok(jobs[0].available_at > first.available_at)
+  // A job created 9 minutes ago can only move to its 10-minute cap, not now + 120s.
+  const created = new Date(Date.now() - 9 * 60_000).toISOString()
+  await getDatabase().prepare("UPDATE mca_background_jobs SET created_at=?,available_at=? WHERE id=?").run(created, created, first.id)
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "other_stip"))
+  const [capped] = await agentJobs(dealId)
+  assert.equal((await agentJobs(dealId)).length, 1)
+  assert.equal(capped.available_at, new Date(Date.parse(created) + 10 * 60_000).toISOString())
 })
 
 test("concurrent runs keep one open action per target", async () => {
@@ -604,6 +624,8 @@ test("document request reuses open stipulations from an earlier request", async 
   const senderId = await seedMerchantSender(workspaceId, broker)
   const first = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
   await decide(broker, dealId, first.id, "review", { senderId })
+  // A sent request frees the target; its stipulations stay open until the merchant uploads.
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET status='approved' WHERE id=?").run(first.id)
   const stipulations = async () => (await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM mca_closing_stipulations WHERE deal_id=?").get(dealId))?.n
   const before = await stipulations()
   await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
@@ -614,10 +636,250 @@ test("document request reuses open stipulations from an earlier request", async 
   assert.equal(await stipulations(), before)
 })
 
+test("dismissing a request waives only the stipulations it created", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const first = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  await decide(broker, dealId, first.id, "review", { senderId })
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET status='approved' WHERE id=?").run(first.id)
+  // The voided check is no longer open from the first request, so the second creates its own.
+  await getDatabase().prepare("UPDATE mca_closing_stipulations SET status='waived' WHERE deal_id=? AND document_category='voided_check'").run(dealId)
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const second = (await actionsFor(dealId)).find(row => row.kind === "request_documents" && row.status === "pending")!
+  await decide(broker, dealId, second.id, "review", { senderId })
+  const stips = () => getDatabase().prepare<{ id: string; status: string; idempotency_key: string; document_category: string }>("SELECT id,status,idempotency_key,document_category FROM mca_closing_stipulations WHERE deal_id=?").all(dealId)
+  const own = (await stips()).filter(row => row.idempotency_key.startsWith(`deal-agent:${second.id}:`))
+  assert.deepEqual(own.map(row => [row.document_category, row.status]), [["voided_check", "open"]])
+  const reused = (await stips()).filter(row => row.idempotency_key.startsWith(`deal-agent:${first.id}:`) && row.status === "open")
+  assert.ok(reused.length > 0)
+  await decide(broker, dealId, second.id, "dismiss")
+  const after = await stips()
+  assert.equal(after.find(row => row.id === own[0].id)?.status, "waived")
+  assert.ok(reused.every(row => after.find(item => item.id === row.id)?.status === "open"))
+  assert.equal((await getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE action='closing.stipulation_waived' AND resource_id=?").get(own[0].id))?.n, 1)
+})
+
+const STALE = () => new Date(Date.now() - 16 * 60_000).toISOString()
+const setExecuting = (actionId: string, updatedAt: string, decidedBy: string | null = null) => getDatabase()
+  .prepare("UPDATE mca_deal_agent_actions SET status='executing',result_json=NULL,error_code=NULL,decided_by_user_id=?,updated_at=? WHERE id=?").run(decidedBy, updatedAt, actionId)
+const actionRow = async (dealId: string, id: string) => (await actionsFor(dealId)).find(row => row.id === id)!
+const recoveredOutcomes = async (actionId: string) => (await getDatabase().prepare<{ outcome: string }>("SELECT metadata::jsonb->>'outcome' AS outcome FROM audit_events WHERE action='deal_agent.action_recovered' AND resource_id=? ORDER BY created_at").all(actionId)).map(row => row.outcome)
+
+test("recovery: stale submit_to_funder returns to pending, or approved once the preview was confirmed", async () => {
+  const { dealId, action, broker } = await completeDealWithSubmitAction()
+  const preview = (await decide(broker, dealId, action.id, "review")).preview as { id: string }
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  let row = await actionRow(dealId, action.id)
+  assert.deepEqual([row.status, row.error_code, row.preview_id, row.decided_by_user_id], ["pending", "interrupted", preview.id, null])
+  // Approving again is safe: confirm is idempotent on the stored preview.
+  await withQueuedDelivery(() => decide(broker, dealId, action.id, "approve", { previewId: preview.id }))
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  row = await actionRow(dealId, action.id)
+  assert.equal(row.status, "approved")
+  assert.deepEqual((JSON.parse(row.result_json!) as { jobs: Array<{ jobId: string }> }).jobs.length, 1)
+  assert.equal((await submissionJobs(dealId)).length, 1)
+  assert.deepEqual(await recoveredOutcomes(action.id), ["pending", "approved"])
+})
+
+test("recovery: stale request_documents follows the closing preview state; a row inside the window is left alone", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const action = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  const preview = (await decide(broker, dealId, action.id, "review", { senderId })).preview as { id: string }
+  await setExecuting(action.id, new Date().toISOString(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.equal((await actionRow(dealId, action.id)).status, "executing")
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.deepEqual([(await actionRow(dealId, action.id)).status, (await actionRow(dealId, action.id)).error_code], ["pending", "interrupted"])
+  const previewState = (state: string) => getDatabase().prepare("UPDATE mca_closing_previews SET state=? WHERE id=?").run(state, preview.id)
+  await previewState("sent")
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.equal((await actionRow(dealId, action.id)).status, "approved")
+  await previewState("failed")
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.deepEqual([(await actionRow(dealId, action.id)).status, (await actionRow(dealId, action.id)).error_code], ["failed", "delivery_failed"])
+  assert.deepEqual(await recoveredOutcomes(action.id), ["pending", "approved", "failed"])
+})
+
+test("recovery: stale schedule_follow_up is approved only when the approver's follow-up exists", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const action = (await actionsFor(dealId)).find(row => row.kind === "schedule_follow_up")!
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.deepEqual([(await actionRow(dealId, action.id)).status, (await actionRow(dealId, action.id)).error_code], ["pending", "interrupted"])
+  await decide(broker, dealId, action.id, "approve")
+  assert.equal((await actionRow(dealId, action.id)).decided_by_user_id, broker.userId)
+  await setExecuting(action.id, STALE(), broker.userId)
+  await listDealAgent(broker, dealId)
+  assert.equal((await actionRow(dealId, action.id)).status, "approved")
+  assert.deepEqual(await recoveredOutcomes(action.id), ["pending", "approved"])
+})
+
+test("stale executing row is recovered by the next run, which then proposes for the target", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const action = (await actionsFor(dealId)).find(row => row.kind === "schedule_follow_up")!
+  await setExecuting(action.id, STALE())
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const followUps = (await actionsFor(dealId)).filter(row => row.kind === "schedule_follow_up")
+  assert.equal(followUps.find(row => row.id === action.id)?.status, "superseded")
+  assert.equal(followUps.filter(row => row.status === "pending").length, 1)
+  assert.deepEqual(await recoveredOutcomes(action.id), ["pending"])
+})
+
+async function reviewedRequestWithNewerRun() {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const before = await actionsFor(dealId)
+  const reviewed = before.find(row => row.kind === "request_documents")!
+  const preview = (await decide(broker, dealId, reviewed.id, "review", { senderId })).preview as { id: string }
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  return { workspaceId, dealId, broker, senderId, reviewed, preview, oldFollowUp: before.find(row => row.kind === "schedule_follow_up")! }
+}
+
+test("a reviewed request survives a newer run: kept with its preview, newer proposal parked, unreviewed follow-up superseded", async () => {
+  const { dealId, reviewed, preview, oldFollowUp } = await reviewedRequestWithNewerRun()
+  const runs = await runsFor(dealId)
+  assert.equal(runs.length, 2)
+  assert.ok(runs.every(run => run.state === "completed"), JSON.stringify(runs))
+  const actions = await actionsFor(dealId)
+  const row = actions.find(item => item.id === reviewed.id)!
+  assert.deepEqual([row.status, row.preview_id, row.fingerprint, row.error_code], ["pending", preview.id, reviewed.fingerprint, "inputs_changed"])
+  assert.ok(row.next_fingerprint && row.next_fingerprint !== reviewed.fingerprint)
+  assert.ok(!(JSON.parse(row.next_payload_json!) as { items: Array<{ category: string }> }).items.some(item => item.category === "driver_license"))
+  assert.equal(actions.filter(item => item.kind === "request_documents" && item.status === "pending").length, 1)
+  assert.equal(actions.find(item => item.id === oldFollowUp.id)?.status, "superseded")
+  assert.equal(actions.filter(item => item.kind === "schedule_follow_up" && item.status === "pending").length, 1)
+})
+
+test("dismissing a reviewed request promotes the parked proposal to a new pending row", async () => {
+  const { dealId, broker, reviewed } = await reviewedRequestWithNewerRun()
+  const parked = (await actionRow(dealId, reviewed.id))
+  await decide(broker, dealId, reviewed.id, "dismiss")
+  const pending = (await actionsFor(dealId)).filter(item => item.kind === "request_documents" && item.status === "pending")
+  assert.equal(pending.length, 1)
+  assert.notEqual(pending[0].id, reviewed.id)
+  assert.equal(pending[0].fingerprint, parked.next_fingerprint)
+  assert.equal(pending[0].payload_json, parked.next_payload_json)
+  assert.equal(pending[0].preview_id, null)
+})
+
+test("approving a reviewed request sends what was reviewed and clears the parked proposal", async () => {
+  const { dealId, broker, reviewed, preview } = await reviewedRequestWithNewerRun()
+  setClosingTransportForTests({ async deliver(request) { return { state: "sent", correlationId: request.correlationId, externalId: "agent-mail-parked" } } })
+  try { await decide(broker, dealId, reviewed.id, "approve", { previewId: preview.id }) } finally { setClosingTransportForTests() }
+  const row = await actionRow(dealId, reviewed.id)
+  assert.deepEqual([row.status, row.fingerprint, row.next_fingerprint, row.next_payload_json, row.error_code], ["approved", reviewed.fingerprint, null, null, null])
+})
+
+test("reviewing again promotes the parked proposal before building the preview", async () => {
+  const { dealId, broker, senderId, reviewed, preview } = await reviewedRequestWithNewerRun()
+  const parked = await actionRow(dealId, reviewed.id)
+  const fresh = (await decide(broker, dealId, reviewed.id, "review", { senderId })).preview as { id: string; body: string }
+  const row = await actionRow(dealId, reviewed.id)
+  assert.deepEqual([row.status, row.fingerprint, row.payload_json, row.next_fingerprint, row.error_code, row.preview_id], ["pending", parked.next_fingerprint, parked.next_payload_json, null, null, fresh.id])
+  assert.notEqual(fresh.id, preview.id)
+  assert.doesNotMatch(fresh.body, /Driver license/)
+})
+
+test("a reviewed row whose target is no longer proposed is kept with no_longer_suggested", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  const now = new Date().toISOString()
+  const runId = `nls-${dealId}`
+  await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at) VALUES (?,?,?,?,'running',?,?)`).run(runId, workspaceId, dealId, runId, now, now)
+  const actor = documentScanActor({ workspaceId, dealId, id: "nls" })
+  await upsertProposals(actor, dealId, runId, [{ kind: "request_documents", targetKey: "request_documents", fingerprint: "c1", payload: {} }, { kind: "submit_to_funder", targetKey: "submit:f1", fingerprint: "s1", payload: {} }])
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET preview_id='reviewed-preview',next_fingerprint='c0',next_payload_json='{}' WHERE deal_id=? AND target_key='request_documents'").run(dealId)
+  await upsertProposals(actor, dealId, runId, [])
+  const actions = await actionsFor(dealId)
+  const kept = actions.find(row => row.target_key === "request_documents")!
+  assert.deepEqual([kept.status, kept.error_code, kept.next_fingerprint, kept.preview_id], ["pending", "no_longer_suggested", null, "reviewed-preview"])
+  assert.equal(actions.find(row => row.target_key === "submit:f1")?.status, "superseded")
+  // Proposed again with the reviewed fingerprint: the row is current and the note clears.
+  await upsertProposals(actor, dealId, runId, [{ kind: "request_documents", targetKey: "request_documents", fingerprint: "c1", payload: {} }])
+  assert.equal((await actionsFor(dealId)).find(row => row.target_key === "request_documents")?.error_code, null)
+})
+
 test("an older run does not overwrite proposals while a newer run is in flight", async () => {
   const { workspaceId, dealId } = await enabledDeal()
   for (const [id, createdAt] of [["older", "2026-01-01T00:00:00.000Z"], ["newer", "2026-01-01T00:01:00.000Z"]]) await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at)
     VALUES (?,?,?,?,'running',?,?)`).run(`${id}-${dealId}`, workspaceId, dealId, id, createdAt, createdAt)
   const result = await upsertProposals(documentScanActor({ workspaceId, dealId, id: "race" }), dealId, `older-${dealId}`, [{ kind: "request_documents", targetKey: "request_documents", fingerprint: "c1", payload: {} }])
   assert.deepEqual(result, { skipped: "newer_run" })
+})
+
+test("re-review waives only the stipulations the new version drops; shared ones are reused", async () => {
+  const { workspaceId, dealId } = await enabledDeal()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const now = new Date().toISOString()
+  const runId = `revise-${dealId}`
+  await getDatabase().prepare(`INSERT INTO mca_deal_agent_runs (id,workspace_id,deal_id,input_key,state,created_at,updated_at) VALUES (?,?,?,?,'running',?,?)`).run(runId, workspaceId, dealId, runId, now, now)
+  const actor = documentScanActor({ workspaceId, dealId, id: "revise" })
+  const A = { category: "driver_license", label: "Driver license (front)", code: "missing_driver_license" }
+  const B = { category: "voided_check", label: "Voided business check", code: "missing_voided_check" }
+  const C = { category: "application", label: "Signed merchant application", code: "missing_application" }
+  const request = (fingerprint: string, items: unknown[]) => [{ kind: "request_documents" as const, targetKey: "request_documents", fingerprint, payload: { items, otherFindings: [] } }]
+  await upsertProposals(actor, dealId, runId, request("c1", [A, B]))
+  const action = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  await decide(broker, dealId, action.id, "review", { senderId })
+  const stips = () => getDatabase().prepare<{ id: string; status: string; idempotency_key: string }>("SELECT id,status,idempotency_key FROM mca_closing_stipulations WHERE deal_id=?").all(dealId)
+  const byKey = async (category: string) => (await stips()).find(row => row.idempotency_key === `deal-agent:${action.id}:${category}`)
+  const [a, b] = [(await byKey("driver_license"))!, (await byKey("voided_check"))!]
+  await upsertProposals(actor, dealId, runId, request("c2", [B, C]))
+  assert.equal((await actionRow(dealId, action.id)).next_fingerprint, "c2")
+  const fresh = (await decide(broker, dealId, action.id, "review", { senderId })).preview as { body: string }
+  const after = await stips()
+  assert.equal(after.find(row => row.id === a.id)?.status, "waived")
+  assert.equal(after.find(row => row.id === b.id)?.status, "open")
+  const c = (await byKey("application"))!
+  assert.equal(c.status, "open")
+  assert.equal(after.length, 3)
+  assert.match(fresh.body, new RegExp(`secure-upload:${b.id}`))
+  assert.match(fresh.body, new RegExp(`secure-upload:${c.id}`))
+  assert.doesNotMatch(fresh.body, new RegExp(`secure-upload:${a.id}`))
+  const waivedAudits = (id: string) => getDatabase().prepare<{ n: number }>("SELECT count(*)::int n FROM audit_events WHERE action='closing.stipulation_waived' AND resource_id=?").get(id)
+  assert.equal((await waivedAudits(a.id))?.n, 1)
+  assert.equal((await waivedAudits(b.id))?.n, 0)
+})
+
+test("a run completes when a reviewed row and a superseded twin share the target", async () => {
+  const { workspaceId, dealId } = await incompleteDealWithRun()
+  const broker = await seedMember(workspaceId, "admin")
+  const senderId = await seedMerchantSender(workspaceId, broker)
+  const reviewed = (await actionsFor(dealId)).find(row => row.kind === "request_documents")!
+  const preview = (await decide(broker, dealId, reviewed.id, "review", { senderId })).preview as { id: string }
+  // Learn the version-2 fingerprint from a real run, then rebuild the crash state: reviewed v1 plus a superseded v2 twin.
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "driver_license"))
+  await runAgent(dealId)
+  const v2 = (await actionRow(dealId, reviewed.id)).next_fingerprint!
+  assert.ok(v2 && v2 !== reviewed.fingerprint)
+  await getDatabase().prepare("UPDATE mca_deal_agent_actions SET next_fingerprint=NULL,next_payload_json=NULL,error_code=NULL WHERE id=?").run(reviewed.id)
+  const { run_id: runId } = (await getDatabase().prepare<{ run_id: string }>("SELECT run_id FROM mca_deal_agent_actions WHERE id=?").get(reviewed.id))!
+  const now = new Date().toISOString()
+  const twinId = `twin-${dealId}`
+  await getDatabase().prepare(`INSERT INTO mca_deal_agent_actions (id,workspace_id,deal_id,run_id,kind,target_key,fingerprint,payload_json,status,created_at,updated_at)
+    VALUES (?,?,?,?,'request_documents','request_documents',?,?,'superseded',?,?)`).run(twinId, workspaceId, dealId, runId, v2, reviewed.payload_json, now, now)
+  // A document that leaves completeness unchanged: a new run that proposes v2 again.
+  await withAgentEnv("true", () => upload(workspaceId, dealId, "other_stip"))
+  await runAgent(dealId)
+  const runs = await runsFor(dealId)
+  assert.equal(runs.length, 3)
+  assert.equal(runs[2].state, "completed", JSON.stringify(runs[2]))
+  const actions = await actionsFor(dealId)
+  const row = actions.find(item => item.id === reviewed.id)!
+  assert.deepEqual([row.status, row.preview_id, row.fingerprint, row.next_fingerprint, row.error_code], ["pending", preview.id, reviewed.fingerprint, v2, "inputs_changed"])
+  assert.equal(actions.find(item => item.id === twinId)?.status, "superseded")
+  assert.equal(actions.filter(item => item.kind === "request_documents" && item.status === "pending").length, 1)
 })

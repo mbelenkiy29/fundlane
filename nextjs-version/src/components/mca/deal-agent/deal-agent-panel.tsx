@@ -17,6 +17,11 @@ type SubmissionPreview = { destinations: Array<{ funderId: string; name: string;
 type RequestPreview = { recipientMasked: string; subject?: string; body: string }
 
 const KIND_LABELS: Record<Action["kind"], string> = { request_documents: "Request missing documents", submit_to_funder: "Submit to funder", schedule_follow_up: "Schedule follow-up" }
+const ERROR_NOTES: Record<string, string> = {
+  interrupted: "This didn't finish. Review and approve again.",
+  inputs_changed: "The deal changed since you reviewed this. Approving sends what you reviewed; review again to use the newer proposal.",
+  no_longer_suggested: "The agent no longer suggests this. You can still approve what you reviewed, or dismiss it.",
+}
 
 function Reasons({ action }: { action: Action }) {
   const payload = action.payload as Record<string, unknown>
@@ -97,7 +102,8 @@ export function DealAgentPanel({ dealId, onChanged }: { dealId: string; onChange
         const reviewable = action.kind !== "schedule_follow_up"
         const disabled = busy === action.id || action.status === "executing"
         return <div key={action.id} className="space-y-3 rounded-lg border p-3">
-          <div className="flex flex-wrap items-center gap-2"><p className="font-medium">{KIND_LABELS[action.kind]}</p>{action.status === "executing" && <Badge variant="secondary">In progress</Badge>}{action.errorCode && <Badge variant="destructive">{action.errorCode}</Badge>}</div>
+          <div className="flex flex-wrap items-center gap-2"><p className="font-medium">{KIND_LABELS[action.kind]}</p>{action.status === "executing" && <Badge variant="secondary">In progress</Badge>}{action.errorCode && !ERROR_NOTES[action.errorCode] && <Badge variant="destructive">{action.errorCode}</Badge>}</div>
+          {action.errorCode && ERROR_NOTES[action.errorCode] && <p className="text-sm text-muted-foreground">{ERROR_NOTES[action.errorCode]}</p>}
           <Reasons action={action} />
           {action.kind === "request_documents" && <Select value={senderId} onValueChange={setSenderId}><SelectTrigger aria-label="Merchant sender"><SelectValue placeholder={senders.length ? "Verified merchant sender" : "No verified merchant sender"} /></SelectTrigger><SelectContent>{senders.map(sender => <SelectItem key={sender.id} value={sender.id}>{sender.fromAddress}</SelectItem>)}</SelectContent></Select>}
           {preview !== undefined && <Preview preview={preview} />}
