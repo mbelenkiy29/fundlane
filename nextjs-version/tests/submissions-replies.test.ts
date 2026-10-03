@@ -628,3 +628,195 @@ test("unique-domain reply with zero subject hits stays pending_review", async ()
   assert.equal(reply.evidence.candidateDealIds?.includes(deal.id), true)
   assert.equal(spy.mutations.length, 0)
 })
+
+test("system-provider reply anchors by the attempted Message-ID in References or In-Reply-To", async () => {
+  const deal = await seedDeal("References Anchor Merchant LLC")
+  const sent = await sendTo(deal.id, alphaFunderId)
+  const attempted = sent.ref.messageId
+  // Stored shape of a Resend/useSend attempt: the delivered RFC Message-ID is unknown.
+  await getDatabase().prepare("UPDATE mca_submission_attempts SET external_ref=? WHERE job_id=?").run(JSON.stringify({
+    ...sent.ref, messageId: "", threadId: "", inReplyTo: null, references: [], threadStatus: "unknown",
+    attemptedMessageId: attempted, provider: "resend", providerEmailId: "em-1", delivery: "sent",
+  }), sent.jobId)
+  const sesId = "<010001a0fd6dc083-references-000000@email.amazonses.com>"
+  const reply = (providerMessageId: string, inReplyTo: string, references?: string[]) => ({
+    providerMessageId, inReplyTo, references, from: "Underwriting <uw@unrelated-replies.example.test>", subject: "Checking in", body: "Any update on the file?",
+  })
+  const spy: MailboxSpy = {
+    list: 0,
+    mutations: [],
+    messages: [
+      reply("system-anchor-references", sesId, [attempted, sesId]),
+      reply("system-anchor-in-reply-to", attempted),
+      reply("system-anchor-ses-only", sesId, [sesId]),
+    ],
+  }
+  setReplyMailboxForTests(fixtureMailbox(spy))
+
+  const run = await repliesRun(cookieRequest("/api/mca/submissions/replies/run", "admin-session-token", {
+    method: "POST",
+    body: JSON.stringify({ senderId, enabled: true }),
+  }))
+  assert.equal(run.status, 200)
+  const replies = (await (await repliesGet(cookieRequest("/api/mca/submissions/replies", "admin-session-token"))).json() as QueueBody).replies
+  for (const id of ["system-anchor-references", "system-anchor-in-reply-to"]) {
+    const item = replies.find((entry) => entry.providerMessageId === id)
+    assert.equal(item?.state, "matched", id)
+    assert.equal(item?.matchedJobId, sent.jobId, id)
+    assert.equal(item?.evidence.method, "message_id", id)
+  }
+  const sesOnly = replies.find((entry) => entry.providerMessageId === "system-anchor-ses-only")
+  assert.equal(sesOnly?.state, "pending_review")
+  assert.equal(sesOnly?.matchedJobId, undefined)
+})
+
+test("scheduled funder reply ingest needs both flags and isolates each workspace", async () => {
+  const other = await createSender(actor(ids.otherWorkspace), {
+    provider: "smtp", purpose: "submission", fromName: "Other Desk", fromAddress: "other@example.test", signature: "Best",
+    isDefault: true, smtp: { host: "smtp.example.test", port: 587, username: "other", password: SMTP_PASSWORD },
+  })
+  await getDatabase().prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), other.workspaceId, other.id)
+  const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
+  const far = Date.now() + 300_000
+  const calls: number[] = []
+  setReplyMailboxForTests({ async listMessages() { calls.push(1); return { messages: [], nextCursor: "empty" } } })
+  await runReplyIngest(actor(), { senderId, enabled: true })
+  await runReplyIngest(actor(ids.otherWorkspace), { senderId: other.id, enabled: true })
+  const live = process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED
+  const scheduled = process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED
+  try {
+    calls.length = 0
+    for (const [a, b] of [["true", undefined], [undefined, "true"], ["false", "true"]] as const) {
+      if (a) process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = a; else delete process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED
+      if (b) process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = b; else delete process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED
+      assert.equal(await runScheduledReplyIngest(new Date().toISOString(), far), undefined)
+    }
+    assert.equal(calls.length, 0)
+    process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = "true"
+    process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = "true"
+    assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 0 })
+    assert.equal(calls.length, 2)
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() - 1))?.workspaces, 0)
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 1000))?.workspaces, 0) // cleanup reserve, with no database/provider work
+    calls.length = 0
+    setReplyMailboxForTests({ async listMessages() { calls.push(1); if (calls.length === 1) throw new Error("boom"); return { messages: [], nextCursor: "empty" } } })
+    assert.deepEqual(await runScheduledReplyIngest(new Date().toISOString(), far), { workspaces: 2, created: 0, failed: 1 })
+    assert.equal(calls.length, 2)
+    await runReplyIngest(actor(ids.otherWorkspace), { senderId: other.id, enabled: false })
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), far))?.workspaces, 1)
+  } finally {
+    for (const [key, value] of [["MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED", live], ["MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED", scheduled]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+    }
+    setReplyMailboxForTests()
+  }
+})
+
+test("scheduled polling rotates one sender per workspace before IO and recovers an expired lease", async () => {
+  const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
+  const extra = await createSender(actor(), { provider: "smtp", purpose: "submission", fromName: "Second Desk", fromAddress: "second@example.test", signature: "Best", smtp: { host: "smtp.example.test", port: 587, username: "second", password: SMTP_PASSWORD } })
+  const db = getDatabase(), prior = [process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED, process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED]
+  await db.prepare("UPDATE mca_email_senders SET state='verified',verified_at=? WHERE workspace_id=? AND id=?").run(new Date().toISOString(), ids.workspace, extra.id)
+  setReplyMailboxForTests({ async listMessages() { return { messages: [], nextCursor: "empty" } } })
+  await runReplyIngest(actor(), { senderId, enabled: true })
+  await runReplyIngest(actor(), { senderId: extra.id, enabled: true })
+  await db.prepare("UPDATE mca_funder_replies SET updated_at='2020-01-01T00:00:00Z' WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").run(ids.workspace, senderId)
+  await db.prepare("UPDATE mca_funder_replies SET updated_at='2021-01-01T00:00:00Z' WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").run(ids.workspace, extra.id)
+  const scanned: string[] = []
+  try {
+    process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = "true"
+    setReplyMailboxForTests({ async listMessages(input) {
+      const row = await db.prepare<{ match_evidence: string; updated_at: string }>("SELECT match_evidence,updated_at FROM mca_funder_replies WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").get(input.workspaceId, input.senderId)
+      const checkpoint = JSON.parse(row!.match_evidence)
+      assert.ok(checkpoint.scheduledClaimToken, "claim is durable before a request that could kill the process")
+      assert.ok(Date.parse(checkpoint.scheduledLeaseUntil) > Date.now())
+      assert.ok(Date.parse(row!.updated_at) > Date.parse("2021-01-01T00:00:00Z"), "the killed sender will already have rotated")
+      assert.equal(input.messageLimit, 2)
+      assert.ok(input.deadlineMs! - Date.now() <= 25_000)
+      scanned.push(input.senderId)
+      return { messages: [], nextCursor: "empty", complete: true }
+    } })
+    await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000)
+    await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000)
+    assert.deepEqual(scanned, [senderId, extra.id])
+    await db.prepare(`UPDATE mca_funder_replies SET match_evidence=(match_evidence::jsonb || '{"scheduledClaimToken":"killed","scheduledLeaseUntil":"2020-01-01T00:00:00Z"}'::jsonb)::text,updated_at='2020-01-01T00:00:00Z' WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'`).run(ids.workspace, senderId)
+    await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000)
+    assert.equal(scanned.at(-1), senderId)
+    const restored = await db.prepare<{ match_evidence: string }>("SELECT match_evidence FROM mca_funder_replies WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").get(ids.workspace, senderId)
+    assert.equal(JSON.parse(restored!.match_evidence).scheduledClaimToken, undefined)
+  } finally {
+    for (const [i, key] of ["MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED", "MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED"].entries()) { if (prior[i] === undefined) delete process.env[key]; else process.env[key] = prior[i] }
+    setReplyMailboxForTests({ async listMessages() { return { messages: [], nextCursor: "empty" } } })
+    await runReplyIngest(actor(), { senderId: extra.id, enabled: false })
+    setReplyMailboxForTests()
+  }
+})
+
+test("interrupted extraction retains durable pending work and replay does not duplicate a reply", async () => {
+  const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
+  const { setReplyOutcomeClassifierForTests } = await import("../src/lib/mca/submissions/extract-outcomes")
+  const { parseReplyDeterministically } = await import("../src/lib/mca/submissions/deterministic-reply-parser")
+  const { AppError } = await import("../src/lib/mca/errors")
+  const deal = await seedDeal("Resumable Reply Merchant"), { ref } = await sendTo(deal.id, alphaFunderId)
+  const message: MailboxMessage = { providerMessageId: "resumable-extraction-message", from: "underwriting@alpha.example.test", inReplyTo: ref.messageId, subject: "Approved", body: "Approved for $80,000; factor 1.3; term 12 months." }
+  const prior = [process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED, process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED]
+  setReplyMailboxForTests({ async listMessages() { return { messages: [], nextCursor: "empty" } } })
+  await runReplyIngest(actor(), { senderId, enabled: true })
+  let attempts = 0
+  try {
+    process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = "true"
+    setReplyMailboxForTests({ async listMessages() { return { messages: [message], nextCursor: "retained-provider-page", complete: false } } })
+    setReplyOutcomeClassifierForTests({ name: "synthetic", async classify(input) { if (++attempts === 1) throw new AppError(503, "execution_expired", "Synthetic interrupted extraction"); return parseReplyDeterministically(input) } })
+    await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000)
+    const read = () => getDatabase().prepare<{ match_evidence: string }>("SELECT match_evidence FROM mca_funder_replies WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").get(ids.workspace, senderId)
+    const pending = JSON.parse((await read())!.match_evidence)
+    assert.equal(pending.cursor, "retained-provider-page")
+    assert.equal(pending.pendingReplyIds.length, 1)
+    await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000)
+    assert.deepEqual(JSON.parse((await read())!.match_evidence).pendingReplyIds, [])
+    const row = await getDatabase().prepare<{ count: number; evidence: string }>("SELECT count(*)::int count,min(match_evidence) evidence FROM mca_funder_replies WHERE workspace_id=? AND provider_message_id=?").get(ids.workspace, message.providerMessageId)
+    assert.equal(row!.count, 1)
+    assert.ok(JSON.parse(row!.evidence).extraction, "the configured classifier eventually completes the retained preview")
+    assert.equal(attempts, 2)
+  } finally {
+    setReplyOutcomeClassifierForTests()
+    setReplyMailboxForTests()
+    for (const [i, key] of ["MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED", "MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED"].entries()) { if (prior[i] === undefined) delete process.env[key]; else process.env[key] = prior[i] }
+  }
+})
+
+test("manual and scheduled scans share a lease; opt-out preserves progress and permanently revokes the old token", async () => {
+  const { runReplyIngest, runScheduledReplyIngest } = await import("../src/lib/mca/submissions/replies")
+  const { AppError } = await import("../src/lib/mca/errors")
+  const prior = [process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED, process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED]
+  let entered!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  setReplyMailboxForTests({ async listMessages() { return { messages: [], nextCursor: "before-race" } } })
+  await runReplyIngest(actor(), { senderId, enabled: true })
+  const read = () => getDatabase().prepare<{ match_evidence: string }>("SELECT match_evidence FROM mca_funder_replies WHERE workspace_id=? AND sender_id=? AND provider_message_id='mca:mailbox-checkpoint:v1'").get(ids.workspace, senderId)
+  try {
+    process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED = process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED = "true"
+    setReplyMailboxForTests({ async listMessages() { entered(); await gate; return { messages: [], nextCursor: "stale-manual-cursor" } } })
+    const manual = runReplyIngest(actor(), { senderId })
+    await started
+    const original = JSON.parse((await read())!.match_evidence)
+    assert.equal(original.claimMode, "manual")
+    assert.ok(original.scheduledClaimToken)
+    assert.equal((await runScheduledReplyIngest(new Date().toISOString(), Date.now() + 30_000))?.workspaces, 0)
+    await assert.rejects(runReplyIngest(actor(), { senderId }), error => error instanceof AppError && error.code === "reply_ingest_busy")
+    await runReplyIngest(actor(), { senderId, enabled: false })
+    const disabled = JSON.parse((await read())!.match_evidence)
+    assert.equal(disabled.cursor, original.cursor)
+    assert.deepEqual(disabled.pendingReplyIds, original.pendingReplyIds)
+    assert.equal(disabled.scheduledClaimToken, undefined)
+    setReplyMailboxForTests({ async listMessages() { return { messages: [], nextCursor: "new-owner-cursor" } } })
+    await runReplyIngest(actor(), { senderId, enabled: true })
+    const rejected = assert.rejects(manual, error => error instanceof AppError && error.code === "reply_ingest_claim_lost")
+    release(); await rejected
+    assert.equal(JSON.parse((await read())!.match_evidence).cursor, "new-owner-cursor")
+  } finally {
+    release?.()
+    setReplyMailboxForTests()
+    for (const [i, key] of ["MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED", "MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED"].entries()) { if (prior[i] === undefined) delete process.env[key]; else process.env[key] = prior[i] }
+  }
+})

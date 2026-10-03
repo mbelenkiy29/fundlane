@@ -3,7 +3,8 @@ import "server-only";
 
 import { AppError } from "./errors";
 import { newId } from "./db";
-import { sendSystemEmail, systemEmailCredentials, resendSystemEmailEnabled } from "./system-email";
+import { sendSystemEmail, sendFrozenSystemEmail, systemEmailConfiguration, systemEmailCredentials, type FrozenSystemEmailConfiguration } from "./system-email";
+import { hmacScopedToken } from "./crypto";
 import { trialRequiresCard } from "./stripe-checkout-trial";
 
 export type EmailMessage = TransactionalMessage;
@@ -63,24 +64,46 @@ function validateTransactionalActionUrl(value:string):void {
 
 export interface BillingEmailMessage {
   recipient: string; actionUrl: string; expiresAt: string; data: Record<string, unknown>;
-  transport: "webhook" | "usesend"; from?: string; retryUntil?: string;
+  transport: "webhook" | "system" | "usesend"; from?: string; retryUntil?: string;
+  configuration?: FrozenBillingEmailConfiguration;
   content?: { subject:string; text:string; html:string };
 }
-/** Billing recovery is allowed while paused. Only this explicit helper has the UseSend fallback. */
+type FrozenBillingEmailConfiguration = FrozenSystemEmailConfiguration | { provider: "webhook"; endpoint: string; keyIdentity: string };
+
+/** Freeze only an opaque credential identity, never a secret. No provider I/O. */
+export function billingEmailConfiguration(): FrozenBillingEmailConfiguration {
+  const endpoint = process.env.MCA_EMAIL_WEBHOOK_URL?.trim();
+  if (!endpoint) return systemEmailConfiguration();
+  validateTransactionalActionUrl(endpoint);
+  const url = new URL(endpoint);
+  if (url.hash) throw new AppError(503, "billing_email_unconfigured", "Configure a billing email endpoint without a fragment.");
+  return { provider: "webhook", endpoint, keyIdentity: hmacScopedToken("billing-email-webhook-key", "platform", process.env.MCA_EMAIL_WEBHOOK_TOKEN ?? "") };
+}
+
+/** Billing recovery is allowed while paused; every retry uses its original transport identity. */
 export async function deliverBillingEmail(message: BillingEmailMessage, correlationId: string): Promise<void> {
-  if (message.transport === "webhook") {
-    if (!process.env.MCA_EMAIL_WEBHOOK_URL) throw new AppError(503,"billing_email_unconfigured","The original billing webhook transport is unavailable.")
-    const result = await deliverEmail({ ...message, template:"operations_alert" },{correlationId})
-    if (result.delivery !== "sent") throw new AppError(503,"billing_email_unconfigured","Billing email requires a real delivery transport.")
-    return
+  const configuration = message.configuration;
+  const reviewRequired = () => new AppError(503, "billing_delivery_review_required", "Review the original provider delivery before reissuing this notification.");
+  // Legacy payloads cannot prove which account/endpoint accepted an earlier attempt.
+  if (!configuration || (message.transport === "webhook") !== (configuration.provider === "webhook")) throw reviewRequired();
+  validateTransactionalActionUrl(message.actionUrl);
+  if (configuration.provider === "webhook") {
+    let current: FrozenBillingEmailConfiguration;
+    try { current = billingEmailConfiguration(); } catch { throw reviewRequired(); }
+    if (JSON.stringify(current) !== JSON.stringify(configuration)) throw reviewRequired();
+    const payload = { ...message };
+    delete payload.configuration;
+    const response = await sendTransactionalWebhook(configuration.endpoint, process.env.MCA_EMAIL_WEBHOOK_TOKEN, { ...payload, template: "operations_alert" }, correlationId);
+    if (!response.ok) throw new AppError(502, response.status >= 500 ? "email_delivery_uncertain" : "email_delivery_failed", "The email provider did not accept the message.");
+    return;
   }
-  const key = resendSystemEmailEnabled() ? systemEmailCredentials()?.apiKey : process.env.MCA_USESEND_API_KEY?.trim()
-  if (message.retryUntil && Date.parse(message.retryUntil) <= Date.now()) throw new AppError(503,"billing_delivery_review_required",resendSystemEmailEnabled() ? "The automatic retry window has ended. Check provider delivery before reissuing this notification." : "UseSend's deduplication window has ended. Check provider delivery before reissuing this notification.")
-  const from = resendSystemEmailEnabled() ? systemEmailCredentials()?.from : message.from
-  if (!key || !from) throw new AppError(503,"billing_email_unconfigured",resendSystemEmailEnabled() ? "Configure MCA_RESEND_API_KEY and a From address for billing notifications." : "Configure MCA_USESEND_API_KEY and MCA_USESEND_FROM for billing notifications.")
-  const url = new URL(message.actionUrl)
-  if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["localhost","127.0.0.1"].includes(url.hostname))) throw new AppError(503,"billing_origin_invalid","Billing recovery links require HTTPS.")
-  await sendSystemEmail({apiKey:key,from,to:message.recipient,...(message.content??renderBillingEmailContent(message)),idempotencyKey:correlationId})
+  if (!message.retryUntil || !Number.isFinite(Date.parse(message.retryUntil)) || Date.parse(message.retryUntil) <= Date.now() || message.from !== configuration.from) throw reviewRequired();
+  try {
+    await sendFrozenSystemEmail({ to: message.recipient, ...(message.content ?? renderBillingEmailContent(message)), idempotencyKey: correlationId }, configuration, { preserveProvider: true });
+  } catch (error) {
+    if (error instanceof AppError && ["onboarding_email_provider_changed", "onboarding_email_provider_unavailable"].includes(error.code)) throw reviewRequired();
+    throw error;
+  }
 }
 
 /** Freeze this output in the outbox so a deployment cannot change a retry's provider body. */

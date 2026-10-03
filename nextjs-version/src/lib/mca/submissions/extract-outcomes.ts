@@ -9,6 +9,7 @@ import { getDatabase, newId, nowIso, parseJson, recordAuditEvent, withImmediateT
 import type { DealActor } from "../deals/schema"
 import { getDealForDocument } from "../deals/service"
 import { AppError } from "../errors"
+import { assertExecutionActive, executionSignal, executionRemainingMs } from "../jobs/execution"
 import type { ReplyState, SubmissionJob } from "./contracts"
 import { parseReplyDeterministically } from "./deterministic-reply-parser"
 
@@ -435,8 +436,10 @@ export class OpenAiReplyOutcomeClassifier implements ReplyOutcomeClassifier {
 
   private async call(input: unknown[]): Promise<{ json: unknown; requestId?: string }> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    assertExecutionActive()
+    const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, executionRemainingMs() ?? Infinity))
     let response: Response
+    let body: RawResponse
     try {
       response = await fetch(this.endpoint, {
         method: "POST",
@@ -447,16 +450,18 @@ export class OpenAiReplyOutcomeClassifier implements ReplyOutcomeClassifier {
           input,
           text: { format: { type: "json_schema", name: "mca_reply_outcomes", strict: true, schema: outcomeJsonSchema } },
         }),
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, ...(executionSignal() ? [executionSignal()!] : [])]),
       })
+      // Keep cancellation active while consuming the response body as well.
+      body = await response.json().catch(error => { assertExecutionActive(); if (controller.signal.aborted) throw error; return {} }) as RawResponse
     } catch (error) {
+      assertExecutionActive()
       if ((error as Error).name === "AbortError") throw new AppError(504, "provider_timeout", "Reply extraction AI timed out. Retry the extraction.")
       throw new AppError(503, "provider_unavailable", "Reply extraction AI could not be reached. Check the configured provider and retry.")
     } finally {
       clearTimeout(timer)
     }
     const requestId = response.headers.get("x-request-id") ?? undefined
-    const body = await response.json().catch(() => ({})) as RawResponse
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         throw new AppError(503, "provider_authentication_failed", "Reply extraction AI credentials were rejected. Rotate OPENAI_API_KEY and retry.")
@@ -532,6 +537,7 @@ async function classifyReply(reply: FunderReply): Promise<ClassifiedReplyOutcome
   try {
     return await configuredClassifier().classify(input)
   } catch (error) {
+    assertExecutionActive()
     if (!(error instanceof AppError) || !error.code.startsWith("provider_")) throw error
     const fallback = parseReplyDeterministically(input)
     return { ...fallback, warnings: [...fallback.warnings, "AI extraction was unavailable; review the original reply."] }
@@ -785,7 +791,7 @@ async function writeSnapshot(row: ReplyRow, snapshot: ReplyExtractionSnapshot, n
   await db().prepare(
     "UPDATE mca_funder_replies SET match_evidence = ?, state = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
   ).run(
-    JSON.stringify({ ...evidence, extraction: snapshot }),
+    JSON.stringify({ ...evidence, automaticExtractionPending: false, extraction: snapshot }),
     nextState ?? row.state,
     now,
     row.workspace_id,
@@ -1042,6 +1048,8 @@ async function auditExtract(actor: DealActor, action: string, replyId: string, m
 
 async function runExtract(actor: DealActor, replyId: string, options: {
   preview: boolean
+  beforeClassify?: () => Promise<void>
+  beforePersist?: () => Promise<void>
   correction?: ExtractCorrectionInput
   expectedClassification?: OutcomeClassification
   expectedProposalKey?: unknown
@@ -1063,6 +1071,7 @@ async function runExtract(actor: DealActor, replyId: string, options: {
   if (!options.preview && (!previous || typeof expectedKey !== "string" || replyProposalKey(previous) !== expectedKey)) {
     throw new AppError(409, "proposal_changed", "The proposed terms changed. Review the current proposal before confirming.")
   }
+  if (options.preview && !options.correction) await options.beforeClassify?.()
   const classifiedRaw = options.correction
     ? correctionToClassified(options.correction, previous)
     : !options.preview && previous
@@ -1081,6 +1090,8 @@ async function runExtract(actor: DealActor, replyId: string, options: {
     previous,
   })
   return withImmediateTransaction(async () => {
+    // Automatic polling fences its lease here after classification, before taking the reply lock.
+    if (options.preview) await options.beforePersist?.()
     await db().prepare("SELECT id FROM mca_funder_replies WHERE workspace_id = ? AND id = ? FOR UPDATE").get(actor.workspaceId, reply.id)
     const current = await loadReplyRow(actor.workspaceId, reply.id)
     if (!current) throw new AppError(404, "resource_not_found", "The requested resource was not found.")
@@ -1089,6 +1100,8 @@ async function runExtract(actor: DealActor, replyId: string, options: {
       || (!options.preview && (!latestPrevious || replyProposalKey(latestPrevious) !== expectedKey))) {
       throw new AppError(409, "proposal_changed", "The reply match or proposed terms changed. Review it again before confirming.")
     }
+    // A broker may have previewed or confirmed while automatic classification was in flight.
+    if (options.preview && options.beforePersist && (latestPrevious || current.state !== "matched")) return getReplyExtraction(actor, reply.id)
     let snapshot = snapshotOf({
       reply,
       classified: normalized.classified,
@@ -1165,8 +1178,8 @@ async function runExtract(actor: DealActor, replyId: string, options: {
   })
 }
 
-export async function previewReplyExtraction(actor: DealActor, input: ExtractRunInput): Promise<ExtractOutcomeView> {
-  return runExtract(actor, asReplyId(input.replyId), { preview: true })
+export async function previewReplyExtraction(actor: DealActor, input: ExtractRunInput, beforeClassify?: () => Promise<void>, beforePersist?: () => Promise<void>): Promise<ExtractOutcomeView> {
+  return runExtract(actor, asReplyId(input.replyId), { preview: true, beforeClassify, beforePersist })
 }
 
 export async function persistReplyExtraction(actor: DealActor, input: ExtractRunInput): Promise<ExtractOutcomeView> {

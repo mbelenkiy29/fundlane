@@ -259,18 +259,21 @@ export function receiptEmailContent(input: { dealLink?: string; addDocumentLink?
 export async function sendUsesendEmail(input: {
   apiKey: string
   from: string
-  to: string
+  to: string | string[]
+  cc?: string[]
   subject: string
   text: string
   html: string
   replyTo?: string
+  attachments?: Array<{ filename: string; content: string }>
+  headers?: Record<string, string>
   idempotencyKey: string
   fetchImpl?: typeof fetch
 }): Promise<{ emailId: string }> {
   const { status, body } = await usesendRequest<Record<string, unknown>>(input.fetchImpl ?? fetch, input.apiKey, "/v1/emails", {
     method: "POST",
     headers: { "Idempotency-Key": input.idempotencyKey.slice(0, 256) },
-    body: JSON.stringify({ to: input.to, from: input.from, subject: input.subject, text: input.text, html: input.html, ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}) }),
+    body: JSON.stringify({ to: input.to, from: input.from, subject: input.subject, text: input.text, html: input.html, ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}), ...(input.cc?.length ? { cc: input.cc } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.headers ? { headers: input.headers } : {}) }),
   })
   const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {}
   const error = record.error && typeof record.error === "object" && !Array.isArray(record.error) ? record.error as Record<string, unknown> : undefined

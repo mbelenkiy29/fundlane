@@ -18,6 +18,8 @@ import { createFunder } from "../src/lib/mca/funders/directory"
 import { createSender, updateSender } from "../src/lib/mca/senders/service"
 import { getOutgoingDocumentBytes } from "../src/lib/mca/submissions/compress"
 import {
+  deliverRendered,
+  sendSubmissionEmail,
   parseEmailAttemptRef,
   setEmailDeliveryFetchForTests,
   setSubmissionEmailProductionForTests,
@@ -26,6 +28,7 @@ import {
 import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
 import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
+import { prepareDealSubmission, readDealSubmissionPreview } from "../src/lib/mca/submissions/broker-preview"
 import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
@@ -689,5 +692,176 @@ test("approved ambiguous relay responses stay uncertain even with the optional l
       captured.push({ body: typeof init?.body === "string" ? init.body : "", correlationId: new Headers(init?.headers).get("x-correlation-id") ?? undefined })
       return new Response("accepted", { status: 202 })
     })
+  }
+})
+
+async function withProvider(provider: "usesend" | "resend", run: (calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> }>) => Promise<void>, respond: () => Response | Promise<Response> = () => Response.json({ emailId: "em-1", id: "em-1" })) {
+  const keys = ["MCA_EMAIL_WEBHOOK_URL", "MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED", "MCA_USESEND_API_KEY", "MCA_USESEND_FROM", "MCA_RESEND_API_KEY", "MCA_RESEND_FROM", "MCA_SYSTEM_EMAIL_PROVIDER", "MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED"] as const
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  delete process.env.MCA_EMAIL_WEBHOOK_URL
+  if (provider === "resend") {
+    process.env.MCA_SYSTEM_EMAIL_PROVIDER = "resend"
+    process.env.MCA_RESEND_API_KEY = "re_test_key"
+    process.env.MCA_RESEND_FROM = "Fundlane <system@resend.example.test>"
+  } else process.env.MCA_SYSTEM_EMAIL_PROVIDER = "usesend"
+  process.env.MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED = "true"
+  process.env.MCA_USESEND_API_KEY = "us_test_key"
+  process.env.MCA_USESEND_FROM = "Fundlane <system@mail.example.test>"
+  const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
+  setEmailDeliveryFetchForTests(async (input, init) => {
+    calls.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) })
+    return respond()
+  })
+  try { await run(calls) } finally {
+    for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key] }
+    setEmailDeliveryFetchForTests(async (_input, init) => {
+      captured.push({ body: typeof init?.body === "string" ? init.body : "", correlationId: new Headers(init?.headers).get("x-correlation-id") ?? undefined })
+      return new Response("accepted", { status: 202 })
+    })
+  }
+}
+
+async function queueOne(documents = 0) {
+  const { deal } = await seedDeal()
+  for (let i = 0; i < documents; i += 1) {
+    await storeDocument(actor(), { dealId: deal.id, idempotencyKey: `email-extra-${dealCounter}-${i}`, filename: `extra-${i}.pdf`, mimeType: "application/pdf", bytes: new Uint8Array(Buffer.from(`%PDF-1.4\n% extra ${dealCounter}-${i}\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n`)), category: "statement", source: "test" })
+  }
+  const queued = await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [alphaFunderId], confirmationKey: `email-usesend-${dealCounter}` })
+  return { job: queued.jobs[0]!, attempt: await attemptRow(queued.jobs[0]!.jobId) }
+}
+
+for (const [provider, url, key, from, replyToKey] of [
+  ["usesend", "https://app.usesend.com/api/v1/emails", "us_test_key", "Fundlane <system@mail.example.test>", "replyTo"],
+  ["resend", "https://api.resend.com/emails", "re_test_key", "Fundlane <system@resend.example.test>", "reply_to"],
+] as const) {
+  test(`${provider} submission send carries attachments, Reply-To, Message-ID and References`, async () => {
+    await withProvider(provider, async (calls) => {
+      const { job, attempt } = await queueOne()
+      assert.equal(job.state, "sent")
+      assert.equal(calls.length, 1)
+      const { url: sentUrl, headers, body } = calls[0]!
+      assert.equal(sentUrl, url)
+      assert.equal(headers.get("authorization"), `Bearer ${key}`)
+      assert.equal(headers.get("idempotency-key"), attempt?.correlation_id)
+      assert.equal(body.from, from)
+      assert.equal(body[replyToKey], "broker@example.test")
+      assert.deepEqual(body.to, ["alpha@funders.example.test"])
+      const ref = parseEmailAttemptRef(attempt?.external_ref)
+      assert.equal(ref?.attemptedMessageId, (body.headers as Record<string, string>)["Message-ID"])
+      assert.equal((body.headers as Record<string, string>).References, (body.headers as Record<string, string>)["Message-ID"])
+      assert.equal(ref?.messageId, "")
+      assert.equal(ref?.threadId, "")
+      assert.deepEqual(ref?.references, [])
+      assert.equal(ref?.threadStatus, "unknown")
+      assert.equal(ref?.providerEmailId, "em-1")
+      assert.equal(ref?.provider, provider)
+      assert.equal(ref?.snapshot.fromAddress, provider === "resend" ? "system@resend.example.test" : "system@mail.example.test")
+      const files = body.attachments as Array<{ filename: string; content: string }>
+      assert.equal(files.length, 1)
+      assert.equal(files[0]!.filename, "statement.pdf")
+      assert.ok(Buffer.from(files[0]!.content, "base64").length > 0)
+    })
+  })
+}
+
+test("useSend submission send fails closed above ten attachments without calling the provider", async () => {
+  await withProvider("usesend", async (calls) => {
+    const { job, attempt } = await queueOne(10)
+    assert.equal(job.state, "failed")
+    assert.equal(attempt?.error_code, "email_attachment_limit_exceeded")
+    assert.equal(calls.length, 0)
+  })
+})
+
+test("broker approval shows the delivered system sender and becomes stale after provider configuration changes", async () => {
+  await withProvider("resend", async (calls) => {
+    const { deal } = await seedDeal()
+    const preview = await prepareDealSubmission(actor(), deal.id, [alphaFunderId])
+    assert.equal(preview.destinations[0]?.email?.from, "system@resend.example.test")
+    assert.equal(preview.destinations[0]?.email?.replyTo, "broker@example.test")
+    for (const [key, value] of [["MCA_RESEND_FROM", "Changed <changed@example.test>"], ["MCA_RESEND_API_KEY", "changed-provider-account"], ["MCA_SYSTEM_EMAIL_PROVIDER", "usesend"]] as const) {
+      const before = process.env[key]
+      process.env[key] = value
+      await assert.rejects(readDealSubmissionPreview(actor(), deal.id, preview.id), { code: "submission_preview_stale" })
+      if (before === undefined) delete process.env[key]; else process.env[key] = before
+    }
+    assert.equal(calls.length, 0)
+  })
+})
+
+test("every malformed successful provider response remains uncertain under the send guard", async () => {
+  for (const status of [200, 201, 202]) {
+    await withProvider("resend", async () => {
+      process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+      assert.equal((await queueOne()).attempt?.error_code, "delivery_uncertain")
+    }, () => Response.json({}, { status }))
+  }
+})
+
+test("approved queued system emails refuse provider, sender, account or transport drift before dispatch", async () => {
+  await withProvider("resend", async (calls) => {
+    const { deal } = await seedDeal()
+    await queueSubmissions({ actor: actor(), dealId: deal.id, funderIds: [alphaFunderId], confirmationKey: `frozen-system-${dealCounter}`, deferDelivery: true })
+    const [job] = await listJobsForDeal(ids.workspace, deal.id)
+    assert.ok(job?.approvedPackage?.email)
+    assert.equal(job.approvedPackage.email.fromAddress, "system@resend.example.test")
+    assert.equal(job.approvedPackage.email.submissionSenderAddress, "broker@example.test")
+    for (const [key, value] of [["MCA_RESEND_FROM", "Changed <changed@example.test>"], ["MCA_RESEND_API_KEY", "changed-provider-account"], ["MCA_SYSTEM_EMAIL_PROVIDER", "usesend"], ["MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED", "false"], ["MCA_EMAIL_WEBHOOK_URL", "https://new-webhook.example.test/send"]] as const) {
+      const before = process.env[key]
+      process.env[key] = value
+      assert.equal((await sendSubmissionEmail(job, job.approvedPackage.documents)).errorCode, "approved_email_transport_changed")
+      if (before === undefined) delete process.env[key]; else process.env[key] = before
+    }
+    assert.equal(calls.length, 0)
+  })
+})
+
+test("useSend submission send maps provider errors", async () => {
+  for (const [respond, expected] of [
+    [() => new Response("{}", { status: 422 }), "email_delivery_failed"],
+    [() => new Response("{}", { status: 500 }), "delivery_uncertain"],
+    [() => { throw new DOMException("timed out", "TimeoutError") }, "delivery_uncertain"],
+  ] as const) {
+    await withProvider("usesend", async () => {
+      process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+      assert.equal((await queueOne()).attempt?.error_code, expected)
+    }, respond)
+  }
+})
+
+test("webhook stays preferred; flag off keeps production unconfigured", async () => {
+  await withProvider("usesend", async (calls) => {
+    process.env.MCA_EMAIL_WEBHOOK_URL = "https://hook.example.test/send"
+    assert.equal((await queueOne()).job.state, "sent")
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]!.url, "https://hook.example.test/send")
+  })
+  for (const provider of ["usesend", "resend"] as const) {
+    await withProvider(provider, async (calls) => {
+      process.env.MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED = "false"
+      setSubmissionEmailProductionForTests(true)
+      try { assert.equal((await queueOne()).attempt?.error_code, "email_delivery_unconfigured") } finally { setSubmissionEmailProductionForTests() }
+      assert.equal(calls.length, 0)
+    })
+  }
+})
+
+test("Resend submission send fails closed above 40MB and maps errors", async () => {
+  await withProvider("resend", async (calls) => {
+    // Packaging caps payloads at 25MB first, so exercise the provider guard directly.
+    const file = (n: number) => ({ documentId: `d${n}`, filename: `f${n}.pdf`, checksum: "x", byteLength: 1, category: "statement", bytesBase64: "A".repeat(21 * 1024 * 1024) })
+    const result = await deliverRendered({ funderId: alphaFunderId, funderName: "Alpha", senderId, fromName: "B", fromAddress: "broker@example.test", to: ["alpha@funders.example.test"], cc: [], replyTo: "broker@example.test", subject: "s", body: "b", workspacePrefix: "", funderPrefix: "", signature: "", attachments: [file(1), file(2)] }, "corr-size")
+    assert.equal(result.ok, false)
+    assert.equal(result.errorCode, "email_attachment_size_exceeded")
+    assert.equal(calls.length, 0)
+  })
+  for (const [respond, expected] of [
+    [() => new Response("{}", { status: 422 }), "email_delivery_failed"],
+    [() => new Response("{}", { status: 500 }), "delivery_uncertain"],
+  ] as const) {
+    await withProvider("resend", async () => {
+      process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED = "true"
+      assert.equal((await queueOne()).attempt?.error_code, expected)
+    }, respond)
   }
 })
