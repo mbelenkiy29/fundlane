@@ -1,24 +1,16 @@
 "use client"
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { SeatSelector } from "./seat-selector"
+import { BillingDate } from "./billing-date"
 import { requestJson } from "@/lib/mca/client"
-import { billingTimeZone, formatBillingDate, formatBillingMoney, quotedSeatIncrease, validSelectedSeats, type BillingRecovery } from "@/lib/mca/billing-display"
+import { formatBillingDate, formatBillingMoney, quotedSeatIncrease, validSelectedSeats, type BillingRecovery } from "@/lib/mca/billing-display"
 import { monthlyPriceCents } from "@/lib/mca/billing-catalog"
 import type { CompanyAccess } from "@/lib/mca/company-access"
 
 type BillingResponse = { enabled: boolean; seatSyncEnabled:boolean; manualSeatPreviewEnabled:boolean; seatsCountPendingInvites:boolean; testMode: boolean; occupiedSeats: number; activeSeats:number;pendingInvitationSeats:number; canManagePayment: boolean; cardRequiredTrial?: boolean; checkoutUnavailable?: boolean; access: CompanyAccess; recovery: BillingRecovery; actionRequiredInvoice: null | {id:string;url:string|null}; paymentFailedInvoice: null | {id:string}; state: null | {selected_seats:number;pending_seats:number|null;pending_seats_at:string|null}; billing: null | { subscriptionId: string | null; status: string; seatLimit: number; paymentPastDue: number; periodEnd:string|null }; timeZone?: string | null }
-const subscribeNothing = () => () => {}
-/**
- * A billing timestamp in the company's stored time zone, else the viewer's browser zone. With no stored zone the
- * server cannot know the viewer's, so server render and hydration use UTC and the client re-renders in its own zone.
- */
-export function BillingDate({ value, timeZone }: { value:string; timeZone?:string|null }) {
-  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false)
-  const zone = billingTimeZone(timeZone) ?? (hydrated ? undefined : "UTC")
-  return <time dateTime={value}>{formatBillingDate(value, zone)}</time>
-}
+export { BillingDate }
 export function BillingCancellation({ enabled, busy, onCancel }: { enabled:boolean;busy:boolean;onCancel:()=>void }) {
   return <div className="space-y-2"><Button variant="outline" disabled={!enabled||busy} onClick={onCancel}>Cancel at period end</Button><p className="text-sm text-muted-foreground">Cancellation remains available while company access is paused, including when a seat reduction is scheduled. Cancellation replaces the pending reduction. Monthly fees continue until the effective cancellation date. Outstanding invoices and administrative suspensions remain in effect.</p></div>
 }

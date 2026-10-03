@@ -21,6 +21,20 @@ test("completion renders authoritative trial date and explicit claim without SSR
   assert.deepEqual(result.requests, [])
 })
 
+test("trial end shows in the claimed workspace's time zone, else UTC on the server until the browser zone takes over", () => {
+  const render = (timeZone?: string) => `${renderSetup}
+    const assert=require('node:assert/strict');${load}
+    console.log(JSON.stringify(renderToStaticMarkup(React.createElement(EnrollmentCompletion,{continuation:${JSON.stringify(locator)},initialStatus:{state:'claimed',nextAction:'continue',trialEndsAt:'2026-10-15T18:30:00.000Z'${timeZone ? `,timeZone:'${timeZone}'` : ""}}}))));
+  `
+  const company = runClient(render("America/Los_Angeles"), { TZ: "Asia/Tokyo" }) as string
+  assert.match(company, /<time dateTime="2026-10-15T18:30:00.000Z">Oct 15, 2026, 11:30 AM PDT<\/time>/)
+  assert.doesNotMatch(company, /UTC/)
+  // No stored zone: server markup is UTC whatever the server's zone, so hydration matches; the client then re-renders in the browser zone.
+  const tokyo = runClient(render(), { TZ: "Asia/Tokyo" }) as string, chicago = runClient(render(), { TZ: "America/Chicago" }) as string
+  assert.equal(tokyo, chicago)
+  assert.match(tokyo, /<time dateTime="2026-10-15T18:30:00.000Z">Oct 15, 2026, 6:30 PM UTC<\/time>/)
+})
+
 for (const [destination, returnedDestination] of [["business", "/settings/business"], ["crm", "/dashboard"], ["billing", "/settings/billing"], ["business", "/settings/billing"]]) {
   test(`claimed Continue replays once before selecting A and navigating ${destination} to ${returnedDestination}`, () => {
     const continuation = { ...locator, destination }

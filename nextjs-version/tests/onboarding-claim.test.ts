@@ -92,6 +92,7 @@ test("claimed status leaves B active and explicit authorized replay selects A wi
     const status = await readEnrollmentStatus(input,f.client)
     assert.equal(status.nextAction,"continue")
     assert.equal(status.destination,expected)
+    assert.equal(status.timeZone,(await db.queryOne<{timezone:string}>("SELECT timezone FROM workspaces WHERE id=?",[a.workspaceId]))?.timezone,"signed-in buyer sees the claimed workspace's time zone")
     assert.equal(browserCookies.get(WORKSPACE_COOKIE),b,"observational status must leave ordinary workspace selection alone")
     const replay = await claimEnrollment(input,f.client)
     assert.deepEqual(replay,{workspaceId:a.workspaceId,destination:expected})
