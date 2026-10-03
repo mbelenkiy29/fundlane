@@ -3,16 +3,17 @@ import { chmod, mkdtemp, open, readFile, rm } from "node:fs/promises"
 import { basename, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { assertRestoreTarget, commandEnv, connectionEnv, option, parseDatabaseUrl, requireSwitch, sha256 } from "./safety"
+import { assertRestoreTarget, captureStderr, commandEnv, connectionEnv, option, parseDatabaseUrl, requireSwitch, sha256, toolFailure } from "./safety"
 
 export type RestoreRunner = (command: string, args: string[], env: Record<string, string | undefined>) => Promise<string>
 
 export const runRestoreCommand: RestoreRunner = (command, args, env) => new Promise((resolveRun, reject) => {
-  const child = spawn(command, args, { env: commandEnv(env), stdio: ["ignore", "pipe", "ignore"] })
+  const child = spawn(command, args, { env: commandEnv(env), stdio: ["ignore", "pipe", "pipe"] })
+  const stderr = captureStderr(child.stderr)
   let output = ""
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString() })
   child.on("error", reject)
-  child.on("close", (code) => code === 0 ? resolveRun(output) : reject(new Error(`${command} failed (${code}).`)))
+  child.on("close", (code) => code === 0 ? resolveRun(output) : reject(toolFailure(`${command} failed (${code})`, stderr(), env)))
 })
 
 export async function restoreDrill(args: string[], env: Record<string, string | undefined> = process.env, runner: RestoreRunner = runRestoreCommand): Promise<string> {
