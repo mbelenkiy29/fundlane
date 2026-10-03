@@ -80,7 +80,9 @@ export function decryptUserSecret(value: string, userId: string): string {
 
 export function decryptSensitive(value: string, workspaceId: string): string {
   const [version, nonceValue, tagValue, ciphertextValue] = value.split(".");
-  if (version !== "v1" || !nonceValue || !tagValue || !ciphertextValue) throw new Error("Invalid encrypted value.");
+  // An empty plaintext encrypts to an empty ciphertext segment ("v1.<nonce>.<tag>."), so only a missing
+  // segment is malformed. The GCM auth tag still authenticates the (empty) value.
+  if (version !== "v1" || !nonceValue || !tagValue || ciphertextValue === undefined) throw new Error("Invalid encrypted value.");
   const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(nonceValue, "base64url"));
   decipher.setAAD(Buffer.from(workspaceId));
   decipher.setAuthTag(Buffer.from(tagValue, "base64url"));

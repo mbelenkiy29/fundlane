@@ -109,6 +109,20 @@ test("date validation, DST gaps, all-day exclusive end, weekly and monthly recur
   assert.equal(syncDecision(true,true,false),"conflict")
   assert.match(stableEventId("c","a"),/^[0-9a-v]{5,1024}$/)
 })
+test("activities with empty notes save, read back and update without a decrypt error",async()=>{
+  const created=await saveActivity(admin,input({notes:""}))
+  assert.equal(created.notes,"")
+  const stored=await getDatabase().prepare<{notes_cipher:string|null}>("SELECT notes_cipher FROM mca_calendar_activities WHERE id=?").get(created.id)
+  assert.equal(stored!.notes_cipher,null)
+  assert.equal((await calendarFeed(rep,query())).events[0].notes,"")
+  assert.equal((await update(created.id,{notes:"Added later"})).notes,"Added later")
+  assert.equal((await update(created.id,{notes:""})).notes,"")
+  // Rows written before this fix hold an encrypted empty string ("v1.<nonce>.<tag>."); they must still read.
+  const legacy=encryptSensitive("","workspace")
+  assert.ok(legacy.endsWith("."))
+  await getDatabase().prepare("UPDATE mca_calendar_activities SET notes_cipher=? WHERE id=?").run(legacy,created.id)
+  assert.equal((await calendarFeed(rep,query())).events[0].notes,"")
+})
 test("calendar access follows workspace, deal, assignment and manager permissions",async()=>{
   const activity=await saveActivity(admin,input())
   assert.equal((await calendarFeed(rep,query())).events.length,1)
