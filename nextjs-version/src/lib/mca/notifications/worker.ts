@@ -1,5 +1,6 @@
 import { discoverDocumentNotifications } from '../documents/notification-discovery';
 import { registerDocumentNotificationCondition } from '../documents/notification-condition';
+import { registerRenewalNotificationCondition } from '../renewals/alerts';
 import 'server-only';
 import { z } from 'zod';
 import { getDatabase, newId, nowIso, withImmediateTransaction, recordAuditEvent, type DbExecutor } from '../db';
@@ -69,6 +70,7 @@ export async function runScheduledNotifications(clock = nowIso(), limit = 25, op
     if (deadline - Date.now() < 45000)
         return result;
     registerDocumentNotificationCondition();
+    registerRenewalNotificationCondition();
     await discoverDocumentNotifications({ clock, limit: Math.min(limit,20), deadlineMs: Math.min(deadline-45000,Date.now()+15000) });
     await expireClaims(operationClock());
     if (!transportOverride)
