@@ -8,6 +8,7 @@ import { CreditNotificationBell } from "@/components/mca/assistant/notification-
 import { NewDealHeaderAction } from "@/components/mca/deals/new-deal-header-action"
 import { useOptionalNewDeal } from "@/components/mca/deals/new-deal-provider"
 import { ModeToggle } from "@/components/mode-toggle"
+import { FeedbackMenu } from "@/components/observability/feedback-menu"
 import type { SessionResponse } from "@/lib/mca/types"
 
 export function SiteHeader({ session }: { session?: SessionResponse }) {
@@ -17,13 +18,14 @@ export function SiteHeader({ session }: { session?: SessionResponse }) {
     <header className="sticky top-0 z-20 flex h-(--header-height) shrink-0 items-center overflow-x-clip border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="flex w-full min-w-0 items-center gap-2 px-4 lg:px-6">
         <SidebarTrigger className="-ml-1" />
-        <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+        <div className="ml-auto flex min-w-0 items-center justify-end gap-1" data-sentry-unmask>
           {session?.permissions?.actions.createDeal && newDeal && (
             <NewDealHeaderAction onOpen={() => newDeal.open()} />
           )}
           <CreditNotificationBell canManage={["admin", "super_admin"].includes(session?.membership?.role ?? "")} />
           {session?.platformOwner && <Link href="/platform" className="rounded px-2 py-1 text-sm hover:bg-muted">Platform</Link>}
           {pathname !== "/assistant" && <AssistantButton />}
+          <FeedbackMenu />
           <ModeToggle />
         </div>
       </div>
