@@ -369,6 +369,9 @@ test("hard term rules: max = floor(days/30), min = ceil(days*12/365), eq whole m
   assert.equal(await result(min(90), 2), "fail")
   assert.equal(await result(min(200), 7), "pass")
   assert.equal(await result(min(200), 6), "fail")
+  // 190 days = 6.25 months: rounding up gives 7. Round-to-nearest would give 6 and wrongly pass a 6-month request.
+  assert.equal(await result(min(190), 6), "fail")
+  assert.equal(await result(min(190), 7), "pass")
   // Exact terms match only a whole number of months.
   assert.equal(await result(eq(365), 12), "pass")
   assert.equal(await result(eq(180), 6), "pass")

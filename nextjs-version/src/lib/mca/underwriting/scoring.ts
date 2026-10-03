@@ -456,8 +456,9 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           reasons.push(compareUnknown(rule, `Term is unknown, so the funder's ${limitWord(rule)} cannot pass.`))
           continue
         }
-        // Lender term rules can be in days or years: a month is 30 days, a maximum rounds down, a minimum rounds up,
-        // and an exact term must be a whole number of months. The estimates' 2-18 month clamp is not applied here.
+        // Lender term rules can be in days or years. A maximum uses a 30-day month rounded down, a minimum uses a
+        // 365/12-day month rounded up, and an exact term must be a whole number of months (lenderTermRuleWholeMonths).
+        // The estimates' 2-18 month clamp is not applied here.
         const ruleMonths = lenderTermRuleWholeMonths(rule)
         reasons.push(ruleMonths == null
           ? compareUnknown(rule, `Funder term rule has no usable value or time unit, or is under one month (${rule.value} ${rule.unit}).`)

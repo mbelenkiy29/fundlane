@@ -133,6 +133,11 @@ test("shared lender term helpers: days convert to months, clamp at both ends, mo
   const hard = (value: number, operator: EligibilityRule["operator"], unit: EligibilityRule["unit"] = "days") => lenderTermRuleWholeMonths({ value, unit, operator })
   assert.deepEqual([hard(180,"max"), hard(200,"max"), hard(365,"max"), hard(20,"max")], [6, 6, 12, null])
   assert.deepEqual([hard(90,"min"), hard(200,"min"), hard(365,"min")], [3, 7, 12])
+  // 190 days = 6.25 months: a minimum rounds up to 7 (round-to-nearest would give 6), so 6 months fails and 7 passes.
+  const min190 = hard(190,"min")!
+  assert.equal(min190, 7)
+  assert.equal(6 >= min190, false, "a 6-month request fails a 190-day minimum")
+  assert.equal(7 >= min190, true, "a 7-month request passes a 190-day minimum")
   assert.deepEqual([hard(180,"eq"), hard(365,"eq"), hard(200,"eq")], [6, 12, 6.67])
   assert.deepEqual([hard(24,"max","months"), hard(3,"max","years"), hard(1,"min","years")], [24, 36, 12])
   assert.equal(lenderTermRuleWholeMonths({ value:0, unit:"days", operator:"max" }), null)

@@ -73,7 +73,8 @@ export function lenderTermRuleMonths(rule: Pick<EligibilityRule, "value" | "unit
 /**
  * A lender term rule in whole months for hard-rule scoring (not estimates). Same valid units and values as
  * `lenderTermRuleMonths`, NOT clamped, and rounded toward the lender's side. Days use integer math only; the
- * estimates' 12/365 float factor is never used here (float error could turn 365 days into 13 months).
+ * estimates' 12/365 float factor is never used here, because float error can land just above or below a whole
+ * month and so flip a floor or ceil by one.
  * - max: a 30-day month, rounded down: floor(days / 30). 180 = 6, 200 = 6, 365 = 12. Under 30 days is unknown.
  * - min: a 365/12 month, rounded up: ceil(days * 12 / 365). 90 = 3, 200 = 7, 365 = 12.
  * - eq: matches only a whole number of months, days / 30 or days * 12 / 365, whichever is whole (180 = 6,
