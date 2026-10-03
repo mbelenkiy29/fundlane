@@ -104,6 +104,16 @@ export async function recoverStaleActions(actor: DealActor, dealId: string): Pro
   }
 }
 
+const stipulationKey = (actionId: string, item: { category: string; period?: string }) => `deal-agent:${actionId}:${item.category}${item.period ? `:${item.period}` : ""}`
+
+/** Waives this action's still-open stipulations except `keep`; ones review() reused from an earlier request never match the prefix. */
+async function waiveOwnStipulations(actor: DealActor, database: DbExecutor, dealId: string, actionId: string, reason: string, keep: string[] = []) {
+  const waived = await database.prepare<{ id: string }>(`UPDATE mca_closing_stipulations SET status='waived',exception_reason=?,updated_at=?
+    WHERE workspace_id=? AND deal_id=? AND status='open' AND idempotency_key LIKE ? AND NOT (idempotency_key = ANY(?)) RETURNING id`)
+    .all(reason, nowIso(), actor.workspaceId, dealId, `deal-agent:${actionId}:%`, keep)
+  for (const stipulation of waived) await recordAuditEvent({ context: actor, action: "closing.stipulation_waived", resourceType: "closing_stipulation", resourceId: stipulation.id, metadata: { dealId, hasDocument: false }, correlationId: actor.correlationId })
+}
+
 async function review(actor: DealActor, dealId: string, dealVersion: number, action: ActionRow, input: { senderId?: string; origin: string }): Promise<{ id: string }> {
   const payload = parseJson<Record<string, unknown>>(action.payload_json, {})
   if (action.kind === "submit_to_funder") return prepareDealSubmission(actor, dealId, [payload.funderId])
@@ -115,7 +125,7 @@ async function review(actor: DealActor, dealId: string, dealVersion: number, act
   for (const item of payload.items as Array<{ category: string; label: string; period?: string }>) {
     const open = await getDatabase().prepare<{ id: string }>("SELECT id FROM mca_closing_stipulations WHERE workspace_id=? AND deal_id=? AND status='open' AND document_category=? AND label=? ORDER BY created_at LIMIT 1")
       .get(actor.workspaceId, dealId, item.category, item.label)
-    stipulationIds.push(open?.id ?? (await createStipulation(actor, { dealId, documentCategory: item.category, label: item.label, idempotencyKey: `deal-agent:${action.id}:${item.category}${item.period ? `:${item.period}` : ""}` })).id)
+    stipulationIds.push(open?.id ?? (await createStipulation(actor, { dealId, documentCategory: item.category, label: item.label, idempotencyKey: stipulationKey(action.id, item) })).id)
   }
   // The deal version binds the key to the merchant contact it renders and the fingerprint to the items (a promoted proposal);
   // either change gets a fresh preview instead of idempotency_conflict.
@@ -145,10 +155,7 @@ export async function decideDealAgentAction(actor: DealActor, input: { dealId: s
       const dismissed = await database.prepare<ActionRow>(`UPDATE mca_deal_agent_actions SET status='dismissed',decided_by_user_id=?,decided_at=?,decision_note=?,updated_at=?
         WHERE workspace_id=? AND deal_id=? AND id=? AND status='pending' RETURNING *`).get(actor.userId, now, input.note ?? null, now, actor.workspaceId, deal.id, action.id)
       if (!dismissed) throw new AppError(409, "action_not_pending", "This action was already decided.")
-      // Only stipulations this action created and still open; one review() reused belongs to an earlier request.
-      const waived = await database.prepare<{ id: string }>(`UPDATE mca_closing_stipulations SET status='waived',exception_reason='Deal Agent request dismissed.',updated_at=?
-        WHERE workspace_id=? AND deal_id=? AND status='open' AND idempotency_key LIKE ? RETURNING id`).all(now, actor.workspaceId, deal.id, `deal-agent:${action.id}:%`)
-      for (const stipulation of waived) await recordAuditEvent({ context: actor, action: "closing.stipulation_waived", resourceType: "closing_stipulation", resourceId: stipulation.id, metadata: { dealId: deal.id, hasDocument: false }, correlationId: actor.correlationId })
+      await waiveOwnStipulations(actor, database, deal.id, action.id, "Deal Agent request dismissed.")
       // The proposal parked behind the reviewed row takes its slot; a superseded twin comes back, a decided one stays decided.
       if (dismissed.next_fingerprint) await database.prepare(`INSERT INTO mca_deal_agent_actions (id,workspace_id,deal_id,run_id,kind,target_key,fingerprint,payload_json,status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,'pending',?,?) ON CONFLICT (workspace_id,deal_id,target_key,fingerprint) DO UPDATE SET status='pending',run_id=EXCLUDED.run_id,payload_json=EXCLUDED.payload_json,
@@ -169,6 +176,9 @@ export async function decideDealAgentAction(actor: DealActor, input: { dealId: s
         preview_id=NULL,error_code=NULL,updated_at=? WHERE workspace_id=? AND deal_id=? AND id=? AND status='pending' AND next_fingerprint=? RETURNING *`)
         .get(now, actor.workspaceId, deal.id, action.id, action.next_fingerprint)
       if (!promoted) throw new AppError(409, "action_not_pending", "This action was already decided.")
+      // Items the new version still asks for keep their stipulation (same key), so review() reuses it.
+      await waiveOwnStipulations(actor, database, deal.id, action.id, "Deal Agent request revised.",
+        (parseJson<{ items?: Array<{ category: string; period?: string }> }>(promoted.payload_json, {}).items ?? []).map(item => stipulationKey(action.id, item)))
       return promoted
     })
     const preview = await review(actor, deal.id, deal.version, current, input)
