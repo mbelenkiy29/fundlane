@@ -9,6 +9,7 @@ import {
   getDatabase,
   newId,
   nowIso,
+  runOutsideTransaction,
   withImmediateTransaction,
   type DbExecutor,
 } from "../db"
@@ -654,11 +655,19 @@ export async function completeEnrollmentInvite(input: {
       input.token
     )
   } catch (failure) {
-    // Nothing committed references the account this request created; remove only that one.
-    if (created)
-      await getSupabaseAdminClient()
-        .auth.admin.deleteUser(created)
-        .catch(() => undefined)
+    if (!created) throw failure
+    // The consume may have committed before the error surfaced. Re-read the invite on a fresh pool query and
+    // delete the account this request created only while the invite is provably unused; when unsure, keep it.
+    const after = await runOutsideTransaction(() =>
+      getDatabase().queryOne<{ state: string }>(
+        "SELECT state FROM mca_enrollment_challenges WHERE id=?",
+        [input.challengeId]
+      )
+    ).catch(() => undefined)
+    if (after?.state !== "pending") throw emailUnavailable()
+    await getSupabaseAdminClient()
+      .auth.admin.deleteUser(created)
+      .catch(() => undefined)
     throw failure
   }
   ;(await cookies()).delete(enrollmentAuthCookie)

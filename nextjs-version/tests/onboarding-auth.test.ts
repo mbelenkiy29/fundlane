@@ -17,6 +17,7 @@ import {
 import { getDatabase, nowIso, withTransaction } from "../src/lib/mca/db"
 import { NextRequest } from "next/server"
 import { randomUUID } from "node:crypto"
+import pg from "pg"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import {
@@ -1269,6 +1270,89 @@ test("a failure after createUser removes the account this request created, so a 
   })
   assert.equal((await postInvite(body)).status, 200)
   assert.equal((await challengeRow(invite.id))?.state, "consumed")
+})
+
+// Fails the first COMMIT that would consume the invite: `landed` sends it and then throws (connection lost before
+// the acknowledgement), otherwise the transaction is rolled back before the throw. Returns the restore function.
+function failInviteCommit(challengeId: string, landed: boolean) {
+  const original = pg.Client.prototype.query
+  let fired = false
+  pg.Client.prototype.query = async function (this: pg.Client, ...args: unknown[]) {
+    const run = (...a: unknown[]) => Reflect.apply(original, this, a) as Promise<pg.QueryResult>
+    if (fired || (args[0] as { text?: string })?.text !== "COMMIT") return run(...args)
+    const state = (
+      await run({ text: "SELECT state FROM mca_enrollment_challenges WHERE id=$1", values: [challengeId] })
+    ).rows[0]?.state
+    if (state !== "consumed") return run(...args)
+    fired = true
+    await run({ text: landed ? "COMMIT" : "ROLLBACK" })
+    throw new Error("Connection terminated unexpectedly")
+  } as typeof original
+  return () => {
+    pg.Client.prototype.query = original
+  }
+}
+
+test("an error after the consume committed keeps the new account and points the owner to Login", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const restore = failInviteCommit(invite.id, true)
+  let response: Response
+  try {
+    response = await postInvite({ challengeId: invite.id, token: invite.token, email: f.identity.email, password })
+  } finally {
+    restore()
+  }
+  assert.equal(response.status, 409)
+  const error = (await response.json()).error
+  assert.equal(error.code, "enrollment_email_unavailable")
+  assert.match(error.message, /Login/)
+  assert.match(error.message, /Forgot password/)
+  const created = [...provider.users.values()].find((user) => user.email === f.identity.email)
+  assert.ok(created)
+  assert.deepEqual(provider.deletedUserIds, [])
+  const row = await getDatabase().queryOne<{ state: string; provider_user_id: string }>(
+    "SELECT state,provider_user_id FROM mca_enrollment_challenges WHERE id=?",
+    [invite.id]
+  )
+  assert.deepEqual(row, { state: "consumed", provider_user_id: created.id })
+})
+
+test("an error while the invite is still pending deletes the new account, so a retry succeeds", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const body = { challengeId: invite.id, token: invite.token, email: f.identity.email, password }
+  const restore = failInviteCommit(invite.id, false)
+  let response: Response
+  try {
+    response = await postInvite(body)
+  } finally {
+    restore()
+  }
+  assert.equal(response.status, 500)
+  assert.equal(provider.deletedUserIds.length, 1)
+  assert.equal(provider.users.has(provider.deletedUserIds[0]!), false)
+  assert.deepEqual(await challengeRow(invite.id), { state: "pending", attempts: 1 })
+  assert.equal((await postInvite(body)).status, 200)
+  assert.equal((await challengeRow(invite.id))?.state, "consumed")
+})
+
+test("a provider-only account at a change invite's address is refused at consume with the generic 409 and no changes", async () => {
+  const { f, invite } = await newOwnerInvite()
+  const target = `provider-only-${randomUUID()}@example.test`
+  assert.equal((await postInvite({ challengeId: invite.id, token: invite.token, newEmail: target })).status, 200)
+  const change = await mintInvite(f, { email: target, generation: 2, emailChange: true })
+  const existing = { id: randomUUID(), email: target, app_metadata: {}, user_metadata: {}, aud: "authenticated", created_at: nowIso() }
+  provider.users.set(existing.id, existing as never)
+  const before = (await findEnrollment(f.id))!
+  const response = await postInvite({ challengeId: change.id, token: change.token, email: target, password })
+  assert.equal(response.status, 409)
+  const error = (await response.json()).error
+  assert.equal(error.code, "enrollment_email_unavailable")
+  assert.match(error.message, /Forgot password/)
+  assert.equal(provider.createUserInputs.length, 1)
+  assert.deepEqual(provider.deletedUserIds, [])
+  assert.ok(provider.users.has(existing.id))
+  assert.deepEqual(await findEnrollment(f.id), before)
+  assert.deepEqual(await challengeRow(change.id), { state: "pending", attempts: 1 })
 })
 
 test("after a typo edit, the purchase address can request a fresh link that cancels the pending change", async () => {
