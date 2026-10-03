@@ -26,7 +26,7 @@ export async function resolveUnderwritingWindow(workspaceId: string): Promise<st
   return closedLookbackMonths(required, settings.timezone || "America/New_York")
 }
 
-function includedMonths(months: StatementMonthRecord[], window: string[]): StatementMonthRecord[] {
+export function includedMonths(months: StatementMonthRecord[], window: string[]): StatementMonthRecord[] {
   const lookback = new Set(window.filter((period) => PERIOD.test(period)))
   return months.filter((month) => (
     month.accountKind === "checking"
