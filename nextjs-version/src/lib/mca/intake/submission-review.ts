@@ -17,7 +17,7 @@ import { intakeProgress } from "./processing"
 import { autoSelectableFunderIds, getDealScores } from "../underwriting/scoring"
 import { evaluateUnderwritingSendGates, underwritingSendGateError } from "../underwriting/send-gates"
 import type { ApprovedSubmissionPackage, QueuedJobSummary } from "../submissions/contracts"
-import { prepareApprovedSubmissionEmail } from "../submissions/email-templates"
+import { prepareApprovedSubmissionEmail, displayFrom } from "../submissions/email-templates"
 import { prepareOutgoingPackage } from "../submissions/package"
 import { preflightDestination, probeSubmissionSender } from "../submissions/preflight"
 import { queueSubmissions } from "../submissions/queue"
@@ -98,7 +98,7 @@ function previewView(id: string, expiresAt: string, snapshot: Snapshot): Applica
     // Webhook routes can contain credentials. Only show the destination's host/path.
     destination: route.kind === "custom_webhook" ? safeWebhookDestination(route.destination) : route.destination,
     documents: approved.documents.map((document) => ({ id: document.documentId, filename: snapshot.documents.find((original) => original.id === document.originalDocumentId)?.displayFilename ?? document.documentId })),
-    email: approved.email ? { from: approved.email.fromAddress, to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined,
+    email: approved.email ? { from: displayFrom(approved.email), to: approved.email.to, cc: approved.email.cc, replyTo: approved.email.replyTo, subject: approved.email.subject, body: approved.email.body } : undefined,
     errors: [],
   })) }
 }

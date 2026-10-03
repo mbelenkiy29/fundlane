@@ -24,11 +24,13 @@ import {
   setEmailDeliveryFetchForTests,
   setSubmissionEmailProductionForTests,
   upsertSubmissionEmailTemplate,
+  systemSenderName,
 } from "../src/lib/mca/submissions/email-templates"
 import { prepareOutgoingPackage } from "../src/lib/mca/submissions/package"
 import { setSubmissionCompletenessForTests } from "../src/lib/mca/submissions/queue"
 import { listJobsForDeal } from "../src/lib/mca/submissions/repository"
 import { prepareDealSubmission, readDealSubmissionPreview } from "../src/lib/mca/submissions/broker-preview"
+import { withSenderDisplayName } from "../src/lib/mca/system-email"
 import { updateWatermarkSettings } from "../src/lib/mca/submissions/watermarks"
 import { GET as templatesGet, PUT as templatesPut } from "../src/app/api/mca/submissions/email/route"
 import { POST as previewPost } from "../src/app/api/mca/submissions/email/preview/route"
@@ -731,8 +733,8 @@ async function queueOne(documents = 0) {
 }
 
 for (const [provider, url, key, from, replyToKey] of [
-  ["usesend", "https://app.usesend.com/api/v1/emails", "us_test_key", "Fundlane <system@mail.example.test>", "replyTo"],
-  ["resend", "https://api.resend.com/emails", "re_test_key", "Fundlane <system@resend.example.test>", "reply_to"],
+  ["usesend", "https://app.usesend.com/api/v1/emails", "us_test_key", "Email Templates Test via Fundlane <system@mail.example.test>", "replyTo"],
+  ["resend", "https://api.resend.com/emails", "re_test_key", "Email Templates Test via Fundlane <system@resend.example.test>", "reply_to"],
 ] as const) {
   test(`${provider} submission send carries attachments, Reply-To, Message-ID and References`, async () => {
     await withProvider(provider, async (calls) => {
@@ -777,7 +779,7 @@ test("broker approval shows the delivered system sender and becomes stale after 
   await withProvider("resend", async (calls) => {
     const { deal } = await seedDeal()
     const preview = await prepareDealSubmission(actor(), deal.id, [alphaFunderId])
-    assert.equal(preview.destinations[0]?.email?.from, "system@resend.example.test")
+    assert.equal(preview.destinations[0]?.email?.from, "Email Templates Test via Fundlane <system@resend.example.test>")
     assert.equal(preview.destinations[0]?.email?.replyTo, "broker@example.test")
     for (const [key, value] of [["MCA_RESEND_FROM", "Changed <changed@example.test>"], ["MCA_RESEND_API_KEY", "changed-provider-account"], ["MCA_SYSTEM_EMAIL_PROVIDER", "usesend"]] as const) {
       const before = process.env[key]
@@ -864,4 +866,19 @@ test("Resend submission send fails closed above 40MB and maps errors", async () 
       assert.equal((await queueOne()).attempt?.error_code, expected)
     }, respond)
   }
+})
+
+test("system sender display name is '<company> via <platform>' and only the display name changes", () => {
+  assert.equal(systemSenderName("Acme Capital", "Fundlane <noreply@fundlane.io>"), "Acme Capital via Fundlane")
+  assert.equal(systemSenderName("  Acme\r\n<Capital>  ", "Fundlane <noreply@fundlane.io>"), "Acme Capital via Fundlane")
+  assert.equal(systemSenderName("Acme", "noreply@fundlane.io"), "Acme via Fundlane")
+  assert.equal(systemSenderName("", "Fundlane <noreply@fundlane.io>"), "Fundlane")
+  assert.equal(systemSenderName(undefined, "noreply@fundlane.io"), "")
+  assert.equal(systemSenderName("x".repeat(100), "Fundlane <noreply@fundlane.io>"), `${"x".repeat(64)} via Fundlane`)
+  assert.equal(withSenderDisplayName("Fundlane <noreply@fundlane.io>", "Acme Capital via Fundlane"), "Acme Capital via Fundlane <noreply@fundlane.io>")
+  assert.equal(withSenderDisplayName("Fundlane <noreply@fundlane.io>", "Acme, LLC via Fundlane"), '"Acme, LLC via Fundlane" <noreply@fundlane.io>')
+  assert.equal(withSenderDisplayName("Fundlane <noreply@fundlane.io>", 'Bad"\\Name\nX'), "Bad Name X <noreply@fundlane.io>")
+  assert.equal(withSenderDisplayName("Fundlane <noreply@fundlane.io>", undefined), "Fundlane <noreply@fundlane.io>")
+  assert.equal(withSenderDisplayName("Fundlane <noreply@fundlane.io>", "noreply@fundlane.io"), "Fundlane <noreply@fundlane.io>")
+  assert.equal(withSenderDisplayName("noreply@fundlane.io", "Acme via Fundlane"), "Acme via Fundlane <noreply@fundlane.io>")
 })
