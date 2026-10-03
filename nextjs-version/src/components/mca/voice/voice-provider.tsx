@@ -2,6 +2,7 @@
 import { useEffect,useRef,useState } from "react"
 import { Button } from "@/components/ui/button"
 import { requestJson } from "@/lib/mca/client"
+import { markCaughtError } from "@/lib/observability/caught-errors"
 import { BrowserVoice,type VoiceSnapshot,type VoiceDevice } from "@/lib/mca/voice/browser"
 import type { VoiceReadiness,VoiceHistoryItem } from "@/lib/mca/voice/contracts"
 import { VOICE_LAUNCH_EVENT,VoiceReadyContext } from "./voice-launcher"
@@ -12,7 +13,7 @@ export function VoiceProvider({children}:{children:React.ReactNode}){
  const [sdkLoading,setSdkLoading]=useState(false)
  useEffect(()=>{
   let active=true
-  async function load(){try{const [r,h]=await Promise.all([requestJson<VoiceReadiness>("/api/mca/voice/readiness"),requestJson<{calls:VoiceHistoryItem[]}>("/api/mca/voice/history")]);if(active){setReadiness(r);setHistory(h.calls);setFailure("")}}catch{if(active)setFailure("Calling information is unavailable. Try again.")}}
+  async function load(){try{const [r,h]=await Promise.all([requestJson<VoiceReadiness>("/api/mca/voice/readiness"),requestJson<{calls:VoiceHistoryItem[]}>("/api/mca/voice/history")]);if(active){setReadiness(r);setHistory(h.calls);setFailure("")}}catch(caught){markCaughtError(caught);if(active)setFailure("Calling information is unavailable. Try again.")}}
   // SDK is loaded only after enable, never on mount.
   const voice=new BrowserVoice({createDevice:token=>{const Device=deviceClass.current;if(!Device)throw Error("SDK not loaded");return new Device(token,{allowIncomingWhileBusy:false}) as unknown as VoiceDevice},token:()=>post<{token:string}>("token"),presence:enabled=>post("presence",{enabled}),intent:dealId=>post<{intentId:string}>("dial-intents",{dealId}),cancelIntent:intentId=>post("cancel",{intentId}),onState:s=>{if(active){setSnapshot(s);if(s.state==="incoming")setOpen(true);if(s.state==="ready")void load()}}})
   controller.current=voice

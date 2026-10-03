@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import test from "node:test"
 import { RequestError } from "../src/lib/mca/client"
 import { identifyServerUser, registerReporter, reportException, type ReportContext, type ServerIdentity } from "../src/lib/observability/bridge"
+import { markCaughtError } from "../src/lib/observability/caught-errors"
 import { replayAllowedPath, scrubBreadcrumb, scrubEvent, scrubLog, scrubRecordingEvent, scrubSpan, scrubUrl, scrubUrlsInText } from "../src/lib/observability/scrub"
 import { FEEDBACK_FORMS, FEEDBACK_KINDS, feedbackButtonOffset } from "../src/lib/observability/feedback-forms"
 import { DATA_COLLECTION, SENTRY_TUNNEL_ROUTE, sampleRate } from "../src/lib/observability/sentry-options"
@@ -84,20 +85,45 @@ test("scrubEvent drops fetch failures re-raised by a browser extension's fetch w
   const unhandled = { type: "auto.browser.global_handlers.onunhandledrejection", handled: false }
   const event = () => ({ exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { ...unhandled } }] } })
   const networkError = (message: string, stack: string) => Object.assign(new TypeError(message), { stack: `TypeError: ${message}\n${stack}` })
+  // Our poller caught the failure; the extension leaked the same error object.
+  const caughtError = (message: string, stack: string) => { const error = networkError(message, stack); markCaughtError(error); return error }
   // Production stack: Similarweb's frame_ant.js wraps window.fetch and leaks the rejection our poller already caught.
   const similarweb = "    at o (chrome-extension://hoklmmgfnpapgjgcpechhaamimifchmp/frame_ant/frame_ant.js:2:14445)\n    at window.fetch (chrome-extension://hoklmmgfnpapgjgcpechhaamimifchmp/frame_ant/frame_ant.js:2:14510)\n    at requestJson (https://fundlane.io/_next/static/chunks/app.js:16:26)"
   const firstParty = "    at requestJson (https://fundlane.io/_next/static/chunks/app.js:16:26)"
-  assert.equal(scrubEvent(event(), { originalException: networkError("Failed to fetch", similarweb) }), null)
-  assert.equal(scrubEvent(event(), { originalException: networkError("Failed to fetch (fundlane.io)", similarweb) }), null)
-  assert.equal(scrubEvent(event(), { originalException: networkError("Load failed", "fetch@safari-web-extension://abc/content.js:1:2") }), null)
-  assert.equal(scrubEvent(event(), { originalException: networkError("NetworkError when attempting to fetch resource.", "fetch@moz-extension://abc/content.js:1:2") }), null)
+  assert.equal(scrubEvent(event(), { originalException: caughtError("Failed to fetch", similarweb) }), null)
+  assert.equal(scrubEvent(event(), { originalException: caughtError("Failed to fetch (fundlane.io)", similarweb) }), null)
+  assert.equal(scrubEvent(event(), { originalException: caughtError("Load failed", "fetch@safari-web-extension://abc/content.js:1:2") }), null)
+  assert.equal(scrubEvent(event(), { originalException: caughtError("Load failed", "fetch@safari-extension://com.example.ext/abc/content.js:1:2") }), null)
+  assert.equal(scrubEvent(event(), { originalException: caughtError("NetworkError when attempting to fetch resource.", "fetch@moz-extension://abc/content.js:1:2") }), null)
   // Everything else is still reported.
-  assert.ok(scrubEvent(event(), { originalException: networkError("Failed to fetch", firstParty) }), "a fetch failure without an extension frame is kept")
-  assert.ok(scrubEvent(event(), { originalException: networkError("Cannot read properties of undefined", similarweb) }), "a real TypeError is kept")
+  assert.ok(scrubEvent(event(), { originalException: caughtError("Failed to fetch", firstParty) }), "a caught fetch failure without an extension frame is kept")
+  assert.ok(scrubEvent(event(), { originalException: caughtError("Cannot read properties of undefined", similarweb) }), "a real TypeError is kept")
   assert.ok(scrubEvent(event(), { originalException: Object.assign(new Error("Failed to fetch"), { stack: similarweb }) }), "a non-TypeError is kept")
   const handled = { exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { type: "generic", handled: true } }] } }
-  assert.ok(scrubEvent(handled, { originalException: networkError("Failed to fetch", similarweb) }), "an explicitly captured failure is kept")
+  assert.ok(scrubEvent(handled, { originalException: caughtError("Failed to fetch", similarweb) }), "an explicitly captured failure is kept")
   assert.ok(scrubEvent(event(), { originalException: new RequestError(502, "Bad gateway") }), "server failures are kept")
+})
+
+test("an uncaught first-party fetch failure is kept even when an extension wraps fetch", () => {
+  const event = () => ({ exception: { values: [{ type: "TypeError", value: "Failed to fetch (fundlane.io)", mechanism: { type: "auto.browser.global_handlers.onunhandledrejection", handled: false } }] } })
+  const wrapped = "TypeError: Failed to fetch (fundlane.io)\n    at window.fetch (chrome-extension://hoklmmgfnpapgjgcpechhaamimifchmp/frame_ant/frame_ant.js:2:14510)\n    at loadDeals (https://fundlane.io/_next/static/chunks/app.js:20:4)"
+  const uncaught = Object.assign(new TypeError("Failed to fetch (fundlane.io)"), { stack: wrapped })
+  assert.ok(scrubEvent(event(), { originalException: uncaught }), "nothing of ours caught it, so it is reported")
+  const safari = Object.assign(new TypeError("Load failed"), { stack: "fetch@safari-extension://com.example.ext/abc/content.js:1:2\nloadDeals@https://fundlane.io/_next/static/chunks/app.js:20:4" })
+  assert.ok(scrubEvent(event(), { originalException: safari }), "an uncaught failure through a safari-extension:// wrapper is reported")
+  // Once our helper catches the same error object, the extension's leaked copy is dropped.
+  markCaughtError(uncaught)
+  markCaughtError(safari)
+  assert.equal(scrubEvent(event(), { originalException: uncaught }), null)
+  assert.equal(scrubEvent(event(), { originalException: safari }), null)
+})
+
+test("the FUNDLANE-1/2 pollers mark the fetch failures they handle", () => {
+  const bell = readFileSync(resolve("src/components/mca/assistant/notification-bell.tsx"), "utf8")
+  assert.equal(bell.match(/markCaughtError\(caught\)/g)?.length, 4)
+  assert.doesNotMatch(bell, /catch\s*\{|\.catch\(\(\)\s*=>/, "every notification-bell catch marks its error")
+  const voice = readFileSync(resolve("src/components/mca/voice/voice-provider.tsx"), "utf8")
+  assert.match(voice, /async function load\(\)\{try\{[^\n]*\/api\/mca\/voice\/readiness[^\n]*\}catch\(caught\)\{markCaughtError\(caught\);/)
 })
 
 test("scrubEvent scrubs replay event URLs", () => {
