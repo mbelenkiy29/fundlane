@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import { closeDatabaseForTests } from "../../src/lib/mca/db"
 import { isProductionDatabase, productionDatabaseWarning, rescanBypassedDocuments } from "../../src/lib/mca/documents/rescan"
 
-const USAGE = "Usage: rescan.ts --workspace-id=ID [--ids-file=PATH] [--include-audit] [--backfill-marker] [--apply --confirm-database=HOST/DB]. Preview is the default."
+const USAGE = "Usage: rescan.ts --workspace-id=ID [--ids-file=PATH] [--include-audit] [--backfill-marker] [--apply --confirm-database=USER@HOST/DB]. Preview is the default."
 
 /** One document ID per line; blank lines and lines starting with # are ignored. */
 function readIds(path: string): string[] {

@@ -6,10 +6,11 @@ import type { DealActor } from "../src/lib/mca/deals/schema"
 import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { setDocumentScannerForTests, type DocumentScanner } from "../src/lib/mca/documents/scanner"
-import { updateDocumentScan } from "../src/lib/mca/documents/repository"
+import { findDocumentWithScanSnapshot, markDocumentNotScannedIfUnchanged, updateDocumentScan } from "../src/lib/mca/documents/repository"
 import { getDocument, getDocumentContent, listDocuments, storeDocument } from "../src/lib/mca/documents/service"
 import { databaseIdentity, isProductionDatabase, productionDatabaseWarning, rescanBypassedDocuments } from "../src/lib/mca/documents/rescan"
 import { createPostgresTestDatabase } from "./helpers/postgres-test-db.mjs"
+import { spawnSync } from "node:child_process"
 
 delete process.env.MCA_DOCUMENT_SCANNER
 delete process.env.MCA_BACKGROUND_JOBS
@@ -28,11 +29,14 @@ const storage: DocumentStorage = {
 }
 const pdf = (label: string) => new Uint8Array(Buffer.from(`%PDF-1.4\n${label}\n%%EOF\n`))
 let scans: string[] = []
+/** Runs inside scan(), i.e. after the tool read the row and before it writes: simulates a concurrent change. */
+let duringScan: ((filename: string) => Promise<void>) | undefined
 /** Real-scanner stand-in: the filename decides the verdict. */
 const fixtureScanner: DocumentScanner = {
   name: "fixture-av",
   async scan(_bytes, filename) {
     scans.push(filename)
+    await duringScan?.(filename)
     if (filename.startsWith("infected")) return { status: "infected", provider: "fixture-av", evidence: { signatureDetected: true } }
     if (filename.startsWith("flaky")) return { status: "error", provider: "fixture-av", evidence: { reason: "fixture_timeout" } }
     return { status: "clean", provider: "fixture-av", evidence: { engineVerified: true } }
@@ -96,11 +100,57 @@ after(async () => {
   setDocumentStorageForTests(); setDocumentScannerForTests(); await closeDatabaseForTests(); await testDatabase.close()
 })
 
-test("databaseIdentity names host/database without credentials or port", () => {
-  assert.equal(databaseIdentity("postgres://user:secret@db.example.test:6543/fundlane_prod?sslmode=require"), "db.example.test/fundlane_prod")
+test("databaseIdentity names user@host/database, never the password or port", () => {
+  assert.equal(databaseIdentity("postgres://user:secret@db.example.test:6543/fundlane_prod?sslmode=require"), "user@db.example.test/fundlane_prod")
+  assert.equal(databaseIdentity("postgres://db.example.test/fundlane"), "db.example.test/fundlane", "no user, no @")
+  assert.equal(databaseIdentity("postgres://mca_app%2Eabc:pw@h.example.test/db"), "mca_app.abc@h.example.test/db", "username is decoded")
   assert.equal(databaseIdentity(""), "")
   assert.equal(databaseIdentity("not a url"), "")
-  assert.ok(confirm.endsWith(new URL(testDatabase.databaseUrl).pathname.slice(1)))
+  const testUrl = new URL(testDatabase.databaseUrl)
+  assert.equal(confirm, `${decodeURIComponent(testUrl.username)}@${testUrl.hostname}${testUrl.pathname}`)
+})
+
+// Prod and staging share the Supabase pooler host and database; the project ref is only in the username.
+const POOLER = "aws-0-us-west-2.pooler.supabase.com:6543/postgres"
+const PASSWORD = "Sup3r-Secret-Passw0rd-xyz"
+const PROD_URL = `postgresql://mca_app.drubsfvhlggmtyiigwxy:${PASSWORD}@${POOLER}`
+const STAGING_URL = `postgresql://mca_app.djnhfcxbuigsnqwcpdrz:${PASSWORD}@${POOLER}`
+
+test("pooler URLs that differ only by project ref give different confirm strings; a staging value is refused on prod", async () => {
+  assert.equal(databaseIdentity(PROD_URL), "mca_app.drubsfvhlggmtyiigwxy@aws-0-us-west-2.pooler.supabase.com/postgres")
+  assert.equal(databaseIdentity(STAGING_URL), "mca_app.djnhfcxbuigsnqwcpdrz@aws-0-us-west-2.pooler.supabase.com/postgres")
+  assert.notEqual(databaseIdentity(PROD_URL), databaseIdentity(STAGING_URL))
+  const before = await snapshot()
+  // The guard runs before any database access, so the fake prod URL is never contacted.
+  await withEnv({ DATABASE_URL: PROD_URL }, async () => {
+    for (const mode of [{}, { backfillMarker: true, ids: ["x"] }]) {
+      await assert.rejects(() => rescanBypassedDocuments(actor(), { ...mode, apply: true, confirmDatabase: databaseIdentity(STAGING_URL) }), (error: Error & { code?: string }) => {
+        assert.equal(error.code, "rescan_database_unconfirmed")
+        assert.ok(error.message.includes(databaseIdentity(PROD_URL)), "the refusal names the exact expected value")
+        assert.ok(!error.message.includes(PASSWORD), "the refusal never prints the password")
+        return true
+      })
+    }
+  })
+  assert.deepEqual(await snapshot(), before)
+})
+
+test("the password never appears in the confirm string, the banner, the result or the script output", async () => {
+  for (const url of [PROD_URL, STAGING_URL, `postgres://u:${encodeURIComponent(PASSWORD)}@127.0.0.1:5432/db`]) assert.ok(!databaseIdentity(url).includes(PASSWORD))
+  for (const apply of [false, true]) assert.ok(!productionDatabaseWarning(apply).includes(PASSWORD))
+  const realPassword = decodeURIComponent(new URL(testDatabase.databaseUrl).password)
+  const preview = await rescanBypassedDocuments(actor())
+  if (realPassword) assert.ok(!JSON.stringify(preview).includes(realPassword))
+  // The script against the disposable test DB: a preview, and an apply refused for a wrong confirm value.
+  for (const args of [[], ["--apply", "--confirm-database=wrong"]]) {
+    const run = spawnSync(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/documents/rescan.ts", `--workspace-id=${WS}`, ...args],
+      { encoding: "utf8", env: testDatabase.env({ MCA_DOCUMENT_SCAN_BYPASS: "", MCA_DOCUMENT_SCANNER: "" }), timeout: 60_000 })
+    const output = `${run.stdout}${run.stderr}`
+    assert.ok(output.includes(confirm), `script output names the target (${args.join(" ") || "preview"})`)
+    if (realPassword) assert.ok(!output.includes(realPassword), "script output never contains the password")
+    if (args.length) { assert.equal(run.status, 1); assert.match(output, /Refusing to write: pass --confirm-database=/) }
+    else assert.equal(run.status, 0, output)
+  }
 })
 
 test("production database detection matches the prod project ref in host or username only, and the warning leaks nothing", () => {
@@ -240,4 +290,69 @@ test("audit-log discovery is opt-in and tenant-scoped", async () => {
   const result = await rescanBypassedDocuments(actor(), { includeAudit: true })
   assert.ok(!result.notFound.includes(docs.other))
   assert.equal(result.candidates, 2, "only the still-unverified flaky and corrupt files remain")
+})
+
+test("compare-and-set: a concurrent quarantine or real scan wins; skipped files get no audit row and are not failures", async () => {
+  const RACE = "workspace-rescan-race"
+  await addWorkspace(RACE)
+  const raceDeal = (await createDeal(actor(RACE), { idempotencyKey: "race-deal", legalName: "Race staging" })).deal.id
+  const ids: Record<string, string> = {}
+  setDocumentScannerForTests()
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true" }, async () => {
+    for (const key of ["race-quarantine", "race-realscan", "race-provider", "race-time", "race-marker", "race-ok"]) {
+      ids[key] = (await storeDocument(actor(RACE), { dealId: raceDeal, idempotencyKey: key, filename: `${key}.pdf`, mimeType: "application/pdf", bytes: pdf(key), category: "statement", source: "test" })).id
+    }
+  })
+  setDocumentScannerForTests(fixtureScanner)
+  const set = (id: string, sql: string, ...values: unknown[]) => getDatabase().prepare(`UPDATE mca_documents SET ${sql} WHERE id = ?`).run(...values, id)
+  const later = "2099-01-01T00:00:00.000Z"
+  duringScan = async (filename) => {
+    const key = filename.replace(/\.pdf$/, "")
+    // (1) the status changes: another run quarantined the file.
+    if (key === "race-quarantine") await set(ids[key], "processing_state = 'quarantined', scan_provider = 'other-av', scan_evidence = ?, scan_attempted_at = ?", JSON.stringify({ signatureDetected: true }), later)
+    // (2) same status, but a real scan cleared it (provider, evidence and time change).
+    if (key === "race-realscan") await set(ids[key], "scan_provider = 'real-av', scan_evidence = ?, scan_attempted_at = ?", JSON.stringify({ malwareScanPerformed: true }), later)
+    // Same status; only the provider, only the scan time, or only the marker column (scan_evidence) changes.
+    if (key === "race-provider") await set(ids[key], "scan_provider = 'real-av'")
+    if (key === "race-time") await set(ids[key], "scan_attempted_at = ?", later)
+    if (key === "race-marker") await set(ids[key], "scan_evidence = ?", JSON.stringify({ scanBypassed: true, note: "relabelled" }))
+    // What the concurrent writer left; the rescan must not change it.
+    afterRace[key] = await row(ids[key])
+  }
+  const row = (id: string) => getDatabase().prepare("SELECT processing_state, scan_provider, scan_evidence, scan_attempted_at, updated_at FROM mca_documents WHERE id = ?").get(id)
+  const rows = async () => Object.fromEntries(await Promise.all(Object.entries(ids).map(async ([key, id]) => [key, await row(id)])))
+  const afterRace: Record<string, unknown> = {}
+  const scanner: DocumentScanner = { name: "fixture-av", async scan(bytes, filename) {
+    const verdict = await fixtureScanner.scan(bytes, filename)
+    return filename === "race-realscan.pdf" ? { status: "infected", provider: "fixture-av", evidence: { signatureDetected: true } } : verdict
+  } }
+  setDocumentScannerForTests(scanner)
+  try {
+    const result = await rescanBypassedDocuments(actor(RACE), { apply: true, confirmDatabase: confirm })
+    assert.deepEqual(new Set(result.changedConcurrently), new Set([ids["race-quarantine"], ids["race-realscan"], ids["race-provider"], ids["race-time"], ids["race-marker"]]))
+    assert.deepEqual(result.failed, [], "skipped files are not failures, so the exit code is unaffected")
+    assert.deepEqual(result.quarantined, [], "the real scan's clean result is not overwritten by this run's infected verdict")
+    assert.equal(result.rescannedClean, 1)
+    // The concurrently changed rows are exactly as the concurrent writer left them.
+    const final = await rows()
+    for (const key of ["race-quarantine", "race-realscan", "race-provider", "race-time", "race-marker"]) assert.deepEqual(final[key], afterRace[key], key)
+    assert.equal((final["race-quarantine"] as { processing_state: string }).processing_state, "quarantined", "not overwritten to clean")
+    assert.equal((final["race-realscan"] as { scan_provider: string }).scan_provider, "real-av")
+    const audits = await getDatabase().prepare<{ resource_id: string }>("SELECT resource_id FROM audit_events WHERE workspace_id = ? AND action = 'document.rescanned'").all(RACE)
+    assert.deepEqual(audits.map(row => row.resource_id), [ids["race-ok"]], "only the written file has an audit row")
+  } finally {
+    duringScan = undefined
+    setDocumentScannerForTests(fixtureScanner)
+  }
+})
+
+test("compare-and-set backfill: a stale read writes nothing", async () => {
+  const found = (await findDocumentWithScanSnapshot(WS, docs.scanned))!
+  await getDatabase().prepare("UPDATE mca_documents SET scan_attempted_at = ? WHERE id = ?").run("2099-02-02T00:00:00.000Z", docs.scanned)
+  const before = await getDatabase().prepare("SELECT * FROM mca_documents WHERE id = ?").get(docs.scanned)
+  assert.equal(await markDocumentNotScannedIfUnchanged(getDatabase(), WS, docs.scanned, found.seen, { scanBypassed: true }, new Date().toISOString()), false)
+  assert.deepEqual(await getDatabase().prepare("SELECT * FROM mca_documents WHERE id = ?").get(docs.scanned), before)
+  const fresh = (await findDocumentWithScanSnapshot(WS, docs.scanned))!
+  assert.equal(await markDocumentNotScannedIfUnchanged(getDatabase(), "workspace-rescan-other", docs.scanned, fresh.seen, { scanBypassed: true }, new Date().toISOString()), false, "tenant-scoped")
+  assert.deepEqual(await getDatabase().prepare("SELECT * FROM mca_documents WHERE id = ?").get(docs.scanned), before)
 })

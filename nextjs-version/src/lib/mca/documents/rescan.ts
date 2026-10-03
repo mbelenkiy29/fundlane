@@ -1,11 +1,11 @@
 import "server-only"
 
 import { createHash } from "node:crypto"
-import { getDatabase, nowIso, recordAuditEvent } from "../db"
+import { getDatabase, nowIso, recordAuditEvent, withImmediateTransaction } from "../db"
 import { AppError } from "../errors"
 import type { DealActor } from "../deals/schema"
 import { isDocumentReady, NOT_SCANNED_PROVIDER, wasScanBypassed } from "./contracts"
-import { findDocumentById, markDocumentNotScanned, updateDocumentScan, type DocumentRecord } from "./repository"
+import { findDocumentWithScanSnapshot, markDocumentNotScannedIfUnchanged, updateDocumentScanIfUnchanged, type DocumentRecord, type DocumentScanSnapshot } from "./repository"
 import { documentScanner, scanBypassEnabled, SCAN_BYPASS_NOTE } from "./scanner"
 import { documentStorage } from "./storage"
 
@@ -18,7 +18,7 @@ export interface RescanOptions {
   includeAudit?: boolean
   /** Instead of scanning, add the "not scanned" marker to listed files that lack it. Requires `ids`. */
   backfillMarker?: boolean
-  /** Required with `apply`: must equal `databaseIdentity(DATABASE_URL)` ("host/database"). */
+  /** Required with `apply`: must equal `databaseIdentity(DATABASE_URL)` ("user@host/database", never the password). */
   confirmDatabase?: string
 }
 
@@ -42,14 +42,24 @@ export interface RescanResult {
   markerBackfilled: number
   /** Files left exactly as they were because the scan or the stored bytes could not be checked. */
   failed: { id: string; code: string }[]
+  /**
+   * Files whose scan columns changed between the read and the write (e.g. a concurrent scan or quarantine).
+   * Nothing is written and no audit row is added; not a failure.
+   */
+  changedConcurrently: string[]
 }
 
-/** "host/database" of a Postgres URL, without credentials or port, so an operator can confirm the target. */
+/**
+ * "user@host/database" of a Postgres URL, so an operator can confirm the exact target. The username is included because
+ * Supabase pooler URLs share one host and database across projects; the project ref is only in the username
+ * (`mca_app.<ref>`, `postgres.<ref>`). The password and port are never included.
+ */
 export function databaseIdentity(url = process.env.DATABASE_URL): string {
   if (!url) return ""
   try {
     const parsed = new URL(url)
-    return `${parsed.hostname}/${decodeURIComponent(parsed.pathname.replace(/^\/+/, ""))}`
+    const user = decodeURIComponent(parsed.username)
+    return `${user ? `${user}@` : ""}${parsed.hostname}/${decodeURIComponent(parsed.pathname.replace(/^\/+/, ""))}`
   } catch { return "" }
 }
 
@@ -149,24 +159,32 @@ export async function rescanBypassedDocuments(actor: DealActor, options: RescanO
   const result: RescanResult = {
     mode: options.backfillMarker ? "backfill_marker" : "rescan", apply, database, productionDatabase: isProductionDatabase(), scanner: scanner.name, scannerReady: ready,
     candidates: 0, notFound: [], notReady: [], alreadyScanned: 0, rescannedClean: 0, quarantined: [], markerBackfilled: 0, failed: [],
+    changedConcurrently: [],
   }
   for (const id of await candidateIds(actor.workspaceId, options)) {
-    const record = await findDocumentById(actor.workspaceId, id)
-    if (!record) { result.notFound.push(id); continue }
+    const found = await findDocumentWithScanSnapshot(actor.workspaceId, id)
+    if (!found) { result.notFound.push(id); continue }
+    const { record, seen } = found
     if (!isDocumentReady(record.processingState)) { result.notReady.push({ id, state: record.processingState }); continue }
     if (realScanPerformed(record)) { result.alreadyScanned++; continue }
     if (options.backfillMarker && wasScanBypassed(record.scanProvider, record.scanEvidence)) { result.alreadyScanned++; continue }
     result.candidates++
     if (!apply) continue
     if (options.backfillMarker) {
-      await markDocumentNotScanned(actor.workspaceId, id, { ...record.scanEvidence, scanBypassed: true, malwareScanPerformed: false, note: SCAN_BYPASS_NOTE, markerBackfilled: true }, nowIso())
-      await recordAuditEvent({ context: actor, action: "document.scan_marker_backfilled", resourceType: "document", resourceId: id,
-        metadata: { previousProvider: record.scanProvider ?? null, malwareScanPerformed: false }, correlationId: actor.correlationId })
-      result.markerBackfilled++
+      // The label and its audit row are written together, and only if the row is unchanged since it was read.
+      const written = await withImmediateTransaction(async (executor) => {
+        if (!await markDocumentNotScannedIfUnchanged(executor, actor.workspaceId, id, seen,
+          { ...record.scanEvidence, scanBypassed: true, malwareScanPerformed: false, note: SCAN_BYPASS_NOTE, markerBackfilled: true }, nowIso())) return false
+        await recordAuditEvent({ context: actor, action: "document.scan_marker_backfilled", resourceType: "document", resourceId: id,
+          metadata: { previousProvider: record.scanProvider ?? null, malwareScanPerformed: false }, correlationId: actor.correlationId, executor })
+        return true
+      })
+      if (written) result.markerBackfilled++
+      else result.changedConcurrently.push(id)
       continue
     }
     try {
-      await rescanOne(actor, record, result)
+      await rescanOne(actor, record, seen, result)
     } catch (error) {
       result.failed.push({ id, code: error instanceof AppError ? error.code : "rescan_failed" })
     }
@@ -174,7 +192,7 @@ export async function rescanBypassedDocuments(actor: DealActor, options: RescanO
   return result
 }
 
-async function rescanOne(actor: DealActor, record: DocumentRecord, result: RescanResult) {
+async function rescanOne(actor: DealActor, record: DocumentRecord, seen: DocumentScanSnapshot, result: RescanResult) {
   let bytes: Uint8Array
   try { bytes = await documentStorage().get(record.storageKey) }
   catch { result.failed.push({ id: record.id, code: "document_storage_unavailable" }); return }
@@ -188,10 +206,17 @@ async function rescanOne(actor: DealActor, record: DocumentRecord, result: Resca
     result.failed.push({ id: record.id, code: `scan_${scan.status}` }); return
   }
   const state = scan.status === "clean" ? record.processingState : "quarantined"
-  await updateDocumentScan(actor.workspaceId, record.id, state, scan.provider,
-    { checksumVerified: true, ...scan.evidence, malwareScanPerformed: true, rescannedAfterBypass: true, previousProvider: record.scanProvider ?? null }, nowIso())
-  await recordAuditEvent({ context: actor, action: "document.rescanned", resourceType: "document", resourceId: record.id,
-    metadata: { state, provider: scan.provider, malwareScanPerformed: true, previousProvider: record.scanProvider ?? null }, correlationId: actor.correlationId })
-  if (scan.status === "clean") result.rescannedClean++
+  // Compare-and-set: write only if every scan column still equals what was read before the scan, and write the
+  // audit row in the same transaction. A concurrent scan or quarantine wins; this file is then reported, not overwritten.
+  const written = await withImmediateTransaction(async (executor) => {
+    if (!await updateDocumentScanIfUnchanged(executor, actor.workspaceId, record.id, seen, { state, provider: scan.provider,
+      evidence: { checksumVerified: true, ...scan.evidence, malwareScanPerformed: true, rescannedAfterBypass: true, previousProvider: record.scanProvider ?? null },
+      attemptedAt: nowIso() })) return false
+    await recordAuditEvent({ context: actor, action: "document.rescanned", resourceType: "document", resourceId: record.id,
+      metadata: { state, provider: scan.provider, malwareScanPerformed: true, previousProvider: record.scanProvider ?? null }, correlationId: actor.correlationId, executor })
+    return true
+  })
+  if (!written) result.changedConcurrently.push(record.id)
+  else if (scan.status === "clean") result.rescannedClean++
   else result.quarantined.push(record.id)
 }

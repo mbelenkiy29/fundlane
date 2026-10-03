@@ -67,12 +67,14 @@ cd nextjs-version
 R="node --conditions=react-server --import tsx scripts/documents/rescan.ts --workspace-id=<id>"
 $R                                                    # preview: files marked not_scanned; writes nothing
 $R --ids-file=released.txt --include-audit            # preview, also the ID list and document.ready audit rows with malwareScanPerformed:false
-$R --ids-file=released.txt --include-audit --apply --confirm-database=<host>/<database>   # rescan
+$R --ids-file=released.txt --include-audit --apply --confirm-database=<user>@<host>/<database>   # rescan
 ```
 
 - **Finding files.** It always takes files with `scan_provider='not_scanned'`. `--ids-file` adds an explicit list (one document ID per line; blank lines and `#` comments are ignored). `--include-audit` adds documents whose `document.ready` audit row says `malwareScanPerformed:false`. Only documents in `--workspace-id` are read or changed; IDs from other workspaces are reported in `notFound`.
-- **Preview by default.** Without `--apply` nothing is written. The output (one JSON line) names the target database (`database: "host/database"`), the scanner, and whether it is a real one (`scannerReady`).
-- **Refuses to write unless the database is confirmed.** `--apply` needs `--confirm-database=` equal to the `database` value from the preview. Without it, or with any other value, the tool refuses and writes nothing. This makes it hard to run `--apply` against the wrong database (for example production by mistake).
+- **Preview by default.** Without `--apply` nothing is written. The output (one JSON line) names the target database (`database: "user@host/database"`, e.g. `mca_app.<project-ref>@aws-0-us-west-2.pooler.supabase.com/postgres`), the scanner, and whether it is a real one (`scannerReady`). The password and port are never printed.
+- **Refuses to write unless the database is confirmed.** `--apply` needs `--confirm-database=` equal to the `database` value from the preview. Without it, or with any other value, the tool refuses and writes nothing.
+  - **Why the username is included:** production and staging share the Supabase pooler host and database name (`aws-0-us-west-2.pooler.supabase.com/postgres`), and the project ref appears only in the username (`mca_app.<ref>` / `postgres.<ref>`). So a value copied from a staging preview never matches production.
+  - This makes it hard to run `--apply` against the wrong database (for example production by mistake). A URL that reaches production by IP or a custom DNS name gets no PRODUCTION banner, but the confirm string still names its exact user.
 - **Refuses without a real scanner.** `--apply` refuses while `MCA_DOCUMENT_SCAN_BYPASS=true` or when no scanner is configured. It never marks a file clean without a real scan.
 - **Results.**
   - **Clean:** the real provider and evidence (`malwareScanPerformed: true`, `rescannedAfterBypass: true`) replace the "not scanned" marker, and one `document.rescanned` audit row is added.
@@ -80,6 +82,7 @@ $R --ids-file=released.txt --include-audit --apply --confirm-database=<host>/<da
   - **Scanner error, unreadable bytes, or a changed checksum:** the file is left exactly as it was and listed in `failed`. The exit code is 1.
 - **Skipped.** Files that are not available (pending, failed or quarantined) are listed in `notReady` and never touched.
 - **Safe to rerun.** Files a real scanner already cleared are counted in `alreadyScanned` and skipped.
+- **Compare-and-set.** Each write (rescan result or backfilled label) only goes through if the row's `processing_state`, `scan_provider`, `scan_evidence` (which holds the not-scanned marker) and `scan_attempted_at` still equal what the tool read before scanning, using null-safe comparisons. The write and its audit row share one transaction. If anything changed in the meantime (another rescan, a real scan, a quarantine), nothing is written and no audit row is added. The file is listed in `changedConcurrently`, which doesn't count as a failure and doesn't change the exit code. Rerun to pick it up again.
 
 ### Optional: label files released without the marker
 
@@ -87,7 +90,7 @@ Files released before the marker existed, or relabelled since, can be labelled f
 
 ```bash
 $R --ids-file=released.txt --backfill-marker                                              # preview
-$R --ids-file=released.txt --backfill-marker --apply --confirm-database=<host>/<database>
+$R --ids-file=released.txt --backfill-marker --apply --confirm-database=<user>@<host>/<database>
 ```
 
 Application drafts are short-lived and become deal documents when they are confirmed, so the tool doesn't rescan drafts. Invitation files have no marker column; see above.
