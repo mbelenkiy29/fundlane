@@ -91,15 +91,23 @@ test("scrubBreadcrumb keeps console warnings and errors only", () => {
   assert.equal(scrubBreadcrumb({ category: "ui.click", message: "button.save" })!.message, "button.save")
 })
 
+test("scrubLog keeps UUIDs readable, drops Node deprecation notices", () => {
+  const id = "fc77836e-1234-5678-9012-3a40b1adf7ff"
+  const log = scrubLog({ message: JSON.stringify({ event: "operational_error", id, account: "123456789012" }) })
+  assert.match(String(log!.message), new RegExp(id))
+  assert.doesNotMatch(String(log!.message), /123456789012/)
+  assert.equal(scrubLog({ message: "(node:18346) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated." }), null)
+})
+
 test("scrubLog redacts messages and attributes but keeps SDK metadata", () => {
   const log = scrubLog({
     message: JSON.stringify({ event: "operational_error", email: "owner@example.com" }),
     attributes: { "sentry.release": "abc", "url.full": "https://app.example/review/tok?x=1", note: { value: "card 4111 1111 1111 1111", type: "string" } },
   })
-  assert.doesNotMatch(String(log.message), /owner@example\.com/)
-  assert.equal(log.attributes!["sentry.release"], "abc")
-  assert.equal(log.attributes!["url.full"], "https://app.example/review/[token]?x=[Filtered]")
-  assert.doesNotMatch(JSON.stringify(log.attributes!.note), /4111/)
+  assert.doesNotMatch(String(log!.message), /owner@example\.com/)
+  assert.equal(log!.attributes!["sentry.release"], "abc")
+  assert.equal(log!.attributes!["url.full"], "https://app.example/review/[token]?x=[Filtered]")
+  assert.doesNotMatch(JSON.stringify(log!.attributes!.note), /4111/)
 })
 
 test("scrubSpan removes headers and AI payloads and scrubs URLs", () => {

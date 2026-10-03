@@ -21,6 +21,15 @@ const URL_DATA_KEYS = ["url", "to", "from", "href"]
 const KEPT_CONSOLE_LEVELS = new Set(["warning", "error", "fatal"])
 const MESSAGE_LIMIT = 1000
 const LOG_LIMIT = 4000
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
+const NODE_DEPRECATION = /^\(node:\d+\) \[DEP\d+\] DeprecationWarning/
+
+/** `redactDiagnosticText` that keeps record and correlation UUIDs readable for tracing. */
+function redact(value: string, max: number): string {
+  const ids: string[] = []
+  const masked = value.replace(UUID, (id) => `\u27e6${ids.push(id) - 1}\u27e7`)
+  return redactDiagnosticText(masked, max).replace(/\u27e6(\d+)\u27e7/g, (_, index: string) => ids[Number(index)] ?? "")
+}
 
 /** Drops the fragment, filters every query value and replaces token path segments. */
 export function scrubUrl(value: string): string {
@@ -71,7 +80,7 @@ export function scrubBreadcrumb<T extends BreadcrumbLike>(crumb: T): T | null {
     if (!KEPT_CONSOLE_LEVELS.has(crumb.level ?? "log")) return null
     if (crumb.data) delete crumb.data.arguments
   }
-  if (typeof crumb.message === "string") crumb.message = redactDiagnosticText(crumb.message, MESSAGE_LIMIT)
+  if (typeof crumb.message === "string") crumb.message = redact(crumb.message, MESSAGE_LIMIT)
   scrubDataUrls(crumb.data)
   return crumb
 }
@@ -94,10 +103,10 @@ export function scrubEvent<T extends EventLike>(event: T, hint?: { originalExcep
   // Expected 4xx API responses are shown to the user and are not defects.
   if (hint?.originalException instanceof RequestError && hint.originalException.status < 500) return null
 
-  if (typeof event.message === "string") event.message = redactDiagnosticText(event.message, MESSAGE_LIMIT)
-  if (typeof event.logentry?.message === "string") event.logentry.message = redactDiagnosticText(event.logentry.message, MESSAGE_LIMIT)
+  if (typeof event.message === "string") event.message = redact(event.message, MESSAGE_LIMIT)
+  if (typeof event.logentry?.message === "string") event.logentry.message = redact(event.logentry.message, MESSAGE_LIMIT)
   for (const value of event.exception?.values ?? []) {
-    if (typeof value.value === "string") value.value = redactDiagnosticText(value.value, MESSAGE_LIMIT)
+    if (typeof value.value === "string") value.value = redact(value.value, MESSAGE_LIMIT)
   }
   if (typeof event.transaction === "string") event.transaction = scrubUrlsInText(event.transaction)
 
@@ -135,12 +144,14 @@ interface LogLike {
   attributes?: Dict
 }
 
-export function scrubLog<T extends LogLike>(log: T): T {
-  log.message = redactDiagnosticText(String(log.message), LOG_LIMIT)
+export function scrubLog<T extends LogLike>(log: T): T | null {
+  // Node runtime deprecation notices are printed through console.error; they are not app errors.
+  if (NODE_DEPRECATION.test(String(log.message))) return null
+  log.message = redact(String(log.message), LOG_LIMIT)
   for (const [key, value] of Object.entries(log.attributes ?? {})) {
     if (key.startsWith("sentry.")) continue
     const text = attributeString(value)
-    if (text !== undefined) setAttributeString(log.attributes!, key, /url|path|query|target|route/i.test(key) ? scrubUrl(text) : redactDiagnosticText(text, LOG_LIMIT))
+    if (text !== undefined) setAttributeString(log.attributes!, key, /url|path|query|target|route/i.test(key) ? scrubUrl(text) : redact(text, LOG_LIMIT))
   }
   return log
 }
@@ -179,7 +190,7 @@ export function scrubRecordingEvent<T extends RecordingEventLike>(event: T): T |
   const payload = data.payload as (Dict & { data?: Dict }) | undefined
   if (data.tag === "breadcrumb" && payload) {
     if (payload.category === "console") return null
-    if (typeof payload.message === "string") payload.message = redactDiagnosticText(payload.message, MESSAGE_LIMIT)
+    if (typeof payload.message === "string") payload.message = redact(payload.message, MESSAGE_LIMIT)
     scrubDataUrls(payload.data)
   }
   if (data.tag === "performanceSpan" && payload) {
