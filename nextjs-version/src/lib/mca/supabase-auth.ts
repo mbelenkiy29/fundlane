@@ -4,6 +4,7 @@ import { cookies } from "next/headers"
 import { createSupabaseServerClient, getSupabaseAdminClient } from "../supabase/server"
 import { getDatabase, newId, nowIso, recordAuditEvent, withImmediateTransaction } from "./db"
 import { AppError } from "./errors"
+import { identifyServerUser } from "../observability/bridge"
 import type { MembershipContext, Role } from "./types"
 import { DEFAULT_ACTION_VISIBILITY, DEFAULT_FEATURE_FLAGS, DEFAULT_PAGE_VISIBILITY } from "./workspaces"
 import { monthlyPriceCents } from "./billing-catalog"
@@ -90,7 +91,9 @@ export async function authenticateSupabaseSession(_request?: Request): Promise<M
   void _request // Incoming claims/headers never select roles or bypass the provider session check.
   const identity = await supabaseIdentity()
   if (!identity) return null
-  return resolveSupabaseMembership(identity, (await cookies()).get(WORKSPACE_COOKIE)?.value)
+  const context = await resolveSupabaseMembership(identity, (await cookies()).get(WORKSPACE_COOKIE)?.value)
+  if (context) identifyServerUser(context)
+  return context
 }
 
 export async function setActiveWorkspace(identity: SupabaseIdentity, workspaceId: string) {

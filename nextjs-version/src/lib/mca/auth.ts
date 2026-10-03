@@ -5,6 +5,7 @@ import { assertCompanyOperational } from "./company-access";
 import { isCompanyRecoveryApi } from "./company-recovery";
 
 import { AppError } from "./errors";
+import { identifyServerUser } from "../observability/bridge";
 import { nowIso, parseJson, withImmediateTransaction } from "./db";
 import { hashOpaqueToken } from "./crypto";
 import { assertSessionTotpAccess } from "./totp-service";
@@ -59,7 +60,11 @@ async function consumeApiKey(token: string): Promise<AuthContext | null> {
 
 export async function authenticateRequest(request: Request): Promise<AuthContext | null> {
   const authorization = request.headers.get("authorization");
-  if (authorization?.startsWith("Bearer mca_")) return consumeApiKey(authorization.slice(7));
+  if (authorization?.startsWith("Bearer mca_")) {
+    const context = await consumeApiKey(authorization.slice(7));
+    if (context) identifyServerUser(context);
+    return context;
+  }
   return authenticateSupabaseSession(request);
 }
 

@@ -27,6 +27,7 @@ import { assertOutboundFresh } from "../outbound-freshness"
 import { withOutboundApproval } from "../outbound-approval"
 import { executionSignal, outsideExecutionScope, withExecutionDeadline } from "./execution"
 import { documentRuntimeEnabled } from "./document-runtime"
+import { reportException } from "../../observability/bridge"
 
 async function dispatch(job: BackgroundJob, observeGuardedAttemptOnly = false): Promise<unknown> {
   await assertCompanyOperational(job.workspace_id)
@@ -168,7 +169,9 @@ export async function runNextBackgroundJob(kinds?: readonly BackgroundJobKind[])
     await outsideExecutionScope(() => boundedCleanup
       ? withExecutionDeadline(() => failBackgroundJob(job, error), undefined, 10_000)
       : failBackgroundJob(job, error))
-    console.error(JSON.stringify({ event: "worker_job_failed", jobId: job.id, kind: job.kind, code: error instanceof AppError ? error.code : "processing_failed" }))
+    const code = error instanceof AppError ? error.code : "processing_failed"
+    console.error(JSON.stringify({ event: "worker_job_failed", jobId: job.id, kind: job.kind, code }))
+    if (!(error instanceof AppError) || error.status >= 500) reportException(error, { fingerprint: ["background-job", job.kind, code], tags: { job_kind: job.kind, error_code: code } })
   } finally { clearInterval(heartbeat) }
   return true
 }
