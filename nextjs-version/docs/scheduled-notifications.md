@@ -58,17 +58,43 @@ With `MCA_RENEWAL_ALERTS_ENABLED=true` (default off; only `"true"` enables), eac
 
 ### Turning renewal alerts on in production
 
-Renewal alert emails go to brokers through the system email provider (Resend, or useSend as the fallback). They never use a company's connected mailbox, and merchants never receive them. Every item below must hold in the production environment:
+Renewal alert emails go to brokers through the system email provider (Resend, or useSend as the fallback). They never use a company's connected mailbox, and merchants never receive them. **Infrastructure is the single owner** of this rollout and of the `/api/cron/comms` schedule. Nobody else should install the schedule or flip these flags.
 
-1. `MCA_RENEWAL_ALERTS_ENABLED=true`. This lets the comms tick find eligible advances and queue alerts.
-2. `MCA_NOTIFICATION_RUNTIME=enabled`. This lets the comms tick send queued alerts. Without it, alerts queue up but never go out.
-3. `MCA_APP_ORIGIN` set to the public `https://` app origin. Every alert carries an unsubscribe link built from this origin. In production, a missing or non-https origin suppresses each alert with `notification_origin_invalid`.
-4. System email configured: `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM`, or the useSend equivalents.
-5. `/api/cron/comms` scheduled every five minutes with `Authorization: Bearer ${CRON_SECRET}` (see `docs/ops/cron-schedules.json`).
-6. Migrations `0071` (notifications) and `0073` (renewal policy/actions) applied.
-7. Each company that wants alerts saves a renewal policy on the **Renewals** page (`/renewals`) (paid-in threshold and minimum days since funding). Companies without a policy are skipped.
+**Scheduling `/api/cron/comms` does more than renewal alerts.** Every tick also:
 
-Saving a new policy version re-alerts every advance that is still eligible, because the event key includes the policy version. Change the policy deliberately.
+- sends due daily report emails (enabled `mca_digest_subscriptions`);
+- retries pending workflow webhooks (`mca_workflow_webhook_outbox`);
+- sends onboarding emails, when `MCA_ONBOARDING_EMAIL_ENABLED=true` with the enrollment runtime on;
+- ingests funder replies, when both reply-ingest flags are on.
+
+With `MCA_NOTIFICATION_RUNTIME=enabled`, every queued notification goes out too, not only renewal alerts.
+
+**Pre-check before installing the schedule.** Run against production and review anything unexpected before the first tick:
+
+```sql
+-- Workflow webhooks that will be retried (max 5 attempts)
+SELECT workspace_id, count(*) FROM mca_workflow_webhook_outbox WHERE state = 'pending' AND attempts < 5 GROUP BY 1;
+-- Daily report subscriptions that will start sending
+SELECT workspace_id, count(*) FROM mca_digest_subscriptions WHERE enabled = 1 GROUP BY 1;
+-- Notifications that will be dispatched once MCA_NOTIFICATION_RUNTIME=enabled
+SELECT kind, state, count(*) FROM mca_notifications WHERE state IN ('queued','retry') GROUP BY 1, 2;
+```
+
+**Order** (each step only after the previous one is confirmed):
+
+1. **Migrations:** `0008` (renewal policies and actions) and `0071` (notification foundation) are applied.
+2. **Environment, then redeploy:**
+   - `MCA_APP_ORIGIN` is the public `https://` app origin. Every alert carries an unsubscribe link built from it. A missing or non-https origin suppresses each alert with `notification_origin_invalid`.
+   - System email is configured: `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM`, or the useSend equivalents.
+   - `CRON_SECRET` is set.
+3. **Schedule:** `/api/cron/comms` runs every five minutes with `Authorization: Bearer ${CRON_SECRET}` (see `docs/ops/cron-schedules.json`), after the pre-check above.
+4. **Policies:** each company that wants alerts saves a renewal policy on the **Renewals** page (`/renewals`): paid-in threshold and minimum days since funding. Companies without a policy are skipped.
+5. **`MCA_RENEWAL_ALERTS_ENABLED=true`** (redeploy). Each tick now finds eligible advances and queues alerts.
+6. **`MCA_NOTIFICATION_RUNTIME=enabled`** (redeploy), last. Queued alerts, and any other queued notifications, start sending.
+
+**Expect a first burst.** The first tick after step 5 alerts every advance that is *already* eligible, not only new ones. Saving any new policy version re-alerts every advance that is still eligible, because the event key includes the policy version. Change policies deliberately.
+
+**Rollback:** unset `MCA_NOTIFICATION_RUNTIME` (stops all sending) and `MCA_RENEWAL_ALERTS_ENABLED` (stops new alerts), then redeploy. Remove the schedule if the other comms jobs must stop too. Queued rows are kept for review.
 
 Staging verification on 2026-10-03 (Supabase `djnhfcxbuigsnqwcpdrz`, synthetic "Staging Drill Co", main `6c4bcac`, stub transport so nothing was sent):
 
