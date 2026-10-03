@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { clampLenderTermMonths, estimateDeal, lenderTermRuleMonths, type EstimateDealInput } from "../src/lib/mca/underwriting/estimates"
+import { clampLenderTermMonths, estimateDeal, lenderTermRuleMonths, lenderTermRuleWholeMonths, type EstimateDealInput } from "../src/lib/mca/underwriting/estimates"
 import type { EligibilityRule } from "../src/lib/mca/funders/contracts"
 
 const rule = (field: string, operator: EligibilityRule["operator"], value: number, unit: EligibilityRule["unit"] = field === "term" ? "months" : "usd"): EligibilityRule => ({ id:`${field}:${operator}`, funderId:"f", field, operator, unit, value, unspecified:false })
@@ -128,6 +128,13 @@ test("shared lender term helpers: days convert to months, clamp at both ends, mo
   assert.equal(lenderTermRuleMonths({ value:180, unit:"count" }), null)
   assert.equal(lenderTermRuleMonths({ value:0, unit:"days" }), null)
   assert.equal(lenderTermRuleMonths({ value:-30, unit:"months" }), null)
+  // Scoring's whole-month helper rounds the same way but never clamps.
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"days" }), 6)
+  assert.equal(lenderTermRuleWholeMonths({ value:24, unit:"months" }), 24)
+  assert.equal(lenderTermRuleWholeMonths({ value:3, unit:"years" }), 36)
+  assert.equal(lenderTermRuleWholeMonths({ value:30, unit:"days" }), 1)
+  assert.equal(lenderTermRuleWholeMonths({ value:0, unit:"days" }), null)
+  assert.equal(lenderTermRuleWholeMonths({ value:180, unit:"count" }), null)
 })
 
 test("zero or negative lender term is ignored with a warning, not clamped up to 2 months", () => {

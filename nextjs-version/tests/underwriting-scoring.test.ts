@@ -343,7 +343,7 @@ test("hard DQ ADB, requested amount, term, and deposit count; unknown cannot pas
   assertHardDq(unknownDeposit, "hard.deposit_count", "unknown")
 })
 
-test("hard term rules in days or years are converted to months (180 days = 6) and clamped to 2-18", async () => {
+test("hard term rules in days or years are converted to the lender's real term in months (180 days = 6), not clamped", async () => {
   const workspaceId = "workspace-score-term-units"
   const termResult = async (term: Partial<EligibilityRule>, termMonths: number) => {
     const rules = fitRules().map((rule) => rule.field === "term" ? { ...rule, ...term } as EligibilityRule : rule)
@@ -356,11 +356,14 @@ test("hard term rules in days or years are converted to months (180 days = 6) an
   assert.equal(await termResult({ operator: "min", unit: "days", value: 180 }, 3), "fail")
   assert.equal(await termResult({ operator: "eq", unit: "days", value: 180 }, 6), "pass")
   assert.equal(await termResult({ unit: "years", value: 1 }, 13), "fail")
-  // Clamped at both ends, like estimates: 30 days -> 2 months, 3 years -> 18 months.
-  assert.equal(await termResult({ unit: "days", value: 30 }, 2), "pass")
-  assert.equal(await termResult({ unit: "days", value: 30 }, 3), "fail")
-  assert.equal(await termResult({ unit: "years", value: 3 }, 18), "pass")
-  assert.equal(await termResult({ unit: "years", value: 3 }, 20), "fail")
+  // No 2-18 clamp on hard rules: a 24-month max passes a 20-month request; 3 years is 36 months; 30 days is 1 month.
+  assert.equal(await termResult({ unit: "months", value: 24 }, 20), "pass")
+  assert.equal(await termResult({ unit: "months", value: 24 }, 25), "fail")
+  assert.equal(await termResult({ unit: "years", value: 3 }, 20), "pass")
+  assert.equal(await termResult({ unit: "years", value: 3 }, 37), "fail")
+  assert.equal(await termResult({ unit: "days", value: 30 }, 1), "pass")
+  assert.equal(await termResult({ unit: "days", value: 30 }, 2), "fail")
+  assert.equal(await termResult({ operator: "min", unit: "months", value: 1 }, 1), "pass")
   // A months-unit term is unchanged.
   assert.equal(await termResult({ unit: "months", value: 12 }, 12), "pass")
   assert.equal(await termResult({ unit: "months", value: 12 }, 13), "fail")

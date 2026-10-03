@@ -14,7 +14,7 @@ import { criteriaReadiness } from "../funders/criteria-readiness"
 import type { EligibilityRule, FunderRecord } from "../funders/contracts"
 import type { CompletenessResult, ExistingPositionCandidate, FunderScore, MetricEvidence, StatementMonthRecord, UnderwritingAggregate } from "./contracts"
 import { getCompleteness } from "./completeness"
-import { clampLenderTermMonths, lenderTermRuleMonths } from "./estimates"
+import { lenderTermRuleWholeMonths } from "./estimates"
 import {
   AUTO_SELECT_GRADES,
   DEFAULT_ADB_SCALE,
@@ -451,11 +451,12 @@ async function evaluateHardRules(actor: DealActor, inputs: ScoringInputs, rules:
           reasons.push(compareUnknown(rule, "Term is unknown, so the funder's maximum cannot pass."))
           continue
         }
-        // Lender term rules can be in days or years; convert to months the same way estimates do.
-        const ruleMonths = lenderTermRuleMonths(rule)
+        // Lender term rules can be in days or years; convert to months with the estimates rule. Hard rules
+        // compare against the lender's real term, so the estimates' 2-18 month clamp is not applied here.
+        const ruleMonths = lenderTermRuleWholeMonths(rule)
         reasons.push(ruleMonths == null
           ? compareUnknown(rule, `Funder term rule has no usable value or time unit (${rule.unit}).`)
-          : evaluateNumeric({ ...rule, value: clampLenderTermMonths(ruleMonths) }, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
+          : evaluateNumeric({ ...rule, value: ruleMonths }, inputs.termMonths, "Term (months)", String(inputs.termMonths)))
         continue
       }
       if (field === "deposit_count") {
