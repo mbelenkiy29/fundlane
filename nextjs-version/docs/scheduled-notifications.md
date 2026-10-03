@@ -55,3 +55,24 @@ Claim leases use fresh operation time inside each claim transaction. A tick shar
 ## Renewal alerts
 
 With `MCA_RENEWAL_ALERTS_ENABLED=true` (default off; only `"true"` enables), each `/api/cron/comms` tick runs `runRenewalEligibility` with a system actor for every company that has a renewal policy, then enqueues a broker email `renewal` notification to each active assigned originator/closer. Event key `renewal:v{policyVersion}:{advanceId}` makes reruns idempotent; a new policy version re-alerts. At dispatch the alert is suppressed unless the action is still eligible under the current policy and its advance is not reversed. Companies without a policy are never selected; per-company errors are counted and do not fail the tick. Delivery still requires `MCA_NOTIFICATION_RUNTIME=enabled`. Merchant reminders are not sent.
+
+### Turning renewal alerts on in production
+
+Renewal alert emails go to brokers through the system email provider (Resend, or useSend as the fallback). They never use a company's connected mailbox, and merchants never receive them. Every item below must hold in the production environment:
+
+1. `MCA_RENEWAL_ALERTS_ENABLED=true`. This lets the comms tick find eligible advances and queue alerts.
+2. `MCA_NOTIFICATION_RUNTIME=enabled`. This lets the comms tick send queued alerts. Without it, alerts queue up but never go out.
+3. `MCA_APP_ORIGIN` set to the public `https://` app origin. Every alert carries an unsubscribe link built from this origin. In production, a missing or non-https origin suppresses each alert with `notification_origin_invalid`.
+4. System email configured: `MCA_SYSTEM_EMAIL_PROVIDER=resend`, `MCA_RESEND_API_KEY` and `MCA_RESEND_FROM`, or the useSend equivalents.
+5. `/api/cron/comms` scheduled every five minutes with `Authorization: Bearer ${CRON_SECRET}` (see `docs/ops/cron-schedules.json`).
+6. Migrations `0071` (notifications) and `0073` (renewal policy/actions) applied.
+7. Each company that wants alerts saves a renewal policy under **Accounting → Renewals** (paid-in threshold and minimum days since funding). Companies without a policy are skipped.
+
+Saving a new policy version re-alerts every advance that is still eligible, because the event key includes the policy version. Change the policy deliberately.
+
+Staging verification on 2026-10-03 (Supabase `djnhfcxbuigsnqwcpdrz`, synthetic "Staging Drill Co", main `6c4bcac`, stub transport so nothing was sent):
+
+- Policy v1 at 90% paid-in: the first tick queued 23 alerts across 80 advances. The second tick queued 0.
+- Dispatch with no https `MCA_APP_ORIGIN`: all 23 were suppressed with `notification_origin_invalid`. This led to item 3 above.
+- Policy v2 with an https origin: the tick queued 23 new alerts, and dispatch accepted 23. The pre-send live check ran for each one. A second dispatch pass and a further tick did nothing.
+- Not covered: real provider delivery and the hosted cron schedule.
