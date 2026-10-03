@@ -310,6 +310,9 @@ test("failed-payment banner waits for an invoice snapshot newer than the failure
   try {
     await processStripeBillingEvent({id:`evt_${randomUUID()}`,type:"invoice.payment_failed",livemode:false,data:{object:{id:invoiceId,customer}}} as Stripe.Event)
     assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).paymentFailedInvoice,null)
+    assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).timeZone,"America/New_York")
+    await getDatabase().prepare("UPDATE workspaces SET timezone=? WHERE id=?").run("Not/AZone",owner.workspaceId)
+    assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).timeZone,null)
     await getDatabase().prepare("UPDATE company_billing_invoices SET synced_at=? WHERE workspace_id=? AND stripe_invoice_id=?").run("2100-01-01T00:00:00.000Z",owner.workspaceId,invoiceId)
     assert.equal((await getCompanyBillingPresentation(owner.workspaceId)).paymentFailedInvoice?.id,invoiceId)
   } finally {delete process.env.MCA_BILLING_VERIFIED_INVOICE_NOTICES}
