@@ -14,7 +14,7 @@ Fundlane reports errors, structured logs, traces, masked Session Replay and in-a
 | Logs | `consoleLoggingIntegration` | Server `console.info/warn/error` (the existing secret-free `{"event": ...}` operational logs) and browser `console.warn/error`. Browser `console.log` is never sent because template pages log raw form values. |
 | Traces | Default Next.js tracing | 10% of requests by default. Trace headers are not added to outbound provider calls (`tracePropagationTargets: []`). |
 | Session Replay | `src/components/observability/` | Signed-in workspace and `/platform` pages only (see privacy controls). |
-| User feedback | Header **Feedback** menu (`feedback-menu.tsx`) | "Report a bug" (`feedback_type:bug`) and "Request a feature" (`feedback_type:feature_request`) with name, email, message, optional screenshot and the buffered replay. |
+| User feedback | Floating **Feedback** button (`feedback-button.tsx`), bottom-left beside the sidebar on workspace and `/platform` pages | "Report an issue" (`feedback_type:bug`), "Request a feature" (`feedback_type:feature_request`) and "Suggest an improvement" (`feedback_type:improvement`), each with name, email, message, optional screenshot and the buffered replay. Bottom-right is left to the Browser calls widget and toasts; on `/assistant` the button sits above the chat composer. |
 
 Supabase Edge functions and the historical Render workers are out of scope. Shared server code reports through `src/lib/observability/bridge.ts`, which has no imports and does nothing unless `sentry-server.ts` registered a reporter, so those bundles never include Sentry.
 
@@ -46,7 +46,7 @@ Supabase Edge functions and the historical Render workers are out of scope. Shar
 1. Create a Sentry project for the Next.js platform, or install the Sentry integration in the Vercel `fundlane` project, which creates the project and sets `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT`.
 2. In Sentry organization and project settings, turn on server-side data scrubbing, **Prevent storing of IP addresses** and spike protection.
 3. Set `NEXT_PUBLIC_SENTRY_DSN` (and the build variables if not set by the integration) for **Preview** first and redeploy.
-4. On the preview, using synthetic accounts and records: trigger a browser error and an API 500 and confirm both carry the user and workspace; confirm a replay is masked and stops on `/review/...` and `/account-security`; confirm public `/apply` and `/merchant-upload` pages send no replay; send a bug report and a feature request with a screenshot and check the `feedback_type` tag; sign in as a second user on the same tab and confirm a new replay ID; confirm stack traces are de-minified.
+4. On the preview, using synthetic accounts and records: trigger a browser error and an API 500 and confirm both carry the user and workspace; confirm a replay is masked and stops on `/review/...` and `/account-security`; confirm public `/apply` and `/merchant-upload` pages send no replay; use the floating Feedback button to send an issue report, a feature request and an improvement (one with a screenshot) and check each `feedback_type` tag; sign in as a second user on the same tab and confirm a new replay ID; confirm stack traces are de-minified.
 5. Set the same variables for **Production** after the draft privacy policy update has been approved, then redeploy.
 
 Roll back by unsetting `NEXT_PUBLIC_SENTRY_DSN` and `SENTRY_DSN` and redeploying.
@@ -62,11 +62,12 @@ npx sentry@latest issue list
 npx sentry@latest issue explain <ISSUE-ID>                     # Seer root-cause analysis
 npx sentry@latest issue plan <ISSUE-ID>
 npx sentry@latest feedback list --query "feedback_type:feature_request"
+npx sentry@latest feedback list --query "feedback_type:improvement"
 npx sentry@latest replay list
 npx sentry@latest log list <org>/<project>
 ```
 
-In the Sentry UI, User Feedback lists bug reports and feature requests; filter by `feedback_type:feature_request` to review requests.
+In the Sentry UI, User Feedback lists issue reports, feature requests and improvement suggestions; filter by `feedback_type:bug`, `feedback_type:feature_request` or `feedback_type:improvement`.
 
 ## Tests
 

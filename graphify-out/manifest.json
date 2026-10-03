@@ -1150,8 +1150,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/dashboard-chrome.tsx": {
-    "mtime": 1790998133.9301255,
-    "ast_hash": "5cc8a2fa5a4c19bc090396238c65dee6",
+    "mtime": 1791004445.6071951,
+    "ast_hash": "b9056e161f1e3ad6d3d76b605a11023e",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/datamerch/data-merch-panel.tsx": {
@@ -1275,8 +1275,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/site-header.tsx": {
-    "mtime": 1790998133.9308052,
-    "ast_hash": "5b09aa60cb84cda0bea14103b1cff716",
+    "mtime": 1791004445.6068704,
+    "ast_hash": "423513a0b8a081960d1dfb4200caefef",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/theme-customizer.tsx": {
@@ -2195,7 +2195,7 @@
     "semantic_hash": ""
   },
   "nextjs-version/tsconfig.json": {
-    "mtime": 1791000062.1980107,
+    "mtime": 1791005903.4985845,
     "ast_hash": "302f271393295c814f65d1795b8ade20",
     "semantic_hash": ""
   },
@@ -2205,8 +2205,8 @@
     "semantic_hash": ""
   },
   ".github/workflows/deploy.yml": {
-    "mtime": 1790995998.1847384,
-    "ast_hash": "ae9a6a20a5929e093c5dbe3d9333f9ba",
+    "mtime": 1791002540.274158,
+    "ast_hash": "379fd26f3d51f63390adf28fe9f0c47a",
     "semantic_hash": ""
   },
   "AGENTS.md": {
@@ -7690,8 +7690,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/scripts/supabase/build.mjs": {
-    "mtime": 1790995998.6802044,
-    "ast_hash": "3f62824e542227c2418e9de8de639ec0",
+    "mtime": 1791002540.274158,
+    "ast_hash": "6e207b34d73cfafe8fc00166b3a8764d",
     "semantic_hash": ""
   },
   "nextjs-version/scripts/supabase/deploy.mjs": {
@@ -7700,8 +7700,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/scripts/supabase/edge-cookies.ts": {
-    "mtime": 1790995998.6810253,
-    "ast_hash": "7c860bc137507372f84f885ddc7a8770",
+    "mtime": 1791002540.274158,
+    "ast_hash": "f7237e56de75f69351d6e59ec9ef69c2",
     "semantic_hash": ""
   },
   "nextjs-version/scripts/supabase/entries/mca-assistant.ts": {
@@ -10840,8 +10840,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/platform/platform-chrome.tsx": {
-    "mtime": 1790998133.9323647,
-    "ast_hash": "53a5d63054d7cf0ba9d54075573f0559",
+    "mtime": 1791004445.6070423,
+    "ast_hash": "0daa351eac14787abc237843b9a473cb",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/mca/platform/presentation.tsx": {
@@ -10965,13 +10965,13 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/platform/build.mjs": {
-    "mtime": 1790995998.819271,
-    "ast_hash": "307ef6c5088288a8751869fcf970a1fa",
+    "mtime": 1791001731.9067626,
+    "ast_hash": "b1692cb4283b21142e3566f0aa607cfa",
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/platform/entry.tsx": {
-    "mtime": 1791001172.1980767,
-    "ast_hash": "1c4aeddf69d591b6110d918d26b78c09",
+    "mtime": 1791001731.9071298,
+    "ast_hash": "c449c983a13fe4b285ccea0eb4bcfb58",
     "semantic_hash": ""
   },
   "nextjs-version/tests/browser/platform/fixtures.mjs": {
@@ -11179,11 +11179,6 @@
     "ast_hash": "36e89fbe90722449788f3b840a378a63",
     "semantic_hash": ""
   },
-  "nextjs-version/src/components/observability/feedback-menu.tsx": {
-    "mtime": 1790998791.5375185,
-    "ast_hash": "d78c49a9b2c7432569df761acba89aa6",
-    "semantic_hash": ""
-  },
   "nextjs-version/src/components/observability/replay-control.ts": {
     "mtime": 1790998100.2858942,
     "ast_hash": "8ec82068d3b322aeb23039d33dfb5298",
@@ -11195,8 +11190,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/src/components/observability/session-integrations.ts": {
-    "mtime": 1790998787.3973265,
-    "ast_hash": "3e27d869dac96e4eb8c1982a24d549f3",
+    "mtime": 1791004852.182522,
+    "ast_hash": "43ab6d6995b3a494a0d077d7d5ab14db",
     "semantic_hash": ""
   },
   "nextjs-version/src/components/observability/use-report-boundary-error.ts": {
@@ -11280,8 +11275,8 @@
     "semantic_hash": ""
   },
   "nextjs-version/tests/observability.test.ts": {
-    "mtime": 1790999840.0264962,
-    "ast_hash": "11d91f21f998d190a8abd484ab4f44c2",
+    "mtime": 1791004464.3064673,
+    "ast_hash": "0559dc819d82cfee6744cfaaff75cc21",
     "semantic_hash": ""
   },
   "nextjs-version/tests/reminders-ui.test.ts": {
@@ -11325,8 +11320,23 @@
     "semantic_hash": ""
   },
   "nextjs-version/docs/sentry-observability.md": {
-    "mtime": 1790998449.261915,
-    "ast_hash": "b481e01b976729190bec07b923752548",
+    "mtime": 1791004464.2954795,
+    "ast_hash": "01a64191f3a9e9af72558ee8b38f7c6d",
+    "semantic_hash": ""
+  },
+  "nextjs-version/scripts/supabase/edge-next-server.ts": {
+    "mtime": 1791002540.274158,
+    "ast_hash": "bf12f95bee44611dd49a06e585a3ad99",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/components/observability/feedback-button.tsx": {
+    "mtime": 1791004591.8225067,
+    "ast_hash": "fe788c21844e8af3e652053d852f8f48",
+    "semantic_hash": ""
+  },
+  "nextjs-version/src/lib/observability/feedback-forms.ts": {
+    "mtime": 1791004429.014497,
+    "ast_hash": "527cd5ad4b4d3c0d21bee0d4501404b5",
     "semantic_hash": ""
   }
 }
