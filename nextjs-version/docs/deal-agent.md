@@ -9,7 +9,7 @@ No LLM is added; the only model use is the existing statement extraction provide
 | Flag | Where | Effect |
 | --- | --- | --- |
 | `MCA_DEAL_AGENT_ENABLED=true` | Environment (exactly `true`) | Global kill switch for enqueue, job processing, `deal_agent` in the default cron kinds, the API and the panel. |
-| `featureFlags.dealAgent` | Settings → Workspace → "Deal Agent" switch (admins) | Per-company opt-in. Existing companies read as off. |
+| `featureFlags.dealAgent` | Settings → Workspace → "Deal Agent" switch (admins) | Per-company opt-in. Existing companies read as off. The switch is shown only when `GET /api/workspace` returns `featureAvailability.dealAgent.available: true`, which follows `MCA_DEAL_AGENT_ENABLED`; with the env flag off it is hidden and the stored value is kept unchanged. |
 
 Workspace autonomy settings (`mca_analysis_settings.mode = automatic_send`, auto-submit `auto_submit`) do not affect the agent: the job contains no send calls, and its completeness check passes `skipAutoSubmit` so a deal it finds ready is not handed to auto-submit.
 

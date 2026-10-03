@@ -56,6 +56,7 @@ function mapWorkspace(row: WorkspaceRow): WorkspaceSettings {
     seatLimit: row.seat_limit,
     seatLimitManaged: billingEnabled(),
     featureFlags: { ...featureFlags, dealAgent: featureFlags.dealAgent === true },
+    featureAvailability: { dealAgent: { available: process.env.MCA_DEAL_AGENT_ENABLED === "true" } },
     pageVisibility: parseJson(row.page_visibility, DEFAULT_PAGE_VISIBILITY),
     actionVisibility: parseJson(row.action_visibility, DEFAULT_ACTION_VISIBILITY),
     require2fa: row.require_2fa === true,
@@ -69,7 +70,7 @@ export async function getWorkspaceSettings(workspaceId: string): Promise<Workspa
   return mapWorkspace(row);
 }
 
-export type WorkspaceSettingsPatch = Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt" | "featureFlags" | "pageVisibility" | "actionVisibility">> & {
+export type WorkspaceSettingsPatch = Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt" | "featureFlags" | "featureAvailability" | "pageVisibility" | "actionVisibility">> & {
   featureFlags?: Partial<FeatureFlags>;
   pageVisibility?: Partial<PageVisibility>;
   actionVisibility?: Partial<ActionVisibility>;
