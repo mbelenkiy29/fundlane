@@ -67,10 +67,10 @@ export function MfaForm({ mode = "manage", continueTo = "/onboarding" }: { mode?
     {appTotp && state?.enrolled && !recoveryCodes && !challenge && <p role="status">Authenticator-app two-factor authentication is on. {state.recoveryRemaining} unused recovery codes remain.</p>}
     {recoveryCodes && <div className="space-y-3">
       <p>Store these single-use recovery codes now. They will not be shown again.</p>
-      <ul className="grid gap-2 font-mono text-sm">{recoveryCodes.map(item => <li key={item} className="rounded border p-2">{item}</li>)}</ul>
+      <ul className="grid gap-2 font-mono text-sm" data-sentry-block>{recoveryCodes.map(item => <li key={item} className="rounded border p-2">{item}</li>)}</ul>
       <Button type="button" variant="outline" onClick={() => setRecoveryCodes(null)}>I have saved these codes</Button>
     </div>}
-    {appTotp && enrollment && <div className="space-y-3">
+    {appTotp && enrollment && <div className="space-y-3" data-sentry-block>
       <p>Scan this QR code with your authenticator app, or enter the setup key manually. Keep this key private.</p>
       <Image unoptimized src={enrollment.qrCode} alt="Authenticator setup QR code" width={200} height={200} />
       <code className="block break-all rounded border p-3">{enrollment.secret}</code>

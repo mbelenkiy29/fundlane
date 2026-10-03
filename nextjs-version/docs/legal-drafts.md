@@ -19,7 +19,7 @@ Draft copy lives in `src/lib/marketing/legal-drafts.ts`; presentation in `src/co
 | AI | `src/lib/mca/documents/extraction.ts`, `assistant/agent.ts`, `assistant/hosted-tools.ts`; OpenAI processing and conditional hosted tools do not establish provider retention or training terms. AI credit purchases are not currently offered. |
 | Email, SMS and calendar | `src/lib/mca/senders/oauth.ts`, `sms/service.ts`, `sms/inbox.ts`, `calendar/google.ts`; connection and consent paths exist, but hosted HELP behavior needs verification. |
 | Infrastructure and files | `src/lib/supabase/server.ts`, `src/lib/mca/db.ts`, `documents/storage.ts`, `closing/service.ts`; Supabase Auth/Postgres/private Storage and scoped merchant links. |
-| Cookies and telemetry | `src/proxy.ts`, `supabase-auth.ts`, `src/components/ui/sidebar.tsx`, `src/components/theme-provider.tsx`, `operations/telemetry.ts`; hosting-side analytics remain unconfirmed. |
+| Cookies and telemetry | `src/proxy.ts`, `supabase-auth.ts`, `src/components/ui/sidebar.tsx`, `src/components/theme-provider.tsx`, `operations/telemetry.ts`, `src/lib/observability/`, `src/components/observability/`; Sentry is inert without a DSN (see `docs/sentry-observability.md`); hosting-side analytics remain unconfirmed. |
 | Exports, deletion and security | `src/lib/mca/exports/service.ts`, `assistant/store.ts`, `assistant/files.ts`, `crypto.ts`; scoped exports, selective deletion and selected-field encryption do not establish complete erasure or an archive. |
 | Conditional providers | `documents/cloudmersive.ts`, `documents/verisys.ts`, `closing/docuseal-provider.ts`, `datamerch/client.ts`, `intake/providers.ts`; code paths do not prove deployment. |
 
@@ -44,10 +44,11 @@ These items are not shown on the published pages; they are tracked here for coun
 - [ ] [Attorney review: state-law applicability, request verification, response deadlines, authorized agents and appeals.]
 - [ ] [Attorney review: sale, sharing, targeted advertising, sensitive-data uses and Global Privacy Control handling.]
 - [ ] [Attorney review: hosting-side analytics and complete cookie/storage inventory.]
+- [ ] [Attorney review: Sentry error monitoring, masked session replay and user feedback screenshots were added to "Recipients, service providers and subprocessors" and "Cookies, browser storage and analytics". Confirm the wording, Sentry's data processing terms and region, and whether the effective date or a change notice is required before enabling Sentry in production.]
 - [ ] [Attorney review: material-change notice method and advance-notice period.]
 - [ ] [Attorney review: proposed retention schedule — operational logs 30 days; assistant files 90 days; customer content deleted 90 days after account closure; billing, ledger and audit records 7 years; backups roll off within 30 days; legal holds suspend deletion.]
 
-Core providers are Vercel, Supabase and Stripe. OpenAI, Twilio, useSend or a configured email receiver, Cloudmersive and Verisys depend on configuration. Google and Microsoft mailboxes, Google Calendar/Drive, funders, DataMerch, DocuSeal, custom webhooks and intake providers can be customer-connected recipients. Supabase Auth SMTP, external webhook operators, legal entities, regions, contracts, hosting telemetry and actual deployed configuration remain unverified. Adapter presence alone is not evidence of activation.
+Core providers are Vercel, Supabase and Stripe. OpenAI, Twilio, useSend or a configured email receiver, Cloudmersive, Verisys and Sentry depend on configuration. Google and Microsoft mailboxes, Google Calendar/Drive, funders, DataMerch, DocuSeal, custom webhooks and intake providers can be customer-connected recipients. Supabase Auth SMTP, external webhook operators, legal entities, regions, contracts, hosting telemetry and actual deployed configuration remain unverified. Adapter presence alone is not evidence of activation.
 
 The default billing mode pre-purchases seats. Removing a user leaves the paid count unchanged until an administrator reduces it; reductions take effect at renewal. Optional automatic seat assignment adds a paid seat when an accepted invitation exceeds purchased capacity. Paid additions are prorated and charged immediately; trial seat changes are free.
 

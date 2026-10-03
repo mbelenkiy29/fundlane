@@ -6,12 +6,14 @@ import { resolve } from 'node:path'
 const out = process.env.PLATFORM_BROWSER_OUT || 'output/playwright/platform-redesign'
 const fixtures = resolve('tests/browser/platform/fixtures.mjs')
 await fs.mkdir(out, { recursive: true })
-await esbuild.build({ entryPoints: [process.env.PLATFORM_BROWSER_ENTRY || 'tests/browser/platform/entry.tsx'], outfile: `${out}/app.js`, bundle: true, jsx: 'automatic', alias: { '@': './src' }, define: { 'process.env.NODE_ENV': '"development"' }, plugins: [{
+await esbuild.build({ entryPoints: [process.env.PLATFORM_BROWSER_ENTRY || 'tests/browser/platform/entry.tsx'], outfile: `${out}/app.js`, bundle: true, jsx: 'automatic', alias: { '@': './src' }, define: { 'process.env.NODE_ENV': '"development"', 'process.env.NEXT_PUBLIC_SENTRY_DSN': '""' }, plugins: [{
   name: 'synthetic-platform-services',
   setup(build) {
-    build.onResolve({ filter: /^(next\/(navigation|link)|@\/lib\/(mca\/(errors|platform-console|platform-page-access|platform-audit|roadmap-admin|jobs\/document-runtime)|marketing\/(demo-storage|launch-switches)))$/ }, args => ({ path: args.path, namespace: 'synthetic' }))
+    build.onResolve({ filter: /^(@sentry\/nextjs|next\/(navigation|link)|@\/lib\/(mca\/(errors|platform-console|platform-page-access|platform-audit|roadmap-admin|jobs\/document-runtime)|marketing\/(demo-storage|launch-switches)))$/ }, args => ({ path: args.path, namespace: 'synthetic' }))
     build.onLoad({ filter: /.*/, namespace: 'synthetic' }, args => {
       if (args.path === 'next/navigation') return { contents: `const router={refresh(){globalThis.platformServerReads=(globalThis.platformServerReads??0)+1}}; export const usePathname=()=>location.pathname; export const useRouter=()=>router; export const notFound=()=>{throw new Error('Not found')}`, loader: 'js', resolveDir: process.cwd() }
+      // Sentry stays inert in the synthetic preview, as it does without a DSN.
+      if (args.path === '@sentry/nextjs') return { contents: `const noop=()=>{}; export const getClient=()=>undefined; export const getFeedback=()=>undefined; export const addIntegration=noop; export const captureException=noop; export const setUser=noop; export const setTags=noop; export const setContext=noop; export const replayIntegration=noop; export const feedbackIntegration=noop`, loader: 'js', resolveDir: process.cwd() }
       if (args.path === 'next/link') return { contents: `import React from ${JSON.stringify(resolve('node_modules/react/index.js'))}; export default React.forwardRef(function Link({href,children,...props},ref){return React.createElement('a',{...props,href,ref},children)})`, loader: 'js', resolveDir: process.cwd() }
       return { contents: `export * from ${JSON.stringify(fixtures)}`, loader: 'js', resolveDir: process.cwd() }
     })
