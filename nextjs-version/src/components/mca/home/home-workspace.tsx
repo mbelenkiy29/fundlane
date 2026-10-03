@@ -12,6 +12,7 @@ export function HomeWorkspace({
   readinessEnabled = false,
   progressiveSetup = false,
   trialEndsAt = null,
+  trialTimeZone = null,
 }: {
   firstName: string
   canCreateDeal: boolean
@@ -20,6 +21,7 @@ export function HomeWorkspace({
   readinessEnabled?: boolean
   progressiveSetup?: boolean
   trialEndsAt?: string | null
+  trialTimeZone?: string | null
 }) {
   return (
     <Dashboard2Shell
@@ -30,6 +32,7 @@ export function HomeWorkspace({
       readinessEnabled={readinessEnabled}
       progressiveSetup={progressiveSetup}
       trialEndsAt={trialEndsAt}
+      trialTimeZone={trialTimeZone}
     />
   )
 }

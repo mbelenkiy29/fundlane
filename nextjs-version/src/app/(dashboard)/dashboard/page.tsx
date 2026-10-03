@@ -9,6 +9,7 @@ import type { WorkspaceSetup } from "@/lib/mca/setup/contracts"
 import { getWorkspaceSetup, setupReadinessEnabled } from "@/lib/mca/setup/service"
 import { stripeFirstSignupRequired } from "@/lib/mca/signup-guard"
 import { getCompanyAccess } from "@/lib/mca/company-access"
+import { workspaceDisplayTimeZone } from "@/lib/mca/billing-presentation"
 
 export default async function DashboardPage() {
   const context = await authenticateSupabaseSession()
@@ -17,6 +18,7 @@ export default async function DashboardPage() {
   let initialKpis: HomeKpis | null = null
   let initialSetup: WorkspaceSetup | null = null
   let trialEndsAt: string | null = null
+  let trialTimeZone: string | null = null
   const progressiveSetup = stripeFirstSignupRequired()
   if (context) {
     try {
@@ -30,6 +32,9 @@ export default async function DashboardPage() {
       initialSetup = null
     }
     try { trialEndsAt = (await getCompanyAccess(context.workspaceId)).trialEndsAt } catch { trialEndsAt = null }
+    if (trialEndsAt) {
+      try { trialTimeZone = await workspaceDisplayTimeZone(context.workspaceId) } catch { trialTimeZone = null }
+    }
   }
   return (
     <HomeWorkspace
@@ -40,6 +45,7 @@ export default async function DashboardPage() {
       readinessEnabled={setupReadinessEnabled() || progressiveSetup}
       progressiveSetup={progressiveSetup}
       trialEndsAt={trialEndsAt}
+      trialTimeZone={trialTimeZone}
     />
   )
 }
