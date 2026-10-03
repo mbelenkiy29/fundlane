@@ -337,6 +337,8 @@ async function assertBackupScope(db: Q, ws: string, data: Backup, deals: Row[]) 
   const merchantIds = new Set(t.deals.map(r => r.merchant_id).filter(Boolean))
   for (const r of t.mca_merchants) assert.ok(merchantIds.has(r.id), `Backup merchant ${r.id} is not linked to a seeded deal in the backup`)
   for (const r of t.mca_merchant_owners) assert.ok(merchantIds.has(r.merchant_id), `Backup merchant owner ${r.id} is not on a backed-up merchant`)
+  const shared = (await db.query(`SELECT 1 FROM deals WHERE workspace_id=$1 AND merchant_id=ANY($2::text[]) AND NOT id=ANY($3::text[]) LIMIT 1`, [ws, [...merchantIds], dealIds])).rows
+  assert.equal(shared.length, 0, "A backup merchant is used by a deal outside the seeded deals")
   const advances = new Set((await db.query(`SELECT id FROM mca_advances WHERE workspace_id=$1 AND deal_id=ANY($2::text[])`, [ws, dealIds])).rows.map(r => r.id))
   for (const r of t.mca_advance_status_history) assert.ok(advances.has(r.advance_id), `Backup status history ${r.id} is not on a seeded deal's advance`)
   for (const r of t.mca_documents) assert.equal(r.storage_key, `${ws}/${r.deal_id}/${r.id}`, `Backup document ${r.id} has an unexpected storage key`)
