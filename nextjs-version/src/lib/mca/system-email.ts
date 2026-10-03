@@ -2,13 +2,15 @@ import "server-only"
 
 import { AppError } from "./errors"
 import { parseEmailAddress, sendUsesendEmail } from "./intake/usesend"
-import { requestSystemEmail, type EmailContent, type SystemProvider } from "./operations/email-transport"
+import { requestSystemEmail, type SystemProvider } from "./operations/email-transport"
 import { hmacScopedToken } from "./crypto"
 
 type SystemEmailInput = Parameters<typeof sendUsesendEmail>[0]
 
+/** Resend is primary: `resend` selects it, unset selects it whenever MCA_RESEND_API_KEY is set, and any other value (e.g. `usesend`) keeps the useSend fallback. */
 export function resendSystemEmailEnabled(): boolean {
-  return process.env.MCA_SYSTEM_EMAIL_PROVIDER === "resend"
+  const selected = process.env.MCA_SYSTEM_EMAIL_PROVIDER?.trim()
+  return selected ? selected === "resend" : Boolean(process.env.MCA_RESEND_API_KEY?.trim())
 }
 
 export function systemEmailCredentials(provider?: SystemProvider): { apiKey: string; from: string } | undefined {
@@ -27,8 +29,8 @@ export interface FrozenSystemEmailConfiguration {
 }
 
 /** Freeze configuration identity, never the API key. This is not verified provider account evidence. */
-export function systemEmailConfiguration(): FrozenSystemEmailConfiguration {
-  const provider = resendSystemEmailEnabled() ? "resend" : "usesend"
+export function systemEmailConfiguration(selectedProvider?: SystemProvider): FrozenSystemEmailConfiguration {
+  const provider = selectedProvider ?? (resendSystemEmailEnabled() ? "resend" : "usesend")
   const credentials = systemEmailCredentials(provider)
   if (!credentials) throw new AppError(503, "onboarding_email_unconfigured", "Configure the service email provider.")
   if (!parseEmailAddress(credentials.from) || /[\r\n]/.test(credentials.from)) throw new AppError(503, "onboarding_email_from_invalid", "Configure a valid service email sender.")
@@ -40,12 +42,27 @@ export function systemEmailConfiguration(): FrozenSystemEmailConfiguration {
 }
 
 /** Explicit frozen provider path, independent of the legacy sendSystemEmail environment selector. */
-export async function requestFrozenSystemEmail(input: EmailContent & { to: string; idempotencyKey: string; fetchImpl?: typeof fetch }, configuration: FrozenSystemEmailConfiguration): Promise<Awaited<ReturnType<typeof requestSystemEmail>>> {
+type FrozenSystemEmailInput = Omit<Parameters<typeof requestSystemEmail>[0], "provider" | "apiKey" | "from" | "baseUrl">
+
+export async function requestFrozenSystemEmail(input: FrozenSystemEmailInput, configuration: FrozenSystemEmailConfiguration, options?: { preserveProvider?: boolean }): Promise<Awaited<ReturnType<typeof requestSystemEmail>>> {
   let current: FrozenSystemEmailConfiguration
-  try { current = systemEmailConfiguration() } catch { throw new AppError(503, "onboarding_email_provider_unavailable", "The frozen service email provider is unavailable.") }
+  try { current = systemEmailConfiguration(options?.preserveProvider ? configuration.provider : undefined) } catch { throw new AppError(503, "onboarding_email_provider_unavailable", "The frozen service email provider is unavailable.") }
   if (JSON.stringify(current) !== JSON.stringify(configuration)) throw new AppError(409, "onboarding_email_provider_changed", "Review the changed service email provider configuration.")
   const credentials = systemEmailCredentials(configuration.provider)!
-  return requestSystemEmail({ ...input, provider: configuration.provider, apiKey: credentials.apiKey, from: configuration.from, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), baseUrl: new URL(configuration.endpoint).origin })
+  return requestSystemEmail({ ...input, provider: configuration.provider, apiKey: credentials.apiKey, from: configuration.from, ...(input.replyTo !== undefined ? {} : configuration.replyTo ? { replyTo: configuration.replyTo } : {}), baseUrl: new URL(configuration.endpoint).origin })
+}
+
+/** Send a frozen payload without substituting another provider or account. */
+export async function sendFrozenSystemEmail(input: FrozenSystemEmailInput, configuration: FrozenSystemEmailConfiguration, options?: { preserveProvider?: boolean }): Promise<{ emailId: string }> {
+  const result = await requestFrozenSystemEmail(input, configuration, options)
+  const extra = { providerStatus: result.status }
+  if (result.status === 401 || result.status === 403) throw new AppError(503, `${configuration.provider}_auth_rejected`, "The frozen email provider rejected its credentials or sender.", undefined, extra)
+  if (result.status === 429) throw new AppError(503, `${configuration.provider}_rate_limited`, "The email provider rate limited the message.", undefined, extra)
+  if (result.status === 409) throw new AppError(409, `${configuration.provider}_idempotency_conflict`, "The provider already used this delivery key with another payload.", undefined, extra)
+  if (result.status < 200 || result.status >= 300 || !result.emailId || result.emailId.length > 512 || /[\r\n]/.test(result.emailId)) {
+    throw new AppError(502, `${configuration.provider}_send_failed`, `The email provider returned HTTP ${result.status} without verified acceptance.`, undefined, extra)
+  }
+  return { emailId: result.emailId }
 }
 
 export function systemEmailReplyTo(): string | undefined {

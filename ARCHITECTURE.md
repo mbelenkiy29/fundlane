@@ -50,6 +50,7 @@ The most connected symbols in the graph (treat as the real core):
 | Workers | Postgres-backed `mca_background_jobs`; gated Vercel export cron; native cutover pending | Render workers as active, always-on in-process queue, Redis |
 | Python ChatKit | Source in `chatkit-service/` for rollback | Deployed production assistant |
 | Encryption | AES-256-GCM, workspace ID as AAD (`MCA_DATA_ENCRYPTION_KEY`) | Unencrypted PII in deal owner fields |
+| Error monitoring | Sentry (`@sentry/nextjs`), inert without `NEXT_PUBLIC_SENTRY_DSN`; masked replay and feedback on signed-in pages only | Native logs as the only error record |
 
 Documents that describe a **previous** cutover and must not override this file:
 
@@ -94,6 +95,7 @@ All application paths below are under `nextjs-version/` unless noted.
 | `src/proxy.ts` | Next.js proxy: maintenance, `/login`→`/sign-in`, Supabase cookie refresh. **Not** authorization. |
 | `src/lib/mca/` | Server-only business modules. This is the application. |
 | `src/lib/supabase/` | Browser/server/admin Supabase clients |
+| `src/instrumentation.ts`, `src/instrumentation-client.ts`, `src/lib/observability/`, `src/components/observability/` | Sentry init, scrubbing, dependency-free server bridge, replay/identity session and Feedback menu |
 | `src/components/mca/` | Live product UI |
 | `src/components/ui/` | shadcn/Radix primitives |
 | `src/components/marketing/` | Public marketing site |
@@ -603,6 +605,7 @@ God nodes (highest degree on last cluster): `apiError`, `getDatabase`, `nowIso`,
 | Live deploy / workers | `nextjs-version/docs/supabase-vercel-migration.md`, `nextjs-version/docs/background-job-runtime.md`; Render files are historical |
 | Auth details | `docs/supabase-auth.md` |
 | Billing | `docs/supabase-billing.md` |
+| Error monitoring, replay and feedback | `nextjs-version/docs/sentry-observability.md` |
 | Historical hosting options | `nextjs-version/ARCHITECTURE.md` (not current ops) |
 | Feature history | `docs/milestone-0*/` — accept only after checking source |
 

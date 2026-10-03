@@ -40,7 +40,7 @@ export type TransactionalMessage = {
 export type EmailContent = { subject: string; text: string; html: string }
 export type SystemProvider = "usesend" | "resend"
 
-const escapeHtml = (value: string) =>
+export const escapeHtml = (value: string) =>
   value.replace(
     /[&<>"']/g,
     (char) =>
@@ -165,8 +165,11 @@ export async function requestSystemEmail(
     provider: SystemProvider
     apiKey: string
     from: string
-    to: string
+    to: string | string[]
+    cc?: string[]
     replyTo?: string
+    attachments?: Array<{ filename: string; content: string }>
+    headers?: Record<string, string>
     idempotencyKey: string
     fetchImpl?: typeof fetch
     /** Optional self-hosted useSend HTTPS origin (MCA_USESEND_BASE_URL); ignored for Resend. */
@@ -193,25 +196,17 @@ export async function requestSystemEmail(
                 "Mozilla/5.0 (compatible; MCA-Intake/1.0; +https://fundlane.io)",
             }),
       },
-      body: JSON.stringify(
-        resend
-          ? {
-              from: input.from,
-              to: [input.to],
-              subject: input.subject,
-              text: input.text,
-              html: input.html,
-              ...(input.replyTo !== undefined ? { reply_to: input.replyTo } : {}),
-            }
-          : {
-              to: input.to,
-              from: input.from,
-              subject: input.subject,
-              text: input.text,
-              html: input.html,
-              ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
-            }
-      ),
+      body: JSON.stringify({
+        from: input.from,
+        to: resend ? [input.to].flat() : input.to,
+        subject: input.subject,
+        text: input.text,
+        html: input.html,
+        ...(input.replyTo !== undefined ? { [resend ? "reply_to" : "replyTo"]: input.replyTo } : {}),
+        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.headers ? { headers: input.headers } : {}),
+      }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     }

@@ -10,6 +10,9 @@ import { actorForDeals, getDealForDocument } from "../deals/service"
 import type { DocumentSummary } from "../documents/contracts"
 import { listSubmissionDocuments } from "../documents/service"
 import { AppError } from "../errors"
+import { escapeHtml } from "../operations/email-transport"
+import { parseEmailAddress } from "../intake/usesend"
+import { sendFrozenSystemEmail, systemEmailConfiguration, type FrozenSystemEmailConfiguration } from "../system-email"
 import type { FunderRecord, FunderRoute } from "../funders/contracts"
 import { getFunder, listFunders } from "../funders/directory"
 import { requestCorrelationId } from "../http"
@@ -130,6 +133,9 @@ export interface RenderedSubmissionEmail {
   signature: string
   templateId?: string
   attachments: SubmissionEmailAttachment[]
+  /** Broker mailbox identity remains separate from the actual system From shown for approval. */
+  submissionSenderAddress?: string
+  systemProvider?: FrozenSystemEmailConfiguration
 }
 
 export interface SubmissionEmailPreview extends RenderedSubmissionEmail {
@@ -159,6 +165,10 @@ export interface EmailAttemptRef {
   references: string[]
   delivery: "sent" | "preview" | "uncertain"
   snapshot: EmailAttemptSnapshot
+  provider?: "usesend" | "resend"
+  providerEmailId?: string
+  attemptedMessageId?: string
+  threadStatus?: "unknown"
 }
 
 export interface SubmissionEmailTemplateList {
@@ -380,11 +390,15 @@ export function parseEmailAttemptRef(value: string | null | undefined): EmailAtt
     const parsed = JSON.parse(value) as Partial<EmailAttemptRef>
     if (!parsed || typeof parsed !== "object" || typeof parsed.messageId !== "string" || !parsed.snapshot) return undefined
     return {
-      messageId: parsed.messageId,
-      threadId: typeof parsed.threadId === "string" ? parsed.threadId : parsed.messageId,
-      inReplyTo: typeof parsed.inReplyTo === "string" ? parsed.inReplyTo : null,
-      references: Array.isArray(parsed.references) ? parsed.references.filter((item): item is string => typeof item === "string") : [parsed.messageId],
+      messageId: parsed.threadStatus === "unknown" ? "" : parsed.messageId,
+      threadId: parsed.threadStatus === "unknown" ? "" : typeof parsed.threadId === "string" ? parsed.threadId : parsed.messageId,
+      inReplyTo: parsed.threadStatus === "unknown" ? null : typeof parsed.inReplyTo === "string" ? parsed.inReplyTo : null,
+      references: parsed.threadStatus === "unknown" ? [] : Array.isArray(parsed.references) ? parsed.references.filter((item): item is string => typeof item === "string") : [parsed.messageId],
       delivery: parsed.delivery === "sent" || parsed.delivery === "uncertain" ? parsed.delivery : "preview",
+      ...(parsed.provider === "usesend" || parsed.provider === "resend" ? { provider: parsed.provider } : {}),
+      ...(typeof parsed.providerEmailId === "string" && parsed.providerEmailId.trim() && parsed.providerEmailId.length <= 512 && !/[\r\n]/.test(parsed.providerEmailId) ? { providerEmailId: parsed.providerEmailId } : {}),
+      ...(typeof parsed.attemptedMessageId === "string" ? { attemptedMessageId: parsed.attemptedMessageId } : {}),
+      ...(parsed.threadStatus === "unknown" ? { threadStatus: "unknown" } : {}),
       snapshot: {
         to: Array.isArray(parsed.snapshot.to) ? parsed.snapshot.to.filter((item): item is string => typeof item === "string") : [],
         cc: Array.isArray(parsed.snapshot.cc) ? parsed.snapshot.cc.filter((item): item is string => typeof item === "string") : [],
@@ -443,6 +457,7 @@ export function approvedEmailAttemptRef(job: SubmissionJob, correlationId: strin
   const approved = job.approvedPackage?.email
   if (!approved) return undefined
   const messageId = messageIdFor(correlationId)
+  if (approved.systemProvider) return systemProviderAttemptRef(approved, messageId, "uncertain")
   return { messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(approved) }
 }
 
@@ -679,14 +694,89 @@ function failed(correlationId: string, errorCode: string, errorMessage: string):
 
 function uncertain(correlationId: string, messageId: string, rendered: RenderedSubmissionEmail): DeliverResult {
   return { ...failed(correlationId, "delivery_uncertain", "Email delivery outcome is uncertain. Reconcile the provider receipt before another send."),
-    externalRef: encodeExternalRef({ messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(rendered) }) }
+    externalRef: encodeExternalRef(rendered.systemProvider ? systemProviderAttemptRef(rendered, messageId, "uncertain") : { messageId, threadId: messageId, inReplyTo: null, references: [messageId], delivery: "uncertain", snapshot: snapshotOf(rendered) }) }
 }
 
-async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
+function submissionSystemConfiguration(): FrozenSystemEmailConfiguration | undefined {
+  if (process.env.MCA_EMAIL_WEBHOOK_URL?.trim() || process.env.MCA_SUBMISSION_EMAIL_SYSTEM_PROVIDER_ENABLED !== "true") return undefined
+  try { return systemEmailConfiguration() }
+  catch { throw new AppError(503, "email_delivery_unconfigured", "Configure the system email provider before preparing this submission.") }
+}
+
+function withSystemSender(rendered: RenderedSubmissionEmail, configuration = submissionSystemConfiguration()): RenderedSubmissionEmail {
+  if (!configuration) return rendered
+  const fromAddress = parseEmailAddress(configuration.from)!
+  const fromName = configuration.from.match(/^(.*?)\s*<[^>]+>$/)?.[1]?.trim() || fromAddress
+  return { ...rendered, submissionSenderAddress: rendered.submissionSenderAddress ?? rendered.fromAddress, fromAddress, fromName, systemProvider: configuration }
+}
+
+function systemProviderAttemptRef(rendered: RenderedSubmissionEmail, attemptedMessageId: string, delivery: "sent" | "uncertain", providerEmailId?: string): EmailAttemptRef {
+  // The API receipt ID is not an RFC Message-ID or a mailbox thread ID.
+  return { messageId: "", threadId: "", inReplyTo: null, references: [], threadStatus: "unknown", attemptedMessageId, provider: rendered.systemProvider!.provider, ...(providerEmailId ? { providerEmailId } : {}), delivery, snapshot: snapshotOf(rendered) }
+}
+
+const USESEND_MAX_ATTACHMENTS = 10
+const RESEND_MAX_BYTES = 40 * 1024 * 1024 // base64 size, per Resend's per-email limit
+
+async function deliverViaSystemProvider(rendered: RenderedSubmissionEmail, correlationId: string, messageId: string, configuration: FrozenSystemEmailConfiguration, job?: SubmissionJob): Promise<DeliverResult> {
+  const attachments = rendered.attachments.flatMap((item) => item.bytesBase64 ? [{ filename: item.filename, content: item.bytesBase64 }] : [])
+  if (attachments.length !== rendered.attachments.length) return failed(correlationId, "email_attachment_unavailable", "An attachment has no packaged bytes to send.")
+  if (configuration.provider === "resend") {
+    if (attachments.reduce((sum, item) => sum + item.content.length, 0) > RESEND_MAX_BYTES) {
+      return failed(correlationId, "email_attachment_size_exceeded", "Attachments exceed the email provider's 40MB limit.")
+    }
+  } else if (attachments.length > USESEND_MAX_ATTACHMENTS) {
+    return failed(correlationId, "email_attachment_limit_exceeded", `The email provider accepts at most ${USESEND_MAX_ATTACHMENTS} attachments.`)
+  }
+  const guard = Boolean(job?.approvedPackage) || process.env.MCA_FUNDER_UNKNOWN_SEND_GUARD_ENABLED === "true"
+  let providerEmailId: string
+  try {
+    const sent = await sendFrozenSystemEmail({
+      to: rendered.to,
+      cc: rendered.cc,
+      replyTo: rendered.replyTo || rendered.fromAddress,
+      subject: rendered.subject,
+      text: rendered.body,
+      html: `<div style="white-space:pre-wrap">${escapeHtml(rendered.body)}</div>`,
+      attachments,
+      // Resend replaces Message-ID but keeps References, which replies carry forward.
+      headers: { "Message-ID": messageId, References: messageId },
+      idempotencyKey: correlationId,
+      fetchImpl: http(),
+    }, configuration)
+    providerEmailId = sent.emailId
+  } catch (error) {
+    const status = error instanceof AppError && typeof error.extra?.providerStatus === "number" ? error.extra.providerStatus : undefined
+    if (error instanceof AppError && status === undefined && ["onboarding_email_provider_changed", "onboarding_email_provider_unavailable"].includes(error.code)) {
+      return failed(correlationId, "approved_email_transport_changed", "The approved email provider configuration changed. Prepare a new preview.")
+    }
+    if (error instanceof AppError && status === undefined && ["usesend_base_url_invalid", "system_email_reply_to_invalid", "system_email_unconfigured"].includes(error.code)) {
+      return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.")
+    }
+    // A 2xx without a valid email id, 408 or 5xx (or no response at all) may still have been accepted.
+    if (guard && (status === undefined || (status >= 200 && status < 300) || status === 408 || status >= 500)) return uncertain(correlationId, messageId, rendered)
+    return failed(correlationId, "email_delivery_failed", "The email provider did not accept the submission message.")
+  }
+  const ref = systemProviderAttemptRef(rendered, messageId, "sent", providerEmailId)
+  return { ok: true, state: "sent", correlationId, externalRef: encodeExternalRef(ref) }
+}
+
+export async function deliverRendered(rendered: RenderedSubmissionEmail, correlationId: string, job?: SubmissionJob): Promise<DeliverResult> {
   if (job) await (await import("../company-access")).assertCompanyOperational(job.workspaceId)
   if (job) await (await import("../outbound-approval")).assertOutboundDispatch(job.workspaceId, job.createdAt)
   const messageId = messageIdFor(correlationId)
   const webhook = process.env.MCA_EMAIL_WEBHOOK_URL?.trim()
+  let systemConfiguration: FrozenSystemEmailConfiguration | undefined
+  try { systemConfiguration = submissionSystemConfiguration() }
+  catch { return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.") }
+  if (rendered.systemProvider && (!systemConfiguration || JSON.stringify(systemConfiguration) !== JSON.stringify(rendered.systemProvider))) {
+    return failed(correlationId, "approved_email_transport_changed", "The approved email provider configuration changed. Prepare a new preview.")
+  }
+  if (systemConfiguration) {
+    if (job?.approvedPackage && !rendered.systemProvider) return failed(correlationId, "approved_email_transport_changed", "Review the system sender in a new submission preview.")
+    const outgoing = rendered.systemProvider ? rendered : withSystemSender(rendered, systemConfiguration)
+    return deliverViaSystemProvider(outgoing, correlationId, messageId, systemConfiguration, job)
+  }
   if (!webhook) {
     if (isSubmissionEmailProduction()) {
       return failed(correlationId, "email_delivery_unconfigured", "Email delivery is not configured for this deployment.")
@@ -751,7 +841,7 @@ export async function sendSubmissionEmail(job: SubmissionJob, packaged: Outgoing
     if (job.approvedPackage?.email) {
       const approved = job.approvedPackage.email
       const sender = await assertSenderUsable(systemActor(job.workspaceId, job.id), approved.senderId, "submission")
-      if (sender.fromAddress !== approved.fromAddress) throw new AppError(409, "approved_sender_changed", "The approved sender changed. Prepare a new preview.")
+      if (sender.fromAddress !== (approved.submissionSenderAddress ?? approved.fromAddress)) throw new AppError(409, "approved_sender_changed", "The approved sender changed. Prepare a new preview.")
       const attachments = await Promise.all(approved.attachments.map(async (attachment) => {
         const document = packaged.find((item) => item.documentId === attachment.documentId)
         if (!document) throw new AppError(409, "approved_package_changed", "An approved attachment is missing.")
@@ -922,7 +1012,7 @@ export async function previewSubmissionEmails(actor: DealActor, input: PreviewSu
       continue
     }
     try {
-      previews.push(await renderEmail({
+      previews.push(withSystemSender(await renderEmail({
         deal,
         funderId: funder.id,
         funderName: displayFunderName(funder),
@@ -930,7 +1020,7 @@ export async function previewSubmissionEmails(actor: DealActor, input: PreviewSu
         route,
         documents,
         sender,
-      }))
+      })))
     } catch (error) {
       previews.push({
         funderId: funder.id,
@@ -977,5 +1067,5 @@ export async function prepareApprovedSubmissionEmail(actor: DealActor, deal: Dea
   const originals = summariesToAttachments(documents)
   const rendered = await renderEmail({ deal, funderId: funder.id, funderName: displayFunderName(funder), destination: route.destination, route, documents: originals, sender: await resolvePreviewSender(actor) })
   const attachments = await attachmentsFromPackage(packaged, originals)
-  return { ...rendered, attachments: attachments.map((attachment) => ({ documentId: attachment.documentId, filename: attachment.filename, checksum: attachment.checksum, byteLength: attachment.byteLength, category: attachment.category })) }
+  return withSystemSender({ ...rendered, attachments: attachments.map((attachment) => ({ documentId: attachment.documentId, filename: attachment.filename, checksum: attachment.checksum, byteLength: attachment.byteLength, category: attachment.category })) })
 }

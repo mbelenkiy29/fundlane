@@ -28,6 +28,7 @@ export interface FeatureFlags {
   reports: boolean;
   payments: boolean;
   integrations: boolean;
+  dealAgent: boolean;
 }
 
 export interface PageVisibility {
@@ -57,6 +58,8 @@ export interface WorkspaceSettings {
   seatLimit: number;
   seatLimitManaged?: boolean;
   featureFlags: FeatureFlags;
+  /** Read-only: whether this deployment offers each optional feature (env-gated); not stored. */
+  featureAvailability: { dealAgent: { available: boolean } };
   pageVisibility: PageVisibility;
   actionVisibility: ActionVisibility;
   require2fa: boolean;

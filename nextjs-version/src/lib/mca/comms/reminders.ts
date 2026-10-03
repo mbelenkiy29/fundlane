@@ -31,7 +31,7 @@ export const THREAD_FALLBACK_DISCLOSURE = FALLBACK_DISCLOSURE
 export const REMINDER_STATES = ["previewed", "sent", "failed"] as const
 export type ReminderState = (typeof REMINDER_STATES)[number]
 
-export const REMINDER_INELIGIBLE_REASONS = ["unsupported_transport", "not_sent", "has_response"] as const
+export const REMINDER_INELIGIBLE_REASONS = ["unsupported_transport", "not_sent", "has_response", "delivery_unconfigured"] as const
 export type ReminderIneligibleReason = (typeof REMINDER_INELIGIBLE_REASONS)[number]
 
 export type ReminderThreadMode = "reply" | "fallback"
@@ -277,6 +277,7 @@ function ineligibleReason(job: SubmissionJob, hasResponse: boolean): ReminderIne
   if (job.routeKind !== "email" || unsupportedTransport(job.routeKind)) return "unsupported_transport"
   if (job.state !== "sent") return "not_sent"
   if (hasResponse) return "has_response"
+  if (job.approvedPackage?.email?.systemProvider && !process.env.MCA_EMAIL_WEBHOOK_URL?.trim() && !transportOverride && !fetchOverride) return "delivery_unconfigured"
   return undefined
 }
 
@@ -298,10 +299,13 @@ function assertEligible(job: SubmissionJob, hasResponse: boolean): void {
   if (reason === "has_response") {
     conflict("reminder_already_responded", "This submission already has a funder response.")
   }
+  if (reason === "delivery_unconfigured") {
+    conflict("reminder_delivery_unconfigured", "Funder reminders require the configured email webhook. This submission's system provider cannot send reminders.")
+  }
 }
 
 function threadFromAttempt(ref: EmailAttemptRef | undefined): ReminderThreadPreview {
-  const messageId = ref?.messageId?.trim()
+  const messageId = ref?.threadStatus === "unknown" ? undefined : ref?.messageId?.trim()
   if (!messageId) {
     return { mode: "fallback", references: [], disclosure: FALLBACK_DISCLOSURE }
   }
@@ -616,7 +620,7 @@ async function composeReminder(actor: DealActor, job: SubmissionJob, body: strin
     fromAddress,
     to,
     cc,
-    replyTo: fromAddress,
+    replyTo: ref?.snapshot.replyTo?.trim() || sender.fromAddress,
     subject: replySubject(ref?.snapshot.subject ?? ""),
     body,
     thread,

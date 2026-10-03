@@ -6,6 +6,7 @@ import type { RunCommsJobsResult } from "./contracts"
 import { runCommsJobs } from "./jobs"
 import { WORKFLOW_WEBHOOK_MAX_ATTEMPTS } from "./webhooks"
 import { onboardingEmailEnabled } from "../onboarding/config"
+import { runCommsFollowons } from "./followon-budget"
 
 const emptyFollowups = { attempted: 0, sent: 0, skipped: 0 }
 const emptyDigests = { attempted: 0, sent: 0, skipped: 0 }
@@ -40,7 +41,9 @@ export interface ScheduledCommsJobsResult {
   digests: RunCommsJobsResult["digests"]
   webhooks: RunCommsJobsResult["webhooks"]
   notifications?: Awaited<ReturnType<typeof import("../notifications/worker").runScheduledNotifications>>
+  renewalAlerts?: Awaited<ReturnType<typeof import("../renewals/alerts").runRenewalAlerts>>
   onboardingEmails?: Awaited<ReturnType<typeof import("../onboarding/email-worker").runOnboardingEmails>>
+  funderReplies?: Awaited<ReturnType<typeof import("../submissions/replies").runScheduledReplyIngest>>
 }
 
 /** Runtime-agnostic tick for signed webhook retries and due daily report emails. */
@@ -85,6 +88,15 @@ export async function runScheduledCommsJobs(nowIsoValue = nowIso()): Promise<Sch
   if(process.env.MCA_NOTIFICATION_RUNTIME === "enabled") {
     const {runScheduledNotifications}=await import("../notifications/worker")
     result.notifications=await runScheduledNotifications(nowIsoValue,25,{deadlineMs:notificationDeadline})
+  }
+  // After dispatch so follow-on discovery cannot consume the delivery budget. Reply ingest and
+  // renewal alerts share the remaining tick time; new renewal alerts go out on the next tick.
+  const repliesEnabled = process.env.MCA_FUNDER_REPLY_LIVE_INGEST_ENABLED === "true" && process.env.MCA_FUNDER_REPLY_SCHEDULED_INGEST_ENABLED === "true"
+  const renewalsEnabled = process.env.MCA_RENEWAL_ALERTS_ENABLED === "true"
+  if (repliesEnabled || renewalsEnabled) {
+    Object.assign(result, await runCommsFollowons({ clock: nowIsoValue, deadlineMs: notificationDeadline,
+      ...(repliesEnabled ? { replies: (await import("../submissions/replies")).runScheduledReplyIngest } : {}),
+      ...(renewalsEnabled ? { renewals: (await import("../renewals/alerts")).runRenewalAlerts } : {}) }))
   }
   return result
 }
