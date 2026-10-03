@@ -48,6 +48,16 @@ export interface DocumentSummary {
   version: number
   createdAt: string
   processingState: DocumentProcessingState
+  /** Present (true) only for an available file that the scan bypass let through without a virus scan. */
+  scanBypassed?: true
+}
+
+/** The bypass scanner's name. Files it accepted keep this provider until a real scanner rescans them. */
+export const NOT_SCANNED_PROVIDER = "not_scanned"
+
+/** True when stored scan data shows the file was accepted by the scan bypass, not cleared by a real scanner. */
+export function wasScanBypassed(provider: string | null | undefined, evidence: Record<string, unknown> | null | undefined): boolean {
+  return provider === NOT_SCANNED_PROVIDER || evidence?.scanBypassed === true
 }
 
 export type DocumentActor = DealActor

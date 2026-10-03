@@ -141,6 +141,12 @@ export async function updateDocumentScan(
   return (await findDocumentById(workspaceId, id))!
 }
 
+/** Adds the "not scanned" marker to an available file without changing its state or scan time. */
+export async function markDocumentNotScanned(workspaceId: string, id: string, evidence: Record<string, unknown>, updatedAt: string): Promise<void> {
+  await db().prepare(`UPDATE mca_documents SET scan_provider = 'not_scanned', scan_evidence = ?, updated_at = ?
+    WHERE workspace_id = ? AND id = ? AND processing_state IN ('clean', 'ready')`).run(JSON.stringify(evidence), updatedAt, workspaceId, id)
+}
+
 export async function updateDocumentDisplayFilename(workspaceId: string, id: string, displayFilename: string, updatedAt: string): Promise<DocumentRecord> {
   await db().prepare("UPDATE mca_documents SET display_filename = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
     .run(displayFilename, updatedAt, workspaceId, id)
