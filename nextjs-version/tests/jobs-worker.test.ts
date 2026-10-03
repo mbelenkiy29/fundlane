@@ -8,7 +8,8 @@ import type { DocumentStorage } from "../src/lib/mca/documents/storage"
 import { setDocumentStorageForTests } from "../src/lib/mca/documents/storage"
 import { documentScanner, setDocumentScannerForTests } from "../src/lib/mca/documents/scanner"
 import { recoverWorkspaceDocuments } from "../src/lib/mca/documents/recovery"
-import { updateDocumentScan } from "../src/lib/mca/documents/repository"
+import { updateApplicationDraftScan, updateDocumentScan } from "../src/lib/mca/documents/repository"
+import { createApplicationDraft, getApplicationDraft, retryApplicationDraftScan } from "../src/lib/mca/documents/application-drafts"
 import { getDocument, retryDocumentScan, storeDocument } from "../src/lib/mca/documents/service"
 import { createFunder } from "../src/lib/mca/funders/directory"
 import { claimBackgroundJob, completeBackgroundJob, enqueueBackgroundJob, failBackgroundJob, getBackgroundJob, runAsBackgroundWorker } from "../src/lib/mca/jobs/queue"
@@ -235,6 +236,32 @@ test("scan bypass keeps scan_failed and quarantined documents blocked; recover p
     assert.equal((await getDocument(recoverActor(), failed.id)).processingState, "scan_failed")
     assert.equal((await getDocument(recoverActor(), infected.id)).processingState, "quarantined")
     assert.equal((await getDocument(recoverActor(), uploadFailed.id)).processingState, "upload_failed")
+  })
+})
+
+test("scan bypass keeps quarantined and scan_failed application drafts blocked on retry, draft_scan job and re-upload", async () => {
+  countingScanner()
+  const draftPdf = (label: string) => new Uint8Array(Buffer.from(`%PDF-1.4\n${label}\n%%EOF\n`))
+  const infected = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-infected", filename: "infected.pdf", mimeType: "application/pdf", bytes: draftPdf("infected") })
+  const failed = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-failed", filename: "failed.pdf", mimeType: "application/pdf", bytes: draftPdf("failed") })
+  const now = new Date().toISOString()
+  await updateApplicationDraftScan(actor().workspaceId, infected.id, "quarantined", "fixture", { infected: true }, now)
+  await updateApplicationDraftScan(actor().workspaceId, failed.id, "scan_failed", "fixture", { error: "scanner_error" }, now)
+  setDocumentScannerForTests()
+  await withEnv({ MCA_DOCUMENT_SCAN_BYPASS: "true", MCA_NATIVE_DOCUMENT_EXECUTOR: "true" }, async () => {
+    for (const [draft, state, label] of [[infected, "quarantined", "infected"], [failed, "scan_failed", "failed"]] as const) {
+      assert.equal((await retryApplicationDraftScan(actor(), draft.id)).processingState, state)
+      assert.equal((await createApplicationDraft(actor(), { idempotencyKey: `bypass-draft-${label}`, filename: `${label}.pdf`, mimeType: "application/pdf", bytes: draftPdf(label) })).processingState, state)
+      await enqueueBackgroundJob({ actor: actor(), kind: "draft_scan", resourceId: draft.id, idempotencyKey: `bypass-draft-job-${label}` })
+      assert.equal(await runNextBackgroundJob(["draft_scan"]), true)
+      assert.equal((await getApplicationDraft(actor(), draft.id)).processingState, state)
+    }
+    // A never-scanned draft is still accepted, and its audit does not claim a real scan.
+    const fresh = await createApplicationDraft(actor(), { idempotencyKey: "bypass-draft-fresh", filename: "fresh.pdf", mimeType: "application/pdf", bytes: draftPdf("fresh") })
+    assert.equal(fresh.processingState, "clean")
+    const audit = await getDatabase().prepare<{ metadata: unknown }>("SELECT metadata FROM audit_events WHERE resource_id = ? AND action = 'application_draft.scanned' ORDER BY created_at DESC LIMIT 1").get(fresh.id)
+    const metadata = typeof audit?.metadata === "string" ? JSON.parse(audit.metadata) : audit?.metadata
+    assert.equal((metadata as { actualScannerEvidence?: boolean }).actualScannerEvidence, false)
   })
 })
 
