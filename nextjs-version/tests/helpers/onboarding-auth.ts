@@ -71,6 +71,7 @@ const serverMock = {
         }),
         signInWithOtp: async (input: unknown) => {
           provider.otpInputs.push(input)
+          if (provider.otpError instanceof Error) throw provider.otpError
           return { error: provider.otpError }
         },
         verifyOtp: async (input: unknown) => {

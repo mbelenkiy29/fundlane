@@ -27,6 +27,7 @@ import {
   requireEnrollmentRuntime,
 } from "./claim"
 import { onboardingOrigin, startEnrollmentCheckout } from "./checkout"
+import { enrollmentCodePattern, normalizeEnrollmentCode } from "./enrollment-code"
 
 export const enrollmentHttpHeaders = { "Cache-Control": "private, no-store" }
 export const enrollmentLocatorSchema = z
@@ -168,7 +169,11 @@ export async function handleEnrollmentHttp(
           .object({
             challengeId: z.uuid(),
             email: z.email().max(320),
-            token: z.string().regex(/^\d{6,10}$/),
+            token: z
+              .string()
+              .max(40)
+              .transform(normalizeEnrollmentCode)
+              .pipe(z.string().regex(enrollmentCodePattern)),
           })
           .strict()
       )

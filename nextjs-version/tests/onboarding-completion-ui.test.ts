@@ -171,3 +171,43 @@ test("an invite page renders no credential on the server and only accepts a well
   // Before the client reads the fragment, neither the password form nor any token is rendered.
   assert.doesNotMatch(result.html, /aaaaaaaaaa|Set your password|#t=/)
 })
+
+test("enrollment code form validates in-page instead of relying on a native pattern block", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile("src/components/mca/onboarding/enrollment-auth.tsx", "utf8"))
+  assert.match(source, /noValidate/)
+  assert.doesNotMatch(source, /pattern=/)
+})
+
+function codeFlow(code: string, verifyThrows = false) {
+  return runClient(`${interactionSetup}
+    response=async(path)=>{if(path.endsWith('/auth'))return {success:true,challengeId:'22222222-2222-4222-8222-222222222222'};if(${verifyThrows})throw new Error('RAW provider data');return {destination:'/enrollment?enrollment=${locator.enrollmentId}'}};
+    const { EnrollmentAuth }=require('./src/components/mca/onboarding/enrollment-auth.tsx');
+    (async()=>{const props={continuation:${JSON.stringify(locator)}};
+      input(render(EnrollmentAuth,props).tree,'email').props.onChange({target:{value:'buyer@example.test'}});
+      submit(render(EnrollmentAuth,props).tree);await new Promise(resolve=>setTimeout(resolve));
+      input(render(EnrollmentAuth,props).tree,'token').props.onChange({target:{value:${JSON.stringify(code)}}});
+      await submit(render(EnrollmentAuth,props).tree);
+      console.log(JSON.stringify({calls,navigations,html:render(EnrollmentAuth,props).markup}));
+    })().catch(error=>{console.error(error);process.exitCode=1});
+  `)
+}
+
+test("a pasted 8-digit code with separators is sent as digits", () => {
+  const result = codeFlow(" 5948-0900 ")
+  const verify = result.calls.find((call: {path:string}) => call.path === "/api/enrollment/verify")
+  assert.equal(verify.input.token, "59480900")
+  assert.equal(result.navigations.length, 1)
+})
+
+test("an invalid code shows an in-page alert and sends no verify request", () => {
+  const result = codeFlow("12ab")
+  assert.equal(result.calls.some((call: {path:string}) => call.path === "/api/enrollment/verify"), false)
+  assert.match(result.html, /role="alert"[^>]*>Enter the 6–10 digit code from your email\./)
+})
+
+test("a verify failure shows the generic in-page alert without raw errors", () => {
+  const result = codeFlow("59480900", true)
+  assert.match(result.html, /role="alert"[^>]*>We couldn&#x27;t verify this request/)
+  assert.doesNotMatch(result.html, /RAW provider/)
+  assert.deepEqual(result.navigations, [])
+})

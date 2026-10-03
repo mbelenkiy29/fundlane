@@ -1,4 +1,4 @@
-import test, { before, after, beforeEach } from "node:test"
+import test, { before, after, beforeEach, mock } from "node:test"
 import assert from "node:assert/strict"
 import {
   authContinuation,
@@ -1500,3 +1500,137 @@ test("an edit refuses the current and purchase addresses, and the 24h window cap
   assert.equal(capped.status, 429)
   assert.equal((await challengeRow(g.invite.id))?.state, "pending")
 })
+
+const enrollmentPost = (action: string, body: unknown) =>
+  new Request(`http://localhost:3000/api/enrollment/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    body: JSON.stringify(body),
+  })
+const challengeState = async (id: string) =>
+  (
+    await getDatabase().queryOne<{ state: string }>(
+      "SELECT state FROM mca_enrollment_challenges WHERE id=?",
+      [id]
+    )
+  )?.state
+
+test("a confirmed buyer verifies an 8-digit code with email OTP semantics", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth")
+  assert.ok(f.identity.user.email_confirmed_at)
+  await auth.requestEnrollmentAuthentication({ enrollmentId: f.id, email: f.identity.email })
+  const challengeId = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")[0]
+  const result = await auth.verifyEnrollmentAuthentication({
+    challengeId,
+    email: f.identity.email,
+    token: "59480900",
+  })
+  assert.equal(result.destination, `/enrollment?enrollment=${f.id}`)
+  assert.deepEqual(provider.verificationInputs, [
+    { email: f.identity.email, token: "59480900", type: "email" },
+  ])
+})
+
+test("a brand-new unconfirmed buyer verifies the emailed code with email OTP semantics", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth")
+  const user = f.identity.user as { email_confirmed_at?: string }
+  delete user.email_confirmed_at
+  provider.current = null
+  provider.onOtp = async () => {
+    user.email_confirmed_at = nowIso()
+    provider.current = f.identity
+  }
+  await auth.requestEnrollmentAuthentication({ enrollmentId: f.id, email: f.identity.email })
+  const challengeId = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")[0]
+  const result = await auth.verifyEnrollmentAuthentication({
+    challengeId,
+    email: f.identity.email,
+    token: "12345678",
+  })
+  assert.equal(result.destination, `/enrollment?enrollment=${f.id}`)
+  assert.deepEqual(provider.verificationInputs, [
+    { email: f.identity.email, token: "12345678", type: "email" },
+  ])
+})
+
+test("resending for a confirmed buyer requests a fresh sign-in code and supersedes the old challenge", async () => {
+  const f = await activatedEnrollment()
+  const { handleEnrollmentHttp } = await import("../src/lib/mca/onboarding/http")
+  const send = async () => {
+    const response = await handleEnrollmentHttp(
+      enrollmentPost("auth", { enrollmentId: f.id, email: f.identity.email }),
+      "auth"
+    )
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.deepEqual(Object.keys(body).sort(), ["challengeId", "success"])
+    assert.equal(body.success, true)
+    return body.challengeId as string
+  }
+  const first = await send(),
+    second = await send()
+  assert.notEqual(first, second)
+  assert.equal(provider.otpInputs.length, 2)
+  for (const input of provider.otpInputs as {
+    email: string
+    options: { shouldCreateUser: boolean }
+  }[]) {
+    assert.equal(input.email, f.identity.email)
+    assert.equal(input.options.shouldCreateUser, true)
+  }
+  assert.equal(await challengeState(first), "revoked")
+  assert.equal(await challengeState(second), "pending")
+})
+
+test("HTTP verify accepts a pasted code with separators and sends only digits", async () => {
+  const f = await activatedEnrollment(),
+    auth = await import("../src/lib/mca/onboarding/auth")
+  const { handleEnrollmentHttp } = await import("../src/lib/mca/onboarding/http")
+  await auth.requestEnrollmentAuthentication({ enrollmentId: f.id, email: f.identity.email })
+  const challengeId = browserCookies.get(auth.enrollmentAuthCookie)!.split(".")[0]
+  const response = await handleEnrollmentHttp(
+    enrollmentPost("verify", { challengeId, email: f.identity.email, token: " 5948 0900 " }),
+    "verify"
+  )
+  assert.equal(response.status, 200)
+  assert.equal((provider.verificationInputs[0] as { token: string }).token, "59480900")
+})
+
+for (const failure of [
+  { status: 429, code: "over_email_send_rate_limit", name: "AuthApiError", message: "private provider detail" },
+  Object.assign(new Error("private provider detail"), { code: "over_email_send_rate_limit", status: 429 }),
+])
+  test(`a provider send ${failure instanceof Error ? "exception" : "error"} is logged without contact data and stays account-neutral`, async () => {
+    const f = await activatedEnrollment(),
+      auth = await import("../src/lib/mca/onboarding/auth")
+    provider.otpError = failure
+    const logged = mock.method(console, "error", () => undefined)
+    try {
+      assert.equal(
+        await auth.requestEnrollmentAuthentication({ enrollmentId: f.id, email: f.identity.email }),
+        undefined
+      )
+    } finally {
+      logged.mock.restore()
+    }
+    const cookie = browserCookies.get(auth.enrollmentAuthCookie)!,
+      challengeId = cookie.split(".")[0]
+    assert.equal(await challengeState(challengeId), "revoked")
+    const lines = logged.mock.calls
+      .map((call) => String(call.arguments[0]))
+      .filter((line) => line.includes("enrollment_auth_email_failed"))
+    assert.equal(lines.length, 1)
+    const line = JSON.parse(lines[0])
+    assert.equal(line.event, "operational_error")
+    assert.deepEqual(line.provider, {
+      code: "over_email_send_rate_limit",
+      status: 429,
+      name: failure instanceof Error ? "Error" : "AuthApiError",
+    })
+    assert.equal(line.enrollmentId, f.id)
+    assert.equal(line.challengeId, challengeId)
+    for (const secret of [f.identity.email, "private provider detail", cookie.split(".")[1]])
+      assert.ok(!lines[0].includes(secret))
+  })
